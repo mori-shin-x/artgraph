@@ -1,0 +1,41 @@
+{
+  "name": "spectrace",
+  "version": "0.1.0",
+  "description": "Typed artifact graph for TS/JS — trace specs, docs, code, and tests bidirectionally",
+  "type": "module",
+  "bin": {
+    "spectrace": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "spectrace": "node --enable-source-maps ./dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "traceability",
+    "spec-driven-development",
+    "impact-analysis"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^13.1.0",
+    "glob": "^11.0.2",
+    "gray-matter": "^4.0.3",
+    "remark-parse": "^11.0.0",
+    "ts-morph": "^25.0.0",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "oxfmt": "^0.55.0",
+    "oxlint": "^1.70.0",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.9"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
