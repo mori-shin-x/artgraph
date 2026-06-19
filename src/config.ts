@@ -1,0 +1,18 @@
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { DEFAULT_CONFIG, type SpectraceConfig } from "./types.js";
+
+const CONFIG_FILE = ".spectrace.json";
+
+export function loadConfig(rootDir: string): SpectraceConfig {
+  const configPath = resolve(rootDir, CONFIG_FILE);
+  if (!existsSync(configPath)) return { ...DEFAULT_CONFIG };
+
+  const raw = JSON.parse(readFileSync(configPath, "utf-8"));
+  return {
+    include: raw.include ?? DEFAULT_CONFIG.include,
+    specDirs: raw.specDirs ?? DEFAULT_CONFIG.specDirs,
+    testPatterns: raw.testPatterns ?? DEFAULT_CONFIG.testPatterns,
+    lockFile: raw.lockFile ?? DEFAULT_CONFIG.lockFile,
+  };
+}
