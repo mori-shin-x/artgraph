@@ -55,10 +55,7 @@ export function impact(graph: ArtifactGraph, startIds: string[], lock: LockFile)
     }
   }
 
-  const orphans = findOrphans(graph);
-  const uncovered = findUncovered(graph);
-
-  return { affectedFiles, affectedDocs, affectedReqs, drifted, orphans, uncovered };
+  return { affectedFiles, affectedDocs, affectedReqs, drifted };
 }
 
 export function findOrphans(graph: ArtifactGraph): string[] {

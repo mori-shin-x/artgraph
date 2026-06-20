@@ -28,11 +28,11 @@ describe("parseMarkdown", () => {
 
   it("should extract edges from frontmatter depends_on", () => {
     const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/auth.md"));
-    const implEdges = result.edges.filter((e) => e.kind === "implements");
+    const depEdges = result.edges.filter((e) => e.kind === "depends_on");
 
-    expect(implEdges).toHaveLength(1);
-    expect(implEdges[0].source).toBe("doc:auth-design");
-    expect(implEdges[0].target).toBe("REQ-7f3a");
+    expect(depEdges).toHaveLength(1);
+    expect(depEdges[0].source).toBe("doc:auth-design");
+    expect(depEdges[0].target).toBe("REQ-7f3a");
   });
 
   it("should compute content hash for each REQ", () => {

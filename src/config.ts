@@ -8,7 +8,14 @@ export function loadConfig(rootDir: string): SpectraceConfig {
   const configPath = resolve(rootDir, CONFIG_FILE);
   if (!existsSync(configPath)) return { ...DEFAULT_CONFIG };
 
-  const raw = JSON.parse(readFileSync(configPath, "utf-8"));
+  let raw: any;
+  try {
+    raw = JSON.parse(readFileSync(configPath, "utf-8"));
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Failed to parse ${configPath}: ${msg}`);
+  }
+
   return {
     include: raw.include ?? DEFAULT_CONFIG.include,
     specDirs: raw.specDirs ?? DEFAULT_CONFIG.specDirs,

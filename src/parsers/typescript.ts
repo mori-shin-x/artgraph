@@ -1,13 +1,14 @@
 import { Project, type SourceFile } from "ts-morph";
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import type { GraphNode, GraphEdge } from "../types.js";
 
-const IMPL_RE = /\/\/\s*@impl\s+((?:REQ-[0-9a-f]{4,}\s*)+)/g;
-const REQ_ID_RE = /REQ-[0-9a-f]{4,}/g;
+const IMPL_RE = /\/\/[^\S\n]*@impl[^\S\n]+((?:REQ-[0-9a-fA-F]{4,}[^\S\n]*)+)/gm;
+const REQ_ID_RE = /REQ-[0-9a-fA-F]{4,}/g;
 
-const TEST_REQ_RE = /\[REQ-[0-9a-f]{4,}]/g;
-const TEST_ANNOTATION_RE = /req:\s*["']?(REQ-[0-9a-f]{4,})["']?/g;
+const TEST_REQ_RE = /\[REQ-[0-9a-fA-F]{4,}]/g;
+const TEST_ANNOTATION_RE = /req:\s*["']?(REQ-[0-9a-fA-F]{4,})["']?/g;
 
 interface ParsedTS {
   nodes: GraphNode[];
@@ -15,10 +16,11 @@ interface ParsedTS {
 }
 
 export function createTSParser(rootDir: string, patterns: string[]) {
-  const project = new Project({
-    tsConfigFilePath: resolve(rootDir, "tsconfig.json"),
-    skipAddingFilesFromTsConfig: true,
-  });
+  const tsconfigPath = resolve(rootDir, "tsconfig.json");
+  const projectOpts = existsSync(tsconfigPath)
+    ? { tsConfigFilePath: tsconfigPath, skipAddingFilesFromTsConfig: true }
+    : { skipAddingFilesFromTsConfig: true };
+  const project = new Project(projectOpts);
 
   for (const pattern of patterns) {
     project.addSourceFilesAtPaths(resolve(rootDir, pattern));
