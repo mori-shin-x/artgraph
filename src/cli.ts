@@ -6,6 +6,7 @@ import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
 import { check } from "./check.js";
 import { readLock } from "./lock.js";
+import { getGitDiffFiles } from "./diff.js";
 
 const program = new Command();
 
@@ -42,7 +43,8 @@ program
 program
   .command("impact")
   .description("Show impact from changed files or REQ-IDs")
-  .argument("<targets...>", "File paths or REQ-IDs")
+  .argument("[targets...]", "File paths or REQ-IDs")
+  .option("--diff", "Use git diff to detect changed files")
   .option("--format <format>", "Output format: json | text", "text")
   .action((targets: string[], opts) => {
     const rootDir = process.cwd();
@@ -50,9 +52,19 @@ program
     const { graph } = scan(rootDir, config);
     const lock = readLock(rootDir, config.lockFile);
 
-    const startIds = resolveStartIds(graph, targets);
+    const inputTargets = opts.diff ? getGitDiffFiles(rootDir) : targets;
+    if (inputTargets.length === 0) {
+      if (opts.diff) {
+        console.log("No changes detected in git diff.");
+      } else {
+        console.error("No targets specified. Use file paths, REQ-IDs, or --diff.");
+      }
+      process.exit(opts.diff ? 0 : 1);
+    }
+
+    const startIds = resolveStartIds(graph, inputTargets);
     if (startIds.length === 0) {
-      console.error(`No matching nodes found for: ${targets.join(", ")}`);
+      console.error(`No matching nodes found for: ${inputTargets.join(", ")}`);
       process.exit(1);
     }
 
@@ -69,13 +81,32 @@ program
   .command("check")
   .description("Check for drift, orphans, and uncovered REQs")
   .option("--gate", "Exit 2 on any issue (for Stop hook)")
+  .option("--diff", "Scope check to files changed in git diff")
   .option("--format <format>", "Output format: json | text", "text")
   .action((opts) => {
     const rootDir = process.cwd();
     const config = loadConfig(rootDir);
     const { graph } = scan(rootDir, config);
     const lock = readLock(rootDir, config.lockFile);
-    const result = check(graph, lock);
+
+    let result;
+    if (opts.diff) {
+      const diffFiles = getGitDiffFiles(rootDir);
+      if (diffFiles.length === 0) {
+        console.log("No changes detected in git diff.");
+        process.exit(0);
+      }
+      const startIds = resolveStartIds(graph, diffFiles);
+      const impactResult = impact(graph, startIds, lock);
+      result = {
+        drifted: impactResult.drifted,
+        orphans: impactResult.orphans,
+        uncovered: impactResult.uncovered,
+        pass: impactResult.drifted.length === 0 && impactResult.orphans.length === 0,
+      };
+    } else {
+      result = check(graph, lock);
+    }
 
     if (opts.format === "json") {
       console.log(JSON.stringify(result));
@@ -127,21 +158,27 @@ function printImpactText(result: any) {
 }
 
 function printCheckText(result: any) {
-  if (result.pass) {
-    console.log("All checks passed.");
-    return;
-  }
-  if (result.drifted.length > 0) {
+  if (result.drifted?.length > 0) {
     console.log("DRIFT:");
     for (const d of result.drifted) console.log(`  ${d.nodeId} (${d.kind})`);
   }
-  if (result.orphans.length > 0) {
+  if (result.orphans?.length > 0) {
     console.log("ORPHANS:");
     for (const o of result.orphans) console.log(`  ${o}`);
   }
-  if (result.uncovered.length > 0) {
+  if (result.uncovered?.length > 0) {
     console.log("UNCOVERED:");
     for (const u of result.uncovered) console.log(`  ${u}`);
+  }
+  if (result.coverage?.length > 0) {
+    console.log("COVERAGE:");
+    for (const c of result.coverage) {
+      const slug = c.slug ? ` (${c.slug})` : "";
+      console.log(`  ${c.reqId}${slug}: ${c.status}`);
+    }
+  }
+  if (result.pass) {
+    console.log("All checks passed.");
   }
 }
 

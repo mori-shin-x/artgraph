@@ -1,0 +1,42 @@
+import type { ArtifactGraph, CoverageStatus } from "./types.js";
+
+export interface CoverageEntry {
+  reqId: string;
+  slug?: string;
+  status: CoverageStatus;
+  implFiles: string[];
+  testFiles: string[];
+}
+
+export function computeCoverage(graph: ArtifactGraph): CoverageEntry[] {
+  const entries: CoverageEntry[] = [];
+
+  for (const [id, node] of graph.nodes) {
+    if (node.kind !== "req") continue;
+
+    const implEdges = graph.edges.filter((e) => e.kind === "implements" && e.target === id);
+    const testEdges = graph.edges.filter((e) => e.kind === "verifies" && e.target === id);
+
+    const implFiles = implEdges.map((e) => e.source);
+    const testFiles = testEdges.map((e) => e.source);
+
+    let status: CoverageStatus;
+    if (implFiles.length === 0) {
+      status = "untagged";
+    } else if (testFiles.length === 0) {
+      status = "impl-only";
+    } else {
+      status = "verified";
+    }
+
+    entries.push({
+      reqId: id,
+      slug: node.slug,
+      status,
+      implFiles,
+      testFiles,
+    });
+  }
+
+  return entries;
+}
