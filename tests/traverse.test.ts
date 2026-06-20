@@ -14,7 +14,7 @@ const config: SpectraceConfig = {
 };
 
 describe("impact traversal", () => {
-  const graph = buildGraph(FIXTURE_DIR, config);
+  const { graph } = buildGraph(FIXTURE_DIR, config);
 
   it("should traverse from REQ-7f3a to its implementors and tests", () => {
     const result = impact(graph, ["REQ-7f3a"], {});
@@ -62,7 +62,7 @@ describe("impact traversal", () => {
 
 describe("findOrphans", () => {
   it("should detect @impl pointing to nonexistent REQ", () => {
-    const graph = buildGraph(FIXTURE_DIR, config);
+    const { graph } = buildGraph(FIXTURE_DIR, config);
     graph.edges.push({
       source: "file:src/auth/login.ts",
       target: "REQ-dead",
@@ -77,7 +77,7 @@ describe("findOrphans", () => {
 
 describe("findUncovered", () => {
   it("should detect REQ without any @impl", () => {
-    const graph = buildGraph(FIXTURE_DIR, config);
+    const { graph } = buildGraph(FIXTURE_DIR, config);
     const uncovered = findUncovered(graph);
 
     expect(uncovered).toContain("REQ-c3d4");
@@ -85,7 +85,7 @@ describe("findUncovered", () => {
 });
 
 describe("resolveStartIds", () => {
-  const graph = buildGraph(FIXTURE_DIR, config);
+  const { graph } = buildGraph(FIXTURE_DIR, config);
 
   it("should resolve REQ-ID directly", () => {
     const ids = resolveStartIds(graph, ["REQ-7f3a"]);

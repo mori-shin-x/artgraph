@@ -30,6 +30,7 @@ program
           docCount: result.docCount,
           fileCount: result.fileCount,
           testCount: result.testCount,
+          warnings: result.warnings,
         }),
       );
     } else {
@@ -37,6 +38,9 @@ program
       console.log(
         `  req: ${result.reqCount}  doc: ${result.docCount}  file: ${result.fileCount}  test: ${result.testCount}`,
       );
+      for (const w of result.warnings) {
+        console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
+      }
     }
   });
 
@@ -89,7 +93,7 @@ program
     const { graph } = scan(rootDir, config);
     const lock = readLock(rootDir, config.lockFile);
 
-    let result;
+    let scopedNodeIds: Set<string> | undefined;
     if (opts.diff) {
       const diffFiles = getGitDiffFiles(rootDir);
       if (diffFiles.length === 0) {
@@ -97,16 +101,19 @@ program
         process.exit(0);
       }
       const startIds = resolveStartIds(graph, diffFiles);
+      if (startIds.length === 0) {
+        console.log("Changed files are not tracked in the graph.");
+        process.exit(0);
+      }
       const impactResult = impact(graph, startIds, lock);
-      result = {
-        drifted: impactResult.drifted,
-        orphans: impactResult.orphans,
-        uncovered: impactResult.uncovered,
-        pass: impactResult.drifted.length === 0 && impactResult.orphans.length === 0,
-      };
-    } else {
-      result = check(graph, lock);
+      scopedNodeIds = new Set([
+        ...startIds,
+        ...impactResult.affectedReqs.map((r) => r),
+        ...impactResult.affectedDocs.map((d) => d),
+        ...impactResult.affectedFiles.map((f) => `file:${f}`),
+      ]);
     }
+    const result = check(graph, lock, scopedNodeIds);
 
     if (opts.format === "json") {
       console.log(JSON.stringify(result));

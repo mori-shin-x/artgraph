@@ -40,8 +40,6 @@ export interface ImpactResult {
   affectedDocs: string[];
   affectedReqs: string[];
   drifted: DriftEntry[];
-  orphans: string[];
-  uncovered: string[];
 }
 
 export interface DriftEntry {

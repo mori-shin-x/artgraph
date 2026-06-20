@@ -1,10 +1,11 @@
 import { resolve } from "node:path";
-import { buildGraph } from "./graph/builder.js";
+import { buildGraph, type BuildWarning } from "./graph/builder.js";
 import { writeLock, buildLockFromGraph } from "./lock.js";
 import type { ArtifactGraph, SpectraceConfig } from "./types.js";
 
 export interface ScanResult {
   graph: ArtifactGraph;
+  warnings: BuildWarning[];
   nodeCount: number;
   edgeCount: number;
   reqCount: number;
@@ -15,7 +16,7 @@ export interface ScanResult {
 
 export function scan(rootDir: string, config: SpectraceConfig): ScanResult {
   const absRoot = resolve(rootDir);
-  const graph = buildGraph(absRoot, config);
+  const { graph, warnings } = buildGraph(absRoot, config);
 
   let reqCount = 0;
   let docCount = 0;
@@ -42,6 +43,7 @@ export function scan(rootDir: string, config: SpectraceConfig): ScanResult {
 
   return {
     graph,
+    warnings,
     nodeCount: graph.nodes.size,
     edgeCount: graph.edges.length,
     reqCount,

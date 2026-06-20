@@ -1,16 +1,24 @@
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, writeFileSync, existsSync, renameSync } from "node:fs";
+import { resolve, dirname, basename } from "node:path";
 import type { LockFile, ArtifactGraph, LockEntry } from "./types.js";
 
 export function readLock(rootDir: string, lockPath: string): LockFile {
   const fullPath = resolve(rootDir, lockPath);
   if (!existsSync(fullPath)) return {};
-  return JSON.parse(readFileSync(fullPath, "utf-8"));
+  try {
+    return JSON.parse(readFileSync(fullPath, "utf-8"));
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`Warning: failed to parse ${fullPath}, treating as empty: ${msg}`);
+    return {};
+  }
 }
 
 export function writeLock(rootDir: string, lockPath: string, lock: LockFile): void {
   const fullPath = resolve(rootDir, lockPath);
-  writeFileSync(fullPath, JSON.stringify(lock, null, 2) + "\n", "utf-8");
+  const tmpPath = resolve(dirname(fullPath), `.${basename(fullPath)}.tmp`);
+  writeFileSync(tmpPath, JSON.stringify(lock, null, 2) + "\n", "utf-8");
+  renameSync(tmpPath, fullPath);
 }
 
 export function buildLockFromGraph(graph: ArtifactGraph): LockFile {

@@ -15,7 +15,7 @@ const config: SpectraceConfig = {
 
 describe("check", () => {
   it("should pass when lock matches current state and all REQs are covered", () => {
-    const graph = buildGraph(FIXTURE_DIR, config);
+    const { graph } = buildGraph(FIXTURE_DIR, config);
     const reqNode = graph.nodes.get("REQ-7f3a")!;
     const req2Node = graph.nodes.get("REQ-a1b2")!;
     const req3Node = graph.nodes.get("REQ-c3d4")!;
@@ -48,7 +48,7 @@ describe("check", () => {
   });
 
   it("should detect drift when spec content changed", () => {
-    const graph = buildGraph(FIXTURE_DIR, config);
+    const { graph } = buildGraph(FIXTURE_DIR, config);
 
     const lock: LockFile = {
       "REQ-7f3a": {
@@ -64,7 +64,7 @@ describe("check", () => {
   });
 
   it("should detect orphan @impl tags", () => {
-    const graph = buildGraph(FIXTURE_DIR, config);
+    const { graph } = buildGraph(FIXTURE_DIR, config);
     graph.edges.push({
       source: "file:src/auth/login.ts",
       target: "REQ-ffff",
@@ -77,14 +77,14 @@ describe("check", () => {
   });
 
   it("should report uncovered REQs", () => {
-    const graph = buildGraph(FIXTURE_DIR, config);
+    const { graph } = buildGraph(FIXTURE_DIR, config);
     const result = check(graph, {});
 
     expect(result.uncovered).toContain("REQ-c3d4");
   });
 
   it("should fail when there are any issues", () => {
-    const graph = buildGraph(FIXTURE_DIR, config);
+    const { graph } = buildGraph(FIXTURE_DIR, config);
     const result = check(graph, {});
 
     expect(result.pass).toBe(false);

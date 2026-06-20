@@ -14,7 +14,7 @@ const config: SpectraceConfig = {
 };
 
 describe("computeCoverage", () => {
-  const graph = buildGraph(FIXTURE_DIR, config);
+  const { graph } = buildGraph(FIXTURE_DIR, config);
 
   it("should mark REQ with @impl and test as verified", () => {
     const coverage = computeCoverage(graph);

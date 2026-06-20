@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { relative } from "node:path";
 import matter from "gray-matter";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
@@ -6,15 +7,16 @@ import { visit } from "unist-util-visit";
 import { createHash } from "node:crypto";
 import type { GraphNode, GraphEdge } from "../types.js";
 
-const REQ_HEADING_RE = /(?<id>REQ-[0-9a-f]{4,})\s*(?:\((?<slug>[^)]+)\))?/;
+const REQ_HEADING_RE = /(?<id>REQ-[0-9a-fA-F]{4,})\s*(?:\((?<slug>[^)]+)\))?/;
 
 interface ParsedSpec {
   nodes: GraphNode[];
   edges: GraphEdge[];
 }
 
-export function parseMarkdown(filePath: string): ParsedSpec {
+export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
   const raw = readFileSync(filePath, "utf-8");
+  const relPath = rootDir ? relative(rootDir, filePath) : filePath;
   const { data: frontmatter, content } = matter(raw);
   const tree = unified().use(remarkParse).parse(content);
 
@@ -32,19 +34,14 @@ export function parseMarkdown(filePath: string): ParsedSpec {
     nodes.push({
       id: docId,
       kind: "doc",
-      filePath,
+      filePath: relPath,
       label: docId,
       contentHash: fileHash,
     });
 
     if (spectraceMeta.depends_on) {
       for (const dep of spectraceMeta.depends_on) {
-        const edgeKind =
-          dep.relation === "derives_from"
-            ? "derives_from"
-            : dep.relation === "implements"
-              ? "implements"
-              : "depends_on";
+        const edgeKind = dep.relation === "derives_from" ? "derives_from" : "depends_on";
         edges.push({
           source: docId,
           target: dep.id,
@@ -68,7 +65,7 @@ export function parseMarkdown(filePath: string): ParsedSpec {
     nodes.push({
       id: reqId,
       kind: "req",
-      filePath,
+      filePath: relPath,
       slug,
       label: text,
       contentHash: reqHash,
