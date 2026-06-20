@@ -154,14 +154,6 @@ function printImpactText(result: any) {
     console.log("Drifted:");
     for (const d of result.drifted) console.log(`  ${d.nodeId} (${d.kind})`);
   }
-  if (result.orphans.length > 0) {
-    console.log("Orphans:");
-    for (const o of result.orphans) console.log(`  ${o}`);
-  }
-  if (result.uncovered.length > 0) {
-    console.log("Uncovered:");
-    for (const u of result.uncovered) console.log(`  ${u}`);
-  }
 }
 
 function printCheckText(result: any) {
