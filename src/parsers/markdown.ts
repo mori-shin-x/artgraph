@@ -19,7 +19,17 @@ interface ParsedSpec {
 export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
   const raw = readFileSync(filePath, "utf-8");
   const relPath = rootDir ? relative(rootDir, filePath) : filePath;
-  const { data: frontmatter, content } = matter(raw);
+
+  let frontmatter: Record<string, any> = {};
+  let content: string;
+  try {
+    const parsed = matter(raw, { language: "yaml", engines: {} });
+    frontmatter = parsed.data;
+    content = parsed.content;
+  } catch {
+    content = raw;
+  }
+
   const tree = unified().use(remarkParse).parse(content);
 
   const nodes: GraphNode[] = [];
@@ -54,19 +64,19 @@ export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
   }
 
   visit(tree, "listItem", (node: any) => {
-    const text = toString(node);
-    const match = text.match(LIST_ITEM_RE);
+    const firstParagraph = node.children?.find((c: any) => c.type === "paragraph");
+    const labelText = firstParagraph ? toString(firstParagraph) : toString(node);
+    const match = labelText.match(LIST_ITEM_RE);
     if (!match) return;
 
     const reqId = match[1];
-    const fullText = toString(node);
-    const reqHash = hash(fullText);
+    const reqHash = hash(toString(node));
 
     nodes.push({
       id: reqId,
       kind: "req",
       filePath: relPath,
-      label: text.split("\n")[0],
+      label: labelText,
       contentHash: reqHash,
     });
   });
@@ -94,8 +104,10 @@ export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
 
 function extractText(node: any): string {
   let text = "";
-  visit(node, "text", (t: any) => {
-    text += t.value;
+  visit(node, (t: any) => {
+    if (t.type === "text" || t.type === "inlineCode") {
+      text += t.value;
+    }
   });
   return text;
 }

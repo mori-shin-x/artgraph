@@ -8,7 +8,7 @@ const IMPL_RE =
   /\/\/[^\S\n]*@impl[^\S\n]+((?:(?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)[^\S\n]*)+)/gm;
 const REQ_ID_RE = /(?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)/g;
 
-const TEST_REQ_RE = /\[(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)]/g;
+const TEST_REQ_RE = /\[(?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)]/g;
 const TEST_ANNOTATION_RE =
   /req:\s*["']?((?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+))["']?/g;
 

@@ -104,17 +104,6 @@ interface ReqPatternConfig {
 
 ## 新規エンティティ
 
-### ParsedReq（パーサー内部）
-
-```ts
-interface ParsedReq {
-  id: string;           // "FR-001" or "Requirement-1"（正規化済み）
-  label: string;        // リスト項目 or 見出しのテキスト全体
-  contentHash: string;  // リスト項目/セクションの AST コンテンツのハッシュ
-  source: "list" | "heading";
-}
-```
-
 ### CollectedReq（builder 内部、2パスビルド用）
 
 ```ts

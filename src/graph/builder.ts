@@ -88,6 +88,15 @@ export function buildGraph(
       ...req.node,
       id: finalId,
     };
+
+    const existing = nodes.get(finalId);
+    if (existing && existing.filePath !== node.filePath) {
+      warnings.push({
+        type: "duplicate-id",
+        id: finalId,
+        files: [existing.filePath, node.filePath],
+      });
+    }
     nodes.set(finalId, node);
 
     for (const edge of req.edges) {
@@ -106,6 +115,14 @@ export function buildGraph(
   // Remap non-req edge targets that reference colliding IDs
   for (const edge of nonReqEdges) {
     const remappedTarget = remapId(edge.target, idMapping, collidingIds);
+    if (collidingIds.has(edge.target) && remappedTarget === edge.target) {
+      const dirs = idToDirs.get(edge.target)!;
+      warnings.push({
+        type: "ambiguous-id",
+        id: edge.target,
+        files: [...dirs],
+      });
+    }
     edges.push({ ...edge, target: remappedTarget });
   }
 
@@ -121,21 +138,24 @@ export function buildGraph(
   // Remap @impl/@verifies edge targets for colliding IDs
   for (const edge of tsResult.edges) {
     if ((edge.kind === "implements" || edge.kind === "verifies") && collidingIds.has(edge.target)) {
-      // Unqualified reference to a colliding ID — ambiguous
       const dirs = idToDirs.get(edge.target)!;
       warnings.push({
         type: "ambiguous-id",
         id: edge.target,
         files: [...dirs],
       });
-      edges.push(edge);
     } else if (
       (edge.kind === "implements" || edge.kind === "verifies") &&
       edge.target.includes("/")
     ) {
-      // Qualified reference like ns-a/FR-001 — resolve directly
-      const resolved = nodes.has(edge.target) ? edge.target : edge.target;
-      edges.push({ ...edge, target: resolved });
+      if (!nodes.has(edge.target)) {
+        warnings.push({
+          type: "ambiguous-id",
+          id: edge.target,
+          files: [],
+        });
+      }
+      edges.push(edge);
     } else {
       edges.push(edge);
     }

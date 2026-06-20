@@ -85,8 +85,8 @@ Acceptance Scenarios:
 - FR-004: 同一 ID が複数の spec ファイルに存在する場合、spec ディレクトリ名で名前空間を分離する。`@impl` タグが曖昧な場合は警告を出し、修飾形式（`specDirName/ID`、例: `001-auth/FR-001`）を要求する
 - FR-005: `@impl` タグの ID パターンを、新しい仕様 ID 形式（PREFIX-NNN, Requirement-N, 修飾形式）に対応させる。Kiro の `Requirement N` は `Requirement-N`（ハイフン区切り）に正規化する
 - FR-006: テストタグの ID パターン（`[FR-001]`, `annotations: { req: "FR-001" }`）を新しい形式に対応させる
-- FR-007: 認識する ID パターンは設定（`.spectrace.json`）で拡張・制限できる
-- FR-008: Spec Kit frontmatter（title, status, priority, owner）を読み取り、仕様ノードのメタデータとして保持する
+- FR-007: 認識する ID パターンは設定（`.spectrace.json`）で拡張・制限できる (deferred: Phase 6)
+- FR-008: Spec Kit frontmatter（title, status, priority, owner）を読み取り、仕様ノードのメタデータとして保持する (deferred: 将来バージョン)
 
 ### Key Entities
 

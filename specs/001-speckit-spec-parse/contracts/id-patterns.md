@@ -94,7 +94,7 @@ WHEN a user submits valid data THEN the system SHALL create an account
 
 ID 抽出パターン:
 ```
-/[A-Z][A-Za-z]*-\d+|(?:\d{3}-[\w-]+\/)?[A-Z][A-Za-z]*-\d+|Requirement-\d+/g
+/(?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)/g
 ```
 
 出力: `{ source: "file:src/auth/login.ts", target: "FR-001", kind: "implements" }` エッジ
