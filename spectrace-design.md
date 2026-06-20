@@ -54,29 +54,31 @@ Non-goals: 仕様文の意味的な正しさの判定、要求の良し悪し評
 - `verifies`（test→req）: テストタグ
 - `imports`（code→code）: TS AST から派生。デグレ波及面
 
-統合 impact クエリ: `git diff` の変更を起点に全エッジ型を双方向トラバース。例 `impact REQ-7f3a` は「依存する設計書 →（推移的に）詳細設計書 →（implements）実装シンボル →（verifies）テスト → さらにそのシンボルのコード依存元」まで一本で返す（＝要求から V 字の末端まで）。出力 = `{ 影響を受ける依存元コード, 紐づくドキュメント/仕様, drift したリンク, 未リンクの新シンボル }`。
+統合 impact クエリ: `git diff` の変更を起点に全エッジ型を双方向トラバース。例 `impact FR-001` は「依存する設計書 →（推移的に）詳細設計書 →（implements）実装シンボル →（verifies）テスト → さらにそのシンボルのコード依存元」まで一本で返す（＝要求から V 字の末端まで）。出力 = `{ 影響を受ける依存元コード, 紐づくドキュメント/仕様, drift したリンク, 未リンクの新シンボル }`。
 
 ## 4. 確定した設計判断
 
 ### D1. リンク機構 — 仕様が ID を所有
 
-- SDD で .md 仕様を書く時に ID を仕様側で発行。対応コードはエージェントが `@impl REQ-xxxx` で claim。
+- SDD で .md 仕様を書く時に ID を仕様側で発行。対応コードはエージェントが `@impl FR-001` 等で claim。
 - 機械的チェックが2つ立つ:
-  - 網羅性（仕様→コード）: 各 `REQ-X` に `@impl REQ-X` が1つ以上あるか → 未実装検出
-  - 妥当性（コード→仕様）: `@impl REQ-Y` が実在の `REQ-Y` を指すか → orphan/stale 検出
-- 「未カバー」は通常エラーではなく TODO。→ 未カバーは Plan の入力（やることリスト）。ゲートが弾くのは "この変更の一貫性"（drift / orphan / 「Plan で REQ-X 実装と言ったのに未カバーで終了」）であり、グローバル網羅は必ずしもゲートにしない。
-- 確信度の二段化: `@impl` タグ（＝意図と位置）に加え、REQ-X に紐づく "通るテスト"（＝振る舞い）をセットにする。カバレッジ状態 = `untagged` / `impl-only` / `verified(impl＋緑テスト)`。
+  - 網羅性（仕様→コード）: 各仕様 ID に `@impl` が1つ以上あるか → 未実装検出
+  - 妥当性（コード→仕様）: `@impl` が実在の仕様 ID を指すか → orphan/stale 検出
+- 「未カバー」は通常エラーではなく TODO。→ 未カバーは Plan の入力（やることリスト）。ゲートが弾くのは "この変更の一貫性"（drift / orphan / 「Plan で FR-001 実装と言ったのに未カバーで終了」）であり、グローバル網羅は必ずしもゲートにしない。
+- 確信度の二段化: `@impl` タグ（＝意図と位置）に加え、仕様 ID に紐づく "通るテスト"（＝振る舞い）をセットにする。カバレッジ状態 = `untagged` / `impl-only` / `verified(impl＋緑テスト)`。
 
-### D2. ID スキーム — 不変コア ＋ 任意 slug
+### D2. ID スキーム — SDD ツール ID 直接使用
 
-- `REQ-7f3a`（不変・非可読）＋ 任意の人間用 slug `auth-login`。対応台帳はツールが保持。
-- 効果: 言い換えではタグを触らない。本当に分割/統合した時だけ追従コマンドを使う。
-- → rename/split/merge 追従コマンドが必要（タグ一括書換 ＋ lock 更新）。req・doc 両方の ID に適用。
+- SDD ツール（Spec Kit, Kiro, BMAD 等）が付与する ID（FR-001, Requirement 1 等）をそのまま spectrace の仕様 ID として使用する。spectrace 独自の ID レイヤーは設けない。
+- 名前空間: 同一 ID が複数の spec ファイルに存在する場合、spec ディレクトリ名で修飾する（例: `001-auth/FR-001`）。プロジェクト内で一意なら修飾不要。`@impl FR-001` が曖昧な場合は spectrace が警告し修飾を要求する。
+- rename/renumber/split/merge は `spectrace rename` で @impl タグと lock を一括書換。req・doc 両方の ID に適用。
+- 効果: 開発者は SDD ツールで見慣れた ID をそのまま `@impl` に書ける。学習コスト・導入摩擦を最小化。
+- トレードオフ: 仕様のリナンバリングで `@impl` タグの書換が発生する（rename コマンドで軽減）。不変 ID 方式と比べ rename 耐性は低いが、既存 SDD ツールとの低摩擦な統合を優先する。
 
 ### D3. 粒度 — 使う側に委ねる
 
 - 粒度は意味的性質でツールは判定不能（D5）。かつインパクト精度が良い粒度を自己インセンティブ化する（粗いとノイズ、細かいとタグ過多）ので縛らない。
-- ツールが機械的にやるのは: ID フォーマット強制（正規表現） ＋ 任意の構造束縛（見出し1つ/受け入れ基準1つに ID 1個）＋ 任意の助言ヒューリスティック（既定オフ）。
+- ツールが機械的にやるのは: ID パターン認識（PREFIX-NNN リスト項目、Requirement N 見出し等、設定で拡張可能） ＋ 任意の構造束縛 ＋ 任意の助言ヒューリスティック（既定オフ）。
 
 ### D4. drift 検出 — content-hash ＋ lock
 
@@ -112,9 +114,17 @@ Non-goals: 仕様文の意味的な正しさの判定、要求の良し悪し評
 
 タグ文法（code↔spec, test）
 
-- 仕様(.md): 各要求が ID を持つ。例 `#### REQ-7f3a (auth-login): ユーザーはメールでログインできる`
-- コード: 実装シンボルの近くに `// @impl REQ-7f3a`
-- テスト: テスト名に `[REQ-7f3a]`、または meta（`test(name, { annotations: { req: "REQ-7f3a" } })`）
+仕様(.md) — SDD ツールの記法をそのまま使用（D2）。spectrace は以下のパターンを認識する:
+
+- リスト項目（Spec Kit / BMAD 形式）: `- FR-001: ユーザーはメールでログインできる`
+- 見出し（Kiro 形式）: `### Requirement 1: ユーザーはメールでログインできる`
+- ID パターンは設定で拡張可能。デフォルトはリスト項目の `PREFIX-NNN`（例: FR-001, SC-001, NFR-1, REQ-001）と見出しの `Requirement N`。
+
+コード: 実装シンボルの近くに `// @impl FR-001`
+
+テスト: テスト名に `[FR-001]`、または meta（`test(name, { annotations: { req: "FR-001" } })`）
+
+名前空間（D2）: 同一 ID が複数 spec に存在する場合は修飾形式で参照。`// @impl 001-auth/FR-001`
 
 ドキュメント frontmatter（doc↔doc, D7）
 
@@ -124,7 +134,7 @@ spectrace:
   node_id: "doc:api-design"
   depends_on:
     - { id: "doc:system-design", relation: derives_from }
-    - { id: "REQ-7f3a", relation: implements }
+    - { id: "FR-001", relation: implements }
 ---
 ```
 
@@ -132,22 +142,22 @@ lock ファイル（`.trace.lock`, JSON）— 承認済み状態
 
 ```json
 {
-  "REQ-7f3a": {
-    "slug": "auth-login",
-    "specHash": "sha256:…",
+  "FR-001": {
+    "specFile": "specs/001-auth/spec.md",
+    "contentHash": "sha256:…",
     "impl": ["src/auth/login.ts#login", "src/auth/session.ts#createSession"],
-    "tests": ["tests/login.test.ts#[REQ-7f3a] logs in with valid email"],
+    "tests": ["tests/login.test.ts#[FR-001] logs in with valid email"],
     "lastReconciled": "2026-06-20T00:00:00Z"
   },
   "doc:api-design": {
     "docHash": "sha256:…",
-    "dependsOn": ["doc:system-design", "REQ-7f3a"],
+    "dependsOn": ["doc:system-design", "FR-001"],
     "lastReconciled": "2026-06-20T00:00:00Z"
   }
 }
 ```
 
-drift = 現在の hash ≠ lock の hash。slug 台帳もここに同居。
+drift = 現在の hash ≠ lock の hash。
 
 ## 7. CLI / MCP サーフェス
 

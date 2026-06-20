@@ -1,13 +1,15 @@
 <!--
 Sync Impact Report
-- Version change: N/A (template) → 1.0.0
-- Modified principles: N/A (initial creation from template)
-- Added sections: Core Principles (5), Technology Constraints, Development Workflow, Governance
+- Version change: 1.0.0 → 1.1.0
+- Modified principles:
+  - II. Declarative Links: REQ-xxxx ハッシュ ID → SDD ツール ID 直接使用に変更
+  - V. Incremental Adoption: ID フォーマット強制 → ID パターン認識に変更
+- Added sections: None
 - Removed sections: None
 - Templates requiring updates:
-  - .specify/templates/plan-template.md ✅ compatible (Constitution Check section aligns)
-  - .specify/templates/spec-template.md ✅ compatible (FR/SC structure aligns)
-  - .specify/templates/tasks-template.md ✅ compatible (phase structure aligns)
+  - .specify/templates/plan-template.md ✅ compatible
+  - .specify/templates/spec-template.md ✅ compatible
+  - .specify/templates/tasks-template.md ✅ compatible
 - Follow-up TODOs: None
 -->
 
@@ -25,15 +27,18 @@ claim 済み未カバーが無いか、依存元を特定できるか — これ
 - LLM 伝播や確率的判定をコアパスに入れてはならない
 - 「正しいか」ではなく「整合しているか」を問う
 
-### II. Declarative Links — Spec Owns ID
+### II. Declarative Links — SDD ツール ID 直接使用
 
-仕様が ID を所有し、コードは `@impl REQ-xxxx` で claim する。
-ID は不変コア（`REQ-7f3a`）＋ 任意 slug（`auth-login`）。
+仕様が ID を所有し、コードは `@impl FR-001` 等で claim する。
+SDD ツール（Spec Kit, Kiro, BMAD 等）が付与する ID をそのまま使用し、
+spectrace 独自の ID レイヤーは設けない。
 
-- 網羅性チェック: 各 REQ-ID に `@impl` が1つ以上あるか
-- 妥当性チェック: `@impl` が実在の ID を指すか
+- 認識する ID パターン: リスト項目の PREFIX-NNN（FR-001, SC-001 等）、見出しの Requirement N
+- 名前空間: 同一 ID が複数 spec に存在する場合、spec ディレクトリ名で修飾（例: `001-auth/FR-001`）
+- 網羅性チェック: 各仕様 ID に `@impl` が1つ以上あるか
+- 妥当性チェック: `@impl` が実在の仕様 ID を指すか
 - 確信度の二段化: `impl-only`（タグのみ）/ `verified`（タグ＋緑テスト）
-- doc 間リンクは frontmatter `depends_on` で宣言、同じ ID スキームに従う
+- doc 間リンクは frontmatter `depends_on` で宣言
 
 ### III. JS/TS Native
 
@@ -62,7 +67,7 @@ TS/JS エコシステムをファーストクラスで扱う。
 - 新しく書く仕様から徐々にタグを付与していける設計
 - file-level（高速）と symbol-level（精密）の2モードを共通スキーマで持ち、
   解決不能エッジは file-level にフォールバック
-- 粒度は使う側に委ねる — ツールは ID フォーマット強制のみ
+- 粒度は使う側に委ねる — ツールは ID パターン認識のみ（PREFIX-NNN, Requirement N 等、設定で拡張可能）
 
 ## Technology Constraints
 
@@ -92,4 +97,4 @@ TS/JS エコシステムをファーストクラスで扱う。
   - PATCH: 文言の明確化・誤字修正
 - 全 PR は Constitution への準拠を確認する
 
-Version: 1.0.0 | Ratified: 2026-06-20 | Last Amended: 2026-06-20
+Version: 1.1.0 | Ratified: 2026-06-20 | Last Amended: 2026-06-20
