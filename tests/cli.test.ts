@@ -62,12 +62,12 @@ describe("CLI: scan", () => {
 // ---------------------------------------------------------------------------
 describe("CLI: impact", () => {
   it("should show impact for a REQ-ID", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["impact", "REQ-7f3a", "--format", "json"]);
+    const { stdout, exitCode } = run(["impact", "AUTH-001", "--format", "json"]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
     expect(result.affectedFiles.length).toBeGreaterThan(0);
-    expect(result.affectedReqs).toContain("REQ-7f3a");
+    expect(result.affectedReqs).toContain("AUTH-001");
   });
 
   it("should show impact for a file path", { timeout: 30000 }, () => {
@@ -75,20 +75,20 @@ describe("CLI: impact", () => {
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
-    expect(result.affectedReqs).toContain("REQ-7f3a");
+    expect(result.affectedReqs).toContain("AUTH-001");
   });
 
   it("should output human-readable text by default", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["impact", "REQ-7f3a"]);
+    const { stdout, exitCode } = run(["impact", "AUTH-001"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Affected REQs:");
-    expect(stdout).toContain("REQ-7f3a");
+    expect(stdout).toContain("AUTH-001");
   });
 
   it("should show impact for multiple targets", { timeout: 30000 }, () => {
     const { stdout, exitCode } = run([
       "impact",
-      "REQ-7f3a",
+      "AUTH-001",
       "src/auth/session.ts",
       "--format",
       "json",
@@ -96,7 +96,7 @@ describe("CLI: impact", () => {
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
-    expect(result.affectedReqs).toContain("REQ-7f3a");
+    expect(result.affectedReqs).toContain("AUTH-001");
     expect(result.affectedFiles.length).toBeGreaterThan(0);
   });
 
@@ -184,16 +184,16 @@ describe("CLI: reconcile then check (no drift)", () => {
 
     // Step 2: check should report zero drift and zero orphans.
     // Note: pass may still be false due to uncovered REQs in the fixture
-    // (REQ-c3d4 has no @impl), but drift should be empty.
+    // (AUTH-003 has no @impl), but drift should be empty.
     const chk = run(["check", "--format", "json"]);
     expect(chk.exitCode).toBe(0);
 
     const result = JSON.parse(chk.stdout);
     expect(result.drifted).toEqual([]);
     expect(result.orphans).toEqual([]);
-    // REQ-c3d4 has no @impl, so pass is false and uncovered contains it.
+    // AUTH-003 has no @impl, so pass is false and uncovered contains it.
     expect(result.pass).toBe(false);
-    expect(result.uncovered).toContain("REQ-c3d4");
+    expect(result.uncovered).toContain("AUTH-003");
   });
 
   it("should include coverage information after reconcile", { timeout: 30000 }, () => {
@@ -208,8 +208,8 @@ describe("CLI: reconcile then check (no drift)", () => {
     const result = JSON.parse(chk.stdout);
     expect(result.coverage.length).toBeGreaterThan(0);
 
-    // REQ-7f3a should be verified (has both impl and test).
-    const req7f3a = result.coverage.find((c: any) => c.reqId === "REQ-7f3a");
+    // AUTH-001 should be verified (has both impl and test).
+    const req7f3a = result.coverage.find((c: any) => c.reqId === "AUTH-001");
     expect(req7f3a).toEqual(expect.objectContaining({ status: "verified" }));
 
     cleanup();

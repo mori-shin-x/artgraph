@@ -1,6 +1,5 @@
 node_modules/
 dist/
 .trace.lock
-.specify/
 .claude/skills/
 .claude/worktrees/

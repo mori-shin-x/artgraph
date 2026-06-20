@@ -33,7 +33,7 @@ export function buildLockFromGraph(graph: ArtifactGraph): LockFile {
       lastReconciled: now,
     };
 
-    if (node.slug) entry.slug = node.slug;
+    if (node.filePath) entry.specFile = node.filePath;
 
     const implEdges = graph.edges.filter((e) => e.kind === "implements" && e.target === id);
     if (implEdges.length > 0) {

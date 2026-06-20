@@ -1,4 +1,4 @@
-// @impl REQ-7f3a REQ-a1b2
+// @impl AUTH-001 AUTH-002
 
 export function createSession(email: string): string {
   return `session_${email}_${Date.now()}`;

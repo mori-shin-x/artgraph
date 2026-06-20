@@ -31,7 +31,6 @@ export function check(graph: ArtifactGraph, lock: LockFile, scope?: Set<string>)
   const filtered = scope ? allCoverage.filter((c) => scope.has(c.reqId)) : allCoverage;
   const coverage = filtered.map((c) => ({
     reqId: c.reqId,
-    slug: c.slug,
     status: c.status,
   }));
 

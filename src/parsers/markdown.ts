@@ -4,10 +4,12 @@ import matter from "gray-matter";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import { visit } from "unist-util-visit";
+import { toString } from "mdast-util-to-string";
 import { createHash } from "node:crypto";
 import type { GraphNode, GraphEdge } from "../types.js";
 
-const REQ_HEADING_RE = /(?<id>REQ-[0-9a-fA-F]{4,})\s*(?:\((?<slug>[^)]+)\))?/;
+const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
+const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*:/;
 
 interface ParsedSpec {
   nodes: GraphNode[];
@@ -17,7 +19,17 @@ interface ParsedSpec {
 export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
   const raw = readFileSync(filePath, "utf-8");
   const relPath = rootDir ? relative(rootDir, filePath) : filePath;
-  const { data: frontmatter, content } = matter(raw);
+
+  let frontmatter: Record<string, any> = {};
+  let content: string;
+  try {
+    const parsed = matter(raw, { language: "yaml", engines: {} });
+    frontmatter = parsed.data;
+    content = parsed.content;
+  } catch {
+    content = raw;
+  }
+
   const tree = unified().use(remarkParse).parse(content);
 
   const nodes: GraphNode[] = [];
@@ -51,14 +63,30 @@ export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
     }
   }
 
+  visit(tree, "listItem", (node: any) => {
+    const firstParagraph = node.children?.find((c: any) => c.type === "paragraph");
+    const labelText = firstParagraph ? toString(firstParagraph) : toString(node);
+    const match = labelText.match(LIST_ITEM_RE);
+    if (!match) return;
+
+    const reqId = match[1];
+    const reqHash = hash(toString(node));
+
+    nodes.push({
+      id: reqId,
+      kind: "req",
+      filePath: relPath,
+      label: labelText,
+      contentHash: reqHash,
+    });
+  });
+
   visit(tree, "heading", (node: any) => {
     const text = extractText(node);
-    const match = text.match(REQ_HEADING_RE);
-    if (!match?.groups) return;
+    const match = text.match(KIRO_HEADING_RE);
+    if (!match) return;
 
-    const reqId = match.groups.id;
-    const slug = match.groups.slug;
-
+    const reqId = `Requirement-${match[1]}`;
     const headingContent = extractSectionContent(content, node.position.start.line);
     const reqHash = hash(headingContent);
 
@@ -66,7 +94,6 @@ export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
       id: reqId,
       kind: "req",
       filePath: relPath,
-      slug,
       label: text,
       contentHash: reqHash,
     });
@@ -77,8 +104,10 @@ export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
 
 function extractText(node: any): string {
   let text = "";
-  visit(node, "text", (t: any) => {
-    text += t.value;
+  visit(node, (t: any) => {
+    if (t.type === "text" || t.type === "inlineCode") {
+      text += t.value;
+    }
   });
   return text;
 }
