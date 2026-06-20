@@ -159,13 +159,27 @@ export interface SpectraceConfig {
   docGraph?: {
     autoDocNodes?: boolean;        // C-1: md=doc ノード自動生成（既定 true）
     inlineLinks?: boolean;         // C-2: インラインリンク抽出（既定 true）
-    conventions?: Array<"kiro" | "spec-kit">; // C-3: 規約推論（既定 []）
+    // C-3: 規約推論（既定 []）。組み込みプリセット名か、独自定義を渡せる。
+    conventions?: Array<"kiro" | "spec-kit" | ConventionPreset>;
   };
+}
+
+// 規約推論のプリセット定義。組み込み "kiro"/"spec-kit" もこの形で内部表現する。
+export interface ConventionPreset {
+  name: string;
+  // 同一ディレクトリ内で照合するファイル名と、派生先（上流）のファイル名。
+  // 例: { file: "design.md", derivesFrom: ["requirements.md"] }
+  chain: Array<{ file: string; derivesFrom: string[] }>;
 }
 ```
 
 既定値は「自動 doc ノード ON・インラインリンク ON・規約推論 OFF」とし、
 規約推論は明示的にオプトインさせる（誤検出リスクを抑えるため）。
+
+**規約推論は設定可能（決定 #3）**: 組み込みプリセット `"kiro"` / `"spec-kit"`
+を文字列で指定すれば**設定ゼロで動く**。独自のファイル名・連鎖を使うチームは
+`ConventionPreset` オブジェクトを渡して上書き・追加できる。組み込みプリセットも
+内部的には同じ `ConventionPreset` 構造で定義し、ユーザー定義と同じ経路で処理する。
 
 ## 6. 各機能の設計
 
@@ -200,8 +214,9 @@ export interface SpectraceConfig {
 **relation 許容値の明確化**
 
 - `depends_on` / `derives_from` のみ正式サポート。
-- それ以外（例: 既存 fixture の `implements`）は警告を出しつつ `depends_on` に
-  フォールバック（後方互換）。将来的に fixture を `derives_from` へ修正。
+- それ以外の値はビルド警告を出す。未リリースのため後方互換フォールバックは
+  設けず、既存 fixture `tests/fixtures/specs/auth.md` の
+  `relation: implements` は `derives_from` へ**修正する**（決定 #4）。
 
 ### 6.2 B: ドキュメント ⇔ ドキュメントの依存（`doc → doc`）
 
@@ -239,9 +254,9 @@ spectrace:
   - `contentHash` はファイル全体ハッシュ（既存 `fileHash` を流用）。
 - 既存挙動との関係: これまで req ノードしか出さなかった `speckit-style.md` 等も、
   追加で `doc:...` ノードを持つようになる。req ノードは従来どおり併存。
-- 「その md に属する req は、その doc から `contains`/`derives_from` で結ぶか」は
-  オプション。まずは**結ばない**（要求は引き続き独立ノード）で開始し、必要なら
-  後続で `doc --contains--> req` を追加検討（EdgeKind 追加が必要なので別途）。
+- 「その md に属する req を、その doc から `contains` で結ぶか」は**本スコープ外**。
+  要求は引き続き独立ノードとし、`doc --contains--> req` は別タスクとして切り出した
+  （決定 #2 / Issue #10）。EdgeKind 追加が必要なため後続で扱う。
 
 > パーサは `config` を受け取っていないため、`parseMarkdown` のシグネチャに
 > `options?: { docGraph?: ... }` を追加し、builder から渡す。
@@ -253,10 +268,11 @@ spectrace:
 - remark AST を `visit(tree, "link")` で走査し、`url` が**ローカルの相対 .md**を
   指すものを抽出。
 - 解決: リンク元 md の doc ノード ID → リンク先パスを正規化し、対応する doc
-  ノード ID（5.1 規約 or `node_id`）へ `derives_from`（既定）または `depends_on`
-  のエッジを張る。`via: "inline-link"`。
-- 向きの既定: 「自分が参照している先 = 依存先」とみなし `A --depends_on--> B`。
-  ただし規約由来（C-3）の連鎖は `derives_from` を使う。
+  ノード ID（5.1 規約 or `node_id`）へエッジを張る。`via: "inline-link"`。
+- 向き: **常に `depends_on`**（決定 #1）。インラインリンクは参照・脚注・派生が
+  混在し書き手の意図がばらつくため、弱い意味の `depends_on` で安全側に倒す。
+  強い「派生」の意味を持たせる連鎖は、より確実な C-3（規約推論）で `derives_from`
+  を張る、と役割分担する。frontmatter（C-1）で明示する場合は `relation` で上書き可。
 - 解決できないリンク（外部 URL、アンカーのみ、対象 md がスキャン対象外）は無視。
 
 #### C-3: ツール規約の自動推論
@@ -294,15 +310,16 @@ spectrace:
 | `src/lock.ts` | 変更不要（doc ノード増・dependsOn は既存ロジックで対応） |
 | `src/cli.ts` | `scan` のサマリにエッジ種別別カウントを追加（任意） |
 
-## 8. 後方互換性
+## 8. 互換性・移行
 
-- `node_id` 付き frontmatter は従来どおり動作（優先される）。
-- 既存の `depends_on: [{ relation: implements }]` は警告付きで `depends_on` に
-  フォールバックし、エラーにしない。
-- `docGraph` 未設定でも、自動 doc ノード/インラインリンクは既定 ON のため、
-  既存プロジェクトでもグラフが豊かになる。**lock の差分が出る**点に注意し、
-  リリース時は `reconcile` の実行を案内する。
-- 規約推論（C-3）は既定 OFF。誤検出を避けるためオプトイン。
+本プロダクトは**未リリース**のため、後方互換性は考慮しない（決定 #4）。
+
+- `node_id` 付き frontmatter は引き続き優先的に使われる（C-1 の自動採番より優先）。
+  これは互換のためではなく、明示指定を尊重する仕様として残す。
+- 自動 doc ノード ON により lock に doc エントリが増えるが、移行案内・周知は不要。
+  必要なら `reconcile` を一度実行すればよい。
+- relation の不正値はフォールバックせず警告とし、fixture 側を正す（6.1 参照）。
+- 規約推論（C-3）は既定 OFF（オプトイン）。これは互換ではなく誤検出回避のため。
 
 ## 9. テスト方針
 
@@ -312,15 +329,18 @@ spectrace:
   注釈、を期待どおり出すこと。
 - 統合: builder + traverse で
   `tasks.md` を起点に `design.md` → `requirements.md` まで `impact` が伝播すること。
-- 後方互換: 既存 `auth.md`/`speckit-style.md`/`kiro-style.md` のスナップショットが
-  「req ノードは不変・doc ノードが追加される」形であること。
+- 回帰: 既存 `auth.md`/`speckit-style.md`/`kiro-style.md` で「req ノードは不変・
+  doc ノードが追加される」形であること（auth.md の relation 修正は除く）。
 
-## 10. 未決事項（要レビュー）
+## 10. 決定事項
 
-1. インラインリンクの既定の向きは `depends_on` でよいか（`derives_from` の方が
-   自然なケースもある）。
-2. `doc --contains--> req`（ファイルとその中の要求の所属関係）を導入するか。
-   導入すると「ファイル単位の影響」と「要求単位の影響」を綺麗に橋渡しできるが、
-   `EdgeKind` 追加が必要。
-3. 規約推論の対象ファイル名は固定でよいか、設定で上書き可能にするか。
-4. 自動 doc ノード ON による既存 lock の差分をどう周知するか（マイグレーション）。
+レビューを経て確定した方針（2026-06-20）。
+
+| # | 論点 | 決定 |
+| --- | --- | --- |
+| 1 | インラインリンク（C-2）の向き | **常に `depends_on`**。弱い意味で安全側に倒す。派生の連鎖は C-3 が `derives_from` で担う。 |
+| 2 | `doc --contains--> req` の導入 | **本スコープ外**。Issue #10 として別タスク化。EdgeKind 追加を伴うため後続で対応。 |
+| 3 | 規約推論のファイル名 | **設定可能**にする。組み込み `kiro`/`spec-kit` プリセットで設定ゼロで動き、`ConventionPreset` で上書き・追加可。 |
+| 4 | 自動 doc ノード ON の lock 差分 | 未リリースのため**後方互換・周知は不要**。fixture の不正 relation は修正する。 |
+
+関連 Issue: [#10 doc→req 所属関係エッジ (contains)](https://github.com/ShintaroMorimoto/spectrace/issues/10)
