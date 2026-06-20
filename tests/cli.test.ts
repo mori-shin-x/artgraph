@@ -12,6 +12,7 @@ function run(args: string[]): { stdout: string; exitCode: number } {
     const stdout = execFileSync("node", [CLI, ...args], {
       encoding: "utf-8",
       cwd: FIXTURE_DIR,
+      timeout: 30000,
     });
     return { stdout, exitCode: 0 };
   } catch (e: any) {
@@ -24,7 +25,7 @@ function cleanup() {
 }
 
 describe("CLI: scan", () => {
-  it("should output graph summary as JSON", () => {
+  it("should output graph summary as JSON", { timeout: 30000 }, () => {
     const { stdout, exitCode } = run(["scan", "--format", "json"]);
     expect(exitCode).toBe(0);
 

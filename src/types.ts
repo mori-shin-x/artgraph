@@ -55,6 +55,7 @@ export interface CheckResult {
   drifted: DriftEntry[];
   orphans: string[];
   uncovered: string[];
+  coverage: { reqId: string; slug?: string; status: CoverageStatus }[];
   pass: boolean;
 }
 
