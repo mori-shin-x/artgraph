@@ -2,11 +2,7 @@ import type { ArtifactGraph, LockFile, CheckResult, DriftEntry } from "./types.j
 import { findOrphans, findUncovered } from "./graph/traverse.js";
 import { computeCoverage } from "./coverage.js";
 
-export function check(
-  graph: ArtifactGraph,
-  lock: LockFile,
-  scope?: Set<string>,
-): CheckResult {
+export function check(graph: ArtifactGraph, lock: LockFile, scope?: Set<string>): CheckResult {
   const drifted: DriftEntry[] = [];
 
   for (const [id, entry] of Object.entries(lock)) {
@@ -24,7 +20,9 @@ export function check(
   }
 
   const allOrphans = findOrphans(graph);
-  const orphans = scope ? allOrphans.filter((o) => [...scope].some((s) => o.includes(s))) : allOrphans;
+  const orphans = scope
+    ? allOrphans.filter((o) => [...scope].some((s) => o.includes(s)))
+    : allOrphans;
 
   const allUncovered = findUncovered(graph);
   const uncovered = scope ? allUncovered.filter((id) => scope.has(id)) : allUncovered;

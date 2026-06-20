@@ -6,7 +6,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx oxfmt --write src/ tests/ 2>&1; npx oxlint src/ tests/ 2>&1; npx tsc --noEmit 2>&1"
+            "command": "pnpm oxfmt --write src/ tests/ 2>&1; pnpm oxlint src/ tests/ 2>&1; pnpm tsc --noEmit 2>&1"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/stop-hook.sh",
+            "timeout": 120
           }
         ]
       }
