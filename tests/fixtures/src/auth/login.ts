@@ -1,4 +1,4 @@
-// @impl REQ-7f3a
+// @impl AUTH-001
 import { createSession } from "./session.js";
 
 export interface LoginRequest {

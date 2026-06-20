@@ -2,7 +2,6 @@ import type { ArtifactGraph, CoverageStatus } from "./types.js";
 
 export interface CoverageEntry {
   reqId: string;
-  slug?: string;
   status: CoverageStatus;
   implFiles: string[];
   testFiles: string[];
@@ -31,7 +30,6 @@ export function computeCoverage(graph: ArtifactGraph): CoverageEntry[] {
 
     entries.push({
       reqId: id,
-      slug: node.slug,
       status,
       implFiles,
       testFiles,

@@ -172,8 +172,7 @@ function printCheckText(result: any) {
   if (result.coverage?.length > 0) {
     console.log("COVERAGE:");
     for (const c of result.coverage) {
-      const slug = c.slug ? ` (${c.slug})` : "";
-      console.log(`  ${c.reqId}${slug}: ${c.status}`);
+      console.log(`  ${c.reqId}: ${c.status}`);
     }
   }
   if (result.pass) {

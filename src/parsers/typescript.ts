@@ -4,11 +4,13 @@ import { existsSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import type { GraphNode, GraphEdge } from "../types.js";
 
-const IMPL_RE = /\/\/[^\S\n]*@impl[^\S\n]+((?:REQ-[0-9a-fA-F]{4,}[^\S\n]*)+)/gm;
-const REQ_ID_RE = /REQ-[0-9a-fA-F]{4,}/g;
+const IMPL_RE =
+  /\/\/[^\S\n]*@impl[^\S\n]+((?:(?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)[^\S\n]*)+)/gm;
+const REQ_ID_RE = /(?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)/g;
 
-const TEST_REQ_RE = /\[REQ-[0-9a-fA-F]{4,}]/g;
-const TEST_ANNOTATION_RE = /req:\s*["']?(REQ-[0-9a-fA-F]{4,})["']?/g;
+const TEST_REQ_RE = /\[(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)]/g;
+const TEST_ANNOTATION_RE =
+  /req:\s*["']?((?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+))["']?/g;
 
 interface ParsedTS {
   nodes: GraphNode[];

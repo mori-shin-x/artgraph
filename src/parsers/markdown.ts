@@ -4,10 +4,12 @@ import matter from "gray-matter";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import { visit } from "unist-util-visit";
+import { toString } from "mdast-util-to-string";
 import { createHash } from "node:crypto";
 import type { GraphNode, GraphEdge } from "../types.js";
 
-const REQ_HEADING_RE = /(?<id>REQ-[0-9a-fA-F]{4,})\s*(?:\((?<slug>[^)]+)\))?/;
+const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
+const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*:/;
 
 interface ParsedSpec {
   nodes: GraphNode[];
@@ -51,14 +53,30 @@ export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
     }
   }
 
+  visit(tree, "listItem", (node: any) => {
+    const text = toString(node);
+    const match = text.match(LIST_ITEM_RE);
+    if (!match) return;
+
+    const reqId = match[1];
+    const fullText = toString(node);
+    const reqHash = hash(fullText);
+
+    nodes.push({
+      id: reqId,
+      kind: "req",
+      filePath: relPath,
+      label: text.split("\n")[0],
+      contentHash: reqHash,
+    });
+  });
+
   visit(tree, "heading", (node: any) => {
     const text = extractText(node);
-    const match = text.match(REQ_HEADING_RE);
-    if (!match?.groups) return;
+    const match = text.match(KIRO_HEADING_RE);
+    if (!match) return;
 
-    const reqId = match.groups.id;
-    const slug = match.groups.slug;
-
+    const reqId = `Requirement-${match[1]}`;
     const headingContent = extractSectionContent(content, node.position.start.line);
     const reqHash = hash(headingContent);
 
@@ -66,7 +84,6 @@ export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
       id: reqId,
       kind: "req",
       filePath: relPath,
-      slug,
       label: text,
       contentHash: reqHash,
     });
