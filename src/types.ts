@@ -6,7 +6,6 @@ export interface GraphNode {
   id: string;
   kind: NodeKind;
   filePath: string;
-  slug?: string;
   label?: string;
   contentHash: string;
 }
@@ -23,7 +22,7 @@ export interface ArtifactGraph {
 }
 
 export interface LockEntry {
-  slug?: string;
+  specFile?: string;
   contentHash: string;
   impl?: string[];
   tests?: string[];
@@ -53,8 +52,13 @@ export interface CheckResult {
   drifted: DriftEntry[];
   orphans: string[];
   uncovered: string[];
-  coverage: { reqId: string; slug?: string; status: CoverageStatus }[];
+  coverage: { reqId: string; status: CoverageStatus }[];
   pass: boolean;
+}
+
+export interface ReqPatternConfig {
+  listItem?: string;
+  heading?: string;
 }
 
 export interface SpectraceConfig {
@@ -62,6 +66,7 @@ export interface SpectraceConfig {
   specDirs: string[];
   testPatterns: string[];
   lockFile: string;
+  reqPatterns?: ReqPatternConfig;
 }
 
 export const DEFAULT_CONFIG: SpectraceConfig = {

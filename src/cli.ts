@@ -39,7 +39,12 @@ program
         `  req: ${result.reqCount}  doc: ${result.docCount}  file: ${result.fileCount}  test: ${result.testCount}`,
       );
       for (const w of result.warnings) {
-        console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
+        if (w.type === "ambiguous-id") {
+          const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
+          console.error(`WARNING: ambiguous ID "${w.id}"${hint}`);
+        } else {
+          console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
+        }
       }
     }
   });
@@ -90,7 +95,7 @@ program
   .action((opts) => {
     const rootDir = process.cwd();
     const config = loadConfig(rootDir);
-    const { graph } = scan(rootDir, config);
+    const { graph, warnings } = scan(rootDir, config);
     const lock = readLock(rootDir, config.lockFile);
 
     let scopedNodeIds: Set<string> | undefined;
@@ -116,9 +121,17 @@ program
     const result = check(graph, lock, scopedNodeIds);
 
     if (opts.format === "json") {
-      console.log(JSON.stringify(result));
+      console.log(JSON.stringify({ ...result, warnings }));
     } else {
       printCheckText(result);
+      for (const w of warnings) {
+        if (w.type === "ambiguous-id") {
+          const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
+          console.error(`WARNING: ambiguous ID "${w.id}"${hint}`);
+        } else {
+          console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
+        }
+      }
     }
 
     if (opts.gate && !result.pass) {
@@ -172,8 +185,7 @@ function printCheckText(result: any) {
   if (result.coverage?.length > 0) {
     console.log("COVERAGE:");
     for (const c of result.coverage) {
-      const slug = c.slug ? ` (${c.slug})` : "";
-      console.log(`  ${c.reqId}${slug}: ${c.status}`);
+      console.log(`  ${c.reqId}: ${c.status}`);
     }
   }
   if (result.pass) {

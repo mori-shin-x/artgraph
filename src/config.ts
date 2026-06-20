@@ -21,5 +21,6 @@ export function loadConfig(rootDir: string): SpectraceConfig {
     specDirs: raw.specDirs ?? DEFAULT_CONFIG.specDirs,
     testPatterns: raw.testPatterns ?? DEFAULT_CONFIG.testPatterns,
     lockFile: raw.lockFile ?? DEFAULT_CONFIG.lockFile,
+    reqPatterns: raw.reqPatterns,
   };
 }
