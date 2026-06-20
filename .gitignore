@@ -1,5 +1,10 @@
 node_modules/
 dist/
 .trace.lock
-.claude/skills/
-.claude/worktrees/
+
+# Dev tooling (personal)
+.claude/
+.specify/
+CLAUDE.md
+spectrace-design.md
+docs/spec-kit-integration.md
