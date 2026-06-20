@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { existsSync, unlinkSync } from "node:fs";
@@ -24,6 +24,8 @@ function cleanup() {
   if (existsSync(LOCK_PATH)) unlinkSync(LOCK_PATH);
 }
 
+afterEach(cleanup);
+
 // ---------------------------------------------------------------------------
 // scan
 // ---------------------------------------------------------------------------
@@ -41,8 +43,8 @@ describe("CLI: scan", () => {
   it("should output human-readable text by default", { timeout: 30000 }, () => {
     const { stdout, exitCode } = run(["scan"]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("Nodes:");
-    expect(stdout).toContain("Edges:");
+    expect(stdout).toMatch(/Nodes:\s+[1-9]/);
+    expect(stdout).toMatch(/Edges:\s+[1-9]/);
     expect(stdout).toContain("req:");
     expect(stdout).toContain("file:");
   });
@@ -79,7 +81,8 @@ describe("CLI: impact", () => {
   it("should output human-readable text by default", { timeout: 30000 }, () => {
     const { stdout, exitCode } = run(["impact", "REQ-7f3a"]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("Affected");
+    expect(stdout).toContain("Affected REQs:");
+    expect(stdout).toContain("REQ-7f3a");
   });
 
   it("should show impact for multiple targets", { timeout: 30000 }, () => {
@@ -109,9 +112,9 @@ describe("CLI: impact", () => {
     expect(stderr).toContain("No matching nodes found");
   });
 
+  // Smoke test: --diff depends on real git state so the result is non-deterministic.
+  // A proper test would need a temporary git repo with a controlled diff.
   it("should not crash with --diff flag", { timeout: 30000 }, () => {
-    // --diff depends on git state; we just verify it doesn't throw an unhandled error.
-    // It will either exit 0 (no diff / some diff) or exit 1, but not crash.
     const { exitCode } = run(["impact", "--diff"]);
     expect([0, 1]).toContain(exitCode);
   });
@@ -143,12 +146,13 @@ describe("CLI: check", () => {
     expect(stdout).toContain("COVERAGE:");
   });
 
+  // Smoke test: --diff depends on real git state so the result is non-deterministic.
+  // A proper test would need a temporary git repo with a controlled diff.
   it("should not crash with --diff flag", { timeout: 30000 }, () => {
     cleanup();
     const { exitCode } = run(["check", "--diff"]);
-    // Should exit 0 if no diff or changed files are not in graph,
-    // or produce check results otherwise. Either way, no crash.
-    expect([0, 2]).toContain(exitCode);
+    // Without --gate, check never calls process.exit(2).
+    expect(exitCode).toBe(0);
   });
 });
 
@@ -187,8 +191,9 @@ describe("CLI: reconcile then check (no drift)", () => {
     const result = JSON.parse(chk.stdout);
     expect(result.drifted).toEqual([]);
     expect(result.orphans).toEqual([]);
-
-    cleanup();
+    // REQ-c3d4 has no @impl, so pass is false and uncovered contains it.
+    expect(result.pass).toBe(false);
+    expect(result.uncovered).toContain("REQ-c3d4");
   });
 
   it("should include coverage information after reconcile", { timeout: 30000 }, () => {
@@ -205,8 +210,7 @@ describe("CLI: reconcile then check (no drift)", () => {
 
     // REQ-7f3a should be verified (has both impl and test).
     const req7f3a = result.coverage.find((c: any) => c.reqId === "REQ-7f3a");
-    expect(req7f3a).toBeDefined();
-    expect(req7f3a.status).toBe("verified");
+    expect(req7f3a).toEqual(expect.objectContaining({ status: "verified" }));
 
     cleanup();
   });
