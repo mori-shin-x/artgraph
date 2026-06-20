@@ -11,7 +11,8 @@
     "dev": "tsc --watch",
     "spectrace": "node --enable-source-maps ./dist/cli.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "knip": "knip"
   },
   "keywords": [
     "traceability",
@@ -30,6 +31,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@typescript/native-preview": "7.0.0-dev.20260619.1",
+    "knip": "^6.17.1",
     "oxfmt": "^0.55.0",
     "oxlint": "^1.70.0",
     "typescript": "^5.8.3",
