@@ -18,6 +18,11 @@
             "type": "command",
             "command": "bash .claude/stop-hook.sh",
             "timeout": 120
+          },
+          {
+            "type": "agent",
+            "prompt": "You are a code reviewer for the spectrace project (a TypeScript CLI tool). Review the current uncommitted changes.\n\n1. Run `git diff HEAD -- src/ tests/` to see what changed. If the diff is empty, respond 'yes'.\n2. Read the changed files for full context.\n3. Check for: logic bugs, security issues, missing error handling, type safety problems, inconsistencies with existing patterns.\n4. If you find issues that must be fixed, respond 'no' and describe what needs fixing.\n5. If the changes look correct, respond 'yes'.\n\nBe pragmatic — only block for real bugs, not style preferences.\n\n$ARGUMENTS",
+            "timeout": 120
           }
         ]
       }

@@ -9,4 +9,4 @@ if git diff --quiet HEAD -- src/ tests/ 2>/dev/null && git diff --quiet --cached
   exit 0
 fi
 
-pnpm run build 2>&1 && pnpm run test 2>&1 || exit 2
+pnpm run build 2>&1 && pnpm run test 2>&1 && pnpm knip 2>&1 || exit 2
