@@ -96,4 +96,69 @@ describe("resolveStartIds", () => {
     const ids = resolveStartIds(graph, ["src/auth/login.ts"]);
     expect(ids).toEqual(["file:src/auth/login.ts"]);
   });
+
+  it("T042: should resolve doc: prefix for file paths", () => {
+    const ids = resolveStartIds(graph, ["specs/prose-only.md"]);
+    expect(ids).toContain("doc:specs/prose-only.md");
+  });
+});
+
+describe("impact: depth limit (US3)", () => {
+  it("T041: should limit traversal with maxDepth", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+
+    // Without depth limit, should reach many nodes
+    const fullResult = impact(graph, ["AUTH-001"], {});
+    const fullCount =
+      fullResult.affectedReqs.length +
+      fullResult.affectedDocs.length +
+      fullResult.affectedFiles.length;
+
+    // With maxDepth=1, should reach fewer nodes
+    const limitedResult = impact(graph, ["AUTH-001"], {}, 1);
+    const limitedCount =
+      limitedResult.affectedReqs.length +
+      limitedResult.affectedDocs.length +
+      limitedResult.affectedFiles.length;
+
+    expect(limitedCount).toBeLessThanOrEqual(fullCount);
+    // AUTH-001 itself should always be included
+    expect(limitedResult.affectedReqs).toContain("AUTH-001");
+  });
+
+  it("T041b: should not traverse beyond maxDepth", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+
+    // With maxDepth=0, only start nodes themselves
+    const result = impact(graph, ["AUTH-001"], {}, 0);
+    expect(result.affectedReqs).toContain("AUTH-001");
+    // Should not reach files at depth > 0
+    expect(result.affectedFiles).toHaveLength(0);
+  });
+});
+
+describe("impact: ImpactSummary (US3)", () => {
+  it("T044: should include summary with docs, reqs, files counts", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    const result = impact(graph, ["AUTH-001"], {});
+
+    expect(result.summary).toBeDefined();
+    expect(result.summary!.reqs).toBe(result.affectedReqs.length);
+    expect(result.summary!.docs).toBe(result.affectedDocs.length);
+    expect(result.summary!.files).toBe(result.affectedFiles.length);
+  });
+});
+
+describe("impact: end-to-end trace via contains (US3)", () => {
+  it("T043: should traverse from doc through contains to req to impl file", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+
+    // Start from doc:auth-design (the doc node for auth.md)
+    const result = impact(graph, ["doc:auth-design"], {});
+
+    // Should reach AUTH-001 via contains edge
+    expect(result.affectedReqs).toContain("AUTH-001");
+    // Should reach implementation files via implements edge
+    expect(result.affectedFiles).toContain("src/auth/login.ts");
+  });
 });

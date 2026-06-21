@@ -1,21 +1,29 @@
 import type { ArtifactGraph, ImpactResult, DriftEntry } from "../types.js";
 import type { LockFile } from "../types.js";
 
-export function impact(graph: ArtifactGraph, startIds: string[], lock: LockFile): ImpactResult {
+export function impact(
+  graph: ArtifactGraph,
+  startIds: string[],
+  lock: LockFile,
+  maxDepth?: number,
+): ImpactResult {
   const visited = new Set<string>();
-  const queue = [...startIds];
+  const queue: Array<{ id: string; depth: number }> = startIds.map((id) => ({ id, depth: 0 }));
 
   while (queue.length > 0) {
-    const id = queue.shift()!;
+    const { id, depth } = queue.shift()!;
     if (visited.has(id)) continue;
     visited.add(id);
 
+    // If maxDepth is set and we've reached it, don't explore further from this node
+    if (maxDepth !== undefined && depth >= maxDepth) continue;
+
     for (const edge of graph.edges) {
       if (edge.source === id && !visited.has(edge.target)) {
-        queue.push(edge.target);
+        queue.push({ id: edge.target, depth: depth + 1 });
       }
       if (edge.target === id && !visited.has(edge.source)) {
-        queue.push(edge.source);
+        queue.push({ id: edge.source, depth: depth + 1 });
       }
     }
   }
@@ -55,7 +63,17 @@ export function impact(graph: ArtifactGraph, startIds: string[], lock: LockFile)
     }
   }
 
-  return { affectedFiles, affectedDocs, affectedReqs, drifted };
+  return {
+    affectedFiles,
+    affectedDocs,
+    affectedReqs,
+    drifted,
+    summary: {
+      docs: affectedDocs.length,
+      reqs: affectedReqs.length,
+      files: affectedFiles.length,
+    },
+  };
 }
 
 export function findOrphans(graph: ArtifactGraph): string[] {
@@ -99,6 +117,13 @@ export function resolveStartIds(graph: ArtifactGraph, inputs: string[]): string[
     const fileId = `file:${input}`;
     if (graph.nodes.has(fileId)) {
       ids.push(fileId);
+      continue;
+    }
+
+    // T048: doc: prefix resolution
+    const docId = `doc:${input}`;
+    if (graph.nodes.has(docId)) {
+      ids.push(docId);
       continue;
     }
 
