@@ -17,8 +17,9 @@ import {
   formatAdditionalContext,
   buildHookOutput,
 } from "./hook-pretool.js";
-import type { SpectraceConfig } from "./types.js";
+import type { SpectraceConfig, TestResultMap } from "./types.js";
 import { runInit } from "./init.js";
+import { loadTestResults } from "./test-results.js";
 
 const program = new Command();
 
@@ -93,25 +94,45 @@ program
   .command("scan")
   .description("Build the artifact graph and show summary")
   .option("--format <format>", "Output format: json | text", "text")
+  .option("--test-results <paths...>", "Test result files (Vitest JSON / JUnit XML)")
   .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((opts) => {
     const rootDir = process.cwd();
     const config = applyMode(loadConfig(rootDir), opts.mode);
     const result = scan(rootDir, config);
 
+    const testResultPaths = opts.testResults ?? config.testResultPaths;
+    let testResultStats: { totalTests: number; passedTests: number; failedTests: number } | undefined;
+    if (testResultPaths && testResultPaths.length > 0) {
+      const testResults = loadTestResults(testResultPaths, rootDir);
+      let totalTests = 0;
+      let passedTests = 0;
+      let failedTests = 0;
+      for (const records of testResults.values()) {
+        for (const r of records) {
+          totalTests++;
+          if (r.passed) passedTests++;
+          else failedTests++;
+        }
+      }
+      testResultStats = { totalTests, passedTests, failedTests };
+    }
+
     if (opts.format === "json") {
-      console.log(
-        JSON.stringify({
-          nodeCount: result.nodeCount,
-          edgeCount: result.edgeCount,
-          reqCount: result.reqCount,
-          docCount: result.docCount,
-          fileCount: result.fileCount,
-          symbolCount: result.symbolCount,
-          testCount: result.testCount,
-          warnings: result.warnings,
-        }),
-      );
+      const output: Record<string, unknown> = {
+        nodeCount: result.nodeCount,
+        edgeCount: result.edgeCount,
+        reqCount: result.reqCount,
+        docCount: result.docCount,
+        fileCount: result.fileCount,
+        symbolCount: result.symbolCount,
+        testCount: result.testCount,
+        warnings: result.warnings,
+      };
+      if (testResultStats) {
+        output.testResultStats = testResultStats;
+      }
+      console.log(JSON.stringify(output));
     } else {
       console.log(`Nodes: ${result.nodeCount}  Edges: ${result.edgeCount}`);
       if (result.symbolCount > 0) {
@@ -121,6 +142,11 @@ program
       } else {
         console.log(
           `  req: ${result.reqCount}  doc: ${result.docCount}  file: ${result.fileCount}  test: ${result.testCount}`,
+        );
+      }
+      if (testResultStats) {
+        console.log(
+          `\nTest Results: total=${testResultStats.totalTests} passed=${testResultStats.passedTests} failed=${testResultStats.failedTests}`,
         );
       }
       for (const w of result.warnings) {
@@ -178,12 +204,19 @@ program
   .option("--gate", "Exit 2 on any issue (for Stop hook)")
   .option("--diff", "Scope check to files changed in git diff")
   .option("--format <format>", "Output format: json | text", "text")
+  .option("--test-results <paths...>", "Test result files (Vitest JSON / JUnit XML)")
   .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((opts) => {
     const rootDir = process.cwd();
     const config = applyMode(loadConfig(rootDir), opts.mode);
     const { graph, warnings } = scan(rootDir, config);
     const lock = readLock(rootDir, config.lockFile);
+
+    const testResultPaths = opts.testResults ?? config.testResultPaths;
+    let testResults: TestResultMap | undefined;
+    if (testResultPaths && testResultPaths.length > 0) {
+      testResults = loadTestResults(testResultPaths, rootDir);
+    }
 
     let scopedNodeIds: Set<string> | undefined;
     if (opts.diff) {
@@ -212,7 +245,7 @@ program
         }
       }
     }
-    const result = check(graph, lock, scopedNodeIds);
+    const result = check(graph, lock, scopedNodeIds, testResults);
 
     if (opts.format === "json") {
       console.log(JSON.stringify({ ...result, warnings }));
@@ -241,11 +274,19 @@ program
       .choices(["json", "text"])
       .default("text"),
   )
+  .option("--test-results <paths...>", "Test result files (Vitest JSON / JUnit XML)")
+  .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((opts) => {
     const rootDir = process.cwd();
-    const config = loadConfig(rootDir);
+    const config = applyMode(loadConfig(rootDir), opts.mode);
     const { graph } = scan(rootDir, config);
-    const entries = computeCoverage(graph);
+
+    const testResultPaths = opts.testResults ?? config.testResultPaths;
+    let testResults: TestResultMap | undefined;
+    if (testResultPaths && testResultPaths.length > 0) {
+      testResults = loadTestResults(testResultPaths, rootDir);
+    }
+    const entries = computeCoverage(graph, testResults);
 
     if (opts.format === "json") {
       printCoverageJson(entries);

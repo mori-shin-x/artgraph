@@ -87,6 +87,14 @@ export interface ReqPatternConfig {
   heading?: string;
 }
 
+export interface TestResultRecord {
+  reqId: string;
+  testName: string;
+  passed: boolean;
+}
+
+export type TestResultMap = Map<string, TestResultRecord[]>;
+
 export interface SpectraceConfig {
   include: string[];
   specDirs: string[];
@@ -94,6 +102,7 @@ export interface SpectraceConfig {
   lockFile: string;
   reqPatterns?: ReqPatternConfig;
   mode?: "file" | "symbol";
+  testResultPaths?: string[];
 }
 
 export const DEFAULT_CONFIG: SpectraceConfig = {
