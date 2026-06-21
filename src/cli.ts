@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
@@ -8,11 +8,19 @@ import { check } from "./check.js";
 import { computeCoverage } from "./coverage.js";
 import { readLock } from "./lock.js";
 import { getGitDiffFiles } from "./diff.js";
+import type { SpectraceConfig } from "./types.js";
 import { runInit } from "./init.js";
 
 const program = new Command();
 
 program.name("spectrace").description("Typed artifact graph for TS/JS").version("0.1.0");
+
+function applyMode(config: SpectraceConfig, modeFlag?: string): SpectraceConfig {
+  if (modeFlag === "symbol" || modeFlag === "file") {
+    return { ...config, mode: modeFlag };
+  }
+  return config;
+}
 
 program
   .command("init")
@@ -74,9 +82,10 @@ program
   .command("scan")
   .description("Build the artifact graph and show summary")
   .option("--format <format>", "Output format: json | text", "text")
+  .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((opts) => {
     const rootDir = process.cwd();
-    const config = loadConfig(rootDir);
+    const config = applyMode(loadConfig(rootDir), opts.mode);
     const result = scan(rootDir, config);
 
     if (opts.format === "json") {
@@ -87,15 +96,22 @@ program
           reqCount: result.reqCount,
           docCount: result.docCount,
           fileCount: result.fileCount,
+          symbolCount: result.symbolCount,
           testCount: result.testCount,
           warnings: result.warnings,
         }),
       );
     } else {
       console.log(`Nodes: ${result.nodeCount}  Edges: ${result.edgeCount}`);
-      console.log(
-        `  req: ${result.reqCount}  doc: ${result.docCount}  file: ${result.fileCount}  test: ${result.testCount}`,
-      );
+      if (result.symbolCount > 0) {
+        console.log(
+          `  req: ${result.reqCount}  doc: ${result.docCount}  file: ${result.fileCount}  symbol: ${result.symbolCount}  test: ${result.testCount}`,
+        );
+      } else {
+        console.log(
+          `  req: ${result.reqCount}  doc: ${result.docCount}  file: ${result.fileCount}  test: ${result.testCount}`,
+        );
+      }
       for (const w of result.warnings) {
         if (w.type === "ambiguous-id") {
           const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
@@ -113,9 +129,10 @@ program
   .argument("[targets...]", "File paths or REQ-IDs")
   .option("--diff", "Use git diff to detect changed files")
   .option("--format <format>", "Output format: json | text", "text")
+  .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((targets: string[], opts) => {
     const rootDir = process.cwd();
-    const config = loadConfig(rootDir);
+    const config = applyMode(loadConfig(rootDir), opts.mode);
     const { graph } = scan(rootDir, config);
     const lock = readLock(rootDir, config.lockFile);
 
@@ -150,9 +167,10 @@ program
   .option("--gate", "Exit 2 on any issue (for Stop hook)")
   .option("--diff", "Scope check to files changed in git diff")
   .option("--format <format>", "Output format: json | text", "text")
+  .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((opts) => {
     const rootDir = process.cwd();
-    const config = loadConfig(rootDir);
+    const config = applyMode(loadConfig(rootDir), opts.mode);
     const { graph, warnings } = scan(rootDir, config);
     const lock = readLock(rootDir, config.lockFile);
 
@@ -175,6 +193,13 @@ program
         ...impactResult.affectedDocs.map((d) => d),
         ...impactResult.affectedFiles.map((f) => `file:${f}`),
       ]);
+      for (const f of impactResult.affectedFiles) {
+        for (const [id, node] of graph.nodes) {
+          if (node.kind === "symbol" && node.filePath === f) {
+            scopedNodeIds.add(id);
+          }
+        }
+      }
     }
     const result = check(graph, lock, scopedNodeIds);
 
@@ -233,9 +258,10 @@ program
 program
   .command("reconcile")
   .description("Update the lock file to match current state")
-  .action(() => {
+  .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
+  .action((opts) => {
     const rootDir = process.cwd();
-    const config = loadConfig(rootDir);
+    const config = applyMode(loadConfig(rootDir), opts.mode);
     const { graph } = scan(rootDir, config);
     reconcile(rootDir, config, graph);
     console.log(`Lock file updated: ${config.lockFile}`);

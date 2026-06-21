@@ -11,6 +11,7 @@ export interface ScanResult {
   reqCount: number;
   docCount: number;
   fileCount: number;
+  symbolCount: number;
   testCount: number;
 }
 
@@ -21,6 +22,7 @@ export function scan(rootDir: string, config: SpectraceConfig): ScanResult {
   let reqCount = 0;
   let docCount = 0;
   let fileCount = 0;
+  let symbolCount = 0;
   let testCount = 0;
 
   for (const node of graph.nodes.values()) {
@@ -32,8 +34,10 @@ export function scan(rootDir: string, config: SpectraceConfig): ScanResult {
         docCount++;
         break;
       case "file":
-      case "symbol":
         fileCount++;
+        break;
+      case "symbol":
+        symbolCount++;
         break;
       case "test":
         testCount++;
@@ -49,6 +53,7 @@ export function scan(rootDir: string, config: SpectraceConfig): ScanResult {
     reqCount,
     docCount,
     fileCount,
+    symbolCount,
     testCount,
   };
 }

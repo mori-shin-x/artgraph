@@ -93,6 +93,7 @@ export interface SpectraceConfig {
   testPatterns: string[];
   lockFile: string;
   reqPatterns?: ReqPatternConfig;
+  mode?: "file" | "symbol";
 }
 
 export const DEFAULT_CONFIG: SpectraceConfig = {
