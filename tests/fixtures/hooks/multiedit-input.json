@@ -1,0 +1,10 @@
+{
+  "tool_name": "MultiEdit",
+  "tool_input": {
+    "file_path": "src/auth.ts",
+    "edits": [
+      { "old_string": "x", "new_string": "y" },
+      { "old_string": "a", "new_string": "b" }
+    ]
+  }
+}

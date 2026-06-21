@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { Command, Option } from "commander";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
@@ -11,6 +13,13 @@ import { check } from "./check.js";
 import { computeCoverage } from "./coverage.js";
 import { readLock } from "./lock.js";
 import { getGitDiffFiles } from "./diff.js";
+import {
+  parseHookInput,
+  extractFilePaths,
+  toRelativePath,
+  formatAdditionalContext,
+  buildHookOutput,
+} from "./hook-pretool.js";
 import type { SpectraceConfig } from "./types.js";
 import { runInit } from "./init.js";
 
@@ -53,7 +62,9 @@ program
         }
 
         if (result.scanSummary) {
-          console.log(`\nNodes: ${result.scanSummary.nodeCount}  Edges: ${result.scanSummary.edgeCount}`);
+          console.log(
+            `\nNodes: ${result.scanSummary.nodeCount}  Edges: ${result.scanSummary.edgeCount}`,
+          );
           console.log(
             `  req: ${result.scanSummary.reqCount}  doc: ${result.scanSummary.docCount}  file: ${result.scanSummary.fileCount}  test: ${result.scanSummary.testCount}`,
           );
@@ -228,7 +239,11 @@ program
 program
   .command("coverage")
   .description("Show coverage status for each requirement")
-  .option("--format <format>", "Output format: json | text", "text")
+  .addOption(
+    new Option("--format <format>", "Output format: json | text")
+      .choices(["json", "text"])
+      .default("text"),
+  )
   .action((opts) => {
     const rootDir = process.cwd();
     const config = loadConfig(rootDir);
@@ -236,25 +251,9 @@ program
     const entries = computeCoverage(graph);
 
     if (opts.format === "json") {
-      const items = entries.map((e) => ({ reqId: e.reqId, status: e.status }));
-      const summary = {
-        total: entries.length,
-        verified: entries.filter((e) => e.status === "verified").length,
-        implOnly: entries.filter((e) => e.status === "impl-only").length,
-        untagged: entries.filter((e) => e.status === "untagged").length,
-      };
-      console.log(JSON.stringify({ items, summary }));
+      printCoverageJson(entries);
     } else {
-      console.log("COVERAGE:");
-      for (const e of entries) {
-        console.log(`  ${e.reqId}: ${e.status}`);
-      }
-      const verified = entries.filter((e) => e.status === "verified").length;
-      const implOnly = entries.filter((e) => e.status === "impl-only").length;
-      const untagged = entries.filter((e) => e.status === "untagged").length;
-      console.log(
-        `\nSummary: total=${entries.length} verified=${verified} impl-only=${implOnly} untagged=${untagged}`,
-      );
+      printCoverageText(entries);
     }
   });
 
@@ -288,6 +287,100 @@ program
       console.log(formatGraphJSON(graph, kindFilter));
     } else {
       console.log(formatGraphText(graph, kindFilter));
+    }
+  });
+
+program
+  .command("hook-pretool")
+  .description("PreToolUse hook: analyze impact before Edit/Write/MultiEdit")
+  .action(async () => {
+    const startTime = process.hrtime.bigint();
+    const rootDir = process.cwd();
+
+    try {
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) {
+        chunks.push(chunk);
+      }
+      const stdinText = Buffer.concat(chunks).toString("utf-8");
+
+      const input = parseHookInput(stdinText);
+      if (!input) {
+        process.stderr.write("spectrace: failed to parse hook input\n");
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      const filePaths = extractFilePaths(input);
+      if (filePaths.length === 0) {
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      const relativePaths = filePaths.map((fp) => toRelativePath(fp, rootDir));
+
+      if (!existsSync(resolve(rootDir, ".spectrace.json"))) {
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      let config;
+      try {
+        config = loadConfig(rootDir);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        process.stderr.write(`spectrace: config load failed: ${msg}\n`);
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      let graph;
+      try {
+        const scanResult = scan(rootDir, config);
+        graph = scanResult.graph;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        process.stderr.write(`spectrace: scan failed: ${msg}\n`);
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      const startIds = resolveStartIds(graph, relativePaths);
+      if (startIds.length === 0) {
+        process.stdout.write(JSON.stringify(buildHookOutput("spectrace impact: (none)")));
+        const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;
+        process.stderr.write(`spectrace: hook-pretool completed in ${Math.round(elapsed)}ms\n`);
+        return;
+      }
+
+      let lock;
+      try {
+        lock = readLock(rootDir, config.lockFile);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        process.stderr.write(`spectrace: lock read failed: ${msg}\n`);
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      let result;
+      try {
+        result = impact(graph, startIds, lock);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        process.stderr.write(`spectrace: impact failed: ${msg}\n`);
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      const additionalContext = formatAdditionalContext(result);
+      process.stdout.write(JSON.stringify(buildHookOutput(additionalContext)));
+
+      const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;
+      process.stderr.write(`spectrace: hook-pretool completed in ${Math.round(elapsed)}ms\n`);
+    } catch {
+      process.stderr.write("spectrace: failed to read stdin\n");
+      process.stdout.write(JSON.stringify(buildHookOutput("")));
     }
   });
 
@@ -339,6 +432,30 @@ function printImpactText(result: any) {
       `Summary: ${result.summary.docs} docs, ${result.summary.reqs} reqs, ${result.summary.files} files`,
     );
   }
+}
+
+function printCoverageJson(entries: { reqId: string; status: string }[]) {
+  const items = entries.map((e) => ({ reqId: e.reqId, status: e.status }));
+  const summary = {
+    total: entries.length,
+    verified: entries.filter((e) => e.status === "verified").length,
+    implOnly: entries.filter((e) => e.status === "impl-only").length,
+    untagged: entries.filter((e) => e.status === "untagged").length,
+  };
+  console.log(JSON.stringify({ items, summary }));
+}
+
+function printCoverageText(entries: { reqId: string; status: string }[]) {
+  console.log("COVERAGE:");
+  for (const e of entries) {
+    console.log(`  ${e.reqId}: ${e.status}`);
+  }
+  const verified = entries.filter((e) => e.status === "verified").length;
+  const implOnly = entries.filter((e) => e.status === "impl-only").length;
+  const untagged = entries.filter((e) => e.status === "untagged").length;
+  console.log(
+    `\nSummary: total=${entries.length} verified=${verified} impl-only=${implOnly} untagged=${untagged}`,
+  );
 }
 
 function printCheckText(result: any) {

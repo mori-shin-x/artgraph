@@ -1,0 +1,8 @@
+{
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "src/auth.ts",
+    "old_string": "const x = 1;",
+    "new_string": "const x = 2;"
+  }
+}
