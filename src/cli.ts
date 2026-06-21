@@ -5,9 +5,11 @@ import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
 import { check } from "./check.js";
+import { computeCoverage } from "./coverage.js";
 import { readLock } from "./lock.js";
 import { getGitDiffFiles } from "./diff.js";
 import type { SpectraceConfig } from "./types.js";
+import { runInit } from "./init.js";
 
 const program = new Command();
 
@@ -19,6 +21,62 @@ function applyMode(config: SpectraceConfig, modeFlag?: string): SpectraceConfig 
   }
   return config;
 }
+
+program
+  .command("init")
+  .description("Initialize spectrace for this project")
+  .option("--force", "Overwrite existing .spectrace.json")
+  .option("--no-scan", "Generate config only, skip scan and reconcile")
+  .option("--format <format>", "Output format: json | text", "text")
+  .action((opts) => {
+    const rootDir = process.cwd();
+    try {
+      const result = runInit(rootDir, { force: opts.force, noScan: !opts.scan });
+
+      if (opts.format === "json") {
+        console.log(
+          JSON.stringify({
+            configPath: result.configPath,
+            config: result.config,
+            sddTools: result.sddTools,
+            scanSummary: result.scanSummary ?? null,
+            warnings: result.warnings,
+            lockPath: result.lockPath ?? null,
+          }),
+        );
+      } else {
+        for (const tool of result.sddTools) {
+          console.log(`${tool.name} detected (${tool.marker}/)`);
+        }
+
+        if (result.scanSummary) {
+          console.log(`\nNodes: ${result.scanSummary.nodeCount}  Edges: ${result.scanSummary.edgeCount}`);
+          console.log(
+            `  req: ${result.scanSummary.reqCount}  doc: ${result.scanSummary.docCount}  file: ${result.scanSummary.fileCount}  test: ${result.scanSummary.testCount}`,
+          );
+          for (const w of result.warnings) {
+            if (w.type === "ambiguous-id") {
+              const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
+              console.error(`WARNING: ambiguous ID "${w.id}"${hint}`);
+            } else {
+              console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
+            }
+          }
+          console.log(`\nCreated .spectrace.json`);
+          console.log(`Created ${result.config.lockFile}`);
+          console.log(`\nRun "spectrace check" to verify traceability.`);
+          console.log(`Run "spectrace impact --diff" to see impact of your changes.`);
+        } else {
+          console.log(`Created .spectrace.json (scan skipped)`);
+          console.log(`\nTo scan later, run: spectrace scan && spectrace reconcile`);
+        }
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`Error: ${msg}`);
+      process.exit(1);
+    }
+  });
 
 program
   .command("scan")
@@ -161,6 +219,39 @@ program
 
     if (opts.gate && !result.pass) {
       process.exit(2);
+    }
+  });
+
+program
+  .command("coverage")
+  .description("Show coverage status for each requirement")
+  .option("--format <format>", "Output format: json | text", "text")
+  .action((opts) => {
+    const rootDir = process.cwd();
+    const config = loadConfig(rootDir);
+    const { graph } = scan(rootDir, config);
+    const entries = computeCoverage(graph);
+
+    if (opts.format === "json") {
+      const items = entries.map((e) => ({ reqId: e.reqId, status: e.status }));
+      const summary = {
+        total: entries.length,
+        verified: entries.filter((e) => e.status === "verified").length,
+        implOnly: entries.filter((e) => e.status === "impl-only").length,
+        untagged: entries.filter((e) => e.status === "untagged").length,
+      };
+      console.log(JSON.stringify({ items, summary }));
+    } else {
+      console.log("COVERAGE:");
+      for (const e of entries) {
+        console.log(`  ${e.reqId}: ${e.status}`);
+      }
+      const verified = entries.filter((e) => e.status === "verified").length;
+      const implOnly = entries.filter((e) => e.status === "impl-only").length;
+      const untagged = entries.filter((e) => e.status === "untagged").length;
+      console.log(
+        `\nSummary: total=${entries.length} verified=${verified} impl-only=${implOnly} untagged=${untagged}`,
+      );
     }
   });
 
