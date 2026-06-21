@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import { Command, Option } from "commander";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
@@ -8,6 +10,13 @@ import { check } from "./check.js";
 import { computeCoverage } from "./coverage.js";
 import { readLock } from "./lock.js";
 import { getGitDiffFiles } from "./diff.js";
+import {
+  parseHookInput,
+  extractFilePaths,
+  toRelativePath,
+  formatAdditionalContext,
+  buildHookOutput,
+} from "./hook-pretool.js";
 import type { SpectraceConfig } from "./types.js";
 import { runInit } from "./init.js";
 
@@ -255,6 +264,111 @@ program
     const { graph } = scan(rootDir, config);
     reconcile(rootDir, config, graph);
     console.log(`Lock file updated: ${config.lockFile}`);
+  });
+
+program
+  .command("hook-pretool")
+  .description("PreToolUse hook: analyze impact before Edit/Write/MultiEdit")
+  .action(async () => {
+    const startTime = process.hrtime.bigint();
+    const rootDir = process.cwd();
+
+    try {
+      // stdin を読み取る
+      const chunks: Buffer[] = [];
+      for await (const chunk of process.stdin) {
+        chunks.push(chunk);
+      }
+      const stdinText = Buffer.concat(chunks).toString("utf-8");
+
+      // JSON パース
+      const input = parseHookInput(stdinText);
+      if (!input) {
+        process.stderr.write("spectrace: failed to parse hook input\n");
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      // file_path 抽出
+      const filePaths = extractFilePaths(input);
+      if (filePaths.length === 0) {
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      // 相対パスに変換
+      const relativePaths = filePaths.map((fp) => toRelativePath(fp, rootDir));
+
+      // .spectrace.json が存在しない場合は空で返す（graceful degradation）
+      if (!existsSync(resolve(rootDir, ".spectrace.json"))) {
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      // 設定読み込み
+      let config;
+      try {
+        config = loadConfig(rootDir);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        process.stderr.write(`spectrace: config load failed: ${msg}\n`);
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      // グラフ構築
+      let graph;
+      try {
+        const scanResult = scan(rootDir, config);
+        graph = scanResult.graph;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        process.stderr.write(`spectrace: scan failed: ${msg}\n`);
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      // 開始ノード解決
+      const startIds = resolveStartIds(graph, relativePaths);
+      if (startIds.length === 0) {
+        process.stdout.write(JSON.stringify(buildHookOutput("spectrace impact: (none)")));
+        const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;
+        process.stderr.write(`spectrace: hook-pretool completed in ${Math.round(elapsed)}ms\n`);
+        return;
+      }
+
+      // lock ファイル読み込み
+      let lock;
+      try {
+        lock = readLock(rootDir, config.lockFile);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        process.stderr.write(`spectrace: lock read failed: ${msg}\n`);
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      // impact 計算
+      let result;
+      try {
+        result = impact(graph, startIds, lock);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        process.stderr.write(`spectrace: impact failed: ${msg}\n`);
+        process.stdout.write(JSON.stringify(buildHookOutput("")));
+        return;
+      }
+
+      // 出力生成
+      const additionalContext = formatAdditionalContext(result);
+      process.stdout.write(JSON.stringify(buildHookOutput(additionalContext)));
+
+      const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;
+      process.stderr.write(`spectrace: hook-pretool completed in ${Math.round(elapsed)}ms\n`);
+    } catch {
+      process.stderr.write("spectrace: failed to read stdin\n");
+      process.stdout.write(JSON.stringify(buildHookOutput("")));
+    }
   });
 
 function printImpactText(result: any) {
