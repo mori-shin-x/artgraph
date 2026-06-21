@@ -3,7 +3,10 @@ dist/
 .trace.lock
 
 # Dev tooling (personal)
-.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/spectrace-*.md
 .specify/
 specs/
 CLAUDE.md
