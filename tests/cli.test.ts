@@ -5,7 +5,6 @@ import { existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
 import { run, cleanup, CLI, FIXTURE_DIR, LOCK_PATH } from "./helpers.js";
 
 const HOOKS_DIR = resolve(import.meta.dirname, "fixtures/hooks");
-const SPECTRACE_CONFIG_PATH = resolve(FIXTURE_DIR, ".spectrace.json");
 
 function runWithStdin(
   args: string[],
@@ -390,27 +389,8 @@ describe("CLI: symbol mode", () => {
 // hook-pretool
 // ---------------------------------------------------------------------------
 
-function createSpectraceConfig() {
-  writeFileSync(
-    SPECTRACE_CONFIG_PATH,
-    JSON.stringify({
-      include: ["src/**/*.ts"],
-      specDirs: ["specs"],
-      testPatterns: ["tests/**/*.test.ts"],
-      lockFile: ".trace.lock",
-    }),
-  );
-}
-
-function cleanupConfig() {
-  if (existsSync(SPECTRACE_CONFIG_PATH)) unlinkSync(SPECTRACE_CONFIG_PATH);
-}
-
 describe("CLI: hook-pretool", () => {
-  afterEach(cleanupConfig);
-
   it("should output valid hookSpecificOutput for Edit input", { timeout: 30000 }, () => {
-    createSpectraceConfig();
     const stdin = readFileSync(resolve(HOOKS_DIR, "edit-input.json"), "utf-8");
     const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
     expect(exitCode).toBe(0);
@@ -421,7 +401,6 @@ describe("CLI: hook-pretool", () => {
   });
 
   it("should output valid hookSpecificOutput for Write input", { timeout: 30000 }, () => {
-    createSpectraceConfig();
     const stdin = readFileSync(resolve(HOOKS_DIR, "write-input.json"), "utf-8");
     const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
     expect(exitCode).toBe(0);
@@ -432,7 +411,6 @@ describe("CLI: hook-pretool", () => {
   });
 
   it("should output valid hookSpecificOutput for MultiEdit input", { timeout: 30000 }, () => {
-    createSpectraceConfig();
     const stdin = readFileSync(resolve(HOOKS_DIR, "multiedit-input.json"), "utf-8");
     const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
     expect(exitCode).toBe(0);
@@ -443,7 +421,6 @@ describe("CLI: hook-pretool", () => {
   });
 
   it("should include impact info for a tracked file", { timeout: 30000 }, () => {
-    createSpectraceConfig();
     const stdin = JSON.stringify({
       tool_name: "Edit",
       tool_input: { file_path: "src/auth/login.ts", old_string: "x", new_string: "y" },
@@ -456,7 +433,6 @@ describe("CLI: hook-pretool", () => {
   });
 
   it("should output (none) for an untracked file like README.md", { timeout: 30000 }, () => {
-    createSpectraceConfig();
     const stdin = JSON.stringify({
       tool_name: "Edit",
       tool_input: { file_path: "README.md", old_string: "x", new_string: "y" },
@@ -540,8 +516,6 @@ describe("CLI: hook-pretool graceful degradation", () => {
 // hook-pretool: stderr content verification
 // ---------------------------------------------------------------------------
 describe("CLI: hook-pretool stderr", () => {
-  afterEach(cleanupConfig);
-
   it("should output 'failed to parse hook input' to stderr for invalid JSON", { timeout: 30000 }, () => {
     const { stderr, exitCode } = runWithStdin(["hook-pretool"], "{not valid json}");
     expect(exitCode).toBe(0);
@@ -549,7 +523,6 @@ describe("CLI: hook-pretool stderr", () => {
   });
 
   it("should output 'completed in' to stderr on successful run", { timeout: 30000 }, () => {
-    createSpectraceConfig();
     const stdin = JSON.stringify({
       tool_name: "Edit",
       tool_input: { file_path: "src/auth/login.ts", old_string: "x", new_string: "y" },
