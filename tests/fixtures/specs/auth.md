@@ -2,7 +2,7 @@
 spectrace:
   node_id: "doc:auth-design"
   depends_on:
-    - { id: "AUTH-001", relation: implements }
+    - AUTH-001
 ---
 
 # Auth Module Design

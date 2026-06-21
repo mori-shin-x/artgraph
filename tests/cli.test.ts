@@ -230,6 +230,215 @@ describe("CLI: reconcile then check (no drift)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// graph
+// ---------------------------------------------------------------------------
+describe("CLI: graph", () => {
+  it("T054: should output text format by default", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["graph"]);
+    expect(exitCode).toBe(0);
+    expect(stdout.length).toBeGreaterThan(0);
+  });
+
+  it("T054b: should output JSON format with --format json", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["graph", "--format", "json"]);
+    expect(exitCode).toBe(0);
+
+    const parsed = JSON.parse(stdout);
+    expect(parsed.nodes).toBeDefined();
+    expect(parsed.edges).toBeDefined();
+    expect(Array.isArray(parsed.nodes)).toBe(true);
+    expect(Array.isArray(parsed.edges)).toBe(true);
+  });
+
+  it("T054c: should filter by --kind doc", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["graph", "--format", "json", "--kind", "doc"]);
+    expect(exitCode).toBe(0);
+
+    const parsed = JSON.parse(stdout);
+    for (const node of parsed.nodes) {
+      expect(node.kind).toBe("doc");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// impact --depth
+// ---------------------------------------------------------------------------
+describe("CLI: impact --depth", () => {
+  it("T058: should accept --depth option", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["impact", "AUTH-001", "--depth", "1", "--format", "json"]);
+    expect(exitCode).toBe(0);
+
+    const result = JSON.parse(stdout);
+    expect(result.affectedReqs).toContain("AUTH-001");
+  });
+
+  it("T059: should show summary in text output", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["impact", "AUTH-001"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Summary:");
+    expect(stdout).toMatch(/\d+ docs/);
+    expect(stdout).toMatch(/\d+ reqs/);
+    expect(stdout).toMatch(/\d+ files/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// impact --depth validation
+// ---------------------------------------------------------------------------
+describe("CLI: impact --depth validation", () => {
+  it("should error on NaN --depth value", { timeout: 30000 }, () => {
+    const { exitCode, stderr } = run(["impact", "AUTH-001", "--depth", "abc"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Invalid --depth value");
+  });
+
+  it("should error on negative --depth value", { timeout: 30000 }, () => {
+    const { exitCode, stderr } = run(["impact", "AUTH-001", "--depth", "-1"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Invalid --depth value");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// graph --kind validation
+// ---------------------------------------------------------------------------
+describe("CLI: graph --kind validation", () => {
+  it("should error on invalid --kind value", { timeout: 30000 }, () => {
+    const { exitCode, stderr } = run(["graph", "--kind", "invalid"]);
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toMatch(/allowed choices|invalid/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// impact: 3-stage dependency chain E2E
+// ---------------------------------------------------------------------------
+describe("CLI: impact 3-stage dependency chain", () => {
+  it("should trace through full doc derives_from chain", { timeout: 30000 }, () => {
+    // requirements -> design -> tasks (via derives_from chain in doc-chain fixtures)
+    // Starting from "requirements" should reach the whole chain including tasks
+    const { stdout, exitCode } = run(["impact", "requirements", "--format", "json"]);
+    expect(exitCode).toBe(0);
+
+    const result = JSON.parse(stdout);
+    expect(result.affectedDocs).toContain("requirements");
+    expect(result.affectedDocs).toContain("design");
+    // tasks.md (auto-generated doc ID) should also be reached via design -> tasks chain
+    const hasTasksDoc = result.affectedDocs.some((d: string) => d.includes("tasks"));
+    expect(hasTasksDoc).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// impact: contains reverse + --depth limit
+// ---------------------------------------------------------------------------
+describe("CLI: impact contains reverse + --depth limit", () => {
+  it("should reach req from doc via contains within depth limit", { timeout: 30000 }, () => {
+    // doc:auth-design --contains--> AUTH-001
+    // With depth=1, starting from doc:auth-design should reach AUTH-001
+    const { stdout, exitCode } = run([
+      "impact",
+      "doc:auth-design",
+      "--depth",
+      "1",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+
+    const result = JSON.parse(stdout);
+    expect(result.affectedReqs).toContain("AUTH-001");
+  });
+
+  it("should not reach impl files from doc with --depth 1", { timeout: 30000 }, () => {
+    // doc:auth-design --contains(depth1)--> AUTH-001 --implements(depth2)--> file:src/auth/login.ts
+    // With depth=1, should NOT reach the implementation files (they are at depth 2)
+    const { stdout, exitCode } = run([
+      "impact",
+      "doc:auth-design",
+      "--depth",
+      "1",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+
+    const result = JSON.parse(stdout);
+    expect(result.affectedFiles).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CLI warnings (orphan-doc, invalid-relation)
+// ---------------------------------------------------------------------------
+describe("CLI: warning output", () => {
+  it("should output orphan-doc warning to stderr", { timeout: 30000 }, () => {
+    const { mkdirSync, writeFileSync, rmSync: rm } = require("node:fs");
+    const { mkdtempSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    const tmpRoot = mkdtempSync(join(tmpdir(), "spectrace-warn-"));
+    mkdirSync(join(tmpRoot, "specs"), { recursive: true });
+    mkdirSync(join(tmpRoot, "src"), { recursive: true });
+    writeFileSync(join(tmpRoot, "src", "app.ts"), "export const x = 1;\n");
+    writeFileSync(
+      join(tmpRoot, ".spectrace.json"),
+      JSON.stringify({ include: ["src/**/*.ts"], specDirs: ["specs"] }),
+    );
+    writeFileSync(
+      join(tmpRoot, "specs", "orphan.md"),
+      `---\nspectrace:\n  node_id: "orphan-src"\n  derives_from:\n    - nonexistent-target\n---\n# Orphan\n`,
+    );
+
+    try {
+      const proc = spawnSync("node", [CLI, "scan"], {
+        encoding: "utf-8",
+        cwd: tmpRoot,
+        timeout: 30000,
+      });
+      expect(proc.status).toBe(0);
+      expect(proc.stderr).toContain("orphan-doc");
+      expect(proc.stderr).toContain("nonexistent-target");
+    } finally {
+      rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("should output invalid-relation warning to stderr", { timeout: 30000 }, () => {
+    const { mkdirSync, writeFileSync, rmSync: rm } = require("node:fs");
+    const { mkdtempSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    const tmpRoot = mkdtempSync(join(tmpdir(), "spectrace-warn-"));
+    mkdirSync(join(tmpRoot, "specs"), { recursive: true });
+    mkdirSync(join(tmpRoot, "src"), { recursive: true });
+    writeFileSync(join(tmpRoot, "src", "app.ts"), "export const x = 1;\n");
+    writeFileSync(
+      join(tmpRoot, ".spectrace.json"),
+      JSON.stringify({ include: ["src/**/*.ts"], specDirs: ["specs"] }),
+    );
+    writeFileSync(
+      join(tmpRoot, "specs", "invalid.md"),
+      `---\nspectrace:\n  node_id: "inv-src"\n  extends:\n    - some-doc\n---\n# Invalid\n`,
+    );
+
+    try {
+      const proc = spawnSync("node", [CLI, "scan"], {
+        encoding: "utf-8",
+        cwd: tmpRoot,
+        timeout: 30000,
+      });
+      expect(proc.status).toBe(0);
+      expect(proc.stderr).toContain("invalid relation");
+      expect(proc.stderr).toContain("extends");
+    } finally {
+      rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // init
 // ---------------------------------------------------------------------------
 describe("CLI: init", () => {
@@ -338,6 +547,7 @@ describe("CLI: error cases", () => {
     expect(stdout).toContain("impact");
     expect(stdout).toContain("check");
     expect(stdout).toContain("reconcile");
+    expect(stdout).toContain("graph");
   });
 });
 
