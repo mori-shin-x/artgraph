@@ -1,37 +1,22 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { DEFAULT_CONFIG, type SpectraceConfig } from "./types.js";
+import {
+  DEFAULT_CONFIG,
+  type SpectraceConfig,
+  type ScanSummary,
+  type SddToolInfo,
+  type DetectionResult,
+  type InitOptions,
+} from "./types.js";
 import { scan, reconcile } from "./scan.js";
-
-export interface SddToolInfo {
-  name: string;
-  marker: string;
-}
-
-export interface DetectionResult {
-  hasSrc: boolean;
-  hasSpecs: boolean;
-  hasDocs: boolean;
-  sddTools: SddToolInfo[];
-}
-
-export interface InitOptions {
-  force?: boolean;
-  noScan?: boolean;
-}
+import type { BuildWarning } from "./graph/builder.js";
 
 export interface InitResult {
   configPath: string;
   config: SpectraceConfig;
   sddTools: SddToolInfo[];
-  scanSummary?: {
-    nodeCount: number;
-    edgeCount: number;
-    reqCount: number;
-    docCount: number;
-    fileCount: number;
-    testCount: number;
-  };
+  scanSummary?: ScanSummary;
+  warnings: BuildWarning[];
   lockPath?: string;
 }
 
@@ -82,14 +67,14 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   const detection = detectProject(abs);
   const config = generateConfig(detection);
 
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
-
   if (options.noScan) {
-    return { configPath, config, sddTools: detection.sddTools };
+    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    return { configPath, config, sddTools: detection.sddTools, warnings: [] };
   }
 
   const result = scan(abs, config);
   reconcile(abs, config, result.graph);
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 
   const lockPath = resolve(abs, config.lockFile);
 
@@ -105,6 +90,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
       fileCount: result.fileCount,
       testCount: result.testCount,
     },
+    warnings: result.warnings,
     lockPath,
   };
 }
