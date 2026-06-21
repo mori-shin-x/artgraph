@@ -69,6 +69,32 @@ export interface CheckResult {
   pass: boolean;
 }
 
+export interface ScanSummary {
+  nodeCount: number;
+  edgeCount: number;
+  reqCount: number;
+  docCount: number;
+  fileCount: number;
+  testCount: number;
+}
+
+export interface SddToolInfo {
+  name: string;
+  marker: string;
+}
+
+export interface DetectionResult {
+  hasSrc: boolean;
+  hasSpecs: boolean;
+  hasDocs: boolean;
+  sddTools: SddToolInfo[];
+}
+
+export interface InitOptions {
+  force?: boolean;
+  noScan?: boolean;
+}
+
 export interface ReqPatternConfig {
   listItem?: string;
   heading?: string;
@@ -86,6 +112,7 @@ export interface SpectraceConfig {
   lockFile: string;
   reqPatterns?: ReqPatternConfig;
   docGraph?: DocGraphConfig;
+  mode?: "file" | "symbol";
 }
 
 export const DEFAULT_CONFIG: SpectraceConfig = {
