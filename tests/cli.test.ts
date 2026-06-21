@@ -230,6 +230,60 @@ describe("CLI: reconcile then check (no drift)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// graph
+// ---------------------------------------------------------------------------
+describe("CLI: graph", () => {
+  it("T054: should output text format by default", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["graph"]);
+    expect(exitCode).toBe(0);
+    expect(stdout.length).toBeGreaterThan(0);
+  });
+
+  it("T054b: should output JSON format with --format json", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["graph", "--format", "json"]);
+    expect(exitCode).toBe(0);
+
+    const parsed = JSON.parse(stdout);
+    expect(parsed.nodes).toBeDefined();
+    expect(parsed.edges).toBeDefined();
+    expect(Array.isArray(parsed.nodes)).toBe(true);
+    expect(Array.isArray(parsed.edges)).toBe(true);
+  });
+
+  it("T054c: should filter by --kind doc", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["graph", "--format", "json", "--kind", "doc"]);
+    expect(exitCode).toBe(0);
+
+    const parsed = JSON.parse(stdout);
+    for (const node of parsed.nodes) {
+      expect(node.kind).toBe("doc");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// impact --depth
+// ---------------------------------------------------------------------------
+describe("CLI: impact --depth", () => {
+  it("T058: should accept --depth option", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["impact", "AUTH-001", "--depth", "1", "--format", "json"]);
+    expect(exitCode).toBe(0);
+
+    const result = JSON.parse(stdout);
+    expect(result.affectedReqs).toContain("AUTH-001");
+  });
+
+  it("T059: should show summary in text output", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["impact", "AUTH-001"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Summary:");
+    expect(stdout).toMatch(/\d+ docs/);
+    expect(stdout).toMatch(/\d+ reqs/);
+    expect(stdout).toMatch(/\d+ files/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // error cases
 // ---------------------------------------------------------------------------
 describe("CLI: error cases", () => {
@@ -259,5 +313,6 @@ describe("CLI: error cases", () => {
     expect(stdout).toContain("impact");
     expect(stdout).toContain("check");
     expect(stdout).toContain("reconcile");
+    expect(stdout).toContain("graph");
   });
 });

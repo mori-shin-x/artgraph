@@ -4,6 +4,9 @@ import { Command } from "commander";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
+import { formatGraphText, formatGraphJSON } from "./graph/format.js";
+import type { NodeKind } from "./types.js";
+import type { BuildWarning } from "./graph/builder.js";
 import { check } from "./check.js";
 import { readLock } from "./lock.js";
 import { getGitDiffFiles } from "./diff.js";
@@ -38,14 +41,7 @@ program
       console.log(
         `  req: ${result.reqCount}  doc: ${result.docCount}  file: ${result.fileCount}  test: ${result.testCount}`,
       );
-      for (const w of result.warnings) {
-        if (w.type === "ambiguous-id") {
-          const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
-          console.error(`WARNING: ambiguous ID "${w.id}"${hint}`);
-        } else {
-          console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
-        }
-      }
+      printWarnings(result.warnings);
     }
   });
 
@@ -54,6 +50,7 @@ program
   .description("Show impact from changed files or REQ-IDs")
   .argument("[targets...]", "File paths or REQ-IDs")
   .option("--diff", "Use git diff to detect changed files")
+  .option("--depth <depth>", "Limit BFS traversal depth")
   .option("--format <format>", "Output format: json | text", "text")
   .action((targets: string[], opts) => {
     const rootDir = process.cwd();
@@ -77,7 +74,8 @@ program
       process.exit(1);
     }
 
-    const result = impact(graph, startIds, lock);
+    const maxDepth = opts.depth !== undefined ? parseInt(opts.depth, 10) : undefined;
+    const result = impact(graph, startIds, lock, maxDepth);
 
     if (opts.format === "json") {
       console.log(JSON.stringify(result));
@@ -124,14 +122,7 @@ program
       console.log(JSON.stringify({ ...result, warnings }));
     } else {
       printCheckText(result);
-      for (const w of warnings) {
-        if (w.type === "ambiguous-id") {
-          const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
-          console.error(`WARNING: ambiguous ID "${w.id}"${hint}`);
-        } else {
-          console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
-        }
-      }
+      printWarnings(warnings);
     }
 
     if (opts.gate && !result.pass) {
@@ -150,6 +141,51 @@ program
     console.log(`Lock file updated: ${config.lockFile}`);
   });
 
+program
+  .command("graph")
+  .description("Show the artifact graph")
+  .option("--format <format>", "Output format: text | json", "text")
+  .option("--kind <kind>", "Filter by node kind: doc | req | file | test")
+  .action((opts) => {
+    const rootDir = process.cwd();
+    const config = loadConfig(rootDir);
+    const { graph } = scan(rootDir, config);
+
+    const kindFilter = opts.kind as NodeKind | undefined;
+
+    if (opts.format === "json") {
+      console.log(formatGraphJSON(graph, kindFilter));
+    } else {
+      console.log(formatGraphText(graph, kindFilter));
+    }
+  });
+
+function printWarnings(warnings: BuildWarning[]) {
+  for (const w of warnings) {
+    switch (w.type) {
+      case "ambiguous-id": {
+        const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
+        console.error(`WARNING: ambiguous ID "${w.id}"${hint}`);
+        break;
+      }
+      case "duplicate-id":
+        console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
+        break;
+      case "orphan-doc":
+        console.error(`WARNING: orphan-doc "${w.id}" referenced from ${w.files.join(", ")}`);
+        break;
+      case "invalid-relation":
+        console.error(
+          `WARNING: invalid relation "${w.id}" in ${w.files.join(", ")}. Use "derives_from" or "depends_on"`,
+        );
+        break;
+      case "reserved-prefix":
+        console.error(`WARNING: reserved prefix in ID "${w.id}" in ${w.files.join(", ")}`);
+        break;
+    }
+  }
+}
+
 function printImpactText(result: any) {
   if (result.affectedReqs.length > 0) {
     console.log("Affected REQs:");
@@ -166,6 +202,11 @@ function printImpactText(result: any) {
   if (result.drifted.length > 0) {
     console.log("Drifted:");
     for (const d of result.drifted) console.log(`  ${d.nodeId} (${d.kind})`);
+  }
+  if (result.summary) {
+    console.log(
+      `Summary: ${result.summary.docs} docs, ${result.summary.reqs} reqs, ${result.summary.files} files`,
+    );
   }
 }
 
