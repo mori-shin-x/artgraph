@@ -261,3 +261,47 @@ describe("CLI: error cases", () => {
     expect(stdout).toContain("reconcile");
   });
 });
+
+// ---------------------------------------------------------------------------
+// symbol mode
+// ---------------------------------------------------------------------------
+const SYM_FIXTURE = resolve(import.meta.dirname, "fixtures/symbol-level");
+const SYM_LOCK_PATH = resolve(SYM_FIXTURE, ".trace.lock");
+
+function runSym(args: string[]): { stdout: string; stderr: string; exitCode: number } {
+  try {
+    const stdout = execFileSync("node", [CLI, ...args], {
+      encoding: "utf-8",
+      cwd: SYM_FIXTURE,
+      timeout: 30000,
+    });
+    return { stdout, stderr: "", exitCode: 0 };
+  } catch (e: any) {
+    return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.status ?? 1 };
+  }
+}
+
+describe("CLI: symbol mode", () => {
+  afterEach(() => {
+    if (existsSync(SYM_LOCK_PATH)) unlinkSync(SYM_LOCK_PATH);
+  });
+
+  it("should show symbol count with --mode symbol", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = runSym(["scan", "--mode", "symbol"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("symbol:");
+  });
+
+  it("should not show symbol count in file mode", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = runSym(["scan"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain("symbol:");
+  });
+
+  it("should include symbolCount in JSON output", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = runSym(["scan", "--mode", "symbol", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.symbolCount).toBeGreaterThan(0);
+  });
+});

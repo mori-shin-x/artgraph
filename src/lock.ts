@@ -26,7 +26,7 @@ export function buildLockFromGraph(graph: ArtifactGraph): LockFile {
   const now = new Date().toISOString();
 
   for (const [id, node] of graph.nodes) {
-    if (node.kind !== "req" && node.kind !== "doc") continue;
+    if (node.kind !== "req" && node.kind !== "doc" && node.kind !== "symbol") continue;
 
     const entry: LockEntry = {
       contentHash: node.contentHash,
