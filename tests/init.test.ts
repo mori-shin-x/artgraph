@@ -12,7 +12,7 @@ function cleanup(dir: string) {
   rmSync(dir, { recursive: true, force: true });
 }
 
-describe("init", () => {
+describe("detectProject", () => {
   let tmp: string;
 
   beforeEach(() => {
@@ -23,7 +23,71 @@ describe("init", () => {
     cleanup(tmp);
   });
 
-  // T003: basic init generates .spectrace.json
+  it("detects src/ directory", () => {
+    mkdirSync(join(tmp, "src"));
+    const result = detectProject(tmp);
+    expect(result.hasSrc).toBe(true);
+    expect(result.hasSpecs).toBe(false);
+    expect(result.hasDocs).toBe(false);
+  });
+
+  it("detects specs/ and docs/ directories", () => {
+    mkdirSync(join(tmp, "specs"));
+    mkdirSync(join(tmp, "docs"));
+    const result = detectProject(tmp);
+    expect(result.hasSpecs).toBe(true);
+    expect(result.hasDocs).toBe(true);
+  });
+
+  it("detects both .specify/ and .kiro/ simultaneously", () => {
+    mkdirSync(join(tmp, ".specify"));
+    mkdirSync(join(tmp, ".kiro"));
+    const result = detectProject(tmp);
+    expect(result.sddTools).toHaveLength(2);
+    expect(result.sddTools).toContainEqual({ name: "Spec Kit", marker: ".specify" });
+    expect(result.sddTools).toContainEqual({ name: "Kiro", marker: ".kiro" });
+  });
+
+  it("returns empty sddTools when no SDD tool dirs exist", () => {
+    const result = detectProject(tmp);
+    expect(result.sddTools).toEqual([]);
+  });
+});
+
+describe("generateConfig", () => {
+  it("uses src/**/*.ts when hasSrc is true", () => {
+    const config = generateConfig({ hasSrc: true, hasSpecs: false, hasDocs: false, sddTools: [] });
+    expect(config.include).toContain("src/**/*.ts");
+  });
+
+  it("uses **/*.ts when hasSrc is false", () => {
+    const config = generateConfig({ hasSrc: false, hasSpecs: false, hasDocs: false, sddTools: [] });
+    expect(config.include).toContain("**/*.ts");
+    expect(config.include).not.toContain("src/**/*.ts");
+  });
+
+  it("includes both specs and docs in specDirs when both exist", () => {
+    const config = generateConfig({ hasSrc: true, hasSpecs: true, hasDocs: true, sddTools: [] });
+    expect(config.specDirs).toEqual(["specs", "docs"]);
+  });
+
+  it("falls back to default specDirs when neither specs/ nor docs/ exist", () => {
+    const config = generateConfig({ hasSrc: true, hasSpecs: false, hasDocs: false, sddTools: [] });
+    expect(config.specDirs).toEqual(["specs", "docs"]);
+  });
+});
+
+describe("runInit", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(tmp);
+  });
+
   it("generates .spectrace.json with defaults for a project with src/", () => {
     mkdirSync(join(tmp, "src"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
@@ -35,7 +99,6 @@ describe("init", () => {
     expect(config.include).toContain("src/**/*.ts");
   });
 
-  // T004: scan produces .trace.lock
   it("generates .trace.lock after scan", () => {
     mkdirSync(join(tmp, "src"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
@@ -46,7 +109,6 @@ describe("init", () => {
     expect(result.lockPath).toBeDefined();
   });
 
-  // T005: returns scan summary
   it("returns scan summary with node and edge counts", () => {
     mkdirSync(join(tmp, "src"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
@@ -62,7 +124,15 @@ describe("init", () => {
     expect(typeof result.scanSummary!.testCount).toBe("number");
   });
 
-  // T010: no specs/ but docs/ → specDirs: ["docs"]
+  it("returns warnings array", () => {
+    mkdirSync(join(tmp, "src"));
+    writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
+
+    const result = runInit(tmp);
+
+    expect(Array.isArray(result.warnings)).toBe(true);
+  });
+
   it("sets specDirs to docs when only docs/ exists", () => {
     mkdirSync(join(tmp, "src"));
     mkdirSync(join(tmp, "docs"));
@@ -74,7 +144,6 @@ describe("init", () => {
     expect(config.specDirs).toEqual(["docs"]);
   });
 
-  // T011: no src/ → include widens to **/*.ts
   it("widens include pattern when src/ does not exist", () => {
     writeFileSync(join(tmp, "app.ts"), "export const x = 1;\n");
 
@@ -85,7 +154,18 @@ describe("init", () => {
     expect(config.include).not.toContain("src/**/*.ts");
   });
 
-  // T012: .specify/ → Spec Kit detected
+  it("includes both specs and docs when both directories exist", () => {
+    mkdirSync(join(tmp, "src"));
+    mkdirSync(join(tmp, "specs"));
+    mkdirSync(join(tmp, "docs"));
+    writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
+
+    const result = runInit(tmp);
+
+    const config = JSON.parse(readFileSync(join(tmp, ".spectrace.json"), "utf-8"));
+    expect(config.specDirs).toEqual(["specs", "docs"]);
+  });
+
   it("detects Spec Kit when .specify/ exists", () => {
     mkdirSync(join(tmp, "src"));
     mkdirSync(join(tmp, ".specify"));
@@ -96,7 +176,6 @@ describe("init", () => {
     expect(result.sddTools).toContainEqual({ name: "Spec Kit", marker: ".specify" });
   });
 
-  // T013: .kiro/ → Kiro detected
   it("detects Kiro when .kiro/ exists", () => {
     mkdirSync(join(tmp, "src"));
     mkdirSync(join(tmp, ".kiro"));
@@ -107,7 +186,19 @@ describe("init", () => {
     expect(result.sddTools).toContainEqual({ name: "Kiro", marker: ".kiro" });
   });
 
-  // T017: existing .spectrace.json without --force → error
+  it("detects both .specify/ and .kiro/ simultaneously", () => {
+    mkdirSync(join(tmp, "src"));
+    mkdirSync(join(tmp, ".specify"));
+    mkdirSync(join(tmp, ".kiro"));
+    writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
+
+    const result = runInit(tmp);
+
+    expect(result.sddTools).toHaveLength(2);
+    expect(result.sddTools).toContainEqual({ name: "Spec Kit", marker: ".specify" });
+    expect(result.sddTools).toContainEqual({ name: "Kiro", marker: ".kiro" });
+  });
+
   it("throws error when .spectrace.json already exists", () => {
     mkdirSync(join(tmp, "src"));
     writeFileSync(join(tmp, ".spectrace.json"), "{}\n");
@@ -115,7 +206,6 @@ describe("init", () => {
     expect(() => runInit(tmp)).toThrow(".spectrace.json already exists");
   });
 
-  // T018: --force overwrites existing config
   it("overwrites existing .spectrace.json with --force", () => {
     mkdirSync(join(tmp, "src"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
@@ -128,7 +218,6 @@ describe("init", () => {
     expect(config.include).not.toContain("old");
   });
 
-  // T020: --no-scan generates config only
   it("generates only .spectrace.json with --no-scan", () => {
     mkdirSync(join(tmp, "src"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
@@ -139,5 +228,27 @@ describe("init", () => {
     expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
     expect(result.scanSummary).toBeUndefined();
     expect(result.lockPath).toBeUndefined();
+  });
+
+  it("supports --force combined with --no-scan", () => {
+    mkdirSync(join(tmp, "src"));
+    writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
+    writeFileSync(join(tmp, ".spectrace.json"), '{"include":["old"]}\n');
+
+    const result = runInit(tmp, { force: true, noScan: true });
+
+    expect(existsSync(join(tmp, ".spectrace.json"))).toBe(true);
+    expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
+    const config = JSON.parse(readFileSync(join(tmp, ".spectrace.json"), "utf-8"));
+    expect(config.include).not.toContain("old");
+  });
+
+  it("handles empty project with no ts files", () => {
+    const result = runInit(tmp);
+
+    expect(existsSync(join(tmp, ".spectrace.json"))).toBe(true);
+    expect(existsSync(join(tmp, ".trace.lock"))).toBe(true);
+    expect(result.scanSummary).toBeDefined();
+    expect(result.scanSummary!.nodeCount).toBe(0);
   });
 });

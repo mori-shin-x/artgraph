@@ -18,27 +18,49 @@ program
   .description("Initialize spectrace for this project")
   .option("--force", "Overwrite existing .spectrace.json")
   .option("--no-scan", "Generate config only, skip scan and reconcile")
+  .option("--format <format>", "Output format: json | text", "text")
   .action((opts) => {
     const rootDir = process.cwd();
     try {
       const result = runInit(rootDir, { force: opts.force, noScan: !opts.scan });
 
-      for (const tool of result.sddTools) {
-        console.log(`${tool.name} detected (${tool.marker}/)`);
-      }
-
-      if (result.scanSummary) {
-        console.log(`\nNodes: ${result.scanSummary.nodeCount}  Edges: ${result.scanSummary.edgeCount}`);
+      if (opts.format === "json") {
         console.log(
-          `  req: ${result.scanSummary.reqCount}  doc: ${result.scanSummary.docCount}  file: ${result.scanSummary.fileCount}  test: ${result.scanSummary.testCount}`,
+          JSON.stringify({
+            configPath: result.configPath,
+            config: result.config,
+            sddTools: result.sddTools,
+            scanSummary: result.scanSummary ?? null,
+            warnings: result.warnings,
+            lockPath: result.lockPath ?? null,
+          }),
         );
-        console.log(`\nCreated .spectrace.json`);
-        console.log(`Created ${result.config.lockFile}`);
-        console.log(`\nRun "spectrace check" to verify traceability.`);
-        console.log(`Run "spectrace impact --diff" to see impact of your changes.`);
       } else {
-        console.log(`Created .spectrace.json (scan skipped)`);
-        console.log(`\nTo scan later, run: spectrace scan && spectrace reconcile`);
+        for (const tool of result.sddTools) {
+          console.log(`${tool.name} detected (${tool.marker}/)`);
+        }
+
+        if (result.scanSummary) {
+          console.log(`\nNodes: ${result.scanSummary.nodeCount}  Edges: ${result.scanSummary.edgeCount}`);
+          console.log(
+            `  req: ${result.scanSummary.reqCount}  doc: ${result.scanSummary.docCount}  file: ${result.scanSummary.fileCount}  test: ${result.scanSummary.testCount}`,
+          );
+          for (const w of result.warnings) {
+            if (w.type === "ambiguous-id") {
+              const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
+              console.error(`WARNING: ambiguous ID "${w.id}"${hint}`);
+            } else {
+              console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
+            }
+          }
+          console.log(`\nCreated .spectrace.json`);
+          console.log(`Created ${result.config.lockFile}`);
+          console.log(`\nRun "spectrace check" to verify traceability.`);
+          console.log(`Run "spectrace impact --diff" to see impact of your changes.`);
+        } else {
+          console.log(`Created .spectrace.json (scan skipped)`);
+          console.log(`\nTo scan later, run: spectrace scan && spectrace reconcile`);
+        }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
