@@ -1,34 +1,44 @@
 import type { ArtifactGraph, ImpactResult, DriftEntry } from "../types.js";
 import type { LockFile } from "../types.js";
 
-export function impact(graph: ArtifactGraph, startIds: string[], lock: LockFile): ImpactResult {
+// BFS traversal is BIDIRECTIONAL: edges are followed in both directions regardless
+// of their declared source/target. This means:
+//   - From a req node, traversal reaches the parent doc (via reverse contains edge)
+//   - From a doc node, traversal reaches child reqs (via forward contains edge)
+//   - Starting from any req, the blast radius includes sibling reqs in the same doc
+//     (req -> parent doc -> sibling reqs -> their implementations)
+// Use --depth to limit traversal when contains edges cause unexpectedly wide reach.
+export function impact(
+  graph: ArtifactGraph,
+  startIds: string[],
+  lock: LockFile,
+  maxDepth?: number,
+): ImpactResult {
   const visited = new Set<string>();
-  const queue = [...startIds];
+  const queue: Array<{ id: string; depth: number }> = startIds.map((id) => ({ id, depth: 0 }));
 
   while (queue.length > 0) {
-    const id = queue.shift()!;
+    const { id, depth } = queue.shift()!;
     if (visited.has(id)) continue;
     visited.add(id);
+
+    if (maxDepth !== undefined && depth >= maxDepth) continue;
 
     const node = graph.nodes.get(id);
     if (node && node.kind === "file") {
       for (const [symId, symNode] of graph.nodes) {
-        if (
-          symNode.kind === "symbol" &&
-          symNode.filePath === node.filePath &&
-          !visited.has(symId)
-        ) {
-          queue.push(symId);
+        if (symNode.kind === "symbol" && symNode.filePath === node.filePath && !visited.has(symId)) {
+          queue.push({ id: symId, depth: depth + 1 });
         }
       }
     }
 
     for (const edge of graph.edges) {
       if (edge.source === id && !visited.has(edge.target)) {
-        queue.push(edge.target);
+        queue.push({ id: edge.target, depth: depth + 1 });
       }
       if (edge.target === id && !visited.has(edge.source)) {
-        queue.push(edge.source);
+        queue.push({ id: edge.source, depth: depth + 1 });
       }
     }
   }
@@ -68,7 +78,18 @@ export function impact(graph: ArtifactGraph, startIds: string[], lock: LockFile)
     }
   }
 
-  return { affectedFiles: [...affectedFileSet], affectedDocs, affectedReqs, drifted };
+  const affectedFiles = [...affectedFileSet];
+  return {
+    affectedFiles,
+    affectedDocs,
+    affectedReqs,
+    drifted,
+    summary: {
+      docs: affectedDocs.length,
+      reqs: affectedReqs.length,
+      files: affectedFiles.length,
+    },
+  };
 }
 
 export function findOrphans(graph: ArtifactGraph): string[] {
@@ -120,8 +141,16 @@ export function resolveStartIds(graph: ArtifactGraph, inputs: string[]): string[
       continue;
     }
 
+    // T048: doc: prefix resolution
+    const docId = `doc:${input}`;
+    if (graph.nodes.has(docId)) {
+      ids.push(docId);
+      // Do NOT continue — fall through to filePath match so that
+      // req/file nodes sharing the same filePath are also collected.
+    }
+
     for (const [id, node] of graph.nodes) {
-      if (node.filePath === input) {
+      if (node.filePath === input && !ids.includes(id)) {
         ids.push(id);
       }
     }

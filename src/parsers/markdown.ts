@@ -11,14 +11,25 @@ import type { GraphNode, GraphEdge } from "../types.js";
 const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
 const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*:/;
 
+export interface ParseWarning {
+  type: "invalid-relation" | "reserved-prefix";
+  key: string;
+  filePath: string;
+}
+
 interface ParsedSpec {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  warnings: ParseWarning[];
 }
 
-export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
+export function parseMarkdown(filePath: string, rootDir?: string, specDirPrefix?: string): ParsedSpec {
   const raw = readFileSync(filePath, "utf-8");
   const relPath = rootDir ? relative(rootDir, filePath) : filePath;
+  const docRelPath =
+    specDirPrefix && relPath.startsWith(specDirPrefix + "/")
+      ? relPath.slice(specDirPrefix.length + 1)
+      : relPath;
 
   let frontmatter: Record<string, any> = {};
   let content: string;
@@ -34,31 +45,62 @@ export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
 
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
+  const warnings: ParseWarning[] = [];
 
   const fileHash = hash(raw);
 
+  const VALID_SPECTRACE_KEYS = new Set(["node_id", "derives_from", "depends_on"]);
+
   const spectraceMeta = frontmatter?.spectrace as
-    | { node_id?: string; depends_on?: Array<{ id: string; relation: string }> }
+    | { node_id?: string; derives_from?: string[]; depends_on?: string[]; [key: string]: unknown }
     | undefined;
 
-  if (spectraceMeta?.node_id) {
-    const docId = spectraceMeta.node_id;
-    nodes.push({
-      id: docId,
-      kind: "doc",
-      filePath: relPath,
-      label: docId,
-      contentHash: fileHash,
-    });
+  // Always generate a doc node (US1: T026)
+  // Auto-generated ID uses specDir-relative path per FR-001 / research R3
+  const docId = spectraceMeta?.node_id ?? `doc:${docRelPath}`;
+  nodes.push({
+    id: docId,
+    kind: "doc",
+    filePath: relPath,
+    label: docId,
+    contentHash: fileHash,
+  });
 
-    if (spectraceMeta.depends_on) {
-      for (const dep of spectraceMeta.depends_on) {
-        const edgeKind = dep.relation === "derives_from" ? "derives_from" : "depends_on";
-        edges.push({
-          source: docId,
-          target: dep.id,
-          kind: edgeKind as GraphEdge["kind"],
+  if (spectraceMeta) {
+    // Validate keys (T018: invalid-relation warning)
+    for (const key of Object.keys(spectraceMeta)) {
+      if (!VALID_SPECTRACE_KEYS.has(key)) {
+        warnings.push({
+          type: "invalid-relation",
+          key,
+          filePath: relPath,
         });
+      }
+    }
+
+    // Generate derives_from edges (T017)
+    if (Array.isArray(spectraceMeta.derives_from)) {
+      for (const target of spectraceMeta.derives_from) {
+        if (typeof target === "string") {
+          edges.push({
+            source: docId,
+            target,
+            kind: "derives_from",
+          });
+        }
+      }
+    }
+
+    // Generate depends_on edges (T017)
+    if (Array.isArray(spectraceMeta.depends_on)) {
+      for (const target of spectraceMeta.depends_on) {
+        if (typeof target === "string") {
+          edges.push({
+            source: docId,
+            target,
+            kind: "depends_on",
+          });
+        }
       }
     }
   }
@@ -99,7 +141,7 @@ export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
     });
   });
 
-  return { nodes, edges };
+  return { nodes, edges, warnings };
 }
 
 function extractText(node: any): string {

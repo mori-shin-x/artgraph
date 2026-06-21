@@ -46,4 +46,20 @@ describe("loadConfig", () => {
     expect(config.reqPatterns).toEqual({ listItem: "X-\\d+" });
     expect(config.specDirs).toEqual(["specs", "docs"]);
   });
+
+  it("T012: should load docGraph config with autoNodes false", () => {
+    mkdirSync(TMP_DIR, { recursive: true });
+    writeFileSync(CONFIG_PATH, JSON.stringify({ docGraph: { autoNodes: false } }));
+
+    const config = loadConfig(TMP_DIR);
+    expect(config.docGraph?.autoNodes).toBe(false);
+  });
+
+  it("T013: should have docGraph undefined when not specified", () => {
+    mkdirSync(TMP_DIR, { recursive: true });
+    writeFileSync(CONFIG_PATH, JSON.stringify({}));
+
+    const config = loadConfig(TMP_DIR);
+    expect(config.docGraph).toBeUndefined();
+  });
 });

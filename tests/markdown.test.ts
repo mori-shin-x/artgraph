@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
+import { writeFileSync, unlinkSync, mkdirSync, rmdirSync } from "node:fs";
 import { parseMarkdown } from "../src/parsers/markdown.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
@@ -87,6 +88,134 @@ describe("parseMarkdown", () => {
 
       expect(req?.contentHash).toBeDefined();
       expect(req!.contentHash.length).toBe(16);
+    });
+  });
+
+  describe("T014: frontmatter flat format", () => {
+    it("should generate derives_from edge from flat frontmatter", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/doc-chain/design.md"), FIXTURE_DIR);
+      const edges = result.edges.filter((e) => e.kind === "derives_from");
+
+      expect(edges).toHaveLength(1);
+      expect(edges[0].source).toBe("design");
+      expect(edges[0].target).toBe("requirements");
+    });
+  });
+
+  describe("T020: doc node auto-generation", () => {
+    it("should generate doc node for prose-only markdown (no frontmatter)", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), FIXTURE_DIR, "specs");
+      const docNodes = result.nodes.filter((n) => n.kind === "doc");
+
+      expect(docNodes).toHaveLength(1);
+      expect(docNodes[0].id).toBe("doc:prose-only.md");
+      expect(docNodes[0].kind).toBe("doc");
+    });
+
+    it("should use rootDir-relative path when specDirPrefix is not provided", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), FIXTURE_DIR);
+      const docNodes = result.nodes.filter((n) => n.kind === "doc");
+      expect(docNodes[0].id).toBe("doc:specs/prose-only.md");
+    });
+  });
+
+  describe("T021: frontmatter node_id override", () => {
+    it("should use node_id from frontmatter when specified", () => {
+      const result = parseMarkdown(
+        resolve(FIXTURE_DIR, "specs/doc-chain/requirements.md"),
+        FIXTURE_DIR,
+      );
+      const docNodes = result.nodes.filter((n) => n.kind === "doc");
+
+      expect(docNodes).toHaveLength(1);
+      expect(docNodes[0].id).toBe("requirements");
+    });
+  });
+
+  describe("T022: doc node contentHash", () => {
+    it("should compute contentHash from entire file content", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), FIXTURE_DIR);
+      const doc = result.nodes.find((n) => n.kind === "doc");
+
+      expect(doc?.contentHash).toBeDefined();
+      expect(doc!.contentHash.length).toBe(16);
+    });
+  });
+
+  describe("T023: doc + req coexistence", () => {
+    it("should generate both doc and req nodes for md with requirement IDs", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/doc-with-reqs.md"), FIXTURE_DIR);
+      const docNodes = result.nodes.filter((n) => n.kind === "doc");
+      const reqNodes = result.nodes.filter((n) => n.kind === "req");
+
+      expect(docNodes).toHaveLength(1);
+      expect(docNodes[0].id).toBe("auth-spec");
+      expect(reqNodes.length).toBeGreaterThanOrEqual(2);
+      expect(reqNodes.map((n) => n.id)).toContain("FR-001");
+      expect(reqNodes.map((n) => n.id)).toContain("FR-002");
+    });
+  });
+
+  describe("T018: invalid-relation warning", () => {
+    it("should generate warning for unknown spectrace keys", () => {
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-invalid-key");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const tmpPath = resolve(tmpSpecs, "invalid-key-test.md");
+      writeFileSync(
+        tmpPath,
+        `---
+spectrace:
+  node_id: "test-doc"
+  extends:
+    - some-doc
+---
+# Test
+`,
+      );
+
+      try {
+        const result = parseMarkdown(tmpPath, tmpRoot);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0].type).toBe("invalid-relation");
+        expect(result.warnings[0].key).toBe("extends");
+      } finally {
+        unlinkSync(tmpPath);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+  });
+
+  describe("malformed YAML frontmatter", () => {
+    it("should not crash on invalid YAML and fall back to treating content as body", () => {
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-malformed-yaml");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const tmpPath = resolve(tmpSpecs, "malformed.md");
+      writeFileSync(
+        tmpPath,
+        `---
+spectrace:
+  node_id: "test
+  bad_indent
+    - broken: [unclosed
+---
+# Malformed frontmatter
+`,
+      );
+
+      try {
+        const result = parseMarkdown(tmpPath, tmpRoot);
+        // Should not throw — falls back to treating the whole file as content
+        expect(result.nodes.length).toBeGreaterThanOrEqual(1);
+        const docNode = result.nodes.find((n) => n.kind === "doc");
+        expect(docNode).toBeDefined();
+      } finally {
+        unlinkSync(tmpPath);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
     });
   });
 
