@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
@@ -24,7 +24,7 @@ program
   .command("scan")
   .description("Build the artifact graph and show summary")
   .option("--format <format>", "Output format: json | text", "text")
-  .option("--mode <mode>", "Analysis mode: file | symbol")
+  .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((opts) => {
     const rootDir = process.cwd();
     const config = applyMode(loadConfig(rootDir), opts.mode);
@@ -71,7 +71,7 @@ program
   .argument("[targets...]", "File paths or REQ-IDs")
   .option("--diff", "Use git diff to detect changed files")
   .option("--format <format>", "Output format: json | text", "text")
-  .option("--mode <mode>", "Analysis mode: file | symbol")
+  .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((targets: string[], opts) => {
     const rootDir = process.cwd();
     const config = applyMode(loadConfig(rootDir), opts.mode);
@@ -109,7 +109,7 @@ program
   .option("--gate", "Exit 2 on any issue (for Stop hook)")
   .option("--diff", "Scope check to files changed in git diff")
   .option("--format <format>", "Output format: json | text", "text")
-  .option("--mode <mode>", "Analysis mode: file | symbol")
+  .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((opts) => {
     const rootDir = process.cwd();
     const config = applyMode(loadConfig(rootDir), opts.mode);
@@ -167,9 +167,10 @@ program
 program
   .command("reconcile")
   .description("Update the lock file to match current state")
-  .action(() => {
+  .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
+  .action((opts) => {
     const rootDir = process.cwd();
-    const config = loadConfig(rootDir);
+    const config = applyMode(loadConfig(rootDir), opts.mode);
     const { graph } = scan(rootDir, config);
     reconcile(rootDir, config, graph);
     console.log(`Lock file updated: ${config.lockFile}`);

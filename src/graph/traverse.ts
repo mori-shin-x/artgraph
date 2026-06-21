@@ -10,6 +10,15 @@ export function impact(graph: ArtifactGraph, startIds: string[], lock: LockFile)
     if (visited.has(id)) continue;
     visited.add(id);
 
+    const node = graph.nodes.get(id);
+    if (node && node.kind === "file") {
+      for (const [symId, symNode] of graph.nodes) {
+        if (symNode.kind === "symbol" && symNode.filePath === node.filePath && !visited.has(symId)) {
+          queue.push(symId);
+        }
+      }
+    }
+
     for (const edge of graph.edges) {
       if (edge.source === id && !visited.has(edge.target)) {
         queue.push(edge.target);
@@ -20,7 +29,7 @@ export function impact(graph: ArtifactGraph, startIds: string[], lock: LockFile)
     }
   }
 
-  const affectedFiles: string[] = [];
+  const affectedFileSet = new Set<string>();
   const affectedDocs: string[] = [];
   const affectedReqs: string[] = [];
   const drifted: DriftEntry[] = [];
@@ -33,7 +42,7 @@ export function impact(graph: ArtifactGraph, startIds: string[], lock: LockFile)
       case "file":
       case "symbol":
       case "test":
-        affectedFiles.push(node.filePath);
+        affectedFileSet.add(node.filePath);
         break;
       case "doc":
         affectedDocs.push(id);
@@ -55,7 +64,7 @@ export function impact(graph: ArtifactGraph, startIds: string[], lock: LockFile)
     }
   }
 
-  return { affectedFiles, affectedDocs, affectedReqs, drifted };
+  return { affectedFiles: [...affectedFileSet], affectedDocs, affectedReqs, drifted };
 }
 
 export function findOrphans(graph: ArtifactGraph): string[] {

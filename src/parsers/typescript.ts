@@ -77,28 +77,31 @@ function extractSymbols(
 ): SymbolRange[] {
   const ranges: SymbolRange[] = [];
   const exported = sourceFile.getExportedDeclarations();
+  const seen = new Set<string>();
 
   for (const [name, declarations] of exported) {
-    for (const decl of declarations) {
-      if (decl.getSourceFile() !== sourceFile) continue;
+    const symbolName = name === "default" ? "default" : name;
+    if (seen.has(symbolName)) continue;
 
-      const symbolName = name === "default" ? "default" : name;
-      const symbolId = `symbol:${relPath}#${symbolName}`;
-      const symbolHash = hash(decl.getText());
+    const localDecl = declarations.find((d) => d.getSourceFile() === sourceFile);
+    if (!localDecl) continue;
 
-      nodes.push({
-        id: symbolId,
-        kind: "symbol",
-        filePath: relPath,
-        contentHash: symbolHash,
-      });
+    seen.add(symbolName);
+    const symbolId = `symbol:${relPath}#${symbolName}`;
+    const symbolHash = hash(localDecl.getText());
 
-      ranges.push({
-        name: symbolName,
-        startLine: decl.getStartLineNumber(),
-        endLine: decl.getEndLineNumber(),
-      });
-    }
+    nodes.push({
+      id: symbolId,
+      kind: "symbol",
+      filePath: relPath,
+      contentHash: symbolHash,
+    });
+
+    ranges.push({
+      name: symbolName,
+      startLine: localDecl.getStartLineNumber(),
+      endLine: localDecl.getEndLineNumber(),
+    });
   }
 
   return ranges;
