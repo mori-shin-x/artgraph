@@ -5,6 +5,7 @@ import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
 import { check } from "./check.js";
+import { computeCoverage } from "./coverage.js";
 import { readLock } from "./lock.js";
 import { getGitDiffFiles } from "./diff.js";
 
@@ -136,6 +137,39 @@ program
 
     if (opts.gate && !result.pass) {
       process.exit(2);
+    }
+  });
+
+program
+  .command("coverage")
+  .description("Show coverage status for each requirement")
+  .option("--format <format>", "Output format: json | text", "text")
+  .action((opts) => {
+    const rootDir = process.cwd();
+    const config = loadConfig(rootDir);
+    const { graph } = scan(rootDir, config);
+    const entries = computeCoverage(graph);
+
+    if (opts.format === "json") {
+      const items = entries.map((e) => ({ reqId: e.reqId, status: e.status }));
+      const summary = {
+        total: entries.length,
+        verified: entries.filter((e) => e.status === "verified").length,
+        implOnly: entries.filter((e) => e.status === "impl-only").length,
+        untagged: entries.filter((e) => e.status === "untagged").length,
+      };
+      console.log(JSON.stringify({ items, summary }));
+    } else {
+      console.log("COVERAGE:");
+      for (const e of entries) {
+        console.log(`  ${e.reqId}: ${e.status}`);
+      }
+      const verified = entries.filter((e) => e.status === "verified").length;
+      const implOnly = entries.filter((e) => e.status === "impl-only").length;
+      const untagged = entries.filter((e) => e.status === "untagged").length;
+      console.log(
+        `\nSummary: total=${entries.length} verified=${verified} impl-only=${implOnly} untagged=${untagged}`,
+      );
     }
   });
 
