@@ -1,5 +1,10 @@
-import { isAbsolute, relative } from "node:path";
+import { existsSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { ImpactResult } from "./types.js";
+import { loadConfig, CONFIG_FILE } from "./config.js";
+import { scan } from "./scan.js";
+import { impact, resolveStartIds } from "./graph/traverse.js";
+import { readLock } from "./lock.js";
 
 /** stdin から読み取った hook JSON の型 */
 export interface HookInput {
@@ -21,7 +26,7 @@ export interface HookOutput {
 
 /**
  * stdin の JSON 文字列を HookInput にパースする。
- * パース失敗時は null を返す。
+ * パース失敗時、または tool_name が string でない、tool_input が object でない場合は null を返す。
  */
 export function parseHookInput(json: string): HookInput | null {
   try {
@@ -93,4 +98,82 @@ export function buildHookOutput(additionalContext: string): HookOutput {
       additionalContext,
     },
   };
+}
+
+/**
+ * hook-pretool のメインロジック。
+ * stdin パース → file_path 抽出 → config ロード → scan → impact → 出力生成の全フローを担う。
+ */
+export function runHookPretool(
+  stdin: string,
+  rootDir: string,
+): HookOutput {
+  const startTime = process.hrtime.bigint();
+
+  // JSON パース
+  const input = parseHookInput(stdin);
+  if (!input) {
+    process.stderr.write("spectrace: failed to parse hook input\n");
+    return buildHookOutput("");
+  }
+
+  // file_path 抽出
+  const filePaths = extractFilePaths(input);
+  if (filePaths.length === 0) {
+    return buildHookOutput("");
+  }
+
+  // 相対パスに変換
+  const relativePaths = filePaths.map((fp) => toRelativePath(fp, rootDir));
+
+  // .spectrace.json 不在時は空で返す（graceful degradation）
+  // loadConfig は不在時にデフォルト設定を返すが、contracts では
+  // .spectrace.json 不在時は additionalContext を空と規定している。
+  // CONFIG_FILE 定数を config.ts から import して使用。
+  if (!existsSync(resolve(rootDir, CONFIG_FILE))) {
+    return buildHookOutput("");
+  }
+
+  // 設定読み込み
+  const config = loadConfig(rootDir);
+
+  // グラフ構築
+  let graph;
+  try {
+    const scanResult = scan(rootDir, config);
+    graph = scanResult.graph;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    process.stderr.write(`spectrace: scan failed: ${msg}\n`);
+    return buildHookOutput("");
+  }
+
+  // 開始ノード解決
+  const startIds = resolveStartIds(graph, relativePaths);
+  if (startIds.length === 0) {
+    const output = buildHookOutput("spectrace impact: (none)");
+    const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;
+    process.stderr.write(`spectrace: hook-pretool completed in ${Math.round(elapsed)}ms\n`);
+    return output;
+  }
+
+  // impact 計算（個別 try-catch で contracts 規定のエラーメッセージを出力）
+  let result: ImpactResult;
+  try {
+    const lock = readLock(rootDir, config.lockFile);
+    result = impact(graph, startIds, lock);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    process.stderr.write(`spectrace: impact failed: ${msg}\n`);
+    return buildHookOutput("");
+  }
+
+  // 出力生成
+  const additionalContext = formatAdditionalContext(result);
+  const output = buildHookOutput(additionalContext);
+
+  const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;
+  process.stderr.write(`spectrace: hook-pretool completed in ${Math.round(elapsed)}ms\n`);
+
+  return output;
 }

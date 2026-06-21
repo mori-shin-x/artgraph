@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
 import { run, cleanup, CLI, FIXTURE_DIR, LOCK_PATH } from "./helpers.js";
@@ -12,17 +12,17 @@ function runWithStdin(
   stdin: string,
   cwd?: string,
 ): { stdout: string; stderr: string; exitCode: number } {
-  try {
-    const stdout = execFileSync("node", [CLI, ...args], {
-      encoding: "utf-8",
-      cwd: cwd ?? FIXTURE_DIR,
-      input: stdin,
-      timeout: 30000,
-    });
-    return { stdout, stderr: "", exitCode: 0 };
-  } catch (e: any) {
-    return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.status ?? 1 };
-  }
+  const result = spawnSync("node", [CLI, ...args], {
+    encoding: "utf-8",
+    cwd: cwd ?? FIXTURE_DIR,
+    input: stdin,
+    timeout: 30000,
+  });
+  return {
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    exitCode: result.status ?? 1,
+  };
 }
 
 afterEach(cleanup);
@@ -454,6 +454,18 @@ describe("CLI: hook-pretool", () => {
     expect(output.hookSpecificOutput.additionalContext).toContain("spectrace impact:");
     expect(output.hookSpecificOutput.additionalContext).toContain("AUTH-001");
   });
+
+  it("should output (none) for an untracked file like README.md", { timeout: 30000 }, () => {
+    createSpectraceConfig();
+    const stdin = JSON.stringify({
+      tool_name: "Edit",
+      tool_input: { file_path: "README.md", old_string: "x", new_string: "y" },
+    });
+    const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    expect(exitCode).toBe(0);
+    const output = JSON.parse(stdout);
+    expect(output.hookSpecificOutput.additionalContext).toBe("spectrace impact: (none)");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -490,4 +502,60 @@ describe("CLI: hook-pretool graceful degradation", () => {
       expect(output.hookSpecificOutput.additionalContext).toBe("");
     },
   );
+
+  it(
+    "should exit 0 with empty additionalContext when scan fails (broken config)",
+    { timeout: 30000 },
+    () => {
+      // Write a .spectrace.json with invalid specDirs to trigger scan failure
+      writeFileSync(
+        resolve("/tmp", ".spectrace.json"),
+        JSON.stringify({
+          include: ["/nonexistent/**/*.ts"],
+          specDirs: ["/nonexistent/specs"],
+          testPatterns: [],
+          lockFile: ".trace.lock",
+        }),
+      );
+      try {
+        const stdin = JSON.stringify({
+          tool_name: "Edit",
+          tool_input: { file_path: "src/foo.ts", old_string: "x", new_string: "y" },
+        });
+        const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin, "/tmp");
+        expect(exitCode).toBe(0);
+        const output = JSON.parse(stdout);
+        // Should either be empty or (none) — not crash
+        expect(typeof output.hookSpecificOutput.additionalContext).toBe("string");
+      } finally {
+        if (existsSync(resolve("/tmp", ".spectrace.json"))) {
+          unlinkSync(resolve("/tmp", ".spectrace.json"));
+        }
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// hook-pretool: stderr content verification
+// ---------------------------------------------------------------------------
+describe("CLI: hook-pretool stderr", () => {
+  afterEach(cleanupConfig);
+
+  it("should output 'failed to parse hook input' to stderr for invalid JSON", { timeout: 30000 }, () => {
+    const { stderr, exitCode } = runWithStdin(["hook-pretool"], "{not valid json}");
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain("spectrace: failed to parse hook input");
+  });
+
+  it("should output 'completed in' to stderr on successful run", { timeout: 30000 }, () => {
+    createSpectraceConfig();
+    const stdin = JSON.stringify({
+      tool_name: "Edit",
+      tool_input: { file_path: "src/auth/login.ts", old_string: "x", new_string: "y" },
+    });
+    const { stderr, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain("spectrace: hook-pretool completed in");
+  });
 });

@@ -82,13 +82,13 @@ Acceptance Scenarios:
 
 ### Functional Requirements
 
-- FR-001: `spectrace hook-pretool` サブコマンドは、Claude Code の Edit/Write/MultiEdit ツール呼び出し時に stdin から hook JSON（`{"tool_name": "Edit", "tool_input": {"file_path": "...", ...}}`）を受け取り、`tool_input` から `file_path` を取得して spectrace impact を実行する。MultiEdit の場合は `tool_input.edits` 配列から各ファイルの `file_path` を取得し、各ファイルの impact を統合して出力する
+- FR-001: `spectrace hook-pretool` サブコマンドは、Claude Code の Edit/Write/MultiEdit ツール呼び出し時に stdin から hook JSON（`{"tool_name": "Edit", "tool_input": {"file_path": "...", ...}}`）を受け取り、`tool_input.file_path` を取得して spectrace impact を実行する。MultiEdit も `tool_input.file_path` で取得する（MultiEdit は単一ファイル内の複数箇所編集であり、file_path は 1 つ）
 - FR-002: `spectrace hook-pretool` は、spectrace impact の結果を Claude Code の hookSpecificOutput 形式で stdout に出力し、exit 0 で終了する。出力フォーマットは以下の通り:
 ```json
 {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "additionalContext": "Impact: FR-001 (req), doc:api-design (doc)"
+    "additionalContext": "spectrace impact: FR-001 (req), doc:api-design (doc)"
   }
 }
 ```

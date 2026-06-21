@@ -270,7 +270,6 @@ program
   .command("hook-pretool")
   .description("PreToolUse hook: analyze impact before Edit/Write/MultiEdit")
   .action(async () => {
-    const startTime = process.hrtime.bigint();
     const rootDir = process.cwd();
 
     try {
@@ -281,6 +280,7 @@ program
       }
       const stdinText = Buffer.concat(chunks).toString("utf-8");
 
+<<<<<<< HEAD
       // JSON パース
       const input = parseHookInput(stdinText);
       if (!input) {
@@ -366,6 +366,13 @@ program
       const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;
       process.stderr.write(`spectrace: hook-pretool completed in ${Math.round(elapsed)}ms\n`);
     } catch {
+=======
+      // ロジックは runHookPretool に委譲
+      const output = runHookPretool(stdinText, rootDir);
+      process.stdout.write(JSON.stringify(output));
+    } catch (e) {
+      // stdin 読み取り失敗時の個別エラーメッセージ
+>>>>>>> 2b8ff45 (fix: レビュー指摘対応 — cli.ts リファクタ・バリデーション・テスト補強)
       process.stderr.write("spectrace: failed to read stdin\n");
       process.stdout.write(JSON.stringify(buildHookOutput("")));
     }

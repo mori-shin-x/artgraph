@@ -7,6 +7,7 @@ import {
   toRelativePath,
   formatAdditionalContext,
   buildHookOutput,
+  runHookPretool,
 } from "../src/hook-pretool.js";
 import type { ImpactResult } from "../src/types.js";
 
@@ -48,6 +49,46 @@ describe("parseHookInput", () => {
 
   it("should return null for empty string", () => {
     const result = parseHookInput("");
+    expect(result).toBeNull();
+  });
+
+  it("should return null for JSON array", () => {
+    const result = parseHookInput('[{"tool_name":"Edit"}]');
+    expect(result).toBeNull();
+  });
+
+  it("should return null when tool_name is missing", () => {
+    const result = parseHookInput('{"tool_input":{"file_path":"src/foo.ts"}}');
+    expect(result).toBeNull();
+  });
+
+  it("should return null when tool_name is not a string", () => {
+    const result = parseHookInput('{"tool_name":123,"tool_input":{"file_path":"src/foo.ts"}}');
+    expect(result).toBeNull();
+  });
+
+  it("should return null when tool_input is missing", () => {
+    const result = parseHookInput('{"tool_name":"Edit"}');
+    expect(result).toBeNull();
+  });
+
+  it("should return null when tool_input is not an object", () => {
+    const result = parseHookInput('{"tool_name":"Edit","tool_input":"not-object"}');
+    expect(result).toBeNull();
+  });
+
+  it("should return null when tool_input is an array", () => {
+    const result = parseHookInput('{"tool_name":"Edit","tool_input":[]}');
+    expect(result).toBeNull();
+  });
+
+  it("should return null for JSON primitive (number)", () => {
+    const result = parseHookInput("42");
+    expect(result).toBeNull();
+  });
+
+  it("should return null for JSON primitive (string)", () => {
+    const result = parseHookInput('"hello"');
     expect(result).toBeNull();
   });
 });

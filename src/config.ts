@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { DEFAULT_CONFIG, type SpectraceConfig } from "./types.js";
 
-const CONFIG_FILE = ".spectrace.json";
+export const CONFIG_FILE = ".spectrace.json";
 
 export function loadConfig(rootDir: string): SpectraceConfig {
   const configPath = resolve(rootDir, CONFIG_FILE);
