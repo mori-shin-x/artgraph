@@ -7,7 +7,6 @@ import {
   toRelativePath,
   formatAdditionalContext,
   buildHookOutput,
-  runHookPretool,
 } from "../src/hook-pretool.js";
 import type { ImpactResult } from "../src/types.js";
 

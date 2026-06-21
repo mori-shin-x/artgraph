@@ -28,7 +28,7 @@ Acceptance Scenarios:
 1. Given spec.md に FR-001 が定義されており、src/auth.ts に `@impl FR-001` がある, When Claude Code エージェントが src/auth.ts を Edit しようとする, Then PreToolUse hook が発火し、hookSpecificOutput の additionalContext に FR-001 への到達ノード情報が含まれる
 2. Given doc:api-design が src/handler.ts に紐づいている, When Claude Code エージェントが src/handler.ts を Edit しようとする, Then hookSpecificOutput の additionalContext に doc:api-design の到達ノード情報が含まれる
 3. Given spectrace のグラフ上でどの仕様にも紐づかないファイル（例: README.md）がある, When Claude Code エージェントがそのファイルを Edit しようとする, Then hookSpecificOutput の additionalContext は空または「影響なし」を示し、hook は正常終了する（exit 0）
-4. Given src/handler.ts と src/auth.ts の両方に仕様が紐づいている, When Claude Code エージェントが MultiEdit でこれらのファイルを同時に編集しようとする, Then hookSpecificOutput の additionalContext に両ファイルの到達ノード情報が統合されて含まれる
+4. Given src/handler.ts と src/auth.ts の両方に仕様が紐づいている, When Claude Code エージェントが MultiEdit で src/auth.ts 内の複数箇所を編集しようとする, Then hookSpecificOutput の additionalContext に src/auth.ts の到達ノード情報が含まれる（MultiEdit は単一ファイル内の複数箇所編集）
 
 ---
 
@@ -76,7 +76,7 @@ Acceptance Scenarios:
 - `spectrace impact` の実行に時間がかかる場合（大規模プロジェクト） → v1 ではタイムアウト制御は行わない。レイテンシが問題になる場合は P3 のデーモン化で対応
 - hook の実行権限がない場合 → Claude Code が hook 失敗として処理する（spectrace の責務外）
 - impact 結果に多数のノードが含まれる場合 → additionalContext の文字列長に制限は設けないが、人間が読める要約形式で出力する
-- MultiEdit の tool_input に複数ファイルが含まれる場合（`{"edits": [{"file_path": "...", ...}, ...]}` 形式） → 各ファイルの impact を統合して出力する
+- MultiEdit は単一ファイル内の複数箇所編集であり、tool_input.file_path は 1 つ。Claude Code が複数ファイルを同時に編集する場合は MultiEdit を複数回呼び出すため、各呼び出しで hook が発火する
 
 ## Requirements *(mandatory)*
 
@@ -92,7 +92,7 @@ Acceptance Scenarios:
   }
 }
 ```
-- FR-003: impact 結果が空（影響なし）の場合、additionalContext は空文字列または省略とし、exit 0 で正常終了する
+- FR-003: impact 結果が空（影響なし）の場合、additionalContext は `"spectrace impact: (none)"` とし、exit 0 で正常終了する。.spectrace.json 不在やエラー時は空文字列を返す
 - FR-004: spectrace コマンドが利用不可、設定ファイルが存在しない、または impact 実行が失敗した場合、hook は exit 0 で正常終了し、エージェントのワークフローをブロックしない
 - FR-005: ドキュメントで `.claude/settings.json` への hook 設定方法を案内し、Edit、Write、および MultiEdit ツールに対して hook を発火させる手順を説明する
 - FR-006: additionalContext の内容は、影響を受ける到達ノードの ID（例: FR-001）とノード種別（例: req, doc）を含む、人間が読める要約形式とする
