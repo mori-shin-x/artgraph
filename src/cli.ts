@@ -50,7 +50,9 @@ program
         }
 
         if (result.scanSummary) {
-          console.log(`\nNodes: ${result.scanSummary.nodeCount}  Edges: ${result.scanSummary.edgeCount}`);
+          console.log(
+            `\nNodes: ${result.scanSummary.nodeCount}  Edges: ${result.scanSummary.edgeCount}`,
+          );
           console.log(
             `  req: ${result.scanSummary.reqCount}  doc: ${result.scanSummary.docCount}  file: ${result.scanSummary.fileCount}  test: ${result.scanSummary.testCount}`,
           );
@@ -225,7 +227,11 @@ program
 program
   .command("coverage")
   .description("Show coverage status for each requirement")
-  .option("--format <format>", "Output format: json | text", "text")
+  .addOption(
+    new Option("--format <format>", "Output format: json | text")
+      .choices(["json", "text"])
+      .default("text"),
+  )
   .action((opts) => {
     const rootDir = process.cwd();
     const config = loadConfig(rootDir);
@@ -233,25 +239,9 @@ program
     const entries = computeCoverage(graph);
 
     if (opts.format === "json") {
-      const items = entries.map((e) => ({ reqId: e.reqId, status: e.status }));
-      const summary = {
-        total: entries.length,
-        verified: entries.filter((e) => e.status === "verified").length,
-        implOnly: entries.filter((e) => e.status === "impl-only").length,
-        untagged: entries.filter((e) => e.status === "untagged").length,
-      };
-      console.log(JSON.stringify({ items, summary }));
+      printCoverageJson(entries);
     } else {
-      console.log("COVERAGE:");
-      for (const e of entries) {
-        console.log(`  ${e.reqId}: ${e.status}`);
-      }
-      const verified = entries.filter((e) => e.status === "verified").length;
-      const implOnly = entries.filter((e) => e.status === "impl-only").length;
-      const untagged = entries.filter((e) => e.status === "untagged").length;
-      console.log(
-        `\nSummary: total=${entries.length} verified=${verified} impl-only=${implOnly} untagged=${untagged}`,
-      );
+      printCoverageText(entries);
     }
   });
 
@@ -284,6 +274,30 @@ function printImpactText(result: any) {
     console.log("Drifted:");
     for (const d of result.drifted) console.log(`  ${d.nodeId} (${d.kind})`);
   }
+}
+
+function printCoverageJson(entries: { reqId: string; status: string }[]) {
+  const items = entries.map((e) => ({ reqId: e.reqId, status: e.status }));
+  const summary = {
+    total: entries.length,
+    verified: entries.filter((e) => e.status === "verified").length,
+    implOnly: entries.filter((e) => e.status === "impl-only").length,
+    untagged: entries.filter((e) => e.status === "untagged").length,
+  };
+  console.log(JSON.stringify({ items, summary }));
+}
+
+function printCoverageText(entries: { reqId: string; status: string }[]) {
+  console.log("COVERAGE:");
+  for (const e of entries) {
+    console.log(`  ${e.reqId}: ${e.status}`);
+  }
+  const verified = entries.filter((e) => e.status === "verified").length;
+  const implOnly = entries.filter((e) => e.status === "impl-only").length;
+  const untagged = entries.filter((e) => e.status === "untagged").length;
+  console.log(
+    `\nSummary: total=${entries.length} verified=${verified} impl-only=${implOnly} untagged=${untagged}`,
+  );
 }
 
 function printCheckText(result: any) {
