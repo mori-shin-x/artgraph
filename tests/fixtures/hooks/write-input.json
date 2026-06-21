@@ -1,0 +1,4 @@
+{
+  "tool_name": "Write",
+  "tool_input": { "file_path": "src/new-file.ts", "content": "export function hello() {}" }
+}

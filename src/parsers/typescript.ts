@@ -23,7 +23,11 @@ interface SymbolRange {
   endLine: number;
 }
 
-export function createTSParser(rootDir: string, patterns: string[], mode: "file" | "symbol" = "file") {
+export function createTSParser(
+  rootDir: string,
+  patterns: string[],
+  mode: "file" | "symbol" = "file",
+) {
   const tsconfigPath = resolve(rootDir, "tsconfig.json");
   const projectOpts = existsSync(tsconfigPath)
     ? { tsConfigFilePath: tsconfigPath, skipAddingFilesFromTsConfig: true }
@@ -139,10 +143,12 @@ function extractImports(
           edges.push({ source: sourceId, target: `symbol:${targetRel}#default`, kind: "imports" });
         }
         for (const named of namedImports) {
-          const importName = named.getAliasNode()
-            ? named.getNameNode().getText()
-            : named.getName();
-          edges.push({ source: sourceId, target: `symbol:${targetRel}#${importName}`, kind: "imports" });
+          const importName = named.getAliasNode() ? named.getNameNode().getText() : named.getName();
+          edges.push({
+            source: sourceId,
+            target: `symbol:${targetRel}#${importName}`,
+            kind: "imports",
+          });
         }
         if (!defaultImport && namedImports.length === 0 && !namespaceImport) {
           edges.push({ source: sourceId, target: `file:${targetRel}`, kind: "imports" });
@@ -236,7 +242,7 @@ function resolveSymbolAtLine(ranges: SymbolRange[], line: number): string | null
   let best: SymbolRange | null = null;
   for (const range of ranges) {
     if (line >= range.startLine && line <= range.endLine) {
-      if (!best || (range.endLine - range.startLine) < (best.endLine - best.startLine)) {
+      if (!best || range.endLine - range.startLine < best.endLine - best.startLine) {
         best = range;
       }
     }
