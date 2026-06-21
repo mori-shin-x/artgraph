@@ -14,6 +14,7 @@ export interface GraphNode {
   filePath: string;
   label?: string;
   contentHash: string;
+  metadata?: Record<string, string>;
 }
 
 export interface GraphEdge {
