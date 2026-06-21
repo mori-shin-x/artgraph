@@ -101,6 +101,15 @@ describe("resolveStartIds", () => {
     const ids = resolveStartIds(graph, ["specs/prose-only.md"]);
     expect(ids).toContain("doc:specs/prose-only.md");
   });
+
+  it("should resolve file path to both doc and req nodes in the same file", () => {
+    // auth.md has doc:auth-design and req nodes AUTH-001, AUTH-002, AUTH-003
+    const ids = resolveStartIds(graph, ["specs/auth.md"]);
+    expect(ids).toContain("doc:auth-design");
+    expect(ids).toContain("AUTH-001");
+    expect(ids).toContain("AUTH-002");
+    expect(ids).toContain("AUTH-003");
+  });
 });
 
 describe("impact: depth limit (US3)", () => {

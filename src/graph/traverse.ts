@@ -124,11 +124,12 @@ export function resolveStartIds(graph: ArtifactGraph, inputs: string[]): string[
     const docId = `doc:${input}`;
     if (graph.nodes.has(docId)) {
       ids.push(docId);
-      continue;
+      // Do NOT continue — fall through to filePath match so that
+      // req/file nodes sharing the same filePath are also collected.
     }
 
     for (const [id, node] of graph.nodes) {
-      if (node.filePath === input) {
+      if (node.filePath === input && !ids.includes(id)) {
         ids.push(id);
       }
     }

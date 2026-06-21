@@ -272,6 +272,29 @@ spectrace:
   });
 });
 
+describe("buildGraph: contains edges with autoNodes=false + explicit node_id", () => {
+  it("should generate contains edges for doc nodes with explicit node_id even when autoNodes=false", () => {
+    const noAutoNodesConfig: SpectraceConfig = {
+      ...config,
+      docGraph: { autoNodes: false, autoContains: true },
+    };
+    const { graph } = buildGraph(FIXTURE_DIR, noAutoNodesConfig);
+
+    // auth.md has explicit node_id "doc:auth-design" -> should still exist
+    expect(graph.nodes.has("doc:auth-design")).toBe(true);
+
+    // contains edges from doc:auth-design to AUTH-001/002/003 should still be generated
+    const containsEdges = graph.edges.filter(
+      (e) => e.kind === "contains" && e.source === "doc:auth-design",
+    );
+    expect(containsEdges.length).toBeGreaterThanOrEqual(3);
+    const targets = containsEdges.map((e) => e.target);
+    expect(targets).toContain("AUTH-001");
+    expect(targets).toContain("AUTH-002");
+    expect(targets).toContain("AUTH-003");
+  });
+});
+
 describe("buildGraph: lock file excludes contains edges (T065)", () => {
   it("should not include contains-only dependencies in lock file", () => {
     // Use an isolated fixture where a doc has contains edges but no depends_on/derives_from
