@@ -39,7 +39,7 @@ export function buildGraph(
   for (const specDirName of config.specDirs) {
     const specFiles = globSync(resolve(rootDir, specDirName, "**/*.md"));
     for (const file of specFiles) {
-    const result = parseMarkdown(file, rootDir, specDirName);
+    const result = parseMarkdown(file, { rootDir, specDirPrefix: specDirName, reqPatterns: config.reqPatterns });
     const relFile = relative(rootDir, file);
     const specDir = extractSpecDir(relFile, config.specDirs);
     // Compute what the auto-generated doc ID would be for this file
