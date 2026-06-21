@@ -3,9 +3,23 @@ import type { ArtifactGraph, NodeKind, GraphNode, GraphEdge } from "../types.js"
 export function formatGraphText(graph: ArtifactGraph, kindFilter?: NodeKind): string {
   const { filteredNodes, filteredEdges } = applyFilter(graph, kindFilter);
 
-  // Find root nodes (nodes that are not a target of any edge)
-  const targetIds = new Set(filteredEdges.map((e) => e.target));
-  const roots = [...filteredNodes.values()].filter((n) => !targetIds.has(n.id));
+  // Find root nodes — nodes that are upstream-most in the graph.
+  // derives_from / depends_on: source=downstream, target=upstream
+  //   -> the target is the *root* direction, so being a target does NOT disqualify.
+  // contains / implements / verifies / imports: source=parent/upstream, target=child
+  //   -> being a target DOES disqualify (the node has a parent).
+  // Strategy: a node is a root when it never appears as a *downstream* endpoint.
+  //   - For derives_from/depends_on edges: downstream = source
+  //   - For other edges: downstream = target
+  const downstreamIds = new Set<string>();
+  for (const e of filteredEdges) {
+    if (e.kind === "derives_from" || e.kind === "depends_on") {
+      downstreamIds.add(e.source);
+    } else {
+      downstreamIds.add(e.target);
+    }
+  }
+  const roots = [...filteredNodes.values()].filter((n) => !downstreamIds.has(n.id));
 
   // If no roots found, use all nodes as roots (cyclic graph)
   const rootList = roots.length > 0 ? roots : [...filteredNodes.values()];

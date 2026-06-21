@@ -189,7 +189,8 @@ export function buildGraph(
   }
 
   // T045: Generate contains edges (doc -> req within the same file)
-  if (autoContains && autoNodes) {
+  // Use autoContains alone; doc nodes with explicit node_id exist even when autoNodes=false
+  if (autoContains) {
     const docNodes = [...nodes.values()].filter((n) => n.kind === "doc");
     for (const doc of docNodes) {
       for (const [reqId, reqNode] of nodes) {
@@ -217,19 +218,27 @@ export function buildGraph(
   }
 
   // T035: orphan-doc warning - check that doc->doc edge targets exist
+  // Only fire when the target is missing AND the target would be a doc node.
+  // Skip when the target exists as a non-doc node (e.g. req) — that's a valid cross-kind reference.
   for (const edge of edges) {
     if (
       (edge.kind === "derives_from" || edge.kind === "depends_on") &&
-      nodes.get(edge.source)?.kind === "doc" &&
-      !nodes.has(edge.target)
+      nodes.get(edge.source)?.kind === "doc"
     ) {
-      const sourceNode = nodes.get(edge.source)!;
-      warnings.push({
-        type: "orphan-doc",
-        id: edge.target,
-        files: [sourceNode.filePath],
-        message: `referenced from ${sourceNode.filePath} but not found in graph`,
-      });
+      const targetNode = nodes.get(edge.target);
+      if (targetNode && targetNode.kind !== "doc") {
+        // Target exists but is not a doc node (e.g. req) — not an orphan-doc situation
+        continue;
+      }
+      if (!targetNode) {
+        const sourceNode = nodes.get(edge.source)!;
+        warnings.push({
+          type: "orphan-doc",
+          id: edge.target,
+          files: [sourceNode.filePath],
+          message: `referenced from ${sourceNode.filePath} but not found in graph`,
+        });
+      }
     }
   }
 

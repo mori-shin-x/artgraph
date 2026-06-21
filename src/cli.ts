@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
@@ -74,7 +74,19 @@ program
       process.exit(1);
     }
 
-    const maxDepth = opts.depth !== undefined ? parseInt(opts.depth, 10) : undefined;
+    let maxDepth: number | undefined;
+    if (opts.depth !== undefined) {
+      const parsed = parseInt(opts.depth, 10);
+      if (isNaN(parsed)) {
+        console.error(`Invalid --depth value: "${opts.depth}". Must be a non-negative integer.`);
+        process.exit(1);
+      }
+      if (parsed < 0) {
+        console.error(`Invalid --depth value: "${opts.depth}". Must be a non-negative integer.`);
+        process.exit(1);
+      }
+      maxDepth = parsed;
+    }
     const result = impact(graph, startIds, lock, maxDepth);
 
     if (opts.format === "json") {
@@ -145,7 +157,9 @@ program
   .command("graph")
   .description("Show the artifact graph")
   .option("--format <format>", "Output format: text | json", "text")
-  .option("--kind <kind>", "Filter by node kind: doc | req | file | test")
+  .addOption(
+    new Option("--kind <kind>", "Filter by node kind").choices(["doc", "req", "file", "test"]),
+  )
   .action((opts) => {
     const rootDir = process.cwd();
     const config = loadConfig(rootDir);

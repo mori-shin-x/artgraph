@@ -56,6 +56,46 @@ describe("formatGraphText", () => {
   });
 });
 
+describe("formatGraphText: derives_from chain root detection", () => {
+  it("should detect the upstream-most node as root in a derives_from chain", () => {
+    // Build a minimal graph: A <--derives_from-- B <--derives_from-- C
+    // A is the root (upstream-most). B and C are downstream.
+    const graph: ArtifactGraph = {
+      nodes: new Map([
+        ["doc:A", { id: "doc:A", kind: "doc", filePath: "a.md", contentHash: "h1" }],
+        ["doc:B", { id: "doc:B", kind: "doc", filePath: "b.md", contentHash: "h2" }],
+        ["doc:C", { id: "doc:C", kind: "doc", filePath: "c.md", contentHash: "h3" }],
+      ]),
+      edges: [
+        { source: "doc:B", target: "doc:A", kind: "derives_from" },
+        { source: "doc:C", target: "doc:B", kind: "derives_from" },
+      ],
+    };
+
+    const text = formatGraphText(graph);
+    const lines = text.split("\n").filter((l) => l.trim().length > 0);
+
+    // doc:A should be the root (first line, no indentation)
+    expect(lines[0]).toBe("doc:A");
+    // doc:B and doc:C should appear as children
+    expect(text).toContain("doc:B");
+    expect(text).toContain("doc:C");
+  });
+
+  it("should not exclude upstream nodes from roots due to derives_from targets", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    const text = formatGraphText(graph, "doc");
+    const lines = text.split("\n");
+
+    // The "requirements" node is the upstream-most doc; it should appear as a root
+    // (i.e. at depth 0 — no leading spaces)
+    const reqLine = lines.find((l) => l.trim() === "requirements");
+    if (reqLine) {
+      expect(reqLine).toBe("requirements");
+    }
+  });
+});
+
 describe("formatGraphJSON", () => {
   it("T051: should output valid JSON with nodes and edges arrays", () => {
     const { graph } = buildGraph(FIXTURE_DIR, config);

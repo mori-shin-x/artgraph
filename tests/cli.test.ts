@@ -284,6 +284,89 @@ describe("CLI: impact --depth", () => {
 });
 
 // ---------------------------------------------------------------------------
+// impact --depth validation
+// ---------------------------------------------------------------------------
+describe("CLI: impact --depth validation", () => {
+  it("should error on NaN --depth value", { timeout: 30000 }, () => {
+    const { exitCode, stderr } = run(["impact", "AUTH-001", "--depth", "abc"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Invalid --depth value");
+  });
+
+  it("should error on negative --depth value", { timeout: 30000 }, () => {
+    const { exitCode, stderr } = run(["impact", "AUTH-001", "--depth", "-1"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Invalid --depth value");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// graph --kind validation
+// ---------------------------------------------------------------------------
+describe("CLI: graph --kind validation", () => {
+  it("should error on invalid --kind value", { timeout: 30000 }, () => {
+    const { exitCode, stderr } = run(["graph", "--kind", "invalid"]);
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toMatch(/allowed choices|invalid/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// impact: 3-stage dependency chain E2E
+// ---------------------------------------------------------------------------
+describe("CLI: impact 3-stage dependency chain", () => {
+  it("should trace through doc derives_from chain to implementation", { timeout: 30000 }, () => {
+    // requirements -> design -> tasks (via derives_from chain in doc-chain fixtures)
+    // Starting from "requirements" should reach the whole chain
+    const { stdout, exitCode } = run(["impact", "requirements", "--format", "json"]);
+    expect(exitCode).toBe(0);
+
+    const result = JSON.parse(stdout);
+    expect(result.affectedDocs).toContain("requirements");
+    expect(result.affectedDocs).toContain("design");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// impact: contains reverse + --depth limit
+// ---------------------------------------------------------------------------
+describe("CLI: impact contains reverse + --depth limit", () => {
+  it("should reach req from doc via contains within depth limit", { timeout: 30000 }, () => {
+    // doc:auth-design --contains--> AUTH-001
+    // With depth=1, starting from doc:auth-design should reach AUTH-001
+    const { stdout, exitCode } = run([
+      "impact",
+      "doc:auth-design",
+      "--depth",
+      "1",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+
+    const result = JSON.parse(stdout);
+    expect(result.affectedReqs).toContain("AUTH-001");
+  });
+
+  it("should not reach impl files from doc with --depth 1", { timeout: 30000 }, () => {
+    // doc:auth-design --contains(depth1)--> AUTH-001 --implements(depth2)--> file:src/auth/login.ts
+    // With depth=1, should NOT reach the implementation files (they are at depth 2)
+    const { stdout, exitCode } = run([
+      "impact",
+      "doc:auth-design",
+      "--depth",
+      "1",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+
+    const result = JSON.parse(stdout);
+    expect(result.affectedFiles).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // error cases
 // ---------------------------------------------------------------------------
 describe("CLI: error cases", () => {
