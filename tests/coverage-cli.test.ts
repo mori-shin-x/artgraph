@@ -1,30 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { existsSync, unlinkSync } from "node:fs";
-
-const CLI = resolve(import.meta.dirname, "../dist/cli.js");
-const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
-const LOCK_PATH = resolve(FIXTURE_DIR, ".trace.lock");
-
-function run(args: string[]): { stdout: string; stderr: string; exitCode: number } {
-  try {
-    const stdout = execFileSync("node", [CLI, ...args], {
-      encoding: "utf-8",
-      cwd: FIXTURE_DIR,
-      timeout: 30000,
-    });
-    return { stdout, stderr: "", exitCode: 0 };
-  } catch (e: any) {
-    return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.status ?? 1 };
-  }
-}
-
-function cleanup() {
-  if (existsSync(LOCK_PATH)) unlinkSync(LOCK_PATH);
-}
+import { run, runAt, cleanup } from "./helpers.js";
 
 afterEach(cleanup);
+
+const EMPTY_FIXTURE = resolve(import.meta.dirname, "fixtures/empty-graph");
+const ALL_VERIFIED_FIXTURE = resolve(import.meta.dirname, "fixtures/all-verified");
 
 // ---------------------------------------------------------------------------
 // coverage
@@ -103,6 +84,18 @@ describe("CLI: coverage", () => {
     expect(stdout).toMatch(/total/i);
   });
 
+  it("should show correct status in text output for each REQ", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["coverage", "--format", "text"]);
+    expect(exitCode).toBe(0);
+
+    // AUTH-001 should be verified in text output
+    expect(stdout).toMatch(/AUTH-001:\s*verified/);
+    // AUTH-002 should be impl-only in text output
+    expect(stdout).toMatch(/AUTH-002:\s*impl-only/);
+    // AUTH-003 should be untagged in text output
+    expect(stdout).toMatch(/AUTH-003:\s*untagged/);
+  });
+
   it("should always exit 0 (no gating)", { timeout: 30000 }, () => {
     // Even with uncovered items, coverage should exit 0
     const { exitCode } = run(["coverage"]);
@@ -113,5 +106,85 @@ describe("CLI: coverage", () => {
     const { stdout, exitCode } = run(["--help"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("coverage");
+  });
+
+  it("should reject invalid --format value", { timeout: 30000 }, () => {
+    const { exitCode, stderr } = run(["coverage", "--format", "invalid"]);
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toMatch(/invalid|allowed|choices/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// coverage: empty graph (0 req nodes)
+// ---------------------------------------------------------------------------
+describe("CLI: coverage (empty graph)", () => {
+  it(
+    "should return empty items and zero summary for empty graph in JSON",
+    { timeout: 30000 },
+    () => {
+      const { stdout, exitCode } = runAt(EMPTY_FIXTURE, ["coverage", "--format", "json"]);
+      expect(exitCode).toBe(0);
+
+      const result = JSON.parse(stdout);
+      expect(result.items).toEqual([]);
+      expect(result.summary).toEqual({
+        total: 0,
+        verified: 0,
+        implOnly: 0,
+        untagged: 0,
+      });
+    },
+  );
+
+  it("should output text without errors for empty graph", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = runAt(EMPTY_FIXTURE, ["coverage", "--format", "text"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("COVERAGE:");
+    expect(stdout).toMatch(/total=0/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// coverage: all-verified fixture (all reqs have impl + test)
+// ---------------------------------------------------------------------------
+describe("CLI: coverage (all verified)", () => {
+  it(
+    "should show all items as verified when every req has impl and test",
+    { timeout: 30000 },
+    () => {
+      const { stdout, exitCode } = runAt(ALL_VERIFIED_FIXTURE, ["coverage", "--format", "json"]);
+      expect(exitCode).toBe(0);
+
+      const result = JSON.parse(stdout);
+      expect(result.items.length).toBeGreaterThan(0);
+
+      for (const item of result.items) {
+        expect(item.status).toBe("verified");
+      }
+
+      expect(result.summary.verified).toBe(result.summary.total);
+      expect(result.summary.implOnly).toBe(0);
+      expect(result.summary.untagged).toBe(0);
+    },
+  );
+
+  it("should show all verified in text output", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = runAt(ALL_VERIFIED_FIXTURE, ["coverage", "--format", "text"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("COVERAGE:");
+    expect(stdout).toMatch(/VER-001:\s*verified/);
+    expect(stdout).toMatch(/VER-002:\s*verified/);
+    // No item line should show impl-only or untagged as a status
+    const lines = stdout.split("\n").filter((l: string) => l.match(/VER-\d+:/));
+    for (const line of lines) {
+      expect(line).toContain("verified");
+      expect(line).not.toContain("impl-only");
+      expect(line).not.toContain("untagged");
+    }
+    // Summary should show all verified
+    expect(stdout).toMatch(/verified=2/);
+    expect(stdout).toMatch(/impl-only=0/);
+    expect(stdout).toMatch(/untagged=0/);
   });
 });

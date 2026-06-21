@@ -39,9 +39,7 @@ export function detectProject(rootDir: string): DetectionResult {
 }
 
 export function generateConfig(detection: DetectionResult): SpectraceConfig {
-  const include = detection.hasSrc
-    ? [...DEFAULT_CONFIG.include]
-    : ["**/*.ts", "**/*.tsx"];
+  const include = detection.hasSrc ? [...DEFAULT_CONFIG.include] : ["**/*.ts", "**/*.tsx"];
 
   const specDirs: string[] = [];
   if (detection.hasSpecs) specDirs.push("specs");
