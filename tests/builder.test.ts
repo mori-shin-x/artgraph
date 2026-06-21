@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { resolve } from "node:path";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmdirSync } from "node:fs";
+import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmdirSync, rmSync } from "node:fs";
 import { buildGraph } from "../src/graph/builder.js";
 import { buildLockFromGraph } from "../src/lock.js";
 import type { SpectraceConfig } from "../src/types.js";
@@ -81,12 +81,12 @@ describe("buildGraph: doc node auto-generation (US1)", () => {
     expect(graph.nodes.has("doc:auth-design")).toBe(true);
   });
 
-  it("T025: should auto-generate doc node IDs with doc: prefix", () => {
+  it("T025: should auto-generate doc node IDs with specDir-relative path", () => {
     const { graph } = buildGraph(FIXTURE_DIR, config);
 
-    // prose-only.md has no node_id, so auto-generated ID should be doc:specs/prose-only.md
-    expect(graph.nodes.has("doc:specs/prose-only.md")).toBe(true);
-    const node = graph.nodes.get("doc:specs/prose-only.md")!;
+    // prose-only.md has no node_id, so auto-generated ID should be doc:prose-only.md (specDir-relative)
+    expect(graph.nodes.has("doc:prose-only.md")).toBe(true);
+    const node = graph.nodes.get("doc:prose-only.md")!;
     expect(node.kind).toBe("doc");
   });
 });
@@ -137,9 +137,7 @@ spectrace:
       );
       expect(orphanWarnings.length).toBeGreaterThanOrEqual(1);
     } finally {
-      unlinkSync(resolve(tmpSpecs, "orphan.md"));
-      rmdirSync(tmpSpecs);
-      rmdirSync(tmpRoot);
+      rmSync(tmpRoot, { recursive: true });
     }
   });
 
@@ -167,9 +165,7 @@ spectrace:
       );
       expect(invalidWarnings.length).toBeGreaterThanOrEqual(1);
     } finally {
-      unlinkSync(resolve(tmpSpecs, "invalid-rel.md"));
-      rmdirSync(tmpSpecs);
-      rmdirSync(tmpRoot);
+      rmSync(tmpRoot, { recursive: true });
     }
   });
 
@@ -209,10 +205,7 @@ spectrace:
       const dupWarnings = warnings.filter((w) => w.type === "duplicate-id" && w.id === "shared-id");
       expect(dupWarnings.length).toBeGreaterThanOrEqual(1);
     } finally {
-      unlinkSync(resolve(tmpSpecs, "a.md"));
-      unlinkSync(resolve(tmpSpecs, "b.md"));
-      rmdirSync(tmpSpecs);
-      rmdirSync(tmpRoot);
+      rmSync(tmpRoot, { recursive: true });
     }
   });
 });
@@ -331,9 +324,7 @@ spectrace:
       // dependsOn should be undefined since there are no depends_on/derives_from edges
       expect(docEntry.dependsOn).toBeUndefined();
     } finally {
-      unlinkSync(resolve(tmpSpecs, "spec.md"));
-      rmdirSync(tmpSpecs);
-      rmdirSync(tmpRoot);
+      rmSync(tmpRoot, { recursive: true });
     }
   });
 });

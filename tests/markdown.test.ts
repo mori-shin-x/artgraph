@@ -104,12 +104,18 @@ describe("parseMarkdown", () => {
 
   describe("T020: doc node auto-generation", () => {
     it("should generate doc node for prose-only markdown (no frontmatter)", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), FIXTURE_DIR);
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), FIXTURE_DIR, "specs");
       const docNodes = result.nodes.filter((n) => n.kind === "doc");
 
       expect(docNodes).toHaveLength(1);
-      expect(docNodes[0].id).toBe("doc:specs/prose-only.md");
+      expect(docNodes[0].id).toBe("doc:prose-only.md");
       expect(docNodes[0].kind).toBe("doc");
+    });
+
+    it("should use rootDir-relative path when specDirPrefix is not provided", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), FIXTURE_DIR);
+      const docNodes = result.nodes.filter((n) => n.kind === "doc");
+      expect(docNodes[0].id).toBe("doc:specs/prose-only.md");
     });
   });
 
@@ -173,6 +179,38 @@ spectrace:
         expect(result.warnings).toHaveLength(1);
         expect(result.warnings[0].type).toBe("invalid-relation");
         expect(result.warnings[0].key).toBe("extends");
+      } finally {
+        unlinkSync(tmpPath);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+  });
+
+  describe("malformed YAML frontmatter", () => {
+    it("should not crash on invalid YAML and fall back to treating content as body", () => {
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-malformed-yaml");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const tmpPath = resolve(tmpSpecs, "malformed.md");
+      writeFileSync(
+        tmpPath,
+        `---
+spectrace:
+  node_id: "test
+  bad_indent
+    - broken: [unclosed
+---
+# Malformed frontmatter
+`,
+      );
+
+      try {
+        const result = parseMarkdown(tmpPath, tmpRoot);
+        // Should not throw — falls back to treating the whole file as content
+        expect(result.nodes.length).toBeGreaterThanOrEqual(1);
+        const docNode = result.nodes.find((n) => n.kind === "doc");
+        expect(docNode).toBeDefined();
       } finally {
         unlinkSync(tmpPath);
         rmdirSync(tmpSpecs);

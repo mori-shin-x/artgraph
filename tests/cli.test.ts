@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { existsSync, unlinkSync } from "node:fs";
 
@@ -315,15 +315,18 @@ describe("CLI: graph --kind validation", () => {
 // impact: 3-stage dependency chain E2E
 // ---------------------------------------------------------------------------
 describe("CLI: impact 3-stage dependency chain", () => {
-  it("should trace through doc derives_from chain to implementation", { timeout: 30000 }, () => {
+  it("should trace through full doc derives_from chain", { timeout: 30000 }, () => {
     // requirements -> design -> tasks (via derives_from chain in doc-chain fixtures)
-    // Starting from "requirements" should reach the whole chain
+    // Starting from "requirements" should reach the whole chain including tasks
     const { stdout, exitCode } = run(["impact", "requirements", "--format", "json"]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
     expect(result.affectedDocs).toContain("requirements");
     expect(result.affectedDocs).toContain("design");
+    // tasks.md (auto-generated doc ID) should also be reached via design -> tasks chain
+    const hasTasksDoc = result.affectedDocs.some((d: string) => d.includes("tasks"));
+    expect(hasTasksDoc).toBe(true);
   });
 });
 
@@ -363,6 +366,75 @@ describe("CLI: impact contains reverse + --depth limit", () => {
 
     const result = JSON.parse(stdout);
     expect(result.affectedFiles).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CLI warnings (orphan-doc, invalid-relation)
+// ---------------------------------------------------------------------------
+describe("CLI: warning output", () => {
+  it("should output orphan-doc warning to stderr", { timeout: 30000 }, () => {
+    const { mkdirSync, writeFileSync, rmSync: rm } = require("node:fs");
+    const { mkdtempSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    const tmpRoot = mkdtempSync(join(tmpdir(), "spectrace-warn-"));
+    mkdirSync(join(tmpRoot, "specs"), { recursive: true });
+    mkdirSync(join(tmpRoot, "src"), { recursive: true });
+    writeFileSync(join(tmpRoot, "src", "app.ts"), "export const x = 1;\n");
+    writeFileSync(
+      join(tmpRoot, ".spectrace.json"),
+      JSON.stringify({ include: ["src/**/*.ts"], specDirs: ["specs"] }),
+    );
+    writeFileSync(
+      join(tmpRoot, "specs", "orphan.md"),
+      `---\nspectrace:\n  node_id: "orphan-src"\n  derives_from:\n    - nonexistent-target\n---\n# Orphan\n`,
+    );
+
+    try {
+      const proc = spawnSync("node", [CLI, "scan"], {
+        encoding: "utf-8",
+        cwd: tmpRoot,
+        timeout: 30000,
+      });
+      expect(proc.status).toBe(0);
+      expect(proc.stderr).toContain("orphan-doc");
+      expect(proc.stderr).toContain("nonexistent-target");
+    } finally {
+      rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("should output invalid-relation warning to stderr", { timeout: 30000 }, () => {
+    const { mkdirSync, writeFileSync, rmSync: rm } = require("node:fs");
+    const { mkdtempSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    const tmpRoot = mkdtempSync(join(tmpdir(), "spectrace-warn-"));
+    mkdirSync(join(tmpRoot, "specs"), { recursive: true });
+    mkdirSync(join(tmpRoot, "src"), { recursive: true });
+    writeFileSync(join(tmpRoot, "src", "app.ts"), "export const x = 1;\n");
+    writeFileSync(
+      join(tmpRoot, ".spectrace.json"),
+      JSON.stringify({ include: ["src/**/*.ts"], specDirs: ["specs"] }),
+    );
+    writeFileSync(
+      join(tmpRoot, "specs", "invalid.md"),
+      `---\nspectrace:\n  node_id: "inv-src"\n  extends:\n    - some-doc\n---\n# Invalid\n`,
+    );
+
+    try {
+      const proc = spawnSync("node", [CLI, "scan"], {
+        encoding: "utf-8",
+        cwd: tmpRoot,
+        timeout: 30000,
+      });
+      expect(proc.status).toBe(0);
+      expect(proc.stderr).toContain("invalid relation");
+      expect(proc.stderr).toContain("extends");
+    } finally {
+      rm(tmpRoot, { recursive: true, force: true });
+    }
   });
 });
 
