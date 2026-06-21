@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { existsSync, unlinkSync } from "node:fs";
@@ -367,6 +367,85 @@ describe("CLI: impact contains reverse + --depth limit", () => {
 });
 
 // ---------------------------------------------------------------------------
+// init
+// ---------------------------------------------------------------------------
+describe("CLI: init", () => {
+  let initTmp: string;
+
+  function runInit(args: string[]): { stdout: string; stderr: string; exitCode: number } {
+    try {
+      const stdout = execFileSync("node", [CLI, "init", ...args], {
+        encoding: "utf-8",
+        cwd: initTmp,
+        timeout: 30000,
+      });
+      return { stdout, stderr: "", exitCode: 0 };
+    } catch (e: any) {
+      return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.status ?? 1 };
+    }
+  }
+
+  beforeEach(() => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    initTmp = mkdtempSync(join(tmpdir(), "spectrace-cli-init-"));
+    mkdirSync(join(initTmp, "src"));
+    writeFileSync(join(initTmp, "src", "app.ts"), "export const x = 1;\n");
+  });
+
+  afterEach(() => {
+    const { rmSync } = require("node:fs");
+    rmSync(initTmp, { recursive: true, force: true });
+  });
+
+  it("should create .spectrace.json and .trace.lock", { timeout: 30000 }, () => {
+    const { exitCode, stdout } = runInit([]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Created .spectrace.json");
+    expect(stdout).toContain("Created .trace.lock");
+    expect(stdout).toContain("Nodes:");
+  });
+
+  it("should output JSON with --format json", { timeout: 30000 }, () => {
+    const { exitCode, stdout } = runInit(["--format", "json"]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.configPath).toBeDefined();
+    expect(result.scanSummary).toBeDefined();
+    expect(result.scanSummary.nodeCount).toBeGreaterThanOrEqual(0);
+    expect(result.warnings).toBeDefined();
+  });
+
+  it("should fail when .spectrace.json already exists", { timeout: 30000 }, () => {
+    const { writeFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    writeFileSync(join(initTmp, ".spectrace.json"), "{}\n");
+
+    const { exitCode, stderr } = runInit([]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("already exists");
+  });
+
+  it("should succeed with --force when .spectrace.json exists", { timeout: 30000 }, () => {
+    const { writeFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    writeFileSync(join(initTmp, ".spectrace.json"), "{}\n");
+
+    const { exitCode, stdout } = runInit(["--force"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Created .spectrace.json");
+  });
+
+  it("should skip scan with --no-scan", { timeout: 30000 }, () => {
+    const { exitCode, stdout } = runInit(["--no-scan"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("scan skipped");
+    expect(stdout).not.toContain("Nodes:");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // error cases
 // ---------------------------------------------------------------------------
 describe("CLI: error cases", () => {
@@ -397,5 +476,49 @@ describe("CLI: error cases", () => {
     expect(stdout).toContain("check");
     expect(stdout).toContain("reconcile");
     expect(stdout).toContain("graph");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// symbol mode
+// ---------------------------------------------------------------------------
+const SYM_FIXTURE = resolve(import.meta.dirname, "fixtures/symbol-level");
+const SYM_LOCK_PATH = resolve(SYM_FIXTURE, ".trace.lock");
+
+function runSym(args: string[]): { stdout: string; stderr: string; exitCode: number } {
+  try {
+    const stdout = execFileSync("node", [CLI, ...args], {
+      encoding: "utf-8",
+      cwd: SYM_FIXTURE,
+      timeout: 30000,
+    });
+    return { stdout, stderr: "", exitCode: 0 };
+  } catch (e: any) {
+    return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.status ?? 1 };
+  }
+}
+
+describe("CLI: symbol mode", () => {
+  afterEach(() => {
+    if (existsSync(SYM_LOCK_PATH)) unlinkSync(SYM_LOCK_PATH);
+  });
+
+  it("should show symbol count with --mode symbol", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = runSym(["scan", "--mode", "symbol"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("symbol:");
+  });
+
+  it("should not show symbol count in file mode", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = runSym(["scan"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain("symbol:");
+  });
+
+  it("should include symbolCount in JSON output", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = runSym(["scan", "--mode", "symbol", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.symbolCount).toBeGreaterThan(0);
   });
 });

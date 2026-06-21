@@ -18,6 +18,15 @@ export function impact(
     // If maxDepth is set and we've reached it, don't explore further from this node
     if (maxDepth !== undefined && depth >= maxDepth) continue;
 
+    const node = graph.nodes.get(id);
+    if (node && node.kind === "file") {
+      for (const [symId, symNode] of graph.nodes) {
+        if (symNode.kind === "symbol" && symNode.filePath === node.filePath && !visited.has(symId)) {
+          queue.push({ id: symId, depth: depth + 1 });
+        }
+      }
+    }
+
     for (const edge of graph.edges) {
       if (edge.source === id && !visited.has(edge.target)) {
         queue.push({ id: edge.target, depth: depth + 1 });
@@ -28,7 +37,7 @@ export function impact(
     }
   }
 
-  const affectedFiles: string[] = [];
+  const affectedFileSet = new Set<string>();
   const affectedDocs: string[] = [];
   const affectedReqs: string[] = [];
   const drifted: DriftEntry[] = [];
@@ -41,7 +50,7 @@ export function impact(
       case "file":
       case "symbol":
       case "test":
-        affectedFiles.push(node.filePath);
+        affectedFileSet.add(node.filePath);
         break;
       case "doc":
         affectedDocs.push(id);
@@ -63,6 +72,7 @@ export function impact(
     }
   }
 
+  const affectedFiles = [...affectedFileSet];
   return {
     affectedFiles,
     affectedDocs,
@@ -117,6 +127,11 @@ export function resolveStartIds(graph: ArtifactGraph, inputs: string[]): string[
     const fileId = `file:${input}`;
     if (graph.nodes.has(fileId)) {
       ids.push(fileId);
+      for (const [id, node] of graph.nodes) {
+        if (node.kind === "symbol" && node.filePath === input) {
+          ids.push(id);
+        }
+      }
       continue;
     }
 
