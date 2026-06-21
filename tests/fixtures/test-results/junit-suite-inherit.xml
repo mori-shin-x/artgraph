@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="[REQ-002] Auth" tests="2" failures="0">
+    <testcase name="should authenticate user" classname="Auth" time="0.01"/>
+    <testcase name="should reject invalid credentials" classname="Auth" time="0.02"/>
+  </testsuite>
+</testsuites>

@@ -23,5 +23,6 @@ export function loadConfig(rootDir: string): SpectraceConfig {
     lockFile: raw.lockFile ?? DEFAULT_CONFIG.lockFile,
     reqPatterns: raw.reqPatterns,
     mode: raw.mode === "symbol" ? "symbol" : "file",
+    testResultPaths: Array.isArray(raw.testResultPaths) ? raw.testResultPaths : undefined,
   };
 }
