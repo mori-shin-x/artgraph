@@ -163,9 +163,30 @@ describe("createTSParser (symbol mode)", () => {
     expect(symbolIds).toContain("symbol:src/defaults.ts#default");
   });
 
+  it("should resolve aliased import { bar as myBar } to original export name", () => {
+    const importEdges = result.edges.filter(
+      (e) => e.kind === "imports" && e.source === "file:src/consumer.ts",
+    );
+
+    expect(importEdges).toContainEqual({
+      source: "file:src/consumer.ts",
+      target: "symbol:src/utils.ts#bar",
+      kind: "imports",
+    });
+  });
+
+  it("should resolve @impl inside arrow function export to symbol source", () => {
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "FR-001" && e.source.includes("arrow"),
+    );
+
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/arrow.ts#handler");
+  });
+
   it("should resolve @impl inside exported function to symbol source", () => {
     const implEdges = result.edges.filter(
-      (e) => e.kind === "implements" && e.target === "FR-001",
+      (e) => e.kind === "implements" && e.target === "FR-001" && e.source.includes("utils"),
     );
 
     expect(implEdges).toHaveLength(1);
@@ -186,7 +207,7 @@ describe("createTSParser (symbol mode)", () => {
     const fileResult = fileParser.parse();
 
     const implEdges = fileResult.edges.filter(
-      (e) => e.kind === "implements" && e.target === "FR-001",
+      (e) => e.kind === "implements" && e.target === "FR-001" && e.source === "file:src/utils.ts",
     );
 
     expect(implEdges).toHaveLength(1);

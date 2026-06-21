@@ -28,6 +28,11 @@ export function buildLockFromGraph(graph: ArtifactGraph): LockFile {
   for (const [id, node] of graph.nodes) {
     if (node.kind !== "req" && node.kind !== "doc" && node.kind !== "symbol") continue;
 
+    if (node.kind === "symbol") {
+      lock[id] = { contentHash: node.contentHash, lastReconciled: now };
+      continue;
+    }
+
     const entry: LockEntry = {
       contentHash: node.contentHash,
       lastReconciled: now,
