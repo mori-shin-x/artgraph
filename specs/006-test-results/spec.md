@@ -61,11 +61,27 @@ Acceptance Scenarios:
 
 ---
 
-### User Story 4 - 設定ファイルによるテスト結果パスの指定 (Priority: P2)
+### User Story 4 - coverage コマンドでのテスト結果反映 (Priority: P1)
 
-開発者が `.spectrace.json` に `testResultPaths` を設定することで、毎回 `--test-results` オプションを指定しなくても、テスト結果が自動的に取り込まれるようにする。glob パターンも利用可能。
+`spectrace coverage` コマンドは REQ ごとの verified/impl-only/untagged 状態を一覧表示する。`--test-results` オプションが指定された場合、テスト pass/fail を反映した coverage 状態を表示する。`spectrace check` と同じ判定ロジックを使用し、一貫した結果を返す。
 
-Why this priority: CLI オプションでの基本動作（US1, US2）が確立された後の利便性向上。設定ファイルによる指定は日常的なワークフローで繰り返しオプションを書く手間を省く。
+Why this priority: `spectrace coverage` は coverage 状態の確認に特化したコマンドであり、テスト結果を反映しないと `spectrace check` と結果が食い違う。ユーザーの混乱を防ぐために `check` と同時にサポートすべき。
+
+Independent Test: テスト結果ファイルを指定して `spectrace coverage --test-results` を実行し、`spectrace check --test-results` と同じ判定結果が得られることを確認する。
+
+Acceptance Scenarios:
+
+1. Given Vitest JSON レポートに `[REQ-001]` を含むテストが pass で記録されており、グラフ上に `verifies` エッジがある, When `spectrace coverage --test-results vitest-report.json` を実行する, Then REQ-001 の coverage 状態が `verified` と表示される
+2. Given Vitest JSON レポートに `[REQ-001]` を含むテストが fail で記録されている, When `spectrace coverage --test-results vitest-report.json` を実行する, Then REQ-001 の coverage 状態が `impl-only` と表示される
+3. Given `--test-results` オプションなしで `spectrace coverage` を実行する, When 既存の `verifies` エッジがある REQ がある, Then 従来通り `verifies` エッジの有無のみで判定される（後方互換）
+
+---
+
+### User Story 5 - 設定ファイルによるテスト結果パスの指定 (Priority: P2)
+
+開発者が `.spectrace.json` に `testResultPaths` を設定することで、毎回 `--test-results` オプションを指定しなくても、テスト結果が自動的に取り込まれるようにする。glob パターンも利用可能。この設定は `spectrace check`、`spectrace coverage`、`spectrace scan` の全コマンドに適用される。
+
+Why this priority: CLI オプションでの基本動作（US1, US2, US4）が確立された後の利便性向上。設定ファイルによる指定は日常的なワークフローで繰り返しオプションを書く手間を省く。
 
 Independent Test: `.spectrace.json` に `testResultPaths` を設定し、`spectrace check` をオプションなしで実行して、テスト結果が取り込まれることを確認する。
 
@@ -77,7 +93,7 @@ Acceptance Scenarios:
 
 ---
 
-### User Story 5 - 複数テスト結果ファイルの統合 (Priority: P2)
+### User Story 6 - 複数テスト結果ファイルの統合 (Priority: P2)
 
 開発者がモノレポや分割テスト実行で複数のテスト結果ファイルを持っている場合、`--test-results` に複数のパスまたは glob パターンを指定すると、全てのファイルが統合されて判定に使用される。
 
@@ -116,6 +132,7 @@ Acceptance Scenarios:
 - FR-008: 複数のテスト結果ファイルを指定した場合、全ファイルの結果を統合して判定する。同一 REQ に対して複数のテスト結果がある場合、1つでも fail があれば pass としない
 - FR-009: `spectrace scan` コマンドも `--test-results` オプションを受け付け、テスト結果の統計情報を出力に含める
 - FR-010: テスト名の describe ブロック（Vitest JSON の ancestorTitles / JUnit XML の testsuite name）に `[REQ-xxxx]` がある場合、その REQ タグを内部のテストケースに継承する
+- FR-011: `spectrace coverage` コマンドも `--test-results` オプションを受け付け、テスト pass/fail を反映した coverage 状態を表示する。判定ロジックは `spectrace check` と同一とする
 
 ### Key Entities
 
@@ -133,6 +150,7 @@ Acceptance Scenarios:
 - SC-003: JUnit XML レポートでも Vitest JSON と同一の判定結果が得られる
 - SC-004: `--test-results` オプションなしの場合、従来と同一の判定結果が得られる（回帰なし）
 - SC-005: テスト結果ファイルが存在しないまたは読み込めない場合、エラーで停止せず、従来の判定にフォールバックする
+- SC-006: `spectrace coverage --test-results` と `spectrace check --test-results` が同一のテスト結果ファイルに対して一貫した coverage 判定を返す
 
 ## Assumptions
 
