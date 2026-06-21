@@ -23,9 +23,13 @@ interface ParsedSpec {
   warnings: ParseWarning[];
 }
 
-export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
+export function parseMarkdown(filePath: string, rootDir?: string, specDirPrefix?: string): ParsedSpec {
   const raw = readFileSync(filePath, "utf-8");
   const relPath = rootDir ? relative(rootDir, filePath) : filePath;
+  const docRelPath =
+    specDirPrefix && relPath.startsWith(specDirPrefix + "/")
+      ? relPath.slice(specDirPrefix.length + 1)
+      : relPath;
 
   let frontmatter: Record<string, any> = {};
   let content: string;
@@ -52,7 +56,8 @@ export function parseMarkdown(filePath: string, rootDir?: string): ParsedSpec {
     | undefined;
 
   // Always generate a doc node (US1: T026)
-  const docId = spectraceMeta?.node_id ?? `doc:${relPath}`;
+  // Auto-generated ID uses specDir-relative path per FR-001 / research R3
+  const docId = spectraceMeta?.node_id ?? `doc:${docRelPath}`;
   nodes.push({
     id: docId,
     kind: "doc",

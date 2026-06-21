@@ -99,7 +99,7 @@ describe("resolveStartIds", () => {
 
   it("T042: should resolve doc: prefix for file paths", () => {
     const ids = resolveStartIds(graph, ["specs/prose-only.md"]);
-    expect(ids).toContain("doc:specs/prose-only.md");
+    expect(ids).toContain("doc:prose-only.md");
   });
 
   it("should resolve file path to both doc and req nodes in the same file", () => {
@@ -169,6 +169,52 @@ describe("impact: end-to-end trace via contains (US3)", () => {
     expect(result.affectedReqs).toContain("AUTH-001");
     // Should reach implementation files via implements edge
     expect(result.affectedFiles).toContain("src/auth/login.ts");
+  });
+});
+
+describe("impact: cyclic doc-to-doc graph", () => {
+  it("should terminate without infinite loop on cyclic derives_from", () => {
+    const cyclicGraph = {
+      nodes: new Map([
+        ["doc:A", { id: "doc:A", kind: "doc" as const, filePath: "a.md", contentHash: "h1" }],
+        ["doc:B", { id: "doc:B", kind: "doc" as const, filePath: "b.md", contentHash: "h2" }],
+        ["doc:C", { id: "doc:C", kind: "doc" as const, filePath: "c.md", contentHash: "h3" }],
+      ]),
+      edges: [
+        { source: "doc:A", target: "doc:B", kind: "derives_from" as const },
+        { source: "doc:B", target: "doc:C", kind: "derives_from" as const },
+        { source: "doc:C", target: "doc:A", kind: "derives_from" as const },
+      ],
+    };
+    const result = impact(cyclicGraph, ["doc:A"], {});
+    expect(result.affectedDocs).toContain("doc:A");
+    expect(result.affectedDocs).toContain("doc:B");
+    expect(result.affectedDocs).toContain("doc:C");
+    expect(result.affectedDocs).toHaveLength(3);
+  });
+
+  it("should respect maxDepth in cyclic graph (bidirectional traversal)", () => {
+    // Linear chain: A -> B -> C -> D (no cycle back)
+    const linearGraph = {
+      nodes: new Map([
+        ["doc:A", { id: "doc:A", kind: "doc" as const, filePath: "a.md", contentHash: "h1" }],
+        ["doc:B", { id: "doc:B", kind: "doc" as const, filePath: "b.md", contentHash: "h2" }],
+        ["doc:C", { id: "doc:C", kind: "doc" as const, filePath: "c.md", contentHash: "h3" }],
+        ["doc:D", { id: "doc:D", kind: "doc" as const, filePath: "d.md", contentHash: "h4" }],
+      ]),
+      edges: [
+        { source: "doc:B", target: "doc:A", kind: "derives_from" as const },
+        { source: "doc:C", target: "doc:B", kind: "derives_from" as const },
+        { source: "doc:D", target: "doc:C", kind: "derives_from" as const },
+      ],
+    };
+    // From B with depth=1: reaches A (backward via B->A) and C (forward via C->B)
+    // D is at depth 2 from B and should NOT be reached
+    const result = impact(linearGraph, ["doc:B"], {}, 1);
+    expect(result.affectedDocs).toContain("doc:B");
+    expect(result.affectedDocs).toContain("doc:A");
+    expect(result.affectedDocs).toContain("doc:C");
+    expect(result.affectedDocs).not.toContain("doc:D");
   });
 });
 

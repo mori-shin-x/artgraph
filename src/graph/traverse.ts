@@ -1,6 +1,13 @@
 import type { ArtifactGraph, ImpactResult, DriftEntry } from "../types.js";
 import type { LockFile } from "../types.js";
 
+// BFS traversal is BIDIRECTIONAL: edges are followed in both directions regardless
+// of their declared source/target. This means:
+//   - From a req node, traversal reaches the parent doc (via reverse contains edge)
+//   - From a doc node, traversal reaches child reqs (via forward contains edge)
+//   - Starting from any req, the blast radius includes sibling reqs in the same doc
+//     (req -> parent doc -> sibling reqs -> their implementations)
+// Use --depth to limit traversal when contains edges cause unexpectedly wide reach.
 export function impact(
   graph: ArtifactGraph,
   startIds: string[],
@@ -15,7 +22,6 @@ export function impact(
     if (visited.has(id)) continue;
     visited.add(id);
 
-    // If maxDepth is set and we've reached it, don't explore further from this node
     if (maxDepth !== undefined && depth >= maxDepth) continue;
 
     const node = graph.nodes.get(id);

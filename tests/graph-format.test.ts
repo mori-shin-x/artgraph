@@ -140,3 +140,46 @@ describe("formatGraphJSON", () => {
     }
   });
 });
+
+describe("formatGraphText: cyclic graph", () => {
+  it("should terminate without infinite loop on cyclic edges", () => {
+    const graph: ArtifactGraph = {
+      nodes: new Map([
+        ["doc:A", { id: "doc:A", kind: "doc", filePath: "a.md", contentHash: "h1" }],
+        ["doc:B", { id: "doc:B", kind: "doc", filePath: "b.md", contentHash: "h2" }],
+        ["doc:C", { id: "doc:C", kind: "doc", filePath: "c.md", contentHash: "h3" }],
+      ]),
+      edges: [
+        { source: "doc:A", target: "doc:B", kind: "derives_from" },
+        { source: "doc:B", target: "doc:C", kind: "derives_from" },
+        { source: "doc:C", target: "doc:A", kind: "derives_from" },
+      ],
+    };
+    const text = formatGraphText(graph);
+    expect(text).toContain("doc:A");
+    expect(text).toContain("doc:B");
+    expect(text).toContain("doc:C");
+  });
+});
+
+describe("formatGraphText: empty graph", () => {
+  it("should return empty string for graph with no nodes", () => {
+    const graph: ArtifactGraph = {
+      nodes: new Map(),
+      edges: [],
+    };
+    const text = formatGraphText(graph);
+    expect(text).toBe("");
+  });
+
+  it("should return valid JSON for empty graph", () => {
+    const graph: ArtifactGraph = {
+      nodes: new Map(),
+      edges: [],
+    };
+    const json = formatGraphJSON(graph);
+    const parsed = JSON.parse(json);
+    expect(parsed.nodes).toEqual([]);
+    expect(parsed.edges).toEqual([]);
+  });
+});
