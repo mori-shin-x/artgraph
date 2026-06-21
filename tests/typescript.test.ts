@@ -95,3 +95,101 @@ describe("createTSParser", () => {
     expect(verifyEdges[0].target).toBe("Requirement-1");
   });
 });
+
+describe("createTSParser (symbol mode)", () => {
+  const SYM_FIXTURE = resolve(import.meta.dirname, "fixtures/symbol-level");
+  const parser = createTSParser(SYM_FIXTURE, ["src/**/*.ts"], "symbol");
+  const result = parser.parse();
+
+  it("should extract symbol nodes for exported functions", () => {
+    const symbolNodes = result.nodes.filter((n) => n.kind === "symbol");
+    const symbolIds = symbolNodes.map((n) => n.id);
+
+    expect(symbolIds).toContain("symbol:src/utils.ts#foo");
+    expect(symbolIds).toContain("symbol:src/utils.ts#bar");
+  });
+
+  it("should keep file nodes alongside symbol nodes", () => {
+    const fileNodes = result.nodes.filter((n) => n.kind === "file");
+    const filePaths = fileNodes.map((n) => n.filePath);
+
+    expect(filePaths).toContain("src/utils.ts");
+    expect(filePaths).toContain("src/consumer.ts");
+  });
+
+  it("should resolve named import to symbol-level edge", () => {
+    const importEdges = result.edges.filter(
+      (e) => e.kind === "imports" && e.source === "file:src/consumer.ts",
+    );
+
+    const symbolTargets = importEdges.filter((e) => e.target.startsWith("symbol:"));
+    expect(symbolTargets).toContainEqual({
+      source: "file:src/consumer.ts",
+      target: "symbol:src/utils.ts#foo",
+      kind: "imports",
+    });
+  });
+
+  it("should fallback namespace import to file-level edge", () => {
+    const importEdges = result.edges.filter(
+      (e) => e.kind === "imports" && e.source === "file:src/ns-consumer.ts",
+    );
+
+    expect(importEdges).toContainEqual({
+      source: "file:src/ns-consumer.ts",
+      target: "file:src/utils.ts",
+      kind: "imports",
+    });
+    const symbolTargets = importEdges.filter((e) => e.target.startsWith("symbol:"));
+    expect(symbolTargets).toHaveLength(0);
+  });
+
+  it("should resolve default import to symbol:path#default edge", () => {
+    const importEdges = result.edges.filter(
+      (e) => e.kind === "imports" && e.source === "file:src/consumer.ts",
+    );
+
+    expect(importEdges).toContainEqual({
+      source: "file:src/consumer.ts",
+      target: "symbol:src/defaults.ts#default",
+      kind: "imports",
+    });
+  });
+
+  it("should extract default export as symbol:path#default node", () => {
+    const symbolNodes = result.nodes.filter((n) => n.kind === "symbol");
+    const symbolIds = symbolNodes.map((n) => n.id);
+
+    expect(symbolIds).toContain("symbol:src/defaults.ts#default");
+  });
+
+  it("should resolve @impl inside exported function to symbol source", () => {
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "FR-001",
+    );
+
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/utils.ts#foo");
+  });
+
+  it("should fallback @impl at top-level to file source", () => {
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "SC-001",
+    );
+
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("file:src/toplevel-impl.ts");
+  });
+
+  it("should use file source for @impl in file mode (regression)", () => {
+    const fileParser = createTSParser(SYM_FIXTURE, ["src/**/*.ts"], "file");
+    const fileResult = fileParser.parse();
+
+    const implEdges = fileResult.edges.filter(
+      (e) => e.kind === "implements" && e.target === "FR-001",
+    );
+
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("file:src/utils.ts");
+  });
+});

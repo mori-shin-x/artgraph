@@ -17,7 +17,13 @@ interface ParsedTS {
   edges: GraphEdge[];
 }
 
-export function createTSParser(rootDir: string, patterns: string[]) {
+interface SymbolRange {
+  name: string;
+  startLine: number;
+  endLine: number;
+}
+
+export function createTSParser(rootDir: string, patterns: string[], mode: "file" | "symbol" = "file") {
   const tsconfigPath = resolve(rootDir, "tsconfig.json");
   const projectOpts = existsSync(tsconfigPath)
     ? { tsConfigFilePath: tsconfigPath, skipAddingFilesFromTsConfig: true }
@@ -28,10 +34,10 @@ export function createTSParser(rootDir: string, patterns: string[]) {
     project.addSourceFilesAtPaths(resolve(rootDir, pattern));
   }
 
-  return { project, parse: () => parseProject(project, rootDir) };
+  return { project, parse: () => parseProject(project, rootDir, mode) };
 }
 
-function parseProject(project: Project, rootDir: string): ParsedTS {
+function parseProject(project: Project, rootDir: string, mode: "file" | "symbol"): ParsedTS {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
 
@@ -51,11 +57,51 @@ function parseProject(project: Project, rootDir: string): ParsedTS {
       contentHash: fileHash,
     });
 
-    extractImports(sourceFile, relPath, rootDir, edges);
-    extractImplTags(fileContent, relPath, isTest, edges);
+    let symbolRanges: SymbolRange[] = [];
+
+    if (mode === "symbol" && !isTest) {
+      symbolRanges = extractSymbols(sourceFile, relPath, nodes);
+    }
+
+    extractImports(sourceFile, relPath, rootDir, edges, mode, isTest);
+    extractImplTags(fileContent, relPath, isTest, edges, mode, symbolRanges);
   }
 
   return { nodes, edges };
+}
+
+function extractSymbols(
+  sourceFile: SourceFile,
+  relPath: string,
+  nodes: GraphNode[],
+): SymbolRange[] {
+  const ranges: SymbolRange[] = [];
+  const exported = sourceFile.getExportedDeclarations();
+
+  for (const [name, declarations] of exported) {
+    for (const decl of declarations) {
+      if (decl.getSourceFile() !== sourceFile) continue;
+
+      const symbolName = name === "default" ? "default" : name;
+      const symbolId = `symbol:${relPath}#${symbolName}`;
+      const symbolHash = hash(decl.getText());
+
+      nodes.push({
+        id: symbolId,
+        kind: "symbol",
+        filePath: relPath,
+        contentHash: symbolHash,
+      });
+
+      ranges.push({
+        name: symbolName,
+        startLine: decl.getStartLineNumber(),
+        endLine: decl.getEndLineNumber(),
+      });
+    }
+  }
+
+  return ranges;
 }
 
 function extractImports(
@@ -63,21 +109,44 @@ function extractImports(
   relPath: string,
   rootDir: string,
   edges: GraphEdge[],
+  mode: "file" | "symbol" = "file",
+  isTest: boolean = false,
 ) {
   const sourceId = `file:${relPath}`;
+  const useSymbol = mode === "symbol" && !isTest;
 
   for (const decl of sourceFile.getImportDeclarations()) {
     const moduleSpecifier = decl.getModuleSpecifierValue();
-    if (moduleSpecifier.startsWith(".")) {
-      const resolved = resolveImport(sourceFile, decl);
-      if (resolved) {
-        const targetRel = relative(rootDir, resolved);
-        edges.push({
-          source: sourceId,
-          target: `file:${targetRel}`,
-          kind: "imports",
-        });
+    if (!moduleSpecifier.startsWith(".")) continue;
+
+    const resolved = resolveImport(sourceFile, decl);
+    if (!resolved) continue;
+
+    const targetRel = relative(rootDir, resolved);
+
+    if (useSymbol) {
+      const namedImports = decl.getNamedImports();
+      const defaultImport = decl.getDefaultImport();
+      const namespaceImport = decl.getNamespaceImport();
+
+      if (namespaceImport) {
+        edges.push({ source: sourceId, target: `file:${targetRel}`, kind: "imports" });
+      } else {
+        if (defaultImport) {
+          edges.push({ source: sourceId, target: `symbol:${targetRel}#default`, kind: "imports" });
+        }
+        for (const named of namedImports) {
+          const importName = named.getAliasNode()
+            ? named.getNameNode().getText()
+            : named.getName();
+          edges.push({ source: sourceId, target: `symbol:${targetRel}#${importName}`, kind: "imports" });
+        }
+        if (!defaultImport && namedImports.length === 0 && !namespaceImport) {
+          edges.push({ source: sourceId, target: `file:${targetRel}`, kind: "imports" });
+        }
       }
+    } else {
+      edges.push({ source: sourceId, target: `file:${targetRel}`, kind: "imports" });
     }
   }
 
@@ -106,22 +175,35 @@ function resolveImport(sourceFile: SourceFile, decl: any): string | undefined {
   }
 }
 
-function extractImplTags(content: string, relPath: string, isTest: boolean, edges: GraphEdge[]) {
-  const sourceId = `file:${relPath}`;
+function extractImplTags(
+  content: string,
+  relPath: string,
+  isTest: boolean,
+  edges: GraphEdge[],
+  mode: "file" | "symbol" = "file",
+  symbolRanges: SymbolRange[] = [],
+) {
+  const fileSourceId = `file:${relPath}`;
 
   let match: RegExpExecArray | null;
 
   IMPL_RE.lastIndex = 0;
   while ((match = IMPL_RE.exec(content)) !== null) {
     const reqIds = match[1].match(REQ_ID_RE);
-    if (reqIds) {
-      for (const reqId of reqIds) {
-        edges.push({
-          source: sourceId,
-          target: reqId,
-          kind: "implements",
-        });
+    if (!reqIds) continue;
+
+    let sourceId = fileSourceId;
+
+    if (mode === "symbol" && !isTest && symbolRanges.length > 0) {
+      const line = lineNumberAt(content, match.index);
+      const resolved = resolveSymbolAtLine(symbolRanges, line);
+      if (resolved) {
+        sourceId = `symbol:${relPath}#${resolved}`;
       }
+    }
+
+    for (const reqId of reqIds) {
+      edges.push({ source: sourceId, target: reqId, kind: "implements" });
     }
   }
 
@@ -129,22 +211,34 @@ function extractImplTags(content: string, relPath: string, isTest: boolean, edge
     TEST_REQ_RE.lastIndex = 0;
     while ((match = TEST_REQ_RE.exec(content)) !== null) {
       const reqId = match[0].slice(1, -1);
-      edges.push({
-        source: sourceId,
-        target: reqId,
-        kind: "verifies",
-      });
+      edges.push({ source: fileSourceId, target: reqId, kind: "verifies" });
     }
 
     TEST_ANNOTATION_RE.lastIndex = 0;
     while ((match = TEST_ANNOTATION_RE.exec(content)) !== null) {
-      edges.push({
-        source: sourceId,
-        target: match[1],
-        kind: "verifies",
-      });
+      edges.push({ source: fileSourceId, target: match[1], kind: "verifies" });
     }
   }
+}
+
+function lineNumberAt(content: string, index: number): number {
+  let line = 1;
+  for (let i = 0; i < index; i++) {
+    if (content[i] === "\n") line++;
+  }
+  return line;
+}
+
+function resolveSymbolAtLine(ranges: SymbolRange[], line: number): string | null {
+  let best: SymbolRange | null = null;
+  for (const range of ranges) {
+    if (line >= range.startLine && line <= range.endLine) {
+      if (!best || (range.endLine - range.startLine) < (best.endLine - best.startLine)) {
+        best = range;
+      }
+    }
+  }
+  return best?.name ?? null;
 }
 
 function hash(content: string): string {

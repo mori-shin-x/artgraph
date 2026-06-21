@@ -97,3 +97,28 @@ describe("resolveStartIds", () => {
     expect(ids).toEqual(["file:src/auth/login.ts"]);
   });
 });
+
+describe("resolveStartIds (symbol mode)", () => {
+  const SYM_FIXTURE = resolve(import.meta.dirname, "fixtures/symbol-level");
+  const symConfig: SpectraceConfig = {
+    include: ["src/**/*.ts"],
+    specDirs: ["specs"],
+    testPatterns: [],
+    lockFile: ".trace.lock",
+    mode: "symbol",
+  };
+  const { graph } = buildGraph(SYM_FIXTURE, symConfig);
+
+  it("should include symbol nodes when resolving file path", () => {
+    const ids = resolveStartIds(graph, ["src/utils.ts"]);
+    expect(ids).toContain("file:src/utils.ts");
+    expect(ids).toContain("symbol:src/utils.ts#foo");
+    expect(ids).toContain("symbol:src/utils.ts#bar");
+  });
+
+  it("should not include symbol nodes from other files", () => {
+    const ids = resolveStartIds(graph, ["src/utils.ts"]);
+    const defaultSymbols = ids.filter((id) => id.includes("defaults.ts"));
+    expect(defaultSymbols).toHaveLength(0);
+  });
+});

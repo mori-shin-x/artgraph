@@ -99,6 +99,11 @@ export function resolveStartIds(graph: ArtifactGraph, inputs: string[]): string[
     const fileId = `file:${input}`;
     if (graph.nodes.has(fileId)) {
       ids.push(fileId);
+      for (const [id, node] of graph.nodes) {
+        if (node.kind === "symbol" && node.filePath === input) {
+          ids.push(id);
+        }
+      }
       continue;
     }
 
