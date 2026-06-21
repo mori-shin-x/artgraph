@@ -13,7 +13,11 @@ export function impact(graph: ArtifactGraph, startIds: string[], lock: LockFile)
     const node = graph.nodes.get(id);
     if (node && node.kind === "file") {
       for (const [symId, symNode] of graph.nodes) {
-        if (symNode.kind === "symbol" && symNode.filePath === node.filePath && !visited.has(symId)) {
+        if (
+          symNode.kind === "symbol" &&
+          symNode.filePath === node.filePath &&
+          !visited.has(symId)
+        ) {
           queue.push(symId);
         }
       }

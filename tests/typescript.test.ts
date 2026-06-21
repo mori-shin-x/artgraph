@@ -194,9 +194,7 @@ describe("createTSParser (symbol mode)", () => {
   });
 
   it("should fallback @impl at top-level to file source", () => {
-    const implEdges = result.edges.filter(
-      (e) => e.kind === "implements" && e.target === "SC-001",
-    );
+    const implEdges = result.edges.filter((e) => e.kind === "implements" && e.target === "SC-001");
 
     expect(implEdges).toHaveLength(1);
     expect(implEdges[0].source).toBe("file:src/toplevel-impl.ts");
