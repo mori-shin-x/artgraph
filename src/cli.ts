@@ -22,6 +22,8 @@ import {
 } from "./hook-pretool.js";
 import type { SpectraceConfig } from "./types.js";
 import { runInit } from "./init.js";
+import { executeRename, executeSplit, executeMerge } from "./rename-executor.js";
+import type { RenameResult } from "./rename-executor.js";
 
 const program = new Command();
 
@@ -480,6 +482,94 @@ function printCheckText(result: any) {
   if (result.pass) {
     console.log("All checks passed.");
   }
+}
+
+program
+  .command("rename")
+  .description("Rename, split, or merge spec IDs across the project")
+  .option("--from <id>", "Source ID to rename")
+  .option("--to <id>", "Target ID for rename")
+  .option("--split <id>", "Source ID to split")
+  .option("--merge <ids...>", "Source IDs to merge")
+  .option("--into <ids...>", "Target ID(s) for split or merge")
+  .option("--dry-run", "Show changes without applying them")
+  .addOption(new Option("--format <format>", "Output format").choices(["json", "text"]).default("text"))
+  .action((opts) => {
+    const rootDir = process.cwd();
+    const baseOpts = { dryRun: !!opts.dryRun, format: opts.format, rootDir };
+
+    try {
+      let result: RenameResult;
+
+      if (opts.from && opts.to) {
+        // rename mode
+        result = executeRename({ ...baseOpts, from: opts.from, to: opts.to });
+      } else if (opts.split && opts.into) {
+        // split mode
+        result = executeSplit({ ...baseOpts, splitId: opts.split, intoIds: opts.into });
+      } else if (opts.merge && opts.into) {
+        // merge mode
+        if (opts.into.length !== 1) {
+          console.error("Error: --merge requires exactly one --into target ID.");
+          process.exit(1);
+        }
+        result = executeMerge({ ...baseOpts, mergeIds: opts.merge, intoId: opts.into[0] });
+      } else {
+        console.error("Error: Specify --from/--to, --split/--into, or --merge/--into.");
+        process.exit(1);
+      }
+
+      if (opts.format === "json") {
+        printRenameJson(result);
+      } else {
+        printRenameText(result);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`Error: ${msg}`);
+      process.exit(1);
+    }
+  });
+
+function printRenameText(result: RenameResult) {
+  if (result.changes.length === 0 && result.lockChanges.length === 0) {
+    console.log("No references found.");
+    return;
+  }
+
+  if (result.operation === "rename") {
+    const from = result.changes[0]?.before?.trim() ?? "";
+    const to = result.changes[0]?.after?.trim() ?? "";
+    console.log(`Renamed ${from} → ${to}`);
+  } else if (result.operation === "split") {
+    const oldId = result.changes[0]?.before?.trim() ?? "";
+    const newIds = [...new Set(result.changes.map((c) => c.after.trim()))];
+    console.log(`Split ${oldId} → ${newIds.join(", ")}`);
+  } else if (result.operation === "merge") {
+    const oldIds = [...new Set(result.changes.map((c) => c.before.trim()))];
+    const newId = result.changes[0]?.after?.trim() ?? "";
+    console.log(`Merged ${oldIds.join(", ")} → ${newId}`);
+  }
+
+  for (const c of result.changes) {
+    const before = c.before.trim().slice(0, 60);
+    const after = c.after.trim().slice(0, 60);
+    console.log(`  ${c.filePath}:${c.line}  ${before} → ${after}`);
+  }
+
+  for (const w of result.warnings) {
+    console.log(
+      `WARNING: ${w.filePath} contains @impl ${w.oldId} — manual assignment to ${w.newIds.join(", ")} needed`,
+    );
+  }
+
+  if (!result.applied) {
+    console.log("(dry-run: no files were modified)");
+  }
+}
+
+function printRenameJson(result: RenameResult) {
+  console.log(JSON.stringify(result));
 }
 
 program.parse();

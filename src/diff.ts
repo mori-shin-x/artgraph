@@ -7,6 +7,19 @@ export function parseDiffFiles(output: string): string[] {
     .filter((l) => l.length > 0);
 }
 
+export function getGitTrackedFiles(rootDir: string): string[] {
+  try {
+    const output = execFileSync("git", ["ls-files"], {
+      cwd: rootDir,
+      encoding: "utf-8",
+    });
+    return parseDiffFiles(output);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(`Failed to run git ls-files: ${msg}`);
+  }
+}
+
 export function getGitDiffFiles(rootDir: string): string[] {
   try {
     const staged = execFileSync("git", ["diff", "--cached", "--name-only"], {
