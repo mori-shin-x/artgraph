@@ -1,8 +1,29 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { existsSync, unlinkSync } from "node:fs";
-import { run, cleanup, CLI, LOCK_PATH } from "./helpers.js";
+import { existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
+import { run, cleanup, CLI, FIXTURE_DIR, LOCK_PATH } from "./helpers.js";
+
+const HOOKS_DIR = resolve(import.meta.dirname, "fixtures/hooks");
+const SPECTRACE_CONFIG_PATH = resolve(FIXTURE_DIR, ".spectrace.json");
+
+function runWithStdin(
+  args: string[],
+  stdin: string,
+  cwd?: string,
+): { stdout: string; stderr: string; exitCode: number } {
+  try {
+    const stdout = execFileSync("node", [CLI, ...args], {
+      encoding: "utf-8",
+      cwd: cwd ?? FIXTURE_DIR,
+      input: stdin,
+      timeout: 30000,
+    });
+    return { stdout, stderr: "", exitCode: 0 };
+  } catch (e: any) {
+    return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.status ?? 1 };
+  }
+}
 
 afterEach(cleanup);
 
@@ -363,4 +384,110 @@ describe("CLI: symbol mode", () => {
     const result = JSON.parse(stdout);
     expect(result.symbolCount).toBeGreaterThan(0);
   });
+});
+
+// ---------------------------------------------------------------------------
+// hook-pretool
+// ---------------------------------------------------------------------------
+
+function createSpectraceConfig() {
+  writeFileSync(
+    SPECTRACE_CONFIG_PATH,
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.test.ts"],
+      lockFile: ".trace.lock",
+    }),
+  );
+}
+
+function cleanupConfig() {
+  if (existsSync(SPECTRACE_CONFIG_PATH)) unlinkSync(SPECTRACE_CONFIG_PATH);
+}
+
+describe("CLI: hook-pretool", () => {
+  afterEach(cleanupConfig);
+
+  it("should output valid hookSpecificOutput for Edit input", { timeout: 30000 }, () => {
+    createSpectraceConfig();
+    const stdin = readFileSync(resolve(HOOKS_DIR, "edit-input.json"), "utf-8");
+    const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    expect(exitCode).toBe(0);
+    const output = JSON.parse(stdout);
+    expect(output.hookSpecificOutput).toBeDefined();
+    expect(output.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+    expect(output.hookSpecificOutput.additionalContext).toBe("spectrace impact: (none)");
+  });
+
+  it("should output valid hookSpecificOutput for Write input", { timeout: 30000 }, () => {
+    createSpectraceConfig();
+    const stdin = readFileSync(resolve(HOOKS_DIR, "write-input.json"), "utf-8");
+    const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    expect(exitCode).toBe(0);
+    const output = JSON.parse(stdout);
+    expect(output.hookSpecificOutput).toBeDefined();
+    expect(output.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+    expect(output.hookSpecificOutput.additionalContext).toBe("spectrace impact: (none)");
+  });
+
+  it("should output valid hookSpecificOutput for MultiEdit input", { timeout: 30000 }, () => {
+    createSpectraceConfig();
+    const stdin = readFileSync(resolve(HOOKS_DIR, "multiedit-input.json"), "utf-8");
+    const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    expect(exitCode).toBe(0);
+    const output = JSON.parse(stdout);
+    expect(output.hookSpecificOutput).toBeDefined();
+    expect(output.hookSpecificOutput.hookEventName).toBe("PreToolUse");
+    expect(output.hookSpecificOutput.additionalContext).toBe("spectrace impact: (none)");
+  });
+
+  it("should include impact info for a tracked file", { timeout: 30000 }, () => {
+    createSpectraceConfig();
+    const stdin = JSON.stringify({
+      tool_name: "Edit",
+      tool_input: { file_path: "src/auth/login.ts", old_string: "x", new_string: "y" },
+    });
+    const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    expect(exitCode).toBe(0);
+    const output = JSON.parse(stdout);
+    expect(output.hookSpecificOutput.additionalContext).toContain("spectrace impact:");
+    expect(output.hookSpecificOutput.additionalContext).toContain("AUTH-001");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hook-pretool: graceful degradation
+// ---------------------------------------------------------------------------
+describe("CLI: hook-pretool graceful degradation", () => {
+  it(
+    "should exit 0 with empty additionalContext when .spectrace.json is missing",
+    { timeout: 30000 },
+    () => {
+      const stdin = readFileSync(resolve(HOOKS_DIR, "edit-input.json"), "utf-8");
+      const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin, "/tmp");
+      expect(exitCode).toBe(0);
+      const output = JSON.parse(stdout);
+      expect(output.hookSpecificOutput.additionalContext).toBe("");
+    },
+  );
+
+  it("should exit 0 with empty additionalContext for invalid JSON", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = runWithStdin(["hook-pretool"], "{not valid json}");
+    expect(exitCode).toBe(0);
+    const output = JSON.parse(stdout);
+    expect(output.hookSpecificOutput.additionalContext).toBe("");
+  });
+
+  it(
+    "should exit 0 with empty additionalContext when file_path is missing",
+    { timeout: 30000 },
+    () => {
+      const stdin = JSON.stringify({ tool_name: "Edit", tool_input: {} });
+      const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+      expect(exitCode).toBe(0);
+      const output = JSON.parse(stdout);
+      expect(output.hookSpecificOutput.additionalContext).toBe("");
+    },
+  );
 });
