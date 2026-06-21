@@ -7,10 +7,45 @@ import { impact, resolveStartIds } from "./graph/traverse.js";
 import { check } from "./check.js";
 import { readLock } from "./lock.js";
 import { getGitDiffFiles } from "./diff.js";
+import { runInit } from "./init.js";
 
 const program = new Command();
 
 program.name("spectrace").description("Typed artifact graph for TS/JS").version("0.1.0");
+
+program
+  .command("init")
+  .description("Initialize spectrace for this project")
+  .option("--force", "Overwrite existing .spectrace.json")
+  .option("--no-scan", "Generate config only, skip scan and reconcile")
+  .action((opts) => {
+    const rootDir = process.cwd();
+    try {
+      const result = runInit(rootDir, { force: opts.force, noScan: !opts.scan });
+
+      for (const tool of result.sddTools) {
+        console.log(`${tool.name} detected (${tool.marker}/)`);
+      }
+
+      if (result.scanSummary) {
+        console.log(`\nNodes: ${result.scanSummary.nodeCount}  Edges: ${result.scanSummary.edgeCount}`);
+        console.log(
+          `  req: ${result.scanSummary.reqCount}  doc: ${result.scanSummary.docCount}  file: ${result.scanSummary.fileCount}  test: ${result.scanSummary.testCount}`,
+        );
+        console.log(`\nCreated .spectrace.json`);
+        console.log(`Created ${result.config.lockFile}`);
+        console.log(`\nRun "spectrace check" to verify traceability.`);
+        console.log(`Run "spectrace impact --diff" to see impact of your changes.`);
+      } else {
+        console.log(`Created .spectrace.json (scan skipped)`);
+        console.log(`\nTo scan later, run: spectrace scan && spectrace reconcile`);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`Error: ${msg}`);
+      process.exit(1);
+    }
+  });
 
 program
   .command("scan")
