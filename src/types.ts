@@ -67,6 +67,9 @@ export interface CheckResult {
   orphans: string[];
   uncovered: string[];
   coverage: { reqId: string; status: CoverageStatus }[];
+  // REQs whose tests ran and failed (only populated when test results are
+  // supplied). These fail the gate in addition to drift/orphans/uncovered.
+  testFailures: string[];
   pass: boolean;
 }
 

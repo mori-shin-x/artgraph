@@ -1,13 +1,25 @@
 import { readFileSync, existsSync } from "node:fs";
 import { globSync } from "glob";
 import type { TestResultRecord, TestResultMap } from "./types.js";
+import { REQ_ID_TOKEN } from "./req-id.js";
+
+function warn(message: string): void {
+  console.error(`spectrace: warning: ${message}`);
+}
 
 /**
  * Extract REQ tags (e.g. [REQ-001] or [namespace/REQ-001]) from text.
  * Returns a deduplicated array of tag identifiers.
+ *
+ * The ID shape is shared with the code parsers via REQ_ID_TOKEN so that
+ * mixed-case IDs such as `[Requirement-001]` or `[Auth-1]` are recognized
+ * here exactly as they are in source code (previously `[A-Z]+-\d+` silently
+ * dropped them, downgrading passing requirements to impl-only).
  */
 export function extractReqTags(text: string): string[] {
-  const regex = /\[(?:([^\]/]+)\/)?([A-Z]+-\d+)\]/g;
+  if (typeof text !== "string" || text.length === 0) return [];
+
+  const regex = new RegExp(`\\[(?:([^\\]/]+)\\/)?(${REQ_ID_TOKEN})\\]`, "g");
   const tags: string[] = [];
   let match: RegExpExecArray | null;
 
@@ -48,10 +60,13 @@ export function parseVitestJson(content: string): TestResultRecord[] {
 
   for (const testResult of data.testResults ?? []) {
     for (const assertion of testResult.assertionResults ?? []) {
-      let reqTags = extractReqTags(assertion.title);
+      const title = assertion.title ?? "";
+      let reqTags = extractReqTags(title);
 
       if (reqTags.length === 0) {
-        for (const ancestor of assertion.ancestorTitles) {
+        // `ancestorTitles` is optional in some reporters — guard against a
+        // missing array so a single malformed entry can't crash the parse.
+        for (const ancestor of assertion.ancestorTitles ?? []) {
           const ancestorTags = extractReqTags(ancestor);
           reqTags.push(...ancestorTags);
         }
@@ -64,7 +79,7 @@ export function parseVitestJson(content: string): TestResultRecord[] {
       for (const reqId of reqTags) {
         records.push({
           reqId,
-          testName: assertion.title,
+          testName: title,
           passed,
         });
       }
@@ -75,32 +90,50 @@ export function parseVitestJson(content: string): TestResultRecord[] {
 }
 
 /**
+ * Read an attribute value from a tag's attribute string, independent of
+ * attribute order and quote style. Returns undefined if the attribute is
+ * absent so callers can fall back gracefully (e.g. a testcase with no `name`
+ * inherits its REQ tags from the enclosing testsuite instead of being lost).
+ */
+function getAttr(attrs: string, name: string): string | undefined {
+  const re = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)')`);
+  const m = re.exec(attrs);
+  if (!m) return undefined;
+  return m[2] ?? m[3] ?? "";
+}
+
+/**
  * Parse JUnit XML output into TestResultRecords using regex.
+ *
+ * This is a deliberately tolerant, dependency-free parser. It handles missing
+ * `name` attributes, arbitrary attribute order/quote style, self-closing and
+ * block testcases, and `<failure>`/`<error>`/`<skipped>` children. It does NOT
+ * attempt to be a full XML parser: deeply nested testsuites and `<failure>`-like
+ * text inside CDATA/comments are out of scope.
  */
 export function parseJUnitXml(content: string): TestResultRecord[] {
   const records: TestResultRecord[] = [];
 
-  const suiteRegex =
-    /<testsuite\s[^>]*name="([^"]*)"[^>]*>([\s\S]*?)<\/testsuite>/g;
+  // Capture the opening-tag attributes (group 1) and body (group 2) so the
+  // `name` attribute is optional rather than required by the pattern itself.
+  const suiteRegex = /<testsuite\b([^>]*)>([\s\S]*?)<\/testsuite>/g;
   let suiteMatch: RegExpExecArray | null;
 
   while ((suiteMatch = suiteRegex.exec(content)) !== null) {
-    const suiteName = suiteMatch[1]!;
+    const suiteName = getAttr(suiteMatch[1]!, "name") ?? "";
     const suiteBody = suiteMatch[2]!;
     const suiteReqTags = extractReqTags(suiteName);
 
-    // Match both self-closing and non-self-closing testcase elements
-    const testcaseRegex =
-      /<testcase\s[^>]*?\bname="([^"]*)"[^>]*(?:\/>|>([\s\S]*?)<\/testcase>)/g;
+    // Match both self-closing and block testcase elements; `name` optional.
+    const testcaseRegex = /<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g;
     let tcMatch: RegExpExecArray | null;
 
     while ((tcMatch = testcaseRegex.exec(suiteBody)) !== null) {
-      const testName = tcMatch[1]!;
+      const testName = getAttr(tcMatch[1]!, "name") ?? "";
       const testBody = tcMatch[2] ?? "";
 
-      const hasFailed =
-        /<failure/.test(testBody) || /<error/.test(testBody);
-      const hasSkipped = /<skipped/.test(testBody);
+      const hasFailed = /<failure[\s/>]/.test(testBody) || /<error[\s/>]/.test(testBody);
+      const hasSkipped = /<skipped[\s/>]/.test(testBody);
       const passed = !hasFailed && !hasSkipped;
 
       let reqTags = extractReqTags(testName);
@@ -166,22 +199,54 @@ export function loadTestResults(paths: string[], rootDir: string): TestResultMap
   const allRecords: TestResultRecord[] = [];
 
   for (const pattern of paths) {
-    const resolvedPaths = globSync(pattern, { cwd: rootDir, absolute: true });
+    let resolvedPaths: string[];
+    try {
+      resolvedPaths = globSync(pattern, { cwd: rootDir, absolute: true });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      warn(`invalid test-results pattern "${pattern}": ${msg}`);
+      continue;
+    }
+
+    // A typo'd path or a glob that matches nothing used to be silently ignored,
+    // which then quietly downgraded requirements to impl-only. Surface it.
+    if (resolvedPaths.length === 0) {
+      warn(`no files matched test-results pattern "${pattern}"`);
+      continue;
+    }
 
     for (const filePath of resolvedPaths) {
       if (!existsSync(filePath)) continue;
 
+      let content: string;
       try {
-        const content = readFileSync(filePath, "utf-8");
-        const records = parseTestResults(content);
-        if (records.length === 0) {
-          console.error(`spectrace: warning: no test results found in ${filePath}`);
-        }
-        allRecords.push(...records);
+        content = readFileSync(filePath, "utf-8");
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error(`spectrace: warning: failed to read ${filePath}: ${msg}`);
+        warn(`failed to read ${filePath}: ${msg}`);
+        continue;
       }
+
+      // Distinguish a *malformed* file from a valid-but-empty one. Without this,
+      // corrupt JSON and "tests genuinely produced no REQ-tagged results" both
+      // collapse to silence and then to impl-only, which is indistinguishable
+      // from a real test failure.
+      const trimmed = content.trimStart();
+      if (trimmed[0] === "{" || trimmed[0] === "[") {
+        try {
+          JSON.parse(trimmed);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          warn(`failed to parse JSON in ${filePath}: ${msg}`);
+          continue;
+        }
+      }
+
+      const records = parseTestResults(content);
+      if (records.length === 0) {
+        warn(`no test results found in ${filePath}`);
+      }
+      allRecords.push(...records);
     }
   }
 

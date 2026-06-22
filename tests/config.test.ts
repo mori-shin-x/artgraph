@@ -63,6 +63,27 @@ describe("loadConfig", () => {
     expect(config.docGraph).toBeUndefined();
   });
 
+  describe("testResultPaths validation", () => {
+    it("should load a valid string array", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ testResultPaths: ["a.json", "b/*.xml"] }));
+      const config = loadConfig(TMP_DIR);
+      expect(config.testResultPaths).toEqual(["a.json", "b/*.xml"]);
+    });
+
+    it("should reject a non-array testResultPaths", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ testResultPaths: "a.json" }));
+      expect(() => loadConfig(TMP_DIR)).toThrow("must be an array of strings");
+    });
+
+    it("should reject a non-string element (e.g. [123])", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ testResultPaths: [123] }));
+      expect(() => loadConfig(TMP_DIR)).toThrow("every entry must be a string");
+    });
+  });
+
   describe("reqPatterns validation (FR-007)", () => {
     it("should reject empty reqPatterns.listItem", () => {
       mkdirSync(TMP_DIR, { recursive: true });
