@@ -58,11 +58,19 @@ program
   .description("Initialize artgraph for this project")
   .option("--force", "Overwrite existing .artgraph.json")
   .option("--no-scan", "Generate config only, skip scan and reconcile")
+  .option(
+    "--with-skills",
+    "Install Claude Code skills (plan, verify, coverage, rename) into .claude/skills/",
+  )
   .option("--format <format>", "Output format: json | text", "text")
   .action((opts) => {
     const rootDir = process.cwd();
     try {
-      const result = runInit(rootDir, { force: opts.force, noScan: !opts.scan });
+      const result = runInit(rootDir, {
+        force: opts.force,
+        noScan: !opts.scan,
+        withSkills: opts.withSkills,
+      });
 
       if (opts.format === "json") {
         console.log(
@@ -73,6 +81,7 @@ program
             scanSummary: result.scanSummary ?? null,
             warnings: result.warnings,
             lockPath: result.lockPath ?? null,
+            skillsInstalled: result.skillsInstalled ?? null,
           }),
         );
       } else {
@@ -103,6 +112,10 @@ program
           console.log(`Created .artgraph.json (scan skipped)`);
           console.log(`\nTo scan later, run: artgraph scan && artgraph reconcile`);
         }
+        if (result.skillsInstalled && result.skillsInstalled.length > 0) {
+          console.log(`\nInstalled ${result.skillsInstalled.length} Claude Code skills:`);
+          for (const path of result.skillsInstalled) console.log(`  ${path}`);
+        }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -123,7 +136,9 @@ program
     const result = scan(rootDir, config);
 
     const testResults = resolveTestResults(opts, config, rootDir);
-    let testResultStats: { totalTests: number; passedTests: number; failedTests: number } | undefined;
+    let testResultStats:
+      | { totalTests: number; passedTests: number; failedTests: number }
+      | undefined;
     if (testResults) {
       let totalTests = 0;
       let passedTests = 0;
@@ -545,7 +560,9 @@ program
   .option("--merge <ids...>", "Source IDs to merge")
   .option("--into <ids...>", "Target ID(s) for split or merge")
   .option("--dry-run", "Show changes without applying them")
-  .addOption(new Option("--format <format>", "Output format").choices(["json", "text"]).default("text"))
+  .addOption(
+    new Option("--format <format>", "Output format").choices(["json", "text"]).default("text"),
+  )
   .action((opts) => {
     const rootDir = process.cwd();
     const format: "json" | "text" = opts.format;

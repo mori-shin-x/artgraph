@@ -97,6 +97,7 @@ export interface DetectionResult {
 export interface InitOptions {
   force?: boolean;
   noScan?: boolean;
+  withSkills?: boolean;
 }
 
 export interface ReqPatternConfig {
