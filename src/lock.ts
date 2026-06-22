@@ -1,6 +1,22 @@
-import { readFileSync, writeFileSync, existsSync, renameSync } from "node:fs";
-import { resolve, dirname, basename } from "node:path";
+import { readFileSync, writeFileSync, existsSync, renameSync, realpathSync } from "node:fs";
+import { resolve, dirname, basename, relative, isAbsolute } from "node:path";
 import type { LockFile, ArtifactGraph, LockEntry } from "./types.js";
+
+// Defence-in-depth against symlinked directory components escaping the project
+// root. `loadConfig` validates the lockFile path with string-only resolve/relative,
+// which a symlinked parent directory can bypass. Here, just before writing, we
+// realpath the (already existing) parent directory and verify it still resolves
+// within the project root.
+function assertWithinRoot(rootDir: string, fullPath: string): void {
+  const realRoot = realpathSync(rootDir);
+  const realDir = realpathSync(dirname(fullPath));
+  const rel = relative(realRoot, realDir);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
+    throw new Error(
+      `Refusing to write lock file outside project root: ${fullPath} resolves to ${realDir}`,
+    );
+  }
+}
 
 export function readLock(rootDir: string, lockPath: string): LockFile {
   const fullPath = resolve(rootDir, lockPath);
@@ -16,6 +32,7 @@ export function readLock(rootDir: string, lockPath: string): LockFile {
 
 export function writeLock(rootDir: string, lockPath: string, lock: LockFile): void {
   const fullPath = resolve(rootDir, lockPath);
+  assertWithinRoot(rootDir, fullPath);
   const tmpPath = resolve(dirname(fullPath), `.${basename(fullPath)}.tmp`);
   writeFileSync(tmpPath, JSON.stringify(lock, null, 2) + "\n", "utf-8");
   renameSync(tmpPath, fullPath);
