@@ -24,7 +24,7 @@ npx artgraph init
 
 ### 3. Skills ファイルの配置
 
-`.claude/skills/` ディレクトリに以下の 3 つのスキルファイルを配置します:
+`.claude/skills/` ディレクトリに以下の 4 つのスキルファイルを配置します:
 
 ```
 .claude/skills/
@@ -34,7 +34,7 @@ npx artgraph init
   artgraph-rename.md
 ```
 
-これらのファイルは artgraph パッケージに含まれています。
+これらのファイルはこのリポジトリの `.claude/skills/` にあります（npm パッケージには同梱されません）。利用するプロジェクトの `.claude/skills/` にコピーしてください。
 Claude Code が `.claude/skills/` 内の `.md` ファイルを自動的にスキルとして認識します。
 
 ## Skills 一覧
