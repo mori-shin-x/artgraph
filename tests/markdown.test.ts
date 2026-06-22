@@ -93,7 +93,7 @@ describe("parseMarkdown", () => {
 
   describe("T014: frontmatter flat format", () => {
     it("should generate derives_from edge from flat frontmatter", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/doc-chain/design.md"), FIXTURE_DIR);
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/doc-chain/design.md"), { rootDir: FIXTURE_DIR });
       const edges = result.edges.filter((e) => e.kind === "derives_from");
 
       expect(edges).toHaveLength(1);
@@ -104,7 +104,7 @@ describe("parseMarkdown", () => {
 
   describe("T020: doc node auto-generation", () => {
     it("should generate doc node for prose-only markdown (no frontmatter)", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), FIXTURE_DIR, "specs");
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), { rootDir: FIXTURE_DIR, specDirPrefix: "specs" });
       const docNodes = result.nodes.filter((n) => n.kind === "doc");
 
       expect(docNodes).toHaveLength(1);
@@ -113,7 +113,7 @@ describe("parseMarkdown", () => {
     });
 
     it("should use rootDir-relative path when specDirPrefix is not provided", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), FIXTURE_DIR);
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), { rootDir: FIXTURE_DIR });
       const docNodes = result.nodes.filter((n) => n.kind === "doc");
       expect(docNodes[0].id).toBe("doc:specs/prose-only.md");
     });
@@ -123,7 +123,7 @@ describe("parseMarkdown", () => {
     it("should use node_id from frontmatter when specified", () => {
       const result = parseMarkdown(
         resolve(FIXTURE_DIR, "specs/doc-chain/requirements.md"),
-        FIXTURE_DIR,
+        { rootDir: FIXTURE_DIR },
       );
       const docNodes = result.nodes.filter((n) => n.kind === "doc");
 
@@ -134,7 +134,7 @@ describe("parseMarkdown", () => {
 
   describe("T022: doc node contentHash", () => {
     it("should compute contentHash from entire file content", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), FIXTURE_DIR);
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), { rootDir: FIXTURE_DIR });
       const doc = result.nodes.find((n) => n.kind === "doc");
 
       expect(doc?.contentHash).toBeDefined();
@@ -144,7 +144,7 @@ describe("parseMarkdown", () => {
 
   describe("T023: doc + req coexistence", () => {
     it("should generate both doc and req nodes for md with requirement IDs", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/doc-with-reqs.md"), FIXTURE_DIR);
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/doc-with-reqs.md"), { rootDir: FIXTURE_DIR });
       const docNodes = result.nodes.filter((n) => n.kind === "doc");
       const reqNodes = result.nodes.filter((n) => n.kind === "req");
 
@@ -175,7 +175,7 @@ spectrace:
       );
 
       try {
-        const result = parseMarkdown(tmpPath, tmpRoot);
+        const result = parseMarkdown(tmpPath, { rootDir: tmpRoot });
         expect(result.warnings).toHaveLength(1);
         expect(result.warnings[0].type).toBe("invalid-relation");
         expect(result.warnings[0].key).toBe("extends");
@@ -206,8 +206,7 @@ spectrace:
       );
 
       try {
-        const result = parseMarkdown(tmpPath, tmpRoot);
-        // Should not throw — falls back to treating the whole file as content
+        const result = parseMarkdown(tmpPath, { rootDir: tmpRoot });
         expect(result.nodes.length).toBeGreaterThanOrEqual(1);
         const docNode = result.nodes.find((n) => n.kind === "doc");
         expect(docNode).toBeDefined();
@@ -216,6 +215,103 @@ spectrace:
         rmdirSync(tmpSpecs);
         rmdirSync(tmpRoot);
       }
+    });
+  });
+
+  describe("custom reqPatterns (FR-007)", () => {
+    it("should extract IDs with custom listItem pattern", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/custom-ids.md"), {
+        reqPatterns: { listItem: "^#(\\d+)[:\\s]" },
+      });
+      const reqIds = result.nodes.filter((n) => n.kind === "req").map((n) => n.id);
+      // Assert the exact set so stray/duplicate nodes are caught.
+      expect(reqIds).toEqual(["123", "456"]);
+    });
+
+    it("should not extract custom IDs with default pattern", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/custom-ids.md"));
+      const reqNodes = result.nodes.filter((n) => n.kind === "req");
+      expect(reqNodes).toHaveLength(0);
+    });
+
+    it("should extract IDs with custom heading pattern", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/custom-heading.md"), {
+        reqPatterns: { heading: "^(US\\d+)\\s*:" },
+      });
+      const reqIds = result.nodes.filter((n) => n.kind === "req").map((n) => n.id);
+      expect(reqIds).toContain("US42");
+      expect(reqIds).toContain("US99");
+    });
+
+    it("should fall back to default listItem when only heading is customized", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/auth.md"), {
+        reqPatterns: { heading: "^(Custom\\d+)\\s*:" },
+      });
+      const reqIds = result.nodes.filter((n) => n.kind === "req").map((n) => n.id);
+      expect(reqIds).toContain("AUTH-001");
+    });
+
+    it("should fall back to default heading when only listItem is customized", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/kiro-style.md"), {
+        reqPatterns: { listItem: "^(CUSTOM-\\d+)[:\\s]" },
+      });
+      const reqIds = result.nodes.filter((n) => n.kind === "req").map((n) => n.id);
+      expect(reqIds).toContain("Requirement-1");
+    });
+  });
+
+  describe("frontmatter metadata (FR-008)", () => {
+    it("should extract all metadata fields from frontmatter", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/with-metadata.md"));
+      const doc = result.nodes.find((n) => n.kind === "doc");
+      expect(doc).toBeDefined();
+      expect(doc!.metadata).toEqual({
+        title: "認証設計",
+        status: "draft",
+        priority: "P1",
+        owner: "yamada",
+      });
+    });
+
+    it("should include only present metadata fields", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/metadata-partial.md"));
+      const doc = result.nodes.find((n) => n.kind === "doc");
+      expect(doc).toBeDefined();
+      expect(doc!.metadata).toEqual({ title: "タイトルのみ" });
+    });
+
+    it("should leave metadata undefined when no metadata fields exist in frontmatter", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/auth.md"));
+      const doc = result.nodes.find((n) => n.kind === "doc");
+      expect(doc).toBeDefined();
+      expect(doc!.metadata).toBeUndefined();
+    });
+
+    it("should not attach metadata to req nodes", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/with-metadata.md"));
+      const reqNodes = result.nodes.filter((n) => n.kind === "req");
+      expect(reqNodes.length).toBeGreaterThan(0);
+      for (const req of reqNodes) {
+        expect(req.metadata).toBeUndefined();
+      }
+    });
+
+    it("should coerce non-string metadata values to strings", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/metadata-coerce.md"));
+      const doc = result.nodes.find((n) => n.kind === "doc");
+      expect(doc).toBeDefined();
+      expect(doc!.metadata).toEqual({
+        title: "123",
+        status: "true",
+        priority: "2",
+      });
+    });
+
+    it("should leave metadata undefined when frontmatter is entirely absent", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"));
+      const doc = result.nodes.find((n) => n.kind === "doc");
+      expect(doc).toBeDefined();
+      expect(doc!.metadata).toBeUndefined();
     });
   });
 

@@ -39,7 +39,7 @@ export function buildGraph(
   for (const specDirName of config.specDirs) {
     const specFiles = globSync(resolve(rootDir, specDirName, "**/*.md"));
     for (const file of specFiles) {
-    const result = parseMarkdown(file, rootDir, specDirName);
+    const result = parseMarkdown(file, { rootDir, specDirPrefix: specDirName, reqPatterns: config.reqPatterns });
     const relFile = relative(rootDir, file);
     const specDir = extractSpecDir(relFile, config.specDirs);
     // Compute what the auto-generated doc ID would be for this file
@@ -160,7 +160,12 @@ export function buildGraph(
 
   // Parse TypeScript files
   const codePatterns = [...config.include, ...config.testPatterns];
-  const tsParser = createTSParser(rootDir, codePatterns, config.mode ?? "file");
+  const tsParser = createTSParser(
+    rootDir,
+    codePatterns,
+    config.mode ?? "file",
+    config.reqPatterns?.codeId,
+  );
   const tsResult = tsParser.parse();
 
   for (const node of tsResult.nodes) {

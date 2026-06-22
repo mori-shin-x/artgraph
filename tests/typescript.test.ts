@@ -96,6 +96,45 @@ describe("createTSParser", () => {
   });
 });
 
+describe("createTSParser (custom codeId — M1)", () => {
+  const CUSTOM_DIR = resolve(import.meta.dirname, "fixtures/custom-id");
+
+  it("should NOT extract numeric @impl/test IDs with the default pattern", () => {
+    const result = createTSParser(CUSTOM_DIR, ["src/**/*.ts", "tests/**/*.ts"]).parse();
+    const implEdges = result.edges.filter((e) => e.kind === "implements");
+    const verifyEdges = result.edges.filter((e) => e.kind === "verifies");
+    expect(implEdges).toHaveLength(0);
+    expect(verifyEdges).toHaveLength(0);
+  });
+
+  it("should extract numeric @impl IDs when codeId is configured", () => {
+    const result = createTSParser(
+      CUSTOM_DIR,
+      ["src/**/*.ts", "tests/**/*.ts"],
+      "file",
+      "\\d+",
+    ).parse();
+    const implTargets = result.edges
+      .filter((e) => e.kind === "implements")
+      .map((e) => e.target)
+      .sort();
+    expect(implTargets).toEqual(["123", "456", "789"]);
+  });
+
+  it("should extract numeric [ID] test tags when codeId is configured", () => {
+    const result = createTSParser(
+      CUSTOM_DIR,
+      ["src/**/*.ts", "tests/**/*.ts"],
+      "file",
+      "\\d+",
+    ).parse();
+    const verifyTargets = result.edges
+      .filter((e) => e.kind === "verifies")
+      .map((e) => e.target);
+    expect(verifyTargets).toContain("123");
+  });
+});
+
 describe("createTSParser (symbol mode)", () => {
   const SYM_FIXTURE = resolve(import.meta.dirname, "fixtures/symbol-level");
   const parser = createTSParser(SYM_FIXTURE, ["src/**/*.ts"], "symbol");
