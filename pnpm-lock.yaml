@@ -7,6 +7,30 @@ settings:
 importers:
 
   .:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.19.21
+      '@typescript/native-preview':
+        specifier: 7.0.0-dev.20260619.1
+        version: 7.0.0-dev.20260619.1
+      knip:
+        specifier: ^6.17.1
+        version: 6.17.1
+      oxfmt:
+        specifier: ^0.55.0
+        version: 0.55.0
+      oxlint:
+        specifier: ^1.70.0
+        version: 1.70.0
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.9(@types/node@22.19.21)(vite@8.0.16(@types/node@22.19.21)(jiti@2.7.0)(yaml@2.9.0))
+
+  packages/spectrace:
     dependencies:
       commander:
         specifier: ^13.1.0
@@ -32,28 +56,6 @@ importers:
       unist-util-visit:
         specifier: ^5.0.0
         version: 5.1.0
-    devDependencies:
-      '@types/node':
-        specifier: ^22.15.0
-        version: 22.19.21
-      '@typescript/native-preview':
-        specifier: 7.0.0-dev.20260619.1
-        version: 7.0.0-dev.20260619.1
-      knip:
-        specifier: ^6.17.1
-        version: 6.17.1
-      oxfmt:
-        specifier: ^0.55.0
-        version: 0.55.0
-      oxlint:
-        specifier: ^1.70.0
-        version: 1.70.0
-      typescript:
-        specifier: ^5.8.3
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.9(@types/node@22.19.21)(vite@8.0.16(@types/node@22.19.21)(jiti@2.7.0)(yaml@2.9.0))
 
 packages:
 
