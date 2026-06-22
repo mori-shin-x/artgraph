@@ -6,7 +6,7 @@ Input: Feature specification from `specs/006-test-results/spec.md`
 
 ## Summary
 
-`spectrace check`、`spectrace coverage`、`spectrace scan` の各コマンドに `--test-results <path>` オプションを追加し、
+`artgraph check`、`artgraph coverage`、`artgraph scan` の各コマンドに `--test-results <path>` オプションを追加し、
 Vitest JSON レポーターおよび JUnit XML 形式のテスト結果ファイルを取り込む。テスト名や describe ブロック名に含まれる
 `[REQ-xxxx]` タグを抽出し、テストの pass/fail 状態を coverage 判定に反映する。
 
@@ -21,7 +21,7 @@ Primary Dependencies: commander, ts-morph, remark (unified), glob, gray-matter
 
 New Dependencies: なし（XML パースは Node.js 標準のテキスト処理で対応。軽量な SAX パーサーは不要 — JUnit XML はフラットな構造で正規表現ベースのパースで十分）
 
-Storage: `.trace.lock`（JSON ファイル）、`.spectrace.json`（設定ファイル）
+Storage: `.trace.lock`（JSON ファイル）、`.artgraph.json`（設定ファイル）
 
 Testing: Vitest
 
@@ -70,7 +70,7 @@ src/
 ├── coverage.ts          # 変更: computeCoverage() にオプショナルなテスト結果引数を追加
 ├── check.ts             # 変更: check() にテスト結果を渡す
 ├── config.ts            # 変更: testResultPaths フィールドの読み込み
-├── types.ts             # 変更: TestResultRecord 型、SpectraceConfig.testResultPaths 追加
+├── types.ts             # 変更: TestResultRecord 型、ArtgraphConfig.testResultPaths 追加
 ├── scan.ts              # 変更なし（テスト結果はグラフ構築後に独立して読み込む）
 ├── hook-pretool.ts      # 変更なし
 ├── init.ts              # 変更なし
