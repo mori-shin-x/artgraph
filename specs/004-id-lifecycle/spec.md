@@ -13,17 +13,17 @@ Input: 仕様 ID のリネーム・分割・統合をプロジェクト全体で
 ### User Story 1 - 仕様 ID のリネーム (Priority: P1)
 
 開発者が仕様策定中に ID の命名規則を変更したい、または ID に誤りがあった場合、
-`spectrace rename --from REQ-xxxx --to REQ-yyyy` を実行すると、プロジェクト全体のあらゆる参照箇所
+`artgraph rename --from REQ-xxxx --to REQ-yyyy` を実行すると、プロジェクト全体のあらゆる参照箇所
 （仕様ファイルの見出し・リスト項目、コードの `@impl` タグ、テストの `[REQ-xxxx]` タグ、frontmatter の `depends_on`、`.trace.lock` のキー）
 が一括で新しい ID に書き換えられる。`doc:xxx` 形式のドキュメント ID にも同じ操作が適用される。
 
 Why this priority: ID のリネームは仕様策定の初期段階で頻繁に発生する最も基本的なライフサイクル操作であり、手作業での一括書き換えはミスを招きやすい。split / merge の前提となる書き換えメカニズムもここで確立する。
 
-Independent Test: fixture プロジェクトに REQ-001 を含む spec.md, コードファイル (`@impl REQ-001`), テストファイル (`[REQ-001]`), `.trace.lock` を配置し、`spectrace rename --from REQ-001 --to REQ-100` を実行後、全ファイルの参照が REQ-100 に書き換わっていることを確認する。
+Independent Test: fixture プロジェクトに REQ-001 を含む spec.md, コードファイル (`@impl REQ-001`), テストファイル (`[REQ-001]`), `.trace.lock` を配置し、`artgraph rename --from REQ-001 --to REQ-100` を実行後、全ファイルの参照が REQ-100 に書き換わっていることを確認する。
 
 Acceptance Scenarios:
 
-1. Given spec.md に `- REQ-001: ユーザー認証` というリスト項目がある, When `spectrace rename --from REQ-001 --to REQ-100` を実行する, Then spec.md 内の `REQ-001` が `REQ-100` に書き換わる
+1. Given spec.md に `- REQ-001: ユーザー認証` というリスト項目がある, When `artgraph rename --from REQ-001 --to REQ-100` を実行する, Then spec.md 内の `REQ-001` が `REQ-100` に書き換わる
 2. Given コードファイルに `// @impl REQ-001` がある, When rename を実行する, Then `// @impl REQ-100` に書き換わる
 3. Given テストファイルに `[REQ-001]` がある, When rename を実行する, Then `[REQ-100]` に書き換わる
 4. Given `.trace.lock` に `"REQ-001"` キーのエントリがある, When rename を実行する, Then キーが `"REQ-100"` に変更され、エントリの内容は保持される
@@ -37,7 +37,7 @@ Acceptance Scenarios:
 ### User Story 2 - 仕様 ID の分割 (Priority: P2)
 
 要件の粒度が大きすぎると判断した開発者が、1 つの仕様 ID を 2 つの新しい ID に分割したい。
-`spectrace rename --split REQ-001 --into REQ-001a REQ-001b` を実行すると、
+`artgraph rename --split REQ-001 --into REQ-001a REQ-001b` を実行すると、
 元の ID が仕様ファイルから削除され、新しい 2 つの ID の見出し雛形が追記される。
 `@impl REQ-001` を持つコードファイルには手動振り分けが必要な旨の警告が出力される。
 `.trace.lock` から元の ID が削除され、新しい ID のエントリが空で追加される。
@@ -48,7 +48,7 @@ Independent Test: fixture プロジェクトに REQ-001 を含む spec.md とコ
 
 Acceptance Scenarios:
 
-1. Given spec.md に `- REQ-001: ユーザー認証` がある, When `spectrace rename --split REQ-001 --into REQ-001a REQ-001b` を実行する, Then spec.md から REQ-001 の行が削除され、REQ-001a と REQ-001b の見出し雛形が追記される
+1. Given spec.md に `- REQ-001: ユーザー認証` がある, When `artgraph rename --split REQ-001 --into REQ-001a REQ-001b` を実行する, Then spec.md から REQ-001 の行が削除され、REQ-001a と REQ-001b の見出し雛形が追記される
 2. Given コードファイルに `// @impl REQ-001` がある, When split を実行する, Then 「REQ-001 の impl が以下のファイルに存在します。手動で REQ-001a または REQ-001b に振り分けてください」という警告が出力される
 3. Given `.trace.lock` に `"REQ-001"` のエントリがある, When split を実行する, Then `"REQ-001"` が削除され、`"REQ-001a"` と `"REQ-001b"` の空エントリが追加される
 4. Given `--dry-run` オプションを指定する, When split を実行する, Then 変更予定の一覧が表示されるが、ファイルは変更されない
@@ -59,7 +59,7 @@ Acceptance Scenarios:
 ### User Story 3 - 仕様 ID の統合 (Priority: P2)
 
 重複する 2 つの要件を 1 つに統合したい開発者が、
-`spectrace rename --merge REQ-001a REQ-001b --into REQ-001` を実行すると、
+`artgraph rename --merge REQ-001a REQ-001b --into REQ-001` を実行すると、
 プロジェクト全体の両 ID への参照が新しい ID に書き換わる。
 `.trace.lock` では元の 2 つのエントリの impl / tests を合算して新 ID に統合する。
 
@@ -69,7 +69,7 @@ Independent Test: fixture プロジェクトに REQ-001a, REQ-001b を含む spe
 
 Acceptance Scenarios:
 
-1. Given spec.md に `- REQ-001a: ...` と `- REQ-001b: ...` がある, When `spectrace rename --merge REQ-001a REQ-001b --into REQ-001` を実行する, Then spec.md から REQ-001a と REQ-001b が削除され、REQ-001 の見出し雛形が追記される
+1. Given spec.md に `- REQ-001a: ...` と `- REQ-001b: ...` がある, When `artgraph rename --merge REQ-001a REQ-001b --into REQ-001` を実行する, Then spec.md から REQ-001a と REQ-001b が削除され、REQ-001 の見出し雛形が追記される
 2. Given コードファイルに `// @impl REQ-001a` と別ファイルに `// @impl REQ-001b` がある, When merge を実行する, Then 両方とも `// @impl REQ-001` に書き換わる
 3. Given `.trace.lock` に REQ-001a (impl: [a.ts], tests: [a.test.ts]) と REQ-001b (impl: [b.ts], tests: [b.test.ts]) がある, When merge を実行する, Then REQ-001 のエントリが作成され、impl: [a.ts, b.ts], tests: [a.test.ts, b.test.ts] となる
 4. Given `--dry-run` オプションを指定する, When merge を実行する, Then 変更予定の一覧が表示されるが、ファイルは変更されない
@@ -92,9 +92,9 @@ Acceptance Scenarios:
 
 ### Functional Requirements
 
-- FR-001: `spectrace rename --from <old-id> --to <new-id>` コマンドは、プロジェクト内の全参照箇所（spec 見出し・リスト項目、`@impl` タグ、テストタグ、frontmatter `depends_on`、`.trace.lock` キー）を一括で書き換える
-- FR-002: `spectrace rename --split <old-id> --into <new-id-1> <new-id-2> [...]` コマンドは、元の ID を仕様ファイルから削除し、新 ID の見出し雛形を追記し、`@impl` を持つコードファイルに対して手動振り分けの警告を出力する
-- FR-003: `spectrace rename --merge <id-1> <id-2> --into <new-id>` コマンドは、全参照を新 ID に書き換え、lock の impl / tests を合算して統合する
+- FR-001: `artgraph rename --from <old-id> --to <new-id>` コマンドは、プロジェクト内の全参照箇所（spec 見出し・リスト項目、`@impl` タグ、テストタグ、frontmatter `depends_on`、`.trace.lock` キー）を一括で書き換える
+- FR-002: `artgraph rename --split <old-id> --into <new-id-1> <new-id-2> [...]` コマンドは、元の ID を仕様ファイルから削除し、新 ID の見出し雛形を追記し、`@impl` を持つコードファイルに対して手動振り分けの警告を出力する
+- FR-003: `artgraph rename --merge <id-1> <id-2> --into <new-id>` コマンドは、全参照を新 ID に書き換え、lock の impl / tests を合算して統合する
 - FR-004: 全サブコマンドは `--dry-run` オプションをサポートし、実際の書き換えを行わずに変更箇所の一覧を表示する
 - FR-005: 全サブコマンドは `--format json|text` オプションをサポートし、出力フォーマットを制御できる
 - FR-006: 書き換え対象は git で追跡中のファイルに限定し、untracked ファイルは無視する
@@ -114,16 +114,16 @@ Acceptance Scenarios:
 
 ### Measurable Outcomes
 
-- SC-001: rename 実行後、プロジェクト内に旧 ID への参照が 0 件であること（`spectrace scan` + `grep` で検証）
+- SC-001: rename 実行後、プロジェクト内に旧 ID への参照が 0 件であること（`artgraph scan` + `grep` で検証）
 - SC-002: split 実行後、元 ID の参照が 0 件、新 ID の雛形が仕様ファイルに存在すること
 - SC-003: merge 実行後、元の 2 ID の参照が 0 件、新 ID に全参照が統合されていること
 - SC-004: dry-run モードでは、実行前後でファイルの内容が一切変更されないこと
-- SC-005: rename / split / merge 実行後に `spectrace check` を実行し、ID 不整合が発生しないこと（split 時の手動振り分け警告を除く）
+- SC-005: rename / split / merge 実行後に `artgraph check` を実行し、ID 不整合が発生しないこと（split 時の手動振り分け警告を除く）
 
 ## Assumptions
 
-- 書き換え対象のファイルは全て git で追跡されている（spectrace のスキャン対象と一致する）
-- 仕様 ID のパターンは spectrace のパーサーが認識する形式（PREFIX-NNN, Requirement-N, doc:xxx）に限定される
+- 書き換え対象のファイルは全て git で追跡されている（artgraph のスキャン対象と一致する）
+- 仕様 ID のパターンは artgraph のパーサーが認識する形式（PREFIX-NNN, Requirement-N, doc:xxx）に限定される
 - 単一のコマンド実行で書き換えが完結する（トランザクション的な操作は不要。書き換え中に失敗した場合、ユーザーは `git checkout` で復元できる）
-- `.trace.lock` のフォーマットは JSON であり、spectrace の既存の lock 読み書き機構を再利用できる
+- `.trace.lock` のフォーマットは JSON であり、artgraph の既存の lock 読み書き機構を再利用できる
 - split で生成される見出し雛形は最小限の内容（ID とプレースホルダーテキスト）であり、ユーザーが後から内容を記述する
