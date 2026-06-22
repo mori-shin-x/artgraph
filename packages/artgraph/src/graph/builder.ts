@@ -26,6 +26,34 @@ interface CollectedReq {
   edges: GraphEdge[];
 }
 
+// Fixed convention presets (C-3). Each entry is a [from, to] pair of file-name
+// stems (lower-cased, extension-stripped) within the *same directory*; when both
+// files exist a `derives_from` edge is generated from the `from` doc to the `to`
+// doc. A single flat list is sufficient because mixing SDD tools in one
+// directory is rare.
+//
+//   kiro:     design→requirements, tasks→design
+//   spec-kit: plan→spec, tasks→plan, research→spec
+//
+// Note: the shared `tasks` stem produces *both* `tasks→design` and `tasks→plan`
+// when a directory happens to contain both `design.md` and `plan.md`. The dedup
+// step (key: `source|target|kind`) does NOT collapse these, since the targets
+// differ. This is intentional — a directory advertising both tools genuinely
+// has two parent chains — but downstream consumers (e.g. `lock.ts`) will see
+// `tasks` listed under both `design` and `plan`. See the `mixed dir` test in
+// builder.test.ts for the locked-in behavior.
+//
+// User-defined presets are intentionally omitted (YAGNI) until there is demand.
+const CONVENTION_EDGES: ReadonlyArray<readonly [from: string, to: string]> = [
+  // kiro
+  ["design", "requirements"],
+  ["tasks", "design"],
+  // spec-kit
+  ["plan", "spec"],
+  ["tasks", "plan"],
+  ["research", "spec"],
+];
+
 export function buildGraph(
   rootDir: string,
   config: ArtgraphConfig,
@@ -230,6 +258,14 @@ export function buildGraph(
     }
   }
 
+  // C-3: Infer doc→doc derives_from edges from folder/file-name conventions.
+  // Runs at builder level (not the parser) since it needs all doc nodes across
+  // directories. Duplicates of frontmatter-declared edges are collapsed by the
+  // dedup step below.
+  if (config.docGraph?.autoConventions ?? true) {
+    edges.push(...inferConventionEdges(nodes));
+  }
+
   // T036: Convert ParseWarnings to BuildWarnings
   for (const pw of parseWarnings) {
     if (pw.type === "invalid-relation") {
@@ -285,9 +321,16 @@ export function buildGraph(
       }
     }
 
-    // Pairs (source, target) already declared by frontmatter — inline links
-    // pointing at the same pair are dropped regardless of kind so an author's
-    // explicit `derives_from` always wins over an inferred `depends_on`.
+    // Pairs (source, target) already covered by a stronger relationship —
+    // either an author's frontmatter `derives_from` / `depends_on` or a
+    // convention-inferred `derives_from` (kiro / spec-kit presets). Inline
+    // links pointing at the same pair are dropped regardless of kind: a
+    // frontmatter `derives_from` and a convention `derives_from` both express
+    // a clearer dependency than an inferred `depends_on` from prose. Note
+    // this means inline links between e.g. `design.md` and `requirements.md`
+    // in the same dir are silently suppressed in favor of the convention
+    // edge — by design (see README "Doc graph"). Tests asserting inline-link
+    // edges must use file stems outside the convention preset.
     const explicitPairs = new Set<string>();
     for (const edge of edges) {
       if (edge.kind !== "derives_from" && edge.kind !== "depends_on") continue;
@@ -360,6 +403,46 @@ export function buildGraph(
   }
 
   return { graph: { nodes, edges: dedupedEdges }, warnings };
+}
+
+// Generate `derives_from` edges by matching known file-name conventions within
+// each directory. Doc nodes are grouped by their containing directory so that a
+// Spec Kit `specs/NNN-feature/` subdir is treated as its own unit. File-name
+// matching is case-insensitive (the stem is lower-cased before lookup). Only
+// `.md` files participate, because doc-node collection itself globs `**/*.md`.
+function inferConventionEdges(nodes: Map<string, GraphNode>): GraphEdge[] {
+  // dir -> (file-name stem -> doc node id). The actual node id is used (honoring
+  // frontmatter `node_id` overrides), not the raw path.
+  const byDir = new Map<string, Map<string, string>>();
+  for (const node of nodes.values()) {
+    if (node.kind !== "doc") continue;
+    const dir = dirname(node.filePath);
+    const stem = basename(node.filePath)
+      .replace(/\.(md|markdown)$/i, "")
+      .toLowerCase();
+    let stems = byDir.get(dir);
+    if (!stems) {
+      stems = new Map();
+      byDir.set(dir, stems);
+    }
+    // If two files share a stem (collision via casing, e.g. Design.md +
+    // design.md), keep the first encountered — generating edges for both
+    // would be ambiguous.
+    if (!stems.has(stem)) stems.set(stem, node.id);
+  }
+
+  const edges: GraphEdge[] = [];
+  for (const stems of byDir.values()) {
+    for (const [fromStem, toStem] of CONVENTION_EDGES) {
+      const source = stems.get(fromStem);
+      const target = stems.get(toStem);
+      // Only emit when both endpoints exist, so no orphan-doc is ever produced.
+      if (source && target && source !== target) {
+        edges.push({ source, target, kind: "derives_from" });
+      }
+    }
+  }
+  return edges;
 }
 
 function extractSpecDir(relFilePath: string, specDirs: string[]): string {

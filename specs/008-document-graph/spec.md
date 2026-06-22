@@ -149,7 +149,7 @@ Acceptance Scenarios:
 ## Assumptions
 
 - グラフの基本単位はファイル（doc ノード）とする。要求 ID 抽出は「ある場合に拾う」ベストエフォートであり、散文のみのドキュメントもグラフに参加できる
-- doc→doc 依存の入力は v1 では frontmatter の 1 経路のみとする。ツール規約の自動推論（C-3）は v1 スコープ外。インラインリンク自動抽出（C-2）は issue #11 で本 spec 後に実装し、`docGraph.inlineLinks`（既定 true）で制御する
+- doc→doc 依存の入力は v1 では (i) frontmatter、(ii) ツール規約の自動推論（C-3: kiro / spec-kit の固定プリセット）、(iii) インラインリンク自動抽出（C-2: issue #11、`docGraph.inlineLinks` 既定 true） の 3 経路とする
 - 要求⇔要求の依存（req→req）は v1 スコープ外
 - `via` エッジメタデータは v1 では追加しない（消費者がいないため）。002-doc-impact-ux の via フィールド（impact 出力で各ノードに到達した際のエッジ型表示）とは別概念であり、本 spec の via 非ゴールはグラフモデル自体へのエッジメタデータ追加を指す
 - DOT / Mermaid 等のリッチ可視化は v1 スコープ外（text/JSON のみ）

@@ -22,9 +22,46 @@ npx artgraph init      # writes .artgraph.json
 | Spec heading (Kiro) | `### Requirement 1: description`                |
 | Implementation      | `// @impl REQ-001`                              |
 | Test                | `it("[REQ-001] …")` or `// req: "REQ-001"`      |
-| Doc relations       | frontmatter `artgraph.depends_on` / `derives_from`, or inline `[text](./other.md)` links |
+| Doc relations       | frontmatter `artgraph.depends_on` / `derives_from`, inferred from kiro / spec-kit file-name conventions, or inline `[text](./other.md)` links |
 
 Custom grammars are configurable via `reqPatterns` in `.artgraph.json`.
+
+## Doc graph (`docGraph` config)
+
+Doc nodes (one per markdown file under `specDirs`) and their relations can be
+generated four ways. All are enabled by default and can be turned off
+individually via the `docGraph` block in `.artgraph.json`:
+
+| Key                | Default | What it does                                                                                                                                                            |
+| ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autoNodes`        | `true`  | Register every `*.md` under `specDirs` as a `doc` node, even without frontmatter.                                                                                       |
+| `autoContains`     | `true`  | Emit `contains` edges from each doc node to req nodes defined in the same file.                                                                                         |
+| `autoConventions`  | `true`  | Emit `derives_from` edges by matching kiro / spec-kit file-name conventions within the same directory (see table below). Frontmatter-declared edges are deduped against these. |
+| `inlineLinks`      | `true`  | Emit `depends_on` edges from inline markdown links between spec/doc files (see "Inline links" below). Frontmatter-declared edges on the same `(source, target)` pair always win. |
+
+### Conventions inferred by `autoConventions`
+
+| Convention | Files (same dir)                              | Edges generated (`derives_from`)                              |
+| ---------- | --------------------------------------------- | ------------------------------------------------------------- |
+| kiro       | `requirements.md`, `design.md`, `tasks.md`    | `design → requirements`, `tasks → design`                     |
+| spec-kit   | `spec.md`, `plan.md`, `tasks.md`, `research.md` | `plan → spec`, `tasks → plan`, `research → spec`              |
+
+Notes:
+
+- An edge is emitted only when *both* endpoints exist in the same directory, so
+  partial sets never produce `orphan-doc` warnings.
+- Matching is case-insensitive (`Design.md` works).
+- A directory containing both kiro and spec-kit files (e.g. `design.md` and
+  `plan.md` together) gets `tasks` linked to *both* `design` and `plan` —
+  intentional for the mixed case, but downstream `dependsOn` will show both
+  chains.
+- **Cycles**: convention edges alone form a DAG, but combining them with a
+  user-declared frontmatter edge pointing the opposite way (e.g. `requirements`
+  declaring `derives_from: [design]`) can produce a silent cycle. artgraph does
+  not run cycle detection — keep frontmatter edges aligned with the convention
+  direction.
+
+### Inline links extracted by `inlineLinks`
 
 Inline markdown links between spec/doc files are picked up automatically and
 emitted as `depends_on` edges (e.g. `design.md` with `See [requirements](./requirements.md)`
@@ -34,11 +71,14 @@ queries are stripped; links inside code fences and inline code are ignored. A
 frontmatter relation (`derives_from` / `depends_on`) on the same `(source, target)`
 pair always wins over an inline link.
 
+To opt out of any of the above:
+
 ```jsonc
 // .artgraph.json
 {
   "docGraph": {
-    "inlineLinks": true,             // default true — set false to disable
+    "autoConventions": false,        // default true — disable file-name convention inference
+    "inlineLinks": true,             // default true — set false to disable inline-link extraction
     "linkWarnings": {
       "unresolved": true,            // default true — warn on links to missing .md
       "outOfScope": false            // default false — warn on .md outside specDirs
@@ -53,6 +93,7 @@ pair always wins over an inline link.
 > links pointing at non-existent `.md` files. If you gate CI on stderr or on
 > graph stability, opt out with `"docGraph": { "inlineLinks": false }` (and/or
 > `"linkWarnings": { "unresolved": false }`) and migrate at your pace.
+
 
 ## Commands
 

@@ -97,6 +97,7 @@ export interface DetectionResult {
 export interface InitOptions {
   force?: boolean;
   noScan?: boolean;
+  withSkills?: boolean;
 }
 
 export interface ReqPatternConfig {
@@ -119,6 +120,12 @@ export type TestResultMap = Map<string, TestResultRecord[]>;
 export interface DocGraphConfig {
   autoNodes?: boolean;
   autoContains?: boolean;
+  // Auto-infer doc→doc `derives_from` edges from folder/file-name conventions
+  // (kiro: requirements/design/tasks, spec-kit: spec/plan/tasks/research).
+  // Defaults to true.
+  autoConventions?: boolean;
+  // Auto-extract doc→doc `depends_on` edges from inline markdown links.
+  // Defaults to true. `linkWarnings` controls per-link warning emission.
   inlineLinks?: boolean;
   linkWarnings?: {
     unresolved?: boolean;

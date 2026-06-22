@@ -7,6 +7,7 @@ import type { ArtgraphConfig } from "../src/types.js";
 
 const NS_FIXTURE_DIR = resolve(import.meta.dirname, "fixtures/ns-collision");
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
+const CONV_FIXTURE_DIR = resolve(import.meta.dirname, "fixtures/conventions");
 
 const nsConfig: ArtgraphConfig = {
   include: ["src/**/*.ts"],
@@ -484,5 +485,192 @@ artgraph:
     } finally {
       rmSync(tmpRoot, { recursive: true });
     }
+  });
+});
+
+describe("buildGraph: convention inference (C-3)", () => {
+  const convConfig: ArtgraphConfig = {
+    include: [],
+    specDirs: ["specs"],
+    testPatterns: [],
+    lockFile: ".trace.lock",
+  };
+
+  const derivesFrom = (source: string, target: string) => (graph: {
+    edges: { source: string; target: string; kind: string }[];
+  }) =>
+    graph.edges.some(
+      (e) => e.kind === "derives_from" && e.source === source && e.target === target,
+    );
+
+  // Helper: derives_from edges originating from a given dir (by source-id prefix
+  // for auto-generated doc ids; pure prefix check on `source` is enough since
+  // the fixtures don't reuse stem names across dirs in a way that overlaps).
+  const derivesFromDir = (dirPrefix: string) => (graph: {
+    edges: { source: string; target: string; kind: string }[];
+  }) =>
+    graph.edges.filter(
+      (e) => e.kind === "derives_from" && e.source.startsWith(dirPrefix),
+    );
+
+  it("infers kiro chain (design→requirements, tasks→design)", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    expect(
+      derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(graph),
+    ).toBe(true);
+    expect(
+      derivesFrom("doc:kiro-feature/tasks.md", "doc:kiro-feature/design.md")(graph),
+    ).toBe(true);
+    // Lock in *exactly* two edges out of this dir — catches accidental
+    // over-generation (e.g. spec-kit pairs firing in a kiro dir).
+    expect(derivesFromDir("doc:kiro-feature/")(graph)).toHaveLength(2);
+  });
+
+  it("infers spec-kit chain (plan→spec, tasks→plan, research→spec)", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    expect(
+      derivesFrom("doc:speckit-feature/plan.md", "doc:speckit-feature/spec.md")(graph),
+    ).toBe(true);
+    expect(
+      derivesFrom("doc:speckit-feature/tasks.md", "doc:speckit-feature/plan.md")(graph),
+    ).toBe(true);
+    expect(
+      derivesFrom("doc:speckit-feature/research.md", "doc:speckit-feature/spec.md")(graph),
+    ).toBe(true);
+    // No kiro pairs should fire here.
+    expect(derivesFromDir("doc:speckit-feature/")(graph)).toHaveLength(3);
+  });
+
+  it("matches file names case-insensitively", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    expect(
+      derivesFrom("doc:case-variant/DESIGN.md", "doc:case-variant/Requirements.md")(graph),
+    ).toBe(true);
+  });
+
+  it("emits no edge (and no orphan-doc) when only one endpoint exists", () => {
+    const { graph, warnings } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    const partialEdges = graph.edges.filter(
+      (e) => e.kind === "derives_from" && e.source.startsWith("doc:partial/"),
+    );
+    expect(partialEdges).toHaveLength(0);
+    expect(warnings.filter((w) => w.type === "orphan-doc")).toHaveLength(0);
+  });
+
+  it("deduplicates against frontmatter-declared edges", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    // Both convention inference and frontmatter declare wf-design → wf-requirements.
+    const matching = graph.edges.filter(
+      (e) =>
+        e.kind === "derives_from" &&
+        e.source === "wf-design" &&
+        e.target === "wf-requirements",
+    );
+    expect(matching).toHaveLength(1);
+  });
+
+  it("does not link convention files across different directories", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    // other-dir has only requirements.md; it must not connect to any design elsewhere.
+    const crossDir = graph.edges.filter(
+      (e) =>
+        e.kind === "derives_from" &&
+        e.target === "doc:other-dir/requirements.md",
+    );
+    expect(crossDir).toHaveLength(0);
+  });
+
+  it("in a mixed kiro+spec-kit dir, `tasks` gets BOTH parent chains", () => {
+    // Locked-in behavior: the shared `tasks` stem appears in both presets, and
+    // edge dedup keys by `source|target|kind` — so `tasks→design` and
+    // `tasks→plan` are distinct keys and both survive. This is intentional
+    // (a dir advertising both tools genuinely has two chains), but downstream
+    // `dependsOn` will list both. If this assumption ever changes, update this
+    // test, the comment in src/graph/builder.ts:CONVENTION_EDGES, and the
+    // README "Doc graph" section together.
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    expect(
+      derivesFrom("doc:mixed-tools/tasks.md", "doc:mixed-tools/design.md")(graph),
+    ).toBe(true);
+    expect(
+      derivesFrom("doc:mixed-tools/tasks.md", "doc:mixed-tools/plan.md")(graph),
+    ).toBe(true);
+    // 3 edges total in this dir: design→(no requirements here), plan→(no spec
+    // here), so only the two `tasks→…` edges fire — locking in the exact count
+    // catches accidental over-generation in this overlap case too.
+    expect(derivesFromDir("doc:mixed-tools/")(graph)).toHaveLength(2);
+  });
+
+  it("defaults autoConventions to true when the key is omitted", () => {
+    // No `docGraph` key at all on the config — should behave like enabled.
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    expect(
+      derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(graph),
+    ).toBe(true);
+
+    // And `docGraph` present but without `autoConventions` → still defaults.
+    const { graph: g2 } = buildGraph(CONV_FIXTURE_DIR, {
+      ...convConfig,
+      docGraph: {},
+    });
+    expect(
+      derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(g2),
+    ).toBe(true);
+  });
+
+  it("strips only known markdown extensions for multi-dot file names", () => {
+    // #36: the stem extractor used `/\.[^.]*$/` ("strip last `.<seg>`"), which
+    // matched the comment's "strip extension" intent for simple names like
+    // `design.md` but diverged for multi-dot names. After the fix the regex
+    // strips only `.md` / `.markdown`, so behavior is now faithfully
+    // "extension only" — `my.design.md` → stem `my.design`, which intentionally
+    // does NOT match the `design` preset (convention files are expected to be
+    // simple names). Locking that behavior in here so future "fixes" don't
+    // silently turn multi-dot names into wildcard-like matches.
+    const { graph, warnings } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    // No `derives_from` edge should originate from the multi-dot dir: the
+    // `my.design.md` stem is `my.design`, which is not a known convention key.
+    const multiDotDerives = graph.edges.filter(
+      (e) => e.kind === "derives_from" && e.source.startsWith("doc:multi-dot/"),
+    );
+    expect(multiDotDerives).toHaveLength(0);
+
+    // And the silent-skip is genuinely silent — no orphan-doc warning for
+    // either node in the dir (their file paths are surfaced in `files`).
+    const multiDotOrphans = warnings.filter(
+      (w) => w.type === "orphan-doc" && w.files.some((f) => f.includes("multi-dot/")),
+    );
+    expect(multiDotOrphans).toHaveLength(0);
+  });
+
+  it("generates no convention edges when autoConventions is false", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, {
+      ...convConfig,
+      docGraph: { autoConventions: false },
+    });
+
+    expect(
+      derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(graph),
+    ).toBe(false);
+    expect(
+      derivesFrom("doc:speckit-feature/plan.md", "doc:speckit-feature/spec.md")(graph),
+    ).toBe(false);
+
+    // Total derives_from across the fixture: only the frontmatter-declared
+    // `wf-design → wf-requirements` survives. Locking in the count proves no
+    // convention edge slipped through.
+    const allDerives = graph.edges.filter((e) => e.kind === "derives_from");
+    expect(allDerives).toHaveLength(1);
+    expect(allDerives[0].source).toBe("wf-design");
+    expect(allDerives[0].target).toBe("wf-requirements");
   });
 });
