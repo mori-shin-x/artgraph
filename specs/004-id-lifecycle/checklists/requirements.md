@@ -31,7 +31,7 @@ Feature: [spec.md](../spec.md)
 
 ## Notes
 
-- 3 つのサブコマンド（rename / split / merge）を `spectrace rename` 配下に統合
+- 3 つのサブコマンド（rename / split / merge）を `artgraph rename` 配下に統合
 - dry-run モードを全操作に適用し、安全性を確保
 - git 追跡ファイルのみ対象とすることで、書き換え範囲を明確に限定
 - 書き換えパターンは 5 種類（spec 見出し・リスト項目、@impl タグ、テストタグ、frontmatter depends_on、.trace.lock キー）に限定し、誤書き換えを防止
