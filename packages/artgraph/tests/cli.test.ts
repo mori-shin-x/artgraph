@@ -515,6 +515,55 @@ describe("CLI: init", () => {
     expect(stdout).toContain("scan skipped");
     expect(stdout).not.toContain("Nodes:");
   });
+
+  it("should install skills with --with-skills (text output)", { timeout: 30000 }, () => {
+    const { existsSync } = require("node:fs");
+    const { join } = require("node:path");
+    const { exitCode, stdout } = runInit(["--no-scan", "--with-skills"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Installed");
+    expect(stdout).toContain("Claude Code skills");
+    expect(stdout).toContain(".claude/skills/artgraph-plan.md");
+    expect(existsSync(join(initTmp, ".claude", "skills", "artgraph-plan.md"))).toBe(true);
+    expect(existsSync(join(initTmp, ".claude", "skills", "artgraph-verify.md"))).toBe(true);
+    expect(existsSync(join(initTmp, ".claude", "skills", "artgraph-coverage.md"))).toBe(true);
+    expect(existsSync(join(initTmp, ".claude", "skills", "artgraph-rename.md"))).toBe(true);
+  });
+
+  it("should report skillsInstalled in JSON output with --with-skills", { timeout: 30000 }, () => {
+    const { exitCode, stdout } = runInit(["--no-scan", "--with-skills", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(Array.isArray(result.skillsInstalled)).toBe(true);
+    expect(result.skillsInstalled.length).toBe(4);
+    expect(result.skillsInstalled).toContain(".claude/skills/artgraph-plan.md");
+  });
+
+  it("should not install skills by default", { timeout: 30000 }, () => {
+    const { existsSync } = require("node:fs");
+    const { join } = require("node:path");
+    const { exitCode, stdout } = runInit(["--no-scan"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain("Installed");
+    expect(existsSync(join(initTmp, ".claude", "skills"))).toBe(false);
+  });
+
+  it(
+    "should fail and not write .artgraph.json when skill files conflict",
+    { timeout: 30000 },
+    () => {
+      const { mkdirSync, writeFileSync, existsSync } = require("node:fs");
+      const { join } = require("node:path");
+      mkdirSync(join(initTmp, ".claude", "skills"), { recursive: true });
+      writeFileSync(join(initTmp, ".claude", "skills", "artgraph-plan.md"), "user\n");
+
+      const { exitCode, stderr } = runInit(["--no-scan", "--with-skills"]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toMatch(/artgraph-plan\.md.*--force/);
+      // Pre-flight validation must reject before any write.
+      expect(existsSync(join(initTmp, ".artgraph.json"))).toBe(false);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -620,28 +669,46 @@ describe("CLI: test-results integration", () => {
     if (existsSync(ALL_VERIFIED_LOCK)) unlinkSync(ALL_VERIFIED_LOCK);
   });
 
-  it("should accept --test-results option on check command without crash", { timeout: 30000 }, () => {
-    const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
-    const { exitCode } = runAllVerified(["check", "--test-results", vitestPath]);
-    // Without --gate, check always exits 0 even with issues
-    expect(exitCode).toBe(0);
-  });
+  it(
+    "should accept --test-results option on check command without crash",
+    { timeout: 30000 },
+    () => {
+      const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
+      const { exitCode } = runAllVerified(["check", "--test-results", vitestPath]);
+      // Without --gate, check always exits 0 even with issues
+      expect(exitCode).toBe(0);
+    },
+  );
 
-  it("should accept --test-results option on coverage command without crash", { timeout: 30000 }, () => {
-    const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
-    const { exitCode } = runAllVerified(["coverage", "--test-results", vitestPath]);
-    expect(exitCode).toBe(0);
-  });
+  it(
+    "should accept --test-results option on coverage command without crash",
+    { timeout: 30000 },
+    () => {
+      const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
+      const { exitCode } = runAllVerified(["coverage", "--test-results", vitestPath]);
+      expect(exitCode).toBe(0);
+    },
+  );
 
-  it("should accept --test-results option on scan command without crash", { timeout: 30000 }, () => {
-    const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
-    const { exitCode } = runAllVerified(["scan", "--test-results", vitestPath]);
-    expect(exitCode).toBe(0);
-  });
+  it(
+    "should accept --test-results option on scan command without crash",
+    { timeout: 30000 },
+    () => {
+      const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
+      const { exitCode } = runAllVerified(["scan", "--test-results", vitestPath]);
+      expect(exitCode).toBe(0);
+    },
+  );
 
   it("should include testResultStats in scan JSON output", { timeout: 30000 }, () => {
     const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-mixed.json");
-    const { stdout, exitCode } = runAllVerified(["scan", "--format", "json", "--test-results", vitestPath]);
+    const { stdout, exitCode } = runAllVerified([
+      "scan",
+      "--format",
+      "json",
+      "--test-results",
+      vitestPath,
+    ]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
     expect(result.testResultStats).toBeDefined();
@@ -676,16 +743,26 @@ describe("CLI: test-results integration", () => {
     expect(byId["VER-002"]).toBe("verified");
   });
 
-  it("should downgrade a REQ to impl-only when its test fails (verified -> impl-only)", { timeout: 30000 }, () => {
-    const failPath = resolve(TEST_RESULTS_DIR, "all-verified-fail.json");
-    const { stdout } = runAllVerified(["coverage", "--format", "json", "--test-results", failPath]);
-    const cov = JSON.parse(stdout);
-    const byId = Object.fromEntries(cov.items.map((i: any) => [i.reqId, i.status]));
-    // VER-001's test failed -> must transition away from "verified".
-    expect(byId["VER-001"]).toBe("impl-only");
-    // VER-002's test still passes -> stays verified.
-    expect(byId["VER-002"]).toBe("verified");
-  });
+  it(
+    "should downgrade a REQ to impl-only when its test fails (verified -> impl-only)",
+    { timeout: 30000 },
+    () => {
+      const failPath = resolve(TEST_RESULTS_DIR, "all-verified-fail.json");
+      const { stdout } = runAllVerified([
+        "coverage",
+        "--format",
+        "json",
+        "--test-results",
+        failPath,
+      ]);
+      const cov = JSON.parse(stdout);
+      const byId = Object.fromEntries(cov.items.map((i: any) => [i.reqId, i.status]));
+      // VER-001's test failed -> must transition away from "verified".
+      expect(byId["VER-001"]).toBe("impl-only");
+      // VER-002's test still passes -> stays verified.
+      expect(byId["VER-002"]).toBe("verified");
+    },
+  );
 
   it("should pass check --gate when all tests pass", { timeout: 30000 }, () => {
     const passPath = resolve(TEST_RESULTS_DIR, "all-verified-pass.json");
@@ -701,11 +778,15 @@ describe("CLI: test-results integration", () => {
     expect(stdout).toContain("VER-001");
   });
 
-  it("should not fail check --gate for test failures when --test-results is absent", { timeout: 30000 }, () => {
-    // Legacy: without test results the gate ignores pass/fail entirely.
-    const { exitCode } = runAllVerified(["check", "--gate"]);
-    expect(exitCode).toBe(0);
-  });
+  it(
+    "should not fail check --gate for test failures when --test-results is absent",
+    { timeout: 30000 },
+    () => {
+      // Legacy: without test results the gate ignores pass/fail entirely.
+      const { exitCode } = runAllVerified(["check", "--gate"]);
+      expect(exitCode).toBe(0);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -839,11 +920,15 @@ describe("CLI: hook-pretool graceful degradation", () => {
 // hook-pretool: stderr content verification
 // ---------------------------------------------------------------------------
 describe("CLI: hook-pretool stderr", () => {
-  it("should output 'failed to parse hook input' to stderr for invalid JSON", { timeout: 30000 }, () => {
-    const { stderr, exitCode } = runWithStdin(["hook-pretool"], "{not valid json}");
-    expect(exitCode).toBe(0);
-    expect(stderr).toContain("artgraph: failed to parse hook input");
-  });
+  it(
+    "should output 'failed to parse hook input' to stderr for invalid JSON",
+    { timeout: 30000 },
+    () => {
+      const { stderr, exitCode } = runWithStdin(["hook-pretool"], "{not valid json}");
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain("artgraph: failed to parse hook input");
+    },
+  );
 
   it("should output 'completed in' to stderr on successful run", { timeout: 30000 }, () => {
     const stdin = JSON.stringify({

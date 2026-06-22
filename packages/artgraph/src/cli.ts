@@ -58,7 +58,10 @@ program
   .description("Initialize artgraph for this project")
   .option("--force", "Overwrite existing .artgraph.json")
   .option("--no-scan", "Generate config only, skip scan and reconcile")
-  .option("--with-skills", "Install Claude Code skills into .claude/skills/")
+  .option(
+    "--with-skills",
+    "Install Claude Code skills (plan, verify, coverage, rename) into .claude/skills/",
+  )
   .option("--format <format>", "Output format: json | text", "text")
   .action((opts) => {
     const rootDir = process.cwd();
