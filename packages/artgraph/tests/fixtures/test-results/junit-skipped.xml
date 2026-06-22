@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="Auth" tests="1" skipped="1">
+    <testcase name="[REQ-001] should authenticate user" classname="Auth" time="0">
+      <skipped message="not implemented"/>
+    </testcase>
+  </testsuite>
+</testsuites>

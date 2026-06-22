@@ -65,15 +65,15 @@ additionalContext のフォーマット:
 
 影響あり:
 ```
-spectrace impact: FR-001 (req), SC-001 (req), doc:api-design (doc)
+artgraph impact: FR-001 (req), SC-001 (req), doc:api-design (doc)
 ```
 
 影響なし:
 ```
-spectrace impact: (none)
+artgraph impact: (none)
 ```
 
-設定なし（.spectrace.json 不在）:
+設定なし（.artgraph.json 不在）:
 - additionalContext は空文字列 `""`
 
 ## 内部で利用する既存の型
@@ -147,7 +147,7 @@ stdin (JSON) ──→ HookInput
                     │   └─ 絶対パスの場合、相対パスに変換
                     │
                     ├─ loadConfig(rootDir)
-                    │   └─ .spectrace.json が無ければ空出力で exit 0
+                    │   └─ .artgraph.json が無ければ空出力で exit 0
                     │
                     ├─ scan(rootDir, config) → ArtifactGraph
                     │

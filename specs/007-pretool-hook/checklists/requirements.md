@@ -32,5 +32,5 @@ Feature: [spec.md](../spec.md)
 ## Notes
 
 - shell 版にスコープを限定し、HTTP デーモン化（P3）は明示的にスコープ外としている
-- Constitution 原則との整合: CLI-First Interface（hook が CLI を叩く統一設計）、Deterministic Integrity（impact 結果は決定的）、Incremental Adoption（hook なしでも動作、spectrace 未導入でも graceful degradation）
-- spectrace 本体のコード変更は不要。hook スクリプトと settings.json の設定のみで完結する設計
+- Constitution 原則との整合: CLI-First Interface（hook が CLI を叩く統一設計）、Deterministic Integrity（impact 結果は決定的）、Incremental Adoption（hook なしでも動作、artgraph 未導入でも graceful degradation）
+- artgraph 本体のコード変更は不要。hook スクリプトと settings.json の設定のみで完結する設計

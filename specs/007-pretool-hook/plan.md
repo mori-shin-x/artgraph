@@ -6,14 +6,14 @@ Input: Feature specification from `specs/007-pretool-hook/spec.md`
 
 ## Summary
 
-`spectrace hook-pretool` サブコマンドを新規に追加する。Claude Code の PreToolUse hook として
+`artgraph hook-pretool` サブコマンドを新規に追加する。Claude Code の PreToolUse hook として
 Edit/Write/MultiEdit の実行前に発火し、stdin から受け取った hook JSON の tool_input.file_path を
-抽出して spectrace impact を内部的に実行し、影響を受ける仕様ノード（FR-001 等）や
+抽出して artgraph impact を内部的に実行し、影響を受ける仕様ノード（FR-001 等）や
 ドキュメントノード（doc:api-design 等）を hookSpecificOutput の additionalContext として
 stdout に出力する。これにより、Claude Code エージェントはファイル変更前に影響範囲を自動的に把握できる。
 
 v1 では常に exit 0 で返し、permissionDecision は返さない（情報提供のみ）。
-spectrace 未導入環境では graceful degradation として影響なしを返す。
+artgraph 未導入環境では graceful degradation として影響なしを返す。
 
 ## Technical Context
 
@@ -21,7 +21,7 @@ Language/Version: TypeScript 5.x（Node.js ランタイム）
 
 Primary Dependencies: commander, ts-morph, remark (unified), glob, gray-matter
 
-Storage: `.trace.lock`（JSON ファイル）、`.spectrace.json`（設定ファイル）
+Storage: `.trace.lock`（JSON ファイル）、`.artgraph.json`（設定ファイル）
 
 Testing: Vitest
 
@@ -46,7 +46,7 @@ GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.
 | I. Deterministic Integrity | Pass | 全処理は決定的。impact は BFS グラフ走査で到達ノードを計算。LLM 不使用 |
 | II. Declarative Links — SDD ツール ID 直接使用 | Pass | impact 結果の ID（FR-001 等）をそのまま additionalContext に含める |
 | III. JS/TS Native | Pass | Node.js CLI として実装。ts-morph + remark を継続使用 |
-| IV. CLI-First Interface | Pass | `spectrace hook-pretool` サブコマンドとして公開。stdin/stdout のテキスト入出力プロトコルに従う |
+| IV. CLI-First Interface | Pass | `artgraph hook-pretool` サブコマンドとして公開。stdin/stdout のテキスト入出力プロトコルに従う |
 | V. Incremental Adoption | Pass | hook 設定は任意。未設定・未導入でもエラーにならない。段階的に導入可能 |
 
 ## Project Structure

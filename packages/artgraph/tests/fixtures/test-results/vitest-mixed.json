@@ -1,0 +1,19 @@
+{
+  "testResults": [
+    {
+      "name": "tests/auth.test.ts",
+      "assertionResults": [
+        {
+          "ancestorTitles": ["Auth"],
+          "title": "[REQ-001] should authenticate user",
+          "status": "passed"
+        },
+        {
+          "ancestorTitles": ["Auth"],
+          "title": "[REQ-002] should authorize user",
+          "status": "failed"
+        }
+      ]
+    }
+  ]
+}

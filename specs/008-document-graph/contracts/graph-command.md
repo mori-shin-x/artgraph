@@ -1,9 +1,9 @@
-# Contract: spectrace graph コマンド
+# Contract: artgraph graph コマンド
 
 ## コマンドスキーマ
 
 ```
-spectrace graph [options]
+artgraph graph [options]
 ```
 
 ## オプション
