@@ -1,6 +1,12 @@
 export type NodeKind = "req" | "doc" | "file" | "symbol" | "test";
 
-export type EdgeKind = "depends_on" | "derives_from" | "implements" | "verifies" | "imports";
+export type EdgeKind =
+  | "depends_on"
+  | "derives_from"
+  | "implements"
+  | "verifies"
+  | "imports"
+  | "contains";
 
 export interface GraphNode {
   id: string;
@@ -39,6 +45,13 @@ export interface ImpactResult {
   affectedDocs: string[];
   affectedReqs: string[];
   drifted: DriftEntry[];
+  summary?: ImpactSummary;
+}
+
+export interface ImpactSummary {
+  docs: number;
+  reqs: number;
+  files: number;
 }
 
 export interface DriftEntry {
@@ -95,12 +108,18 @@ export interface TestResultRecord {
 
 export type TestResultMap = Map<string, TestResultRecord[]>;
 
+export interface DocGraphConfig {
+  autoNodes?: boolean;
+  autoContains?: boolean;
+}
+
 export interface SpectraceConfig {
   include: string[];
   specDirs: string[];
   testPatterns: string[];
   lockFile: string;
   reqPatterns?: ReqPatternConfig;
+  docGraph?: DocGraphConfig;
   mode?: "file" | "symbol";
   testResultPaths?: string[];
 }
