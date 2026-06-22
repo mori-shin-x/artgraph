@@ -119,6 +119,10 @@ export type TestResultMap = Map<string, TestResultRecord[]>;
 export interface DocGraphConfig {
   autoNodes?: boolean;
   autoContains?: boolean;
+  // Auto-infer doc→doc `derives_from` edges from folder/file-name conventions
+  // (kiro: requirements/design/tasks, spec-kit: spec/plan/tasks/research).
+  // Defaults to true.
+  autoConventions?: boolean;
 }
 
 export interface ArtgraphConfig {
