@@ -6,6 +6,9 @@ import { resolve } from "node:path";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
+import { formatGraphText, formatGraphJSON } from "./graph/format.js";
+import type { NodeKind } from "./types.js";
+import type { BuildWarning } from "./graph/builder.js";
 import { check } from "./check.js";
 import { computeCoverage } from "./coverage.js";
 import { readLock } from "./lock.js";
@@ -149,14 +152,7 @@ program
           `\nTest Results: total=${testResultStats.totalTests} passed=${testResultStats.passedTests} failed=${testResultStats.failedTests}`,
         );
       }
-      for (const w of result.warnings) {
-        if (w.type === "ambiguous-id") {
-          const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
-          console.error(`WARNING: ambiguous ID "${w.id}"${hint}`);
-        } else {
-          console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
-        }
-      }
+      printWarnings(result.warnings);
     }
   });
 
@@ -165,6 +161,7 @@ program
   .description("Show impact from changed files or REQ-IDs")
   .argument("[targets...]", "File paths or REQ-IDs")
   .option("--diff", "Use git diff to detect changed files")
+  .option("--depth <depth>", "Limit BFS traversal depth")
   .option("--format <format>", "Output format: json | text", "text")
   .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((targets: string[], opts) => {
@@ -189,7 +186,20 @@ program
       process.exit(1);
     }
 
-    const result = impact(graph, startIds, lock);
+    let maxDepth: number | undefined;
+    if (opts.depth !== undefined) {
+      const parsed = parseInt(opts.depth, 10);
+      if (isNaN(parsed)) {
+        console.error(`Invalid --depth value: "${opts.depth}". Must be a non-negative integer.`);
+        process.exit(1);
+      }
+      if (parsed < 0) {
+        console.error(`Invalid --depth value: "${opts.depth}". Must be a non-negative integer.`);
+        process.exit(1);
+      }
+      maxDepth = parsed;
+    }
+    const result = impact(graph, startIds, lock, maxDepth);
 
     if (opts.format === "json") {
       console.log(JSON.stringify(result));
@@ -251,14 +261,7 @@ program
       console.log(JSON.stringify({ ...result, warnings }));
     } else {
       printCheckText(result);
-      for (const w of warnings) {
-        if (w.type === "ambiguous-id") {
-          const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
-          console.error(`WARNING: ambiguous ID "${w.id}"${hint}`);
-        } else {
-          console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
-        }
-      }
+      printWarnings(warnings);
     }
 
     if (opts.gate && !result.pass) {
@@ -308,6 +311,27 @@ program
   });
 
 program
+  .command("graph")
+  .description("Show the artifact graph")
+  .option("--format <format>", "Output format: text | json", "text")
+  .addOption(
+    new Option("--kind <kind>", "Filter by node kind").choices(["doc", "req", "file", "test"]),
+  )
+  .action((opts) => {
+    const rootDir = process.cwd();
+    const config = loadConfig(rootDir);
+    const { graph } = scan(rootDir, config);
+
+    const kindFilter = opts.kind as NodeKind | undefined;
+
+    if (opts.format === "json") {
+      console.log(formatGraphJSON(graph, kindFilter));
+    } else {
+      console.log(formatGraphText(graph, kindFilter));
+    }
+  });
+
+program
   .command("hook-pretool")
   .description("PreToolUse hook: analyze impact before Edit/Write/MultiEdit")
   .action(async () => {
@@ -315,14 +339,12 @@ program
     const rootDir = process.cwd();
 
     try {
-      // stdin を読み取る
       const chunks: Buffer[] = [];
       for await (const chunk of process.stdin) {
         chunks.push(chunk);
       }
       const stdinText = Buffer.concat(chunks).toString("utf-8");
 
-      // JSON パース
       const input = parseHookInput(stdinText);
       if (!input) {
         process.stderr.write("spectrace: failed to parse hook input\n");
@@ -330,23 +352,19 @@ program
         return;
       }
 
-      // file_path 抽出
       const filePaths = extractFilePaths(input);
       if (filePaths.length === 0) {
         process.stdout.write(JSON.stringify(buildHookOutput("")));
         return;
       }
 
-      // 相対パスに変換
       const relativePaths = filePaths.map((fp) => toRelativePath(fp, rootDir));
 
-      // .spectrace.json が存在しない場合は空で返す（graceful degradation）
       if (!existsSync(resolve(rootDir, ".spectrace.json"))) {
         process.stdout.write(JSON.stringify(buildHookOutput("")));
         return;
       }
 
-      // 設定読み込み
       let config;
       try {
         config = loadConfig(rootDir);
@@ -357,7 +375,6 @@ program
         return;
       }
 
-      // グラフ構築
       let graph;
       try {
         const scanResult = scan(rootDir, config);
@@ -369,7 +386,6 @@ program
         return;
       }
 
-      // 開始ノード解決
       const startIds = resolveStartIds(graph, relativePaths);
       if (startIds.length === 0) {
         process.stdout.write(JSON.stringify(buildHookOutput("spectrace impact: (none)")));
@@ -378,7 +394,6 @@ program
         return;
       }
 
-      // lock ファイル読み込み
       let lock;
       try {
         lock = readLock(rootDir, config.lockFile);
@@ -389,7 +404,6 @@ program
         return;
       }
 
-      // impact 計算
       let result;
       try {
         result = impact(graph, startIds, lock);
@@ -400,7 +414,6 @@ program
         return;
       }
 
-      // 出力生成
       const additionalContext = formatAdditionalContext(result);
       process.stdout.write(JSON.stringify(buildHookOutput(additionalContext)));
 
@@ -411,6 +424,32 @@ program
       process.stdout.write(JSON.stringify(buildHookOutput("")));
     }
   });
+
+function printWarnings(warnings: BuildWarning[]) {
+  for (const w of warnings) {
+    switch (w.type) {
+      case "ambiguous-id": {
+        const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
+        console.error(`WARNING: ambiguous ID "${w.id}"${hint}`);
+        break;
+      }
+      case "duplicate-id":
+        console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
+        break;
+      case "orphan-doc":
+        console.error(`WARNING: orphan-doc "${w.id}" referenced from ${w.files.join(", ")}`);
+        break;
+      case "invalid-relation":
+        console.error(
+          `WARNING: invalid relation "${w.id}" in ${w.files.join(", ")}. Use "derives_from" or "depends_on"`,
+        );
+        break;
+      case "reserved-prefix":
+        console.error(`WARNING: reserved prefix in ID "${w.id}" in ${w.files.join(", ")}`);
+        break;
+    }
+  }
+}
 
 function printImpactText(result: any) {
   if (result.affectedReqs.length > 0) {
@@ -428,6 +467,11 @@ function printImpactText(result: any) {
   if (result.drifted.length > 0) {
     console.log("Drifted:");
     for (const d of result.drifted) console.log(`  ${d.nodeId} (${d.kind})`);
+  }
+  if (result.summary) {
+    console.log(
+      `Summary: ${result.summary.docs} docs, ${result.summary.reqs} reqs, ${result.summary.files} files`,
+    );
   }
 }
 
