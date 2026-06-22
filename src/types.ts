@@ -105,6 +105,14 @@ export interface ReqPatternConfig {
   codeId?: string;
 }
 
+export interface TestResultRecord {
+  reqId: string;
+  testName: string;
+  passed: boolean;
+}
+
+export type TestResultMap = Map<string, TestResultRecord[]>;
+
 export interface DocGraphConfig {
   autoNodes?: boolean;
   autoContains?: boolean;
@@ -118,6 +126,7 @@ export interface SpectraceConfig {
   reqPatterns?: ReqPatternConfig;
   docGraph?: DocGraphConfig;
   mode?: "file" | "symbol";
+  testResultPaths?: string[];
 }
 
 export const DEFAULT_CONFIG: SpectraceConfig = {
