@@ -1,0 +1,35 @@
+{
+  "REQ-001": {
+    "specFile": "specs/feature.md",
+    "contentHash": "abc123def456",
+    "impl": [
+      "src/feature.ts"
+    ],
+    "tests": [
+      "tests/feature.test.ts"
+    ],
+    "lastReconciled": "2025-01-01T00:00:00.000Z"
+  },
+  "REQ-002": {
+    "specFile": "specs/feature.md",
+    "contentHash": "789ghi012jkl",
+    "impl": [
+      "src/feature.ts"
+    ],
+    "tests": [
+      "tests/feature.test.ts"
+    ],
+    "dependsOn": [
+      "REQ-001"
+    ],
+    "lastReconciled": "2025-01-01T00:00:00.000Z"
+  },
+  "doc:feature-overview": {
+    "specFile": "specs/feature.md",
+    "contentHash": "mno345pqr678",
+    "dependsOn": [
+      "REQ-002"
+    ],
+    "lastReconciled": "2025-01-01T00:00:00.000Z"
+  }
+}
