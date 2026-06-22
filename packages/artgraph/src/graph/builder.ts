@@ -315,7 +315,9 @@ function inferConventionEdges(nodes: Map<string, GraphNode>): GraphEdge[] {
   for (const node of nodes.values()) {
     if (node.kind !== "doc") continue;
     const dir = dirname(node.filePath);
-    const stem = basename(node.filePath).replace(/\.[^.]*$/, "").toLowerCase();
+    const stem = basename(node.filePath)
+      .replace(/\.(md|markdown)$/i, "")
+      .toLowerCase();
     let stems = byDir.get(dir);
     if (!stems) {
       stems = new Map();
