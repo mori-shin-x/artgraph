@@ -1,5 +1,5 @@
-import { existsSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import {
   DEFAULT_CONFIG,
   type ArtgraphConfig,
@@ -11,6 +11,9 @@ import {
 import { scan, reconcile } from "./scan.js";
 import type { BuildWarning } from "./graph/builder.js";
 
+const SKILLS_TEMPLATE_DIR = resolve(import.meta.dirname, "../templates/skills");
+const SKILLS_DEST_SUBDIR = join(".claude", "skills");
+
 export interface InitResult {
   configPath: string;
   config: ArtgraphConfig;
@@ -18,6 +21,7 @@ export interface InitResult {
   scanSummary?: ScanSummary;
   warnings: BuildWarning[];
   lockPath?: string;
+  skillsInstalled?: string[];
 }
 
 export function detectProject(rootDir: string): DetectionResult {
@@ -54,6 +58,29 @@ export function generateConfig(detection: DetectionResult): ArtgraphConfig {
   };
 }
 
+export function installSkills(rootDir: string, options: { force?: boolean } = {}): string[] {
+  const abs = resolve(rootDir);
+  const destDir = resolve(abs, SKILLS_DEST_SUBDIR);
+  const templates = readdirSync(SKILLS_TEMPLATE_DIR).filter((f) => f.endsWith(".md"));
+
+  if (!options.force) {
+    const conflicts = templates.filter((f) => existsSync(join(destDir, f)));
+    if (conflicts.length > 0) {
+      throw new Error(
+        `Skill file(s) already exist in ${SKILLS_DEST_SUBDIR}: ${conflicts.join(", ")}. Use --force to overwrite.`,
+      );
+    }
+  }
+
+  mkdirSync(destDir, { recursive: true });
+  const installed: string[] = [];
+  for (const name of templates) {
+    copyFileSync(join(SKILLS_TEMPLATE_DIR, name), join(destDir, name));
+    installed.push(join(SKILLS_DEST_SUBDIR, name));
+  }
+  return installed;
+}
+
 export function runInit(rootDir: string, options: InitOptions = {}): InitResult {
   const abs = resolve(rootDir);
   const configPath = resolve(abs, ".artgraph.json");
@@ -65,9 +92,13 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   const detection = detectProject(abs);
   const config = generateConfig(detection);
 
+  const skillsInstalled = options.withSkills
+    ? installSkills(abs, { force: options.force })
+    : undefined;
+
   if (options.noScan) {
     writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
-    return { configPath, config, sddTools: detection.sddTools, warnings: [] };
+    return { configPath, config, sddTools: detection.sddTools, warnings: [], skillsInstalled };
   }
 
   const result = scan(abs, config);
@@ -90,5 +121,6 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     },
     warnings: result.warnings,
     lockPath,
+    skillsInstalled,
   };
 }

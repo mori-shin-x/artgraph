@@ -252,3 +252,69 @@ describe("runInit", () => {
     expect(result.scanSummary!.nodeCount).toBe(0);
   });
 });
+
+describe("runInit --with-skills", () => {
+  let tmp: string;
+  const SKILL_NAMES = [
+    "artgraph-plan.md",
+    "artgraph-verify.md",
+    "artgraph-coverage.md",
+    "artgraph-rename.md",
+  ];
+
+  beforeEach(() => {
+    tmp = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(tmp);
+  });
+
+  it("does not install skills by default", () => {
+    const result = runInit(tmp, { noScan: true });
+
+    expect(result.skillsInstalled).toBeUndefined();
+    expect(existsSync(join(tmp, ".claude", "skills"))).toBe(false);
+  });
+
+  it("copies all skill templates into .claude/skills/ when --with-skills is set", () => {
+    const result = runInit(tmp, { noScan: true, withSkills: true });
+
+    expect(result.skillsInstalled).toBeDefined();
+    expect(result.skillsInstalled!.length).toBe(SKILL_NAMES.length);
+    for (const name of SKILL_NAMES) {
+      const dest = join(tmp, ".claude", "skills", name);
+      expect(existsSync(dest)).toBe(true);
+      // Frontmatter sanity: each template begins with `---` block + `name:` field.
+      const body = readFileSync(dest, "utf-8");
+      expect(body.startsWith("---")).toBe(true);
+      expect(body).toMatch(/name:\s*["']?artgraph-/);
+    }
+  });
+
+  it("throws when a skill file already exists and --force is not set", () => {
+    mkdirSync(join(tmp, ".claude", "skills"), { recursive: true });
+    writeFileSync(join(tmp, ".claude", "skills", "artgraph-plan.md"), "user content\n");
+
+    expect(() => runInit(tmp, { noScan: true, withSkills: true })).toThrow(
+      /artgraph-plan\.md.*--force/,
+    );
+
+    // Existing user content must be preserved.
+    expect(readFileSync(join(tmp, ".claude", "skills", "artgraph-plan.md"), "utf-8")).toBe(
+      "user content\n",
+    );
+  });
+
+  it("overwrites existing skill files when --force is set", () => {
+    mkdirSync(join(tmp, ".claude", "skills"), { recursive: true });
+    writeFileSync(join(tmp, ".claude", "skills", "artgraph-plan.md"), "user content\n");
+
+    const result = runInit(tmp, { noScan: true, withSkills: true, force: true });
+
+    expect(result.skillsInstalled!.length).toBe(SKILL_NAMES.length);
+    const body = readFileSync(join(tmp, ".claude", "skills", "artgraph-plan.md"), "utf-8");
+    expect(body.startsWith("---")).toBe(true);
+    expect(body).not.toBe("user content\n");
+  });
+});
