@@ -38,7 +38,7 @@ check --gate との関係: warning として報告するが gate を fail させ
 
 ### invalid-relation
 
-発生条件: frontmatter の `spectrace` ブロックに `node_id` / `derives_from` / `depends_on` 以外のキーがある場合
+発生条件: frontmatter の `artgraph` ブロックに `node_id` / `derives_from` / `depends_on` 以外のキーがある場合
 
 検出タイミング: `parseMarkdown` での frontmatter パース時
 
