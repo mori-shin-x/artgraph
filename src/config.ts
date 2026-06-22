@@ -97,5 +97,6 @@ export function loadConfig(rootDir: string): SpectraceConfig {
     reqPatterns: raw.reqPatterns,
     docGraph: raw.docGraph,
     mode: raw.mode === "symbol" ? "symbol" : "file",
+    testResultPaths: Array.isArray(raw.testResultPaths) ? raw.testResultPaths : undefined,
   };
 }

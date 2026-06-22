@@ -1,4 +1,4 @@
-import type { ArtifactGraph, CoverageStatus } from "./types.js";
+import type { ArtifactGraph, CoverageStatus, TestResultMap } from "./types.js";
 
 export interface CoverageEntry {
   reqId: string;
@@ -7,7 +7,7 @@ export interface CoverageEntry {
   testFiles: string[];
 }
 
-export function computeCoverage(graph: ArtifactGraph): CoverageEntry[] {
+export function computeCoverage(graph: ArtifactGraph, testResults?: TestResultMap): CoverageEntry[] {
   const entries: CoverageEntry[] = [];
 
   for (const [id, node] of graph.nodes) {
@@ -24,7 +24,16 @@ export function computeCoverage(graph: ArtifactGraph): CoverageEntry[] {
       status = "untagged";
     } else if (testFiles.length === 0) {
       status = "impl-only";
+    } else if (testResults) {
+      // When test results are provided, check actual pass/fail
+      const results = testResults.get(id);
+      if (results && results.length > 0 && results.every((r) => r.passed)) {
+        status = "verified";
+      } else {
+        status = "impl-only";
+      }
     } else {
+      // No test results provided — legacy behavior
       status = "verified";
     }
 
