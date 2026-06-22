@@ -468,6 +468,32 @@ describe("buildGraph: convention inference (C-3)", () => {
     ).toBe(true);
   });
 
+  it("strips only known markdown extensions for multi-dot file names", () => {
+    // #36: the stem extractor used `/\.[^.]*$/` ("strip last `.<seg>`"), which
+    // matched the comment's "strip extension" intent for simple names like
+    // `design.md` but diverged for multi-dot names. After the fix the regex
+    // strips only `.md` / `.markdown`, so behavior is now faithfully
+    // "extension only" — `my.design.md` → stem `my.design`, which intentionally
+    // does NOT match the `design` preset (convention files are expected to be
+    // simple names). Locking that behavior in here so future "fixes" don't
+    // silently turn multi-dot names into wildcard-like matches.
+    const { graph, warnings } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    // No `derives_from` edge should originate from the multi-dot dir: the
+    // `my.design.md` stem is `my.design`, which is not a known convention key.
+    const multiDotDerives = graph.edges.filter(
+      (e) => e.kind === "derives_from" && e.source.startsWith("doc:multi-dot/"),
+    );
+    expect(multiDotDerives).toHaveLength(0);
+
+    // And the silent-skip is genuinely silent — no orphan-doc warning for
+    // either node in the dir (their file paths are surfaced in `files`).
+    const multiDotOrphans = warnings.filter(
+      (w) => w.type === "orphan-doc" && w.files.some((f) => f.includes("multi-dot/")),
+    );
+    expect(multiDotOrphans).toHaveLength(0);
+  });
+
   it("generates no convention edges when autoConventions is false", () => {
     const { graph } = buildGraph(CONV_FIXTURE_DIR, {
       ...convConfig,
