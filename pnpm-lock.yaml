@@ -56,6 +56,16 @@ importers:
       unist-util-visit:
         specifier: ^5.0.0
         version: 5.1.0
+    devDependencies:
+      knip:
+        specifier: ^6.17.1
+        version: 6.17.1
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.9
+        version: 4.1.9(@types/node@22.19.21)(vite@8.0.16(@types/node@22.19.21)(jiti@2.7.0)(yaml@2.9.0))
 
 packages:
 
