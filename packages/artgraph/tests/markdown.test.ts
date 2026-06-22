@@ -330,11 +330,12 @@ artgraph:
         rootDir: FIXTURE_DIR,
         specDirPrefix: "specs",
       });
-      // 4 links in source.md hit target.md: plain, #section, ?v=1, ?v=1#x — all should normalize to the same target path
+      // 5 links in source.md hit target.md after normalization:
+      //   plain, #section, ?v=1, ?v=1#x, percent-encoded ./target%2Emd
       const toTarget = result.inlineLinks.filter(
         (l) => l.targetRelPath === "specs/inline-links/target.md",
       );
-      expect(toTarget.length).toBeGreaterThanOrEqual(4);
+      expect(toTarget.length).toBe(5);
     });
 
     it("ignores images, external URLs, mailto, non-md, empty href and pure fragments", () => {
@@ -383,9 +384,15 @@ artgraph:
         rootDir: FIXTURE_DIR,
         specDirPrefix: "specs",
       });
-      // The [missing][nope] reference cites an undefined label
-      const ghost = result.inlineLinks.find((l) => l.rawHref?.includes("nope"));
-      expect(ghost).toBeUndefined();
+      // Only the 3 resolvable references to target.md (full, collapsed,
+      // shortcut) survive — the `[missing][nope]` line cites an undefined
+      // label and must produce no entry. Pinning the total count catches
+      // both directions: undefined labels leaking through, or resolvable
+      // references being dropped by mistake.
+      expect(result.inlineLinks).toHaveLength(3);
+      for (const link of result.inlineLinks) {
+        expect(link.targetRelPath).toBe("specs/inline-links/target.md");
+      }
     });
 
     it("ignores links inside fenced and indented code blocks and inline code", () => {
@@ -405,6 +412,68 @@ artgraph:
       });
       for (const link of result.inlineLinks) {
         expect(link.sourceDocId).toBe("doc:inline-links/source.md");
+      }
+    });
+
+    it("does not mistake a Windows drive letter `C:/...` for a URL scheme", () => {
+      // Regression: URL_SCHEME_RE used to match single-letter prefixes, so
+      // `[w](C:/foo.md)` would be silently dropped as if it were `mailto:` etc.
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-win-drive");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const src = resolve(tmpSpecs, "win.md");
+      writeFileSync(src, `# Windows drive letter\n\n[w](C:/proj/specs/target.md)\n`);
+
+      try {
+        const result = parseMarkdown(src, { rootDir: tmpRoot });
+        // The link is captured (not rejected as a URL). The target path won't
+        // resolve to a real doc node on Linux/macOS, but that's the builder's
+        // problem — what we're asserting here is the scheme-check no longer
+        // trips on `C:`.
+        expect(result.inlineLinks).toHaveLength(1);
+        expect(result.inlineLinks[0].rawHref).toBe("C:/proj/specs/target.md");
+      } finally {
+        unlinkSync(src);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+
+    it("does not parse links with rootDir-escaping `..` (returns no inlineLinks)", () => {
+      // M7: parser drops links that resolve outside rootDir silently.
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-rootdir-escape");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const src = resolve(tmpSpecs, "escape.md");
+      writeFileSync(src, `# Escape\n\nUp two dirs: [esc](../../outside.md).\n`);
+
+      try {
+        const result = parseMarkdown(src, { rootDir: tmpRoot });
+        expect(result.inlineLinks).toEqual([]);
+      } finally {
+        unlinkSync(src);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+
+    it("survives malformed percent-encoding without throwing", () => {
+      // M7: decodeURIComponent throws on `%G9` etc.; parser must catch and skip.
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-bad-percent");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const src = resolve(tmpSpecs, "bad.md");
+      writeFileSync(src, `# Bad percent\n\nMalformed: [bad](./target%G9.md).\n`);
+
+      try {
+        const result = parseMarkdown(src, { rootDir: tmpRoot });
+        // The malformed link is silently dropped from inlineLinks; parse did
+        // not throw. No other links exist in this file.
+        expect(result.inlineLinks).toEqual([]);
+      } finally {
+        unlinkSync(src);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
       }
     });
   });

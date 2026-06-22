@@ -276,7 +276,13 @@ export function buildGraph(
   if (inlineLinksEnabled && allInlineLinks.length > 0) {
     const docNodesByFilePath = new Map<string, GraphNode>();
     for (const node of nodes.values()) {
-      if (node.kind === "doc") docNodesByFilePath.set(node.filePath, node);
+      if (node.kind === "doc") {
+        // node.filePath is `relative(rootDir, file)`, which yields
+        // back-slashes on Windows; targetRelPath from the parser is
+        // already forward-slash-normalized. Normalize the key so lookups
+        // succeed on both platforms.
+        docNodesByFilePath.set(node.filePath.split(/[\\/]/).join("/"), node);
+      }
     }
 
     // Pairs (source, target) already declared by frontmatter — inline links
@@ -290,6 +296,12 @@ export function buildGraph(
         explicitPairs.add(`${edge.source}|${edge.target}`);
       }
     }
+
+    // Suppress duplicate warnings when an author writes the same broken /
+    // out-of-scope target multiple times in one file. Edges get deduped at the
+    // end of buildGraph; warnings need their own bookkeeping because the same
+    // (source, target) never reaches the edges array.
+    const warnedLinks = new Set<string>();
 
     for (const link of allInlineLinks) {
       const sourceNode = nodes.get(link.sourceDocId);
@@ -309,16 +321,22 @@ export function buildGraph(
       // No matching doc node — decide between unresolved (file missing) and
       // out-of-scope (file present but not under specDirs).
       const targetExists = existsSync(resolve(rootDir, link.targetRelPath));
-      if (targetExists) {
-        if (warnOutOfScope) {
-          warnings.push({
-            type: "out-of-scope-link",
-            id: link.targetRelPath,
-            files: [sourceNode.filePath],
-            message: `inline link "${link.rawHref}" targets ${link.targetRelPath} which is outside specDirs`,
-          });
-        }
-      } else if (warnUnresolved) {
+      const warnType = targetExists ? "out-of-scope-link" : "unresolved-link";
+      if (warnType === "out-of-scope-link" && !warnOutOfScope) continue;
+      if (warnType === "unresolved-link" && !warnUnresolved) continue;
+
+      const dedupKey = `${warnType}|${sourceNode.filePath}|${link.targetRelPath}`;
+      if (warnedLinks.has(dedupKey)) continue;
+      warnedLinks.add(dedupKey);
+
+      if (warnType === "out-of-scope-link") {
+        warnings.push({
+          type: "out-of-scope-link",
+          id: link.targetRelPath,
+          files: [sourceNode.filePath],
+          message: `inline link "${link.rawHref}" targets ${link.targetRelPath} which is outside specDirs`,
+        });
+      } else {
         warnings.push({
           type: "unresolved-link",
           id: link.targetRelPath,

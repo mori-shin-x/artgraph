@@ -20,7 +20,10 @@ const METADATA_FIELDS = ["title", "status", "priority", "owner"] as const;
 // Matches `<scheme>:` at the start of an href (e.g. `http:`, `mailto:`, `tel:`,
 // `javascript:`). Used to skip absolute URLs — only relative paths point at
 // another file in the workspace.
-const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+// The scheme requires at least 2 characters so single-letter prefixes like
+// `C:/foo.md` (Windows drive letters) aren't mistaken for URL schemes; no real
+// scheme is a single letter (RFC 3986 allows it in theory but none are deployed).
+const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]+:/i;
 
 export interface ParseWarning {
   type: "invalid-relation" | "reserved-prefix";
@@ -259,10 +262,10 @@ function resolveInlineHref(rawHref: string, sourceAbsPath: string, rootDir: stri
   const absTarget = resolvePath(dirname(sourceAbsPath), decoded);
   const rel = relative(rootDir, absTarget);
   if (!rel || rel.startsWith("..")) {
-    // Outside rootDir — the builder can still warn via `out-of-scope-link` if
-    // it cares, but we surface only the normalized form here. Returning null
-    // for now keeps the parser side strict; the builder will issue
-    // out-of-scope warnings based on specDirs when needed (a follow-up).
+    // Outside rootDir — drop silently here. The "rootDir-internal but outside
+    // specDirs" case is handled by the builder via the `out-of-scope-link`
+    // warning (which checks the file actually exists). Anything truly outside
+    // the project tree gets no treatment at all.
     return null;
   }
   // Normalize path separators to forward slashes for cross-platform stability.

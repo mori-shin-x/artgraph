@@ -47,6 +47,13 @@ pair always wins over an inline link.
 }
 ```
 
+> **Behavior change on upgrade.** `inlineLinks` and `linkWarnings.unresolved`
+> default to `true`, so an upgrade in place can both add `depends_on` edges to
+> the graph and emit new `WARNING: unresolved-link` lines on stderr for inline
+> links pointing at non-existent `.md` files. If you gate CI on stderr or on
+> graph stability, opt out with `"docGraph": { "inlineLinks": false }` (and/or
+> `"linkWarnings": { "unresolved": false }`) and migrate at your pace.
+
 ## Commands
 
 | Command               | Purpose                                                        |

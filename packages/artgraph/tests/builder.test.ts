@@ -376,6 +376,74 @@ describe("buildGraph: inline markdown links (issue #11)", () => {
     const unresolved = warnings.filter((w) => w.type === "unresolved-link");
     expect(unresolved).toHaveLength(0);
   });
+
+  it("dedupes unresolved-link warnings when the same source links to the same missing target multiple times", () => {
+    const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-warn-dedup");
+    const tmpSpecs = resolve(tmpRoot, "specs");
+    mkdirSync(tmpSpecs, { recursive: true });
+    writeFileSync(
+      resolve(tmpSpecs, "loud.md"),
+      `# Loud\n\n[a](./gone.md) [b](./gone.md) [c](./gone.md)\n`,
+    );
+
+    try {
+      const tmpConfig: ArtgraphConfig = { ...config, include: [], testPatterns: [] };
+      const { warnings } = buildGraph(tmpRoot, tmpConfig);
+      const unresolved = warnings.filter(
+        (w) => w.type === "unresolved-link" && w.id === "specs/gone.md",
+      );
+      // 3 inline links → 1 warning, not 3
+      expect(unresolved).toHaveLength(1);
+      expect(unresolved[0].files).toContain("specs/loud.md");
+    } finally {
+      rmSync(tmpRoot, { recursive: true });
+    }
+  });
+
+  it("emits out-of-scope-link only when the target exists outside specDirs and the warning is enabled", () => {
+    // tmp layout:
+    //   specs/foo.md   — inline link to ../docs/notes.md
+    //   docs/notes.md  — exists, but `docs/` is NOT in specDirs
+    const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-out-of-scope");
+    const tmpSpecs = resolve(tmpRoot, "specs");
+    const tmpDocs = resolve(tmpRoot, "docs");
+    mkdirSync(tmpSpecs, { recursive: true });
+    mkdirSync(tmpDocs, { recursive: true });
+    writeFileSync(
+      resolve(tmpSpecs, "foo.md"),
+      `# Foo\n\nSee [notes](../docs/notes.md).\n`,
+    );
+    writeFileSync(resolve(tmpDocs, "notes.md"), `# Notes\n`);
+
+    try {
+      const tmpConfig: ArtgraphConfig = {
+        ...config,
+        include: [],
+        testPatterns: [],
+        // specDirs intentionally excludes "docs" so the target is "out of scope"
+        specDirs: ["specs"],
+      };
+
+      // Default (outOfScope: false) — silent
+      const silentResult = buildGraph(tmpRoot, tmpConfig);
+      expect(silentResult.warnings.some((w) => w.type === "out-of-scope-link")).toBe(false);
+      // It's also not an unresolved-link, because the file exists
+      expect(silentResult.warnings.some((w) => w.type === "unresolved-link")).toBe(false);
+
+      // Opt-in (outOfScope: true) — emits warning
+      const loudResult = buildGraph(tmpRoot, {
+        ...tmpConfig,
+        docGraph: { linkWarnings: { outOfScope: true } },
+      });
+      const w = loudResult.warnings.find(
+        (w) => w.type === "out-of-scope-link" && w.id === "docs/notes.md",
+      );
+      expect(w).toBeDefined();
+      expect(w!.files).toContain("specs/foo.md");
+    } finally {
+      rmSync(tmpRoot, { recursive: true });
+    }
+  });
 });
 
 describe("buildGraph: lock file excludes contains edges (T065)", () => {
