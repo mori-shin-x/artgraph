@@ -30,7 +30,7 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@types/node@22.19.21)(vite@8.0.16(@types/node@22.19.21)(jiti@2.7.0)(yaml@2.9.0))
 
-  packages/spectrace:
+  packages/artgraph:
     dependencies:
       commander:
         specifier: ^13.1.0
