@@ -1,11 +1,19 @@
 import { resolve, relative, basename, dirname } from "node:path";
+import { existsSync } from "node:fs";
 import { globSync } from "glob";
-import { parseMarkdown, type ParseWarning } from "../parsers/markdown.js";
+import { parseMarkdown, type ParseWarning, type InlineLinkRef } from "../parsers/markdown.js";
 import { createTSParser } from "../parsers/typescript.js";
 import type { ArtifactGraph, GraphNode, GraphEdge, ArtgraphConfig } from "../types.js";
 
 export interface BuildWarning {
-  type: "duplicate-id" | "ambiguous-id" | "orphan-doc" | "invalid-relation" | "reserved-prefix";
+  type:
+    | "duplicate-id"
+    | "ambiguous-id"
+    | "orphan-doc"
+    | "invalid-relation"
+    | "reserved-prefix"
+    | "unresolved-link"
+    | "out-of-scope-link";
   id: string;
   files: string[];
   message?: string;
@@ -56,6 +64,9 @@ export function buildGraph(
 
   const autoNodes = config.docGraph?.autoNodes ?? true;
   const autoContains = config.docGraph?.autoContains ?? true;
+  const inlineLinksEnabled = config.docGraph?.inlineLinks ?? true;
+  const warnUnresolved = config.docGraph?.linkWarnings?.unresolved ?? true;
+  const warnOutOfScope = config.docGraph?.linkWarnings?.outOfScope ?? false;
   const RESERVED_PREFIXES = ["doc:", "file:", "test:", "symbol:"];
   const parseWarnings: ParseWarning[] = [];
 
@@ -63,6 +74,7 @@ export function buildGraph(
   const collected: CollectedReq[] = [];
   const nonReqNodes: GraphNode[] = [];
   const nonReqEdges: GraphEdge[] = [];
+  const allInlineLinks: InlineLinkRef[] = [];
 
   for (const specDirName of config.specDirs) {
     const specFiles = globSync(resolve(rootDir, specDirName, "**/*.md"));
@@ -76,8 +88,11 @@ export function buildGraph(
       : relFile;
     const expectedAutoDocId = `doc:${specDirRelPath}`;
 
-    // Collect parse warnings
+    // Collect parse warnings and inline-link references
     parseWarnings.push(...result.warnings);
+    if (inlineLinksEnabled) {
+      allInlineLinks.push(...result.inlineLinks);
+    }
 
     for (const node of result.nodes) {
       if (node.kind === "req") {
@@ -283,6 +298,93 @@ export function buildGraph(
           id: edge.target,
           files: [sourceNode.filePath],
           message: `referenced from ${sourceNode.filePath} but not found in graph`,
+        });
+      }
+    }
+  }
+
+  // Issue #11: Convert collected inline markdown links into depends_on edges.
+  // This must run AFTER all doc nodes are registered (so we can resolve
+  // targets) and AFTER frontmatter edges land (so we can suppress inline
+  // edges that conflict with an explicit relation), but BEFORE dedup so the
+  // existing (source|target|kind) dedup naturally collapses redundant inline
+  // links to the same target.
+  if (inlineLinksEnabled && allInlineLinks.length > 0) {
+    const docNodesByFilePath = new Map<string, GraphNode>();
+    for (const node of nodes.values()) {
+      if (node.kind === "doc") {
+        // node.filePath is `relative(rootDir, file)`, which yields
+        // back-slashes on Windows; targetRelPath from the parser is
+        // already forward-slash-normalized. Normalize the key so lookups
+        // succeed on both platforms.
+        docNodesByFilePath.set(node.filePath.split(/[\\/]/).join("/"), node);
+      }
+    }
+
+    // Pairs (source, target) already covered by a stronger relationship —
+    // either an author's frontmatter `derives_from` / `depends_on` or a
+    // convention-inferred `derives_from` (kiro / spec-kit presets). Inline
+    // links pointing at the same pair are dropped regardless of kind: a
+    // frontmatter `derives_from` and a convention `derives_from` both express
+    // a clearer dependency than an inferred `depends_on` from prose. Note
+    // this means inline links between e.g. `design.md` and `requirements.md`
+    // in the same dir are silently suppressed in favor of the convention
+    // edge — by design (see README "Doc graph"). Tests asserting inline-link
+    // edges must use file stems outside the convention preset.
+    const explicitPairs = new Set<string>();
+    for (const edge of edges) {
+      if (edge.kind !== "derives_from" && edge.kind !== "depends_on") continue;
+      const sourceNode = nodes.get(edge.source);
+      if (sourceNode?.kind === "doc") {
+        explicitPairs.add(`${edge.source}|${edge.target}`);
+      }
+    }
+
+    // Suppress duplicate warnings when an author writes the same broken /
+    // out-of-scope target multiple times in one file. Edges get deduped at the
+    // end of buildGraph; warnings need their own bookkeeping because the same
+    // (source, target) never reaches the edges array.
+    const warnedLinks = new Set<string>();
+
+    for (const link of allInlineLinks) {
+      const sourceNode = nodes.get(link.sourceDocId);
+      if (!sourceNode) continue; // source doc was filtered out (autoNodes=false)
+
+      const targetNode = docNodesByFilePath.get(link.targetRelPath);
+      if (targetNode) {
+        if (explicitPairs.has(`${link.sourceDocId}|${targetNode.id}`)) continue;
+        edges.push({
+          source: link.sourceDocId,
+          target: targetNode.id,
+          kind: "depends_on",
+        });
+        continue;
+      }
+
+      // No matching doc node — decide between unresolved (file missing) and
+      // out-of-scope (file present but not under specDirs).
+      const targetExists = existsSync(resolve(rootDir, link.targetRelPath));
+      const warnType = targetExists ? "out-of-scope-link" : "unresolved-link";
+      if (warnType === "out-of-scope-link" && !warnOutOfScope) continue;
+      if (warnType === "unresolved-link" && !warnUnresolved) continue;
+
+      const dedupKey = `${warnType}|${sourceNode.filePath}|${link.targetRelPath}`;
+      if (warnedLinks.has(dedupKey)) continue;
+      warnedLinks.add(dedupKey);
+
+      if (warnType === "out-of-scope-link") {
+        warnings.push({
+          type: "out-of-scope-link",
+          id: link.targetRelPath,
+          files: [sourceNode.filePath],
+          message: `inline link "${link.rawHref}" targets ${link.targetRelPath} which is outside specDirs`,
+        });
+      } else {
+        warnings.push({
+          type: "unresolved-link",
+          id: link.targetRelPath,
+          files: [sourceNode.filePath],
+          message: `inline link "${link.rawHref}" → ${link.targetRelPath} not found`,
         });
       }
     }

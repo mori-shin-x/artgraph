@@ -124,6 +124,13 @@ export interface DocGraphConfig {
   // (kiro: requirements/design/tasks, spec-kit: spec/plan/tasks/research).
   // Defaults to true.
   autoConventions?: boolean;
+  // Auto-extract doc→doc `depends_on` edges from inline markdown links.
+  // Defaults to true. `linkWarnings` controls per-link warning emission.
+  inlineLinks?: boolean;
+  linkWarnings?: {
+    unresolved?: boolean;
+    outOfScope?: boolean;
+  };
 }
 
 export interface ArtgraphConfig {

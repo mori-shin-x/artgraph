@@ -315,6 +315,169 @@ artgraph:
     });
   });
 
+  describe("issue #11: inline markdown links", () => {
+    it("extracts a plain inline link as an inlineLinks ref", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      const targets = result.inlineLinks.map((l) => l.targetRelPath);
+      expect(targets).toContain("specs/inline-links/target.md");
+    });
+
+    it("strips fragment and query before resolving the target", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      // 5 links in source.md hit target.md after normalization:
+      //   plain, #section, ?v=1, ?v=1#x, percent-encoded ./target%2Emd
+      const toTarget = result.inlineLinks.filter(
+        (l) => l.targetRelPath === "specs/inline-links/target.md",
+      );
+      expect(toTarget.length).toBe(5);
+    });
+
+    it("ignores images, external URLs, mailto, non-md, empty href and pure fragments", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      // None of the inline links should target external/non-md/etc.
+      for (const link of result.inlineLinks) {
+        expect(link.targetRelPath.endsWith(".md")).toBe(true);
+        expect(link.targetRelPath.startsWith("http")).toBe(false);
+      }
+      // The image and external/mailto/.ts entries should not appear
+      const raws = result.inlineLinks.map((l) => l.rawHref);
+      expect(raws).not.toContain("https://example.com/design.md");
+      expect(raws).not.toContain("mailto:foo@example.com");
+      expect(raws).not.toContain("./source.ts");
+      expect(raws).not.toContain("#section");
+      expect(raws).not.toContain("");
+    });
+
+    it("decodes percent-encoded paths", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      const encoded = result.inlineLinks.find((l) => l.rawHref === "./target%2Emd");
+      expect(encoded).toBeDefined();
+      expect(encoded!.targetRelPath).toBe("specs/inline-links/target.md");
+    });
+
+    it("resolves reference-style links (full, collapsed, shortcut)", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/ref-source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      const toTarget = result.inlineLinks.filter(
+        (l) => l.targetRelPath === "specs/inline-links/target.md",
+      );
+      // Three resolvable references: [target full][ref-target], [ref-target][], [ref-target]
+      expect(toTarget.length).toBe(3);
+    });
+
+    it("does not resolve reference-style links with unknown definition", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/ref-source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      // Only the 3 resolvable references to target.md (full, collapsed,
+      // shortcut) survive — the `[missing][nope]` line cites an undefined
+      // label and must produce no entry. Pinning the total count catches
+      // both directions: undefined labels leaking through, or resolvable
+      // references being dropped by mistake.
+      expect(result.inlineLinks).toHaveLength(3);
+      for (const link of result.inlineLinks) {
+        expect(link.targetRelPath).toBe("specs/inline-links/target.md");
+      }
+    });
+
+    it("ignores links inside fenced and indented code blocks and inline code", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/code-fence.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      // Only the trailing [real](./target.md) link should be picked up
+      expect(result.inlineLinks).toHaveLength(1);
+      expect(result.inlineLinks[0].targetRelPath).toBe("specs/inline-links/target.md");
+    });
+
+    it("populates sourceDocId from the source file's doc node id", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      for (const link of result.inlineLinks) {
+        expect(link.sourceDocId).toBe("doc:inline-links/source.md");
+      }
+    });
+
+    it("does not mistake a Windows drive letter `C:/...` for a URL scheme", () => {
+      // Regression: URL_SCHEME_RE used to match single-letter prefixes, so
+      // `[w](C:/foo.md)` would be silently dropped as if it were `mailto:` etc.
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-win-drive");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const src = resolve(tmpSpecs, "win.md");
+      writeFileSync(src, `# Windows drive letter\n\n[w](C:/proj/specs/target.md)\n`);
+
+      try {
+        const result = parseMarkdown(src, { rootDir: tmpRoot });
+        // The link is captured (not rejected as a URL). The target path won't
+        // resolve to a real doc node on Linux/macOS, but that's the builder's
+        // problem — what we're asserting here is the scheme-check no longer
+        // trips on `C:`.
+        expect(result.inlineLinks).toHaveLength(1);
+        expect(result.inlineLinks[0].rawHref).toBe("C:/proj/specs/target.md");
+      } finally {
+        unlinkSync(src);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+
+    it("does not parse links with rootDir-escaping `..` (returns no inlineLinks)", () => {
+      // M7: parser drops links that resolve outside rootDir silently.
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-rootdir-escape");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const src = resolve(tmpSpecs, "escape.md");
+      writeFileSync(src, `# Escape\n\nUp two dirs: [esc](../../outside.md).\n`);
+
+      try {
+        const result = parseMarkdown(src, { rootDir: tmpRoot });
+        expect(result.inlineLinks).toEqual([]);
+      } finally {
+        unlinkSync(src);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+
+    it("survives malformed percent-encoding without throwing", () => {
+      // M7: decodeURIComponent throws on `%G9` etc.; parser must catch and skip.
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-bad-percent");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const src = resolve(tmpSpecs, "bad.md");
+      writeFileSync(src, `# Bad percent\n\nMalformed: [bad](./target%G9.md).\n`);
+
+      try {
+        const result = parseMarkdown(src, { rootDir: tmpRoot });
+        // The malformed link is silently dropped from inlineLinks; parse did
+        // not throw. No other links exist in this file.
+        expect(result.inlineLinks).toEqual([]);
+      } finally {
+        unlinkSync(src);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+  });
+
   describe("mixed format coverage", () => {
     it("should recognize both list-item and heading formats across fixtures", () => {
       const speckitResult = parseMarkdown(resolve(FIXTURE_DIR, "specs/speckit-style.md"));
