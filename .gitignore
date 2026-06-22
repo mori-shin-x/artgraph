@@ -6,9 +6,9 @@ dist/
 .claude/*
 !.claude/skills/
 .claude/skills/*
-!.claude/skills/spectrace-*.md
+!.claude/skills/artgraph-*.md
 .specify/
 specs/
 CLAUDE.md
-spectrace-design.md
+artgraph-design.md
 docs/spec-kit-integration.md

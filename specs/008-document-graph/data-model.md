@@ -16,11 +16,11 @@ export type EdgeKind = "depends_on" | "derives_from" | "implements" | "verifies"
 
 - `contains` 追加: doc ノードとその中で定義された req ノードの間の所属関係を表す
 
-### SpectraceConfig（既存、拡張）
+### ArtgraphConfig（既存、拡張）
 
 現状（`src/types.ts` L64-77）:
 ```ts
-export interface SpectraceConfig {
+export interface ArtgraphConfig {
   include: string[];
   specDirs: string[];
   testPatterns: string[];
@@ -31,7 +31,7 @@ export interface SpectraceConfig {
 
 変更:
 ```ts
-export interface SpectraceConfig {
+export interface ArtgraphConfig {
   include: string[];
   specDirs: string[];
   testPatterns: string[];
@@ -167,7 +167,7 @@ export interface ImpactSummary {
 
 `src/parsers/markdown.ts` L40-42 の型定義:
 ```ts
-const spectraceMeta = frontmatter?.spectrace as
+const artgraphMeta = frontmatter?.artgraph as
   | { node_id?: string; depends_on?: Array<{ id: string; relation: string }> }
   | undefined;
 ```
@@ -175,7 +175,7 @@ const spectraceMeta = frontmatter?.spectrace as
 ### 新スキーマ
 
 ```ts
-interface SpectraceFrontmatter {
+interface ArtgraphFrontmatter {
   node_id?: string;           // doc ノードのカスタム ID
   derives_from?: string[];    // 派生元ドキュメントの ID リスト
   depends_on?: string[];      // 依存先ドキュメントの ID リスト
@@ -185,7 +185,7 @@ interface SpectraceFrontmatter {
 入力例:
 ```yaml
 ---
-spectrace:
+artgraph:
   node_id: "design-doc"
   derives_from:
     - doc:requirements.md
@@ -195,13 +195,13 @@ spectrace:
 ```
 
 バリデーション:
-- `spectrace` ブロック内の `node_id` / `derives_from` / `depends_on` 以外のキーは `invalid-relation` 警告
+- `artgraph` ブロック内の `node_id` / `derives_from` / `depends_on` 以外のキーは `invalid-relation` 警告
 - `derives_from` / `depends_on` の値は文字列の配列。文字列でない場合はパースエラーとしてスキップ
 
 ## 変更の影響範囲
 
 影響あり:
-- `src/types.ts`: EdgeKind に `contains` 追加、SpectraceConfig に `docGraph` 追加、ImpactResult に `summary` 追加
+- `src/types.ts`: EdgeKind に `contains` 追加、ArtgraphConfig に `docGraph` 追加、ImpactResult に `summary` 追加
 - `src/parsers/markdown.ts`: doc ノード常時生成、frontmatter フラット化対応、ParseWarning 返却
 - `src/graph/builder.ts`: contains エッジ自動生成、エッジデデュープ、新 BuildWarning タイプ
 - `src/graph/traverse.ts`: impact に depth 制限、resolveStartIds に doc: プレフィクス対応

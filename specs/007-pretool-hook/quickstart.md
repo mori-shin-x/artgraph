@@ -4,7 +4,7 @@
 
 - Node.js 20+
 - pnpm
-- spectrace がビルド可能な状態（`pnpm build` が通る）
+- artgraph がビルド可能な状態（`pnpm build` が通る）
 - Claude Code がインストール済み
 
 ## Setup
@@ -30,7 +30,7 @@ echo '{"tool_name":"Edit","tool_input":{"file_path":"src/auth.ts","old_string":"
 {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "additionalContext": "spectrace impact: FR-001 (req), doc:api-design (doc)"
+    "additionalContext": "artgraph impact: FR-001 (req), doc:api-design (doc)"
   }
 }
 ```
@@ -40,7 +40,7 @@ echo '{"tool_name":"Edit","tool_input":{"file_path":"src/auth.ts","old_string":"
 {
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "additionalContext": "spectrace impact: (none)"
+    "additionalContext": "artgraph impact: (none)"
   }
 }
 ```
@@ -58,7 +58,7 @@ echo '{"tool_name":"Write","tool_input":{"file_path":"src/new-file.ts","content"
 ```
 
 確認ポイント:
-- グラフ上に存在しないファイルの場合、`spectrace impact: (none)` が返ること
+- グラフ上に存在しないファイルの場合、`artgraph impact: (none)` が返ること
 - exit code が 0 であること
 
 ## 検証シナリオ 3: MultiEdit ツールでの動作
@@ -81,13 +81,13 @@ echo '{"tool_name":"Edit","tool_input":{"file_path":"/home/user/project/src/auth
 確認ポイント:
 - 絶対パスがプロジェクトルートからの相対パスに変換され、impact が正常に実行されること
 
-## 検証シナリオ 5: .spectrace.json が存在しない環境
+## 検証シナリオ 5: .artgraph.json が存在しない環境
 
 ```bash
-# .spectrace.json がないディレクトリで実行
+# .artgraph.json がないディレクトリで実行
 cd /tmp
 echo '{"tool_name":"Edit","tool_input":{"file_path":"src/auth.ts","old_string":"x","new_string":"y"}}' \
-  | /path/to/spectrace hook-pretool
+  | /path/to/artgraph hook-pretool
 ```
 
 確認ポイント:
@@ -108,7 +108,7 @@ echo '{"tool_name":"Edit","tool_input":{"file_path":"src/auth.ts","old_string":"
         "hooks": [
           {
             "type": "command",
-            "command": "npx spectrace hook-pretool"
+            "command": "npx artgraph hook-pretool"
           }
         ]
       }
