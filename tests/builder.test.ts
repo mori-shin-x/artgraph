@@ -7,6 +7,7 @@ import type { SpectraceConfig } from "../src/types.js";
 
 const NS_FIXTURE_DIR = resolve(import.meta.dirname, "fixtures/ns-collision");
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
+const CONV_FIXTURE_DIR = resolve(import.meta.dirname, "fixtures/conventions");
 
 const nsConfig: SpectraceConfig = {
   include: ["src/**/*.ts"],
@@ -326,5 +327,103 @@ spectrace:
     } finally {
       rmSync(tmpRoot, { recursive: true });
     }
+  });
+});
+
+describe("buildGraph: convention inference (C-3)", () => {
+  const convConfig: SpectraceConfig = {
+    include: [],
+    specDirs: ["specs"],
+    testPatterns: [],
+    lockFile: ".trace.lock",
+  };
+
+  const derivesFrom = (source: string, target: string) => (graph: {
+    edges: { source: string; target: string; kind: string }[];
+  }) =>
+    graph.edges.some(
+      (e) => e.kind === "derives_from" && e.source === source && e.target === target,
+    );
+
+  it("infers kiro chain (design→requirements, tasks→design)", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    expect(
+      derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(graph),
+    ).toBe(true);
+    expect(
+      derivesFrom("doc:kiro-feature/tasks.md", "doc:kiro-feature/design.md")(graph),
+    ).toBe(true);
+  });
+
+  it("infers spec-kit chain (plan→spec, tasks→plan, research→spec)", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    expect(
+      derivesFrom("doc:speckit-feature/plan.md", "doc:speckit-feature/spec.md")(graph),
+    ).toBe(true);
+    expect(
+      derivesFrom("doc:speckit-feature/tasks.md", "doc:speckit-feature/plan.md")(graph),
+    ).toBe(true);
+    expect(
+      derivesFrom("doc:speckit-feature/research.md", "doc:speckit-feature/spec.md")(graph),
+    ).toBe(true);
+  });
+
+  it("matches file names case-insensitively", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    expect(
+      derivesFrom("doc:case-variant/DESIGN.md", "doc:case-variant/Requirements.md")(graph),
+    ).toBe(true);
+  });
+
+  it("emits no edge (and no orphan-doc) when only one endpoint exists", () => {
+    const { graph, warnings } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    const partialEdges = graph.edges.filter(
+      (e) => e.kind === "derives_from" && e.source.startsWith("doc:partial/"),
+    );
+    expect(partialEdges).toHaveLength(0);
+    expect(warnings.filter((w) => w.type === "orphan-doc")).toHaveLength(0);
+  });
+
+  it("deduplicates against frontmatter-declared edges", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    // Both convention inference and frontmatter declare wf-design → wf-requirements.
+    const matching = graph.edges.filter(
+      (e) =>
+        e.kind === "derives_from" &&
+        e.source === "wf-design" &&
+        e.target === "wf-requirements",
+    );
+    expect(matching).toHaveLength(1);
+  });
+
+  it("does not link convention files across different directories", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    // other-dir has only requirements.md; it must not connect to any design elsewhere.
+    const crossDir = graph.edges.filter(
+      (e) =>
+        e.kind === "derives_from" &&
+        e.target === "doc:other-dir/requirements.md",
+    );
+    expect(crossDir).toHaveLength(0);
+  });
+
+  it("generates no convention edges when autoConventions is false", () => {
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, {
+      ...convConfig,
+      docGraph: { autoConventions: false },
+    });
+
+    expect(
+      derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(graph),
+    ).toBe(false);
+    expect(
+      derivesFrom("doc:speckit-feature/plan.md", "doc:speckit-feature/spec.md")(graph),
+    ).toBe(false);
   });
 });
