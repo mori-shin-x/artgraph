@@ -7,7 +7,8 @@
     "artgraph": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "templates"
   ],
   "scripts": {
     "build": "tsc",
@@ -16,7 +17,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "knip": "knip",
-    "prepublishOnly": "tsc"
+    "prepublishOnly": "rm -rf dist && tsc"
   },
   "keywords": [
     "traceability",
