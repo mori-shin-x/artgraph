@@ -31,6 +31,7 @@ npx spectrace init
   spectrace-plan.md
   spectrace-verify.md
   spectrace-coverage.md
+  spectrace-rename.md
 ```
 
 これらのファイルは spectrace パッケージに含まれています。
@@ -83,6 +84,21 @@ spectrace check --diff --format text
 使用する CLI コマンド:
 ```bash
 spectrace coverage --format json
+```
+
+### spectrace-rename
+
+トリガー: 仕様 ID のリネーム・分割・統合の依頼時
+
+`spectrace rename` を使い、spec のリスト項目／見出し、`@impl` タグ、テストの `[ID]` / `req:` タグ、
+frontmatter の `depends_on` / `derives_from`、`.trace.lock` のキーを横断的に書き換えます。
+破壊的操作のため、必ず `--dry-run` で影響範囲を確認してから本適用します。
+
+使用する CLI コマンド:
+```bash
+spectrace rename --from REQ-001 --to REQ-100 --dry-run     # リネーム
+spectrace rename --split REQ-001 --into REQ-101 REQ-102    # 分割
+spectrace rename --merge REQ-001 REQ-002 --into REQ-100    # 統合
 ```
 
 ## Skills と Stop Hook の関係

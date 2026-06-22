@@ -496,7 +496,19 @@ program
   .addOption(new Option("--format <format>", "Output format").choices(["json", "text"]).default("text"))
   .action((opts) => {
     const rootDir = process.cwd();
-    const baseOpts = { dryRun: !!opts.dryRun, format: opts.format, rootDir };
+    const format: "json" | "text" = opts.format;
+    const baseOpts = { dryRun: !!opts.dryRun, format, rootDir };
+
+    const fail = (msg: string): never => {
+      // Honour --format json even on the error path so JSON consumers never
+      // have to parse a plain-text line (F7).
+      if (format === "json") {
+        console.error(JSON.stringify({ error: msg }));
+      } else {
+        console.error(`Error: ${msg}`);
+      }
+      process.exit(1);
+    };
 
     try {
       let result: RenameResult;
@@ -510,24 +522,22 @@ program
       } else if (opts.merge && opts.into) {
         // merge mode
         if (opts.into.length !== 1) {
-          console.error("Error: --merge requires exactly one --into target ID.");
-          process.exit(1);
+          fail("--merge requires exactly one --into target ID.");
         }
         result = executeMerge({ ...baseOpts, mergeIds: opts.merge, intoId: opts.into[0] });
       } else {
-        console.error("Error: Specify --from/--to, --split/--into, or --merge/--into.");
-        process.exit(1);
+        fail("Specify --from/--to, --split/--into, or --merge/--into.");
+        return;
       }
 
-      if (opts.format === "json") {
+      if (format === "json") {
         printRenameJson(result);
       } else {
         printRenameText(result);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error(`Error: ${msg}`);
-      process.exit(1);
+      fail(msg);
     }
   });
 
@@ -538,17 +548,11 @@ function printRenameText(result: RenameResult) {
   }
 
   if (result.operation === "rename") {
-    const from = result.changes[0]?.before?.trim() ?? "";
-    const to = result.changes[0]?.after?.trim() ?? "";
-    console.log(`Renamed ${from} → ${to}`);
+    console.log(`Renamed ${result.from} → ${result.to}`);
   } else if (result.operation === "split") {
-    const oldId = result.changes[0]?.before?.trim() ?? "";
-    const newIds = [...new Set(result.changes.map((c) => c.after.trim()))];
-    console.log(`Split ${oldId} → ${newIds.join(", ")}`);
+    console.log(`Split ${result.from} → ${(result.intoIds ?? []).join(", ")}`);
   } else if (result.operation === "merge") {
-    const oldIds = [...new Set(result.changes.map((c) => c.before.trim()))];
-    const newId = result.changes[0]?.after?.trim() ?? "";
-    console.log(`Merged ${oldIds.join(", ")} → ${newId}`);
+    console.log(`Merged ${(result.sourceIds ?? []).join(", ")} → ${result.to}`);
   }
 
   for (const c of result.changes) {

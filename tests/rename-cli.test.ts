@@ -16,19 +16,26 @@ const RENAME_FIXTURE = resolve(import.meta.dirname, "fixtures/rename");
 /** Temp dirs created during tests — cleaned up in afterEach. */
 const tempDirs: string[] = [];
 
+function gitCommit(cwd: string, message: string): void {
+  execFileSync("git", ["add", "-A"], { cwd, stdio: "pipe" });
+  execFileSync(
+    "git",
+    ["-c", "user.name=test", "-c", "user.email=test@test.com", "commit", "-m", message],
+    { cwd, stdio: "pipe" },
+  );
+}
+
 /**
- * Copy the rename fixture into a fresh temp directory,
- * seed a .spectrace.json, generate .trace.lock via reconcile,
- * and initialise a git repo so `git ls-files` works.
+ * Copy the rename fixture into a fresh temp directory, seed a .spectrace.json,
+ * generate .trace.lock via reconcile, and initialise a git repo so
+ * `git ls-files` works.
  */
 function prepareTempDir(): string {
   const tmp = mkdtempSync(resolve(tmpdir(), "spectrace-rename-cli-"));
   tempDirs.push(tmp);
 
-  // Copy fixture files
   cpSync(RENAME_FIXTURE, tmp, { recursive: true });
 
-  // Create .spectrace.json
   writeFileSync(
     resolve(tmp, ".spectrace.json"),
     JSON.stringify({
@@ -39,29 +46,12 @@ function prepareTempDir(): string {
     }),
   );
 
-  // Initialise git repo so git ls-files works
   execFileSync("git", ["init"], { cwd: tmp, stdio: "pipe" });
-  execFileSync("git", ["add", "."], { cwd: tmp, stdio: "pipe" });
-  execFileSync(
-    "git",
-    ["-c", "user.name=test", "-c", "user.email=test@test.com", "commit", "-m", "init"],
-    { cwd: tmp, stdio: "pipe" },
-  );
+  gitCommit(tmp, "init");
 
-  // Generate .trace.lock via reconcile
-  execFileSync("node", [CLI, "reconcile"], {
-    cwd: tmp,
-    encoding: "utf-8",
-    timeout: 30000,
-  });
-
-  // Commit the lock file so it is tracked
-  execFileSync("git", ["add", ".trace.lock"], { cwd: tmp, stdio: "pipe" });
-  execFileSync(
-    "git",
-    ["-c", "user.name=test", "-c", "user.email=test@test.com", "commit", "-m", "add lock"],
-    { cwd: tmp, stdio: "pipe" },
-  );
+  // Generate .trace.lock via reconcile, then commit it so it is tracked.
+  execFileSync("node", [CLI, "reconcile"], { cwd: tmp, encoding: "utf-8", timeout: 30000 });
+  gitCommit(tmp, "add lock");
 
   return tmp;
 }
@@ -86,6 +76,23 @@ function runCli(
   }
 }
 
+/** Run `spectrace check --format json` and return the parsed result. */
+function runCheck(cwd: string): {
+  drifted: unknown[];
+  orphans: unknown[];
+  uncovered: unknown[];
+  pass: boolean;
+} {
+  const { stdout } = runCli(["check", "--format", "json"], cwd);
+  return JSON.parse(stdout);
+}
+
+function snapshot(tmp: string, files: string[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of files) out[f] = readFileSync(resolve(tmp, f), "utf-8");
+  return out;
+}
+
 afterEach(() => {
   for (const dir of tempDirs) {
     rmSync(dir, { recursive: true, force: true });
@@ -103,38 +110,45 @@ describe("CLI: rename --from/--to", () => {
     const { exitCode } = runCli(["rename", "--from", "REQ-001", "--to", "REQ-100"], tmp);
     expect(exitCode).toBe(0);
 
-    // specs/feature.md: list item rewritten
     const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
     expect(spec).toContain("REQ-100: ユーザー認証");
     expect(spec).not.toMatch(/^- REQ-001:/m);
 
-    // src/feature.ts: @impl tags rewritten
     const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
     expect(src).toContain("@impl REQ-100");
     expect(src).not.toContain("@impl REQ-001");
 
-    // tests/feature.test.ts: test tags rewritten
     const test = readFileSync(resolve(tmp, "tests/feature.test.ts"), "utf-8");
     expect(test).toContain("[REQ-100]");
     expect(test).not.toContain("[REQ-001]");
 
-    // .trace.lock: key renamed, dependsOn updated
     const lock = JSON.parse(readFileSync(resolve(tmp, ".trace.lock"), "utf-8"));
     expect(lock["REQ-100"]).toBeDefined();
     expect(lock["REQ-001"]).toBeUndefined();
 
-    // FR-007: normal sentence mention should NOT be changed
+    // Non-target references must be preserved: REQ-002 untouched and a prose
+    // mention of REQ-001 (not a tracked reference) is left as-is.
+    expect(spec).toContain("- REQ-002: ユーザー登録");
     expect(spec).toContain("REQ-001 は認証基盤の中核要件として");
+  });
+
+  it("leaves the lock drift-free so `check` passes afterwards (F1)", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+    const before = runCheck(tmp);
+    expect(before.pass).toBe(true);
+
+    const { exitCode } = runCli(["rename", "--from", "REQ-001", "--to", "REQ-100"], tmp);
+    expect(exitCode).toBe(0);
+
+    const after = runCheck(tmp);
+    expect(after.drifted).toEqual([]);
+    expect(after.pass).toBe(true);
   });
 
   it("should not modify files when --dry-run is used", { timeout: 30000 }, () => {
     const tmp = prepareTempDir();
-
-    // Snapshot originals
-    const origSpec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
-    const origSrc = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
-    const origTest = readFileSync(resolve(tmp, "tests/feature.test.ts"), "utf-8");
-    const origLock = readFileSync(resolve(tmp, ".trace.lock"), "utf-8");
+    const files = ["specs/feature.md", "src/feature.ts", "tests/feature.test.ts", ".trace.lock"];
+    const orig = snapshot(tmp, files);
 
     const { exitCode, stdout } = runCli(
       ["rename", "--from", "REQ-001", "--to", "REQ-100", "--dry-run"],
@@ -143,11 +157,7 @@ describe("CLI: rename --from/--to", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain("dry-run");
 
-    // All files must remain unchanged
-    expect(readFileSync(resolve(tmp, "specs/feature.md"), "utf-8")).toBe(origSpec);
-    expect(readFileSync(resolve(tmp, "src/feature.ts"), "utf-8")).toBe(origSrc);
-    expect(readFileSync(resolve(tmp, "tests/feature.test.ts"), "utf-8")).toBe(origTest);
-    expect(readFileSync(resolve(tmp, ".trace.lock"), "utf-8")).toBe(origLock);
+    expect(snapshot(tmp, files)).toEqual(orig);
   });
 
   it("should output valid JSON with --format json", { timeout: 30000 }, () => {
@@ -161,32 +171,50 @@ describe("CLI: rename --from/--to", () => {
 
     const result = JSON.parse(stdout);
     expect(result.operation).toBe("rename");
-    expect(result.changes).toBeDefined();
+    expect(result.from).toBe("REQ-001");
+    expect(result.to).toBe("REQ-100");
     expect(Array.isArray(result.changes)).toBe(true);
     expect(result.changes.length).toBeGreaterThan(0);
     expect(result.applied).toBe(true);
   });
 
-  it("should fail when source ID does not exist", { timeout: 30000 }, () => {
+  it("emits JSON on the error path with --format json (F7)", { timeout: 30000 }, () => {
     const tmp = prepareTempDir();
-
     const { exitCode, stderr } = runCli(
-      ["rename", "--from", "NONEXISTENT", "--to", "REQ-100"],
+      ["rename", "--from", "NONEXISTENT", "--to", "REQ-100", "--format", "json"],
       tmp,
     );
+    expect(exitCode).not.toBe(0);
+    expect(() => JSON.parse(stderr)).not.toThrow();
+    expect(JSON.parse(stderr).error).toContain("NONEXISTENT");
+  });
+
+  it("should fail when source ID does not exist", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+    const { exitCode, stderr } = runCli(["rename", "--from", "NONEXISTENT", "--to", "REQ-100"], tmp);
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("NONEXISTENT");
   });
 
   it("should fail when target ID already exists", { timeout: 30000 }, () => {
     const tmp = prepareTempDir();
-
-    const { exitCode, stderr } = runCli(
-      ["rename", "--from", "REQ-001", "--to", "REQ-002"],
-      tmp,
-    );
+    const { exitCode, stderr } = runCli(["rename", "--from", "REQ-001", "--to", "REQ-002"], tmp);
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("REQ-002");
+  });
+
+  it("rejects an invalid target ID (F2)", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+    const { exitCode, stderr } = runCli(["rename", "--from", "REQ-001", "--to", "REQ-001a"], tmp);
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toMatch(/invalid target id/i);
+  });
+
+  it("rejects a self-rename (F9)", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+    const { exitCode, stderr } = runCli(["rename", "--from", "REQ-001", "--to", "REQ-001"], tmp);
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toMatch(/identical/i);
   });
 });
 
@@ -194,34 +222,79 @@ describe("CLI: rename --from/--to", () => {
 // split
 // ---------------------------------------------------------------------------
 describe("CLI: rename --split/--into", () => {
-  it("should split REQ-001 into REQ-001a and REQ-001b", { timeout: 30000 }, () => {
+  it("should split REQ-001 into REQ-101 and REQ-102", { timeout: 30000 }, () => {
     const tmp = prepareTempDir();
 
     const { exitCode, stdout, stderr } = runCli(
-      ["rename", "--split", "REQ-001", "--into", "REQ-001a", "REQ-001b"],
+      ["rename", "--split", "REQ-001", "--into", "REQ-101", "REQ-102"],
       tmp,
     );
     expect(exitCode).toBe(0);
 
-    // specs/feature.md: old list item removed, scaffolds appended
     const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
     expect(spec).not.toMatch(/^- REQ-001:/m);
-    expect(spec).toContain("REQ-001a");
-    expect(spec).toContain("REQ-001b");
+    expect(spec).toContain("REQ-101");
+    expect(spec).toContain("REQ-102");
 
-    // src/feature.ts: @impl REQ-001 should NOT be rewritten (manual assignment needed)
+    // @impl REQ-001 should NOT be rewritten (manual assignment needed).
     const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
     expect(src).toContain("@impl REQ-001");
+    expect(stdout + stderr).toMatch(/manual.*assignment|WARNING/i);
 
-    // Warning about manual assignment in stdout or stderr
-    const combined = stdout + stderr;
-    expect(combined).toMatch(/manual.*assignment|WARNING/i);
-
-    // .trace.lock: REQ-001 deleted, new IDs created
     const lock = JSON.parse(readFileSync(resolve(tmp, ".trace.lock"), "utf-8"));
     expect(lock["REQ-001"]).toBeUndefined();
-    expect(lock["REQ-001a"]).toBeDefined();
-    expect(lock["REQ-001b"]).toBeDefined();
+    expect(lock["REQ-101"]).toBeDefined();
+    expect(lock["REQ-102"]).toBeDefined();
+  });
+
+  it("leaves no drift after split (new IDs are uncovered, not drifted)", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+    const { exitCode } = runCli(
+      ["rename", "--split", "REQ-001", "--into", "REQ-101", "REQ-102"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+
+    const after = runCheck(tmp);
+    // contentHash drift must be gone …
+    expect(after.drifted).toEqual([]);
+    // … but the freshly-scaffolded IDs are legitimately uncovered until @impl
+    // tags are assigned manually.
+    expect(after.uncovered).toContain("REQ-101");
+    expect(after.uncovered).toContain("REQ-102");
+  });
+
+  it("does not modify files with --dry-run", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+    const files = ["specs/feature.md", "src/feature.ts", "tests/feature.test.ts", ".trace.lock"];
+    const orig = snapshot(tmp, files);
+
+    const { exitCode } = runCli(
+      ["rename", "--split", "REQ-001", "--into", "REQ-101", "REQ-102", "--dry-run"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    expect(snapshot(tmp, files)).toEqual(orig);
+  });
+
+  it("rejects duplicate --into targets (M2)", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+    const { exitCode, stderr } = runCli(
+      ["rename", "--split", "REQ-001", "--into", "REQ-101", "REQ-101"],
+      tmp,
+    );
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toMatch(/duplicate/i);
+  });
+
+  it("rejects an invalid split target (F2)", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+    const { exitCode, stderr } = runCli(
+      ["rename", "--split", "REQ-001", "--into", "REQ-001a", "REQ-001b"],
+      tmp,
+    );
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toMatch(/invalid target id/i);
   });
 });
 
@@ -229,31 +302,97 @@ describe("CLI: rename --split/--into", () => {
 // merge
 // ---------------------------------------------------------------------------
 describe("CLI: rename --merge/--into", () => {
-  it("should merge REQ-001 and REQ-002 into REQ-COMBINED", { timeout: 30000 }, () => {
+  it("should merge REQ-001 and REQ-002 into REQ-100 without duplicating it (C1)", { timeout: 30000 }, () => {
     const tmp = prepareTempDir();
 
     const { exitCode } = runCli(
-      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-COMBINED"],
+      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100"],
       tmp,
     );
     expect(exitCode).toBe(0);
 
-    // All references replaced with REQ-COMBINED
+    const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
     const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
     const test = readFileSync(resolve(tmp, "tests/feature.test.ts"), "utf-8");
 
-    // Source files should have REQ-COMBINED
-    expect(src).toContain("@impl REQ-COMBINED");
-    expect(test).toContain("[REQ-COMBINED]");
-
-    // Old IDs should no longer appear in @impl or test tags
+    expect(src).toContain("@impl REQ-100");
+    expect(test).toContain("[REQ-100]");
     expect(src).not.toContain("@impl REQ-001");
     expect(src).not.toContain("@impl REQ-002");
 
-    // .trace.lock: old IDs deleted, REQ-COMBINED created
+    // C1: the merge target must appear exactly once as a definition list item.
+    const defLines = spec.split("\n").filter((l) => /^- REQ-100:/.test(l));
+    expect(defLines).toHaveLength(1);
+    // Old definitions are gone.
+    expect(spec).not.toMatch(/^- REQ-001:/m);
+    expect(spec).not.toMatch(/^- REQ-002:/m);
+
     const lock = JSON.parse(readFileSync(resolve(tmp, ".trace.lock"), "utf-8"));
     expect(lock["REQ-001"]).toBeUndefined();
     expect(lock["REQ-002"]).toBeUndefined();
-    expect(lock["REQ-COMBINED"]).toBeDefined();
+    expect(lock["REQ-100"]).toBeDefined();
+  });
+
+  it("leaves the lock drift-free so `check` passes after merge (F1/C2/H5)", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+    const { exitCode } = runCli(
+      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+
+    const after = runCheck(tmp);
+    expect(after.drifted).toEqual([]);
+    expect(after.pass).toBe(true);
+  });
+
+  it("does not modify files with --dry-run", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+    const files = ["specs/feature.md", "src/feature.ts", "tests/feature.test.ts", ".trace.lock"];
+    const orig = snapshot(tmp, files);
+
+    const { exitCode } = runCli(
+      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100", "--dry-run"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    expect(snapshot(tmp, files)).toEqual(orig);
+  });
+
+  it("rejects an invalid merge target (F2)", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+    const { exitCode, stderr } = runCli(
+      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-COMBINED"],
+      tmp,
+    );
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toMatch(/invalid target id/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// non-ASCII paths (H4)
+// ---------------------------------------------------------------------------
+describe("CLI: rename across non-ASCII paths", () => {
+  it("rewrites references inside files with non-ASCII names", { timeout: 30000 }, () => {
+    const tmp = prepareTempDir();
+
+    // Add a second spec file whose name is non-ASCII; git ls-files would
+    // octal-quote it without the -z / core.quotePath=false guard.
+    writeFileSync(
+      resolve(tmp, "specs/要件.md"),
+      ["# 追加仕様", "", "- REQ-003: 追加要件", ""].join("\n"),
+      "utf-8",
+    );
+    gitCommit(tmp, "add non-ascii spec");
+    execFileSync("node", [CLI, "reconcile"], { cwd: tmp, encoding: "utf-8", timeout: 30000 });
+    gitCommit(tmp, "reconcile");
+
+    const { exitCode } = runCli(["rename", "--from", "REQ-003", "--to", "REQ-300"], tmp);
+    expect(exitCode).toBe(0);
+
+    const spec = readFileSync(resolve(tmp, "specs/要件.md"), "utf-8");
+    expect(spec).toContain("- REQ-300: 追加要件");
+    expect(spec).not.toContain("REQ-003");
   });
 });

@@ -5,6 +5,7 @@ import {
   rewriteImplTags,
   rewriteTestTags,
   rewriteFrontmatter,
+  expandFrontmatterDependsOn,
   rewriteFile,
 } from "../src/rename.js";
 import {
@@ -12,6 +13,7 @@ import {
   splitLockKey,
   mergeLockKeys,
 } from "../src/rename-lock.js";
+import { isValidTargetId } from "../src/id.js";
 import type { LockFile } from "../src/types.js";
 
 // ── rewriteSpecListItem ─────────────────────────────────────────────
@@ -56,15 +58,25 @@ describe("rewriteSpecListItem", () => {
     expect(changes).toHaveLength(2);
   });
 
-  it("handles namespace-qualified ID", () => {
+  it("does not touch a prefix-colliding ID (REQ-1 vs REQ-10)", () => {
+    const input = ["- REQ-1: first", "- REQ-10: tenth"].join("\n");
+    const { content, changes } = rewriteSpecListItem(input, "REQ-1", "REQ-2");
+    expect(content).toBe(["- REQ-2: first", "- REQ-10: tenth"].join("\n"));
+    expect(changes).toHaveLength(1);
+  });
+
+  it("ignores list items the parser does not treat as req IDs", () => {
+    // The parser's LIST_ITEM_RE only captures `[A-Z][A-Za-z]*-\\d+`, so a
+    // namespace-qualified token in a list item is not a tracked req and must
+    // not be rewritten (rewriter/parser parity).
     const input = "- 001-auth/FR-001: auth feature";
     const { content, changes } = rewriteSpecListItem(
       input,
       "001-auth/FR-001",
       "001-auth/FR-010",
     );
-    expect(content).toBe("- 001-auth/FR-010: auth feature");
-    expect(changes).toHaveLength(1);
+    expect(content).toBe(input);
+    expect(changes).toHaveLength(0);
   });
 });
 
@@ -142,19 +154,25 @@ describe("rewriteTestTags", () => {
     expect(changes).toHaveLength(1);
   });
 
-  it("handles case-insensitive prefixes", () => {
-    const input1 = 'Req: "REQ-001"';
-    const input2 = 'requirement: "REQ-001"';
-    const input3 = 'spec: "REQ-001"';
+  it("rewrites an unquoted req: annotation", () => {
+    const input = "req: REQ-001";
+    const { content, changes } = rewriteTestTags(input, "REQ-001", "REQ-100");
+    expect(content).toBe("req: REQ-100");
+    expect(changes).toHaveLength(1);
+  });
 
-    expect(rewriteTestTags(input1, "REQ-001", "REQ-100").content).toBe(
-      'Req: "REQ-100"',
+  it("only rewrites the parser-tracked `req:` key (case-sensitive)", () => {
+    // The parser's TEST_ANNOTATION_RE tracks `req:` exclusively and
+    // case-sensitively, so `Req:`/`requirement:`/`spec:` must be left alone to
+    // avoid rewriting text the tooling never treated as a reference (M1).
+    expect(rewriteTestTags('Req: "REQ-001"', "REQ-001", "REQ-100").content).toBe(
+      'Req: "REQ-001"',
     );
-    expect(rewriteTestTags(input2, "REQ-001", "REQ-100").content).toBe(
-      'requirement: "REQ-100"',
-    );
-    expect(rewriteTestTags(input3, "REQ-001", "REQ-100").content).toBe(
-      'spec: "REQ-100"',
+    expect(
+      rewriteTestTags('requirement: "REQ-001"', "REQ-001", "REQ-100").content,
+    ).toBe('requirement: "REQ-001"');
+    expect(rewriteTestTags('spec: "REQ-001"', "REQ-001", "REQ-100").content).toBe(
+      'spec: "REQ-001"',
     );
   });
 });
@@ -214,6 +232,49 @@ describe("rewriteFrontmatter", () => {
     // Only the body line has doc:old, and it should remain untouched
     expect(content).toBe(input);
   });
+
+  it("rewrites a plain-string depends_on item", () => {
+    const input = ["---", "depends_on:", '  - "REQ-001"', "---", "# Body"].join("\n");
+    const { content, changes } = rewriteFrontmatter(input, "REQ-001", "REQ-100");
+    expect(content).toContain('  - "REQ-100"');
+    expect(changes).toHaveLength(1);
+  });
+
+  it("rewrites an inline flow-map depends_on item", () => {
+    const input = [
+      "---",
+      "spectrace:",
+      "  depends_on:",
+      '    - { id: "REQ-002", relation: implements }',
+      "---",
+    ].join("\n");
+    const { content } = rewriteFrontmatter(input, "REQ-002", "REQ-200");
+    expect(content).toContain('{ id: "REQ-200", relation: implements }');
+  });
+});
+
+// ── expandFrontmatterDependsOn (F5) ─────────────────────────────────
+
+describe("expandFrontmatterDependsOn", () => {
+  it("expands a single dependency into one item per new ID", () => {
+    const input = [
+      "---",
+      "depends_on:",
+      '  - "REQ-001"',
+      '  - "REQ-009"',
+      "---",
+    ].join("\n");
+    const { content, changes } = expandFrontmatterDependsOn(input, "REQ-001", [
+      "REQ-101",
+      "REQ-102",
+    ]);
+    expect(content).toContain('  - "REQ-101"');
+    expect(content).toContain('  - "REQ-102"');
+    // The unrelated dependency survives, and the split ID is gone.
+    expect(content).toContain('  - "REQ-009"');
+    expect(content).not.toContain('"REQ-001"');
+    expect(changes).toHaveLength(2);
+  });
 });
 
 // ── rewriteFile ─────────────────────────────────────────────────────
@@ -260,6 +321,21 @@ describe("rewriteFile", () => {
     expect(content).toContain("[REQ-100]");
     expect(changes).toHaveLength(2);
     expect(changes.every((c) => c.filePath === "src/auth.ts")).toBe(true);
+  });
+
+  it("does NOT rewrite IDs inside fenced code blocks (F6)", () => {
+    const input = [
+      "- REQ-001: real requirement",
+      "",
+      "```md",
+      "- REQ-001: just an example in docs",
+      "```",
+    ].join("\n");
+
+    const { content } = rewriteFile("specs/auth.md", input, "REQ-001", "REQ-100");
+    expect(content).toContain("- REQ-100: real requirement");
+    // The fenced example must be preserved verbatim.
+    expect(content).toContain("- REQ-001: just an example in docs");
   });
 
   it("returns unchanged content for unknown extensions", () => {
@@ -391,6 +467,30 @@ describe("splitLockKey", () => {
     // No delete change because oldId didn't exist
     expect(changes).toHaveLength(2); // 2 creates only
   });
+
+  it("expands references to the split ID in other entries (C2)", () => {
+    const lock: LockFile = {
+      "REQ-001": { contentHash: "a", lastReconciled: "t" },
+      "REQ-003": {
+        contentHash: "c",
+        dependsOn: ["REQ-001", "REQ-002"],
+        lastReconciled: "t",
+      },
+    };
+
+    const { lock: result } = splitLockKey(lock, "REQ-001", ["REQ-101", "REQ-102"]);
+    // No dangling reference to the removed REQ-001 — it expands to both new IDs.
+    expect(result["REQ-003"].dependsOn).toEqual(["REQ-101", "REQ-102", "REQ-002"]);
+  });
+
+  it("carries the split source's specFile onto the new entries (H5)", () => {
+    const lock: LockFile = {
+      "REQ-001": { specFile: "specs/a.md", contentHash: "a", lastReconciled: "t" },
+    };
+    const { lock: result } = splitLockKey(lock, "REQ-001", ["REQ-101", "REQ-102"]);
+    expect(result["REQ-101"].specFile).toBe("specs/a.md");
+    expect(result["REQ-102"].specFile).toBe("specs/a.md");
+  });
 });
 
 // ── mergeLockKeys ───────────────────────────────────────────────────
@@ -476,5 +576,57 @@ describe("mergeLockKeys", () => {
     );
 
     expect(result["REQ-MERGED"].contentHash).toBe("first-hash");
+  });
+
+  it("repoints references to merged sources in other entries (C2)", () => {
+    const lock: LockFile = {
+      "REQ-001": { contentHash: "a", lastReconciled: "t" },
+      "REQ-002": { contentHash: "b", lastReconciled: "t" },
+      "REQ-003": {
+        contentHash: "c",
+        dependsOn: ["REQ-001", "REQ-002"],
+        lastReconciled: "t",
+      },
+    };
+
+    const { lock: result } = mergeLockKeys(lock, ["REQ-001", "REQ-002"], "REQ-100");
+    // Both former references collapse onto the merge target, de-duplicated.
+    expect(result["REQ-003"].dependsOn).toEqual(["REQ-100"]);
+  });
+
+  it("preserves specFile and drops self-references (H5)", () => {
+    const lock: LockFile = {
+      "REQ-001": {
+        specFile: "specs/a.md",
+        contentHash: "a",
+        dependsOn: ["REQ-002"],
+        lastReconciled: "t",
+      },
+      "REQ-002": { specFile: "specs/a.md", contentHash: "b", lastReconciled: "t" },
+    };
+
+    const { lock: result } = mergeLockKeys(lock, ["REQ-001", "REQ-002"], "REQ-100");
+    expect(result["REQ-100"].specFile).toBe("specs/a.md");
+    // The merged entry must not depend on its own former parts.
+    expect(result["REQ-100"].dependsOn).toBeUndefined();
+  });
+});
+
+// ── ID validation (F2) ──────────────────────────────────────────────
+
+describe("isValidTargetId", () => {
+  it("accepts canonical requirement IDs and doc: IDs", () => {
+    expect(isValidTargetId("REQ-001")).toBe(true);
+    expect(isValidTargetId("FR-42")).toBe(true);
+    expect(isValidTargetId("auth/AUTH-2")).toBe(true);
+    expect(isValidTargetId("Requirement-3")).toBe(true);
+    expect(isValidTargetId("doc:feature")).toBe(true);
+  });
+
+  it("rejects IDs the parser could not re-discover", () => {
+    expect(isValidTargetId("REQ-COMBINED")).toBe(false);
+    expect(isValidTargetId("REQ-001a")).toBe(false);
+    expect(isValidTargetId("req-1")).toBe(false);
+    expect(isValidTargetId("doc:")).toBe(false);
   });
 });
