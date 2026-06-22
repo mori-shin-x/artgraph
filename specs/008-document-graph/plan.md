@@ -9,13 +9,13 @@ Input: Feature specification from `specs/008-document-graph/spec.md`
 SDD ツールが出力する Markdown ファイル群の依存関係をグラフとして管理し、ドキュメント→要求→実装の一気通貫トレーサビリティを実現する。主な変更は以下の通り:
 
 1. 各 Markdown ファイルを frontmatter の有無に関わらず `doc` ノードとしてグラフに自動登録する（FR-001）
-2. frontmatter の `spectrace` ブロックで doc→doc 依存（derives_from / depends_on）を宣言する（FR-002）
+2. frontmatter の `artgraph` ブロックで doc→doc 依存（derives_from / depends_on）を宣言する（FR-002）
 3. doc ノードとその中の req ノード間に `contains` エッジを自動生成し、ドキュメント階層→要求→実装の一気通貫トレースを可能にする（FR-003）
-4. `spectrace graph` コマンドでドキュメント依存チェーンを可視化する（FR-004）
+4. `artgraph graph` コマンドでドキュメント依存チェーンを可視化する（FR-004）
 5. orphan-doc / invalid-relation / 予約プレフィクス衝突の警告を追加する（FR-005, FR-007）
 6. `impact` 出力に到達ノード数の内訳を追加し、`--depth N` オプションで BFS 探索深さを制限する（FR-009, FR-010, FR-011）
 
-技術アプローチ: 既存の `parseMarkdown` を拡張して doc ノードを常に生成し、frontmatter の `spectrace` ブロックから doc→doc エッジを抽出する。`buildGraph` で contains エッジを自動生成し、`impact` に depth 制限を追加する。新コマンド `spectrace graph` を CLI に追加する。
+技術アプローチ: 既存の `parseMarkdown` を拡張して doc ノードを常に生成し、frontmatter の `artgraph` ブロックから doc→doc エッジを抽出する。`buildGraph` で contains エッジを自動生成し、`impact` に depth 制限を追加する。新コマンド `artgraph graph` を CLI に追加する。
 
 ## Technical Context
 
@@ -44,9 +44,9 @@ GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.
 | Principle | Status | Notes |
 |-----------|--------|-------|
 | I. Deterministic Integrity | Pass | doc ノード生成はファイル走査、contains エッジは AST パース、frontmatter 依存は YAML パースで全て決定的。LLM 不使用 |
-| II. Declarative Links — SDD ツール ID 直接使用 | Pass | doc ノード ID は frontmatter `spectrace.node_id` または `doc:<相対パス>` の自動採番。doc→doc 依存は frontmatter `spectrace.derives_from` / `spectrace.depends_on` で宣言 |
+| II. Declarative Links — SDD ツール ID 直接使用 | Pass | doc ノード ID は frontmatter `artgraph.node_id` または `doc:<相対パス>` の自動採番。doc→doc 依存は frontmatter `artgraph.derives_from` / `artgraph.depends_on` で宣言 |
 | III. JS/TS Native | Pass | remark + gray-matter で Markdown/frontmatter をパース。既存の TS/JS エコシステム内で完結 |
-| IV. CLI-First Interface | Pass | `spectrace graph` を新コマンドとして追加。`--format json|text`、`--kind` オプション対応 |
+| IV. CLI-First Interface | Pass | `artgraph graph` を新コマンドとして追加。`--format json|text`、`--kind` オプション対応 |
 | V. Incremental Adoption | Pass | doc ノードの自動生成と contains エッジはそれぞれ設定で無効化可能。frontmatter 無しでも動作 |
 
 ## Project Structure
@@ -60,7 +60,7 @@ specs/008-document-graph/
 ├── research.md                   # Phase 0 output
 ├── data-model.md                 # Phase 1 output
 ├── contracts/                    # Phase 1 output
-│   ├── graph-command.md          # spectrace graph コマンドスキーマ
+│   ├── graph-command.md          # artgraph graph コマンドスキーマ
 │   ├── frontmatter-schema.md    # frontmatter の新しいスキーマ
 │   └── warning-types.md         # 新しい warning type のスキーマ
 ├── quickstart.md                 # Phase 1 output
@@ -72,7 +72,7 @@ specs/008-document-graph/
 
 ```text
 src/
-├── types.ts             # EdgeKind に "contains" 追加（L2）、SpectraceConfig に docGraph 設定追加（L64-69）、ImpactResult に内訳カウント追加（L38-42）
+├── types.ts             # EdgeKind に "contains" 追加（L2）、ArtgraphConfig に docGraph 設定追加（L64-69）、ImpactResult に内訳カウント追加（L38-42）
 ├── parsers/
 │   └── markdown.ts      # doc ノード常時生成（L19-64 の parseMarkdown を拡張）、frontmatter の derives_from/depends_on フラット化対応、doc ID 自動採番
 ├── graph/

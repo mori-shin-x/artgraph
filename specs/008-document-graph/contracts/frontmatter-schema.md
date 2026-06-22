@@ -2,13 +2,13 @@
 
 ## 概要
 
-Markdown ファイルの YAML frontmatter 内の `spectrace` ブロックでドキュメントの ID と依存関係を宣言する。
+Markdown ファイルの YAML frontmatter 内の `artgraph` ブロックでドキュメントの ID と依存関係を宣言する。
 
 ## スキーマ定義
 
 ```yaml
 ---
-spectrace:
+artgraph:
   node_id: <string>              # オプション。doc ノードのカスタム ID
   derives_from:                  # オプション。派生元ドキュメントの ID リスト
     - <string>
@@ -19,7 +19,7 @@ spectrace:
 
 ## フィールド詳細
 
-### spectrace.node_id
+### artgraph.node_id
 
 - 型: `string`
 - 必須: いいえ
@@ -27,7 +27,7 @@ spectrace:
 - 例: `"design-doc"`, `"api-requirements"`
 - 制約: プロジェクト内で一意であること。重複時は `duplicate-id` 警告
 
-### spectrace.derives_from
+### artgraph.derives_from
 
 - 型: `string[]`
 - 必須: いいえ
@@ -35,7 +35,7 @@ spectrace:
 - 例: `["doc:requirements.md"]`, `["api-requirements"]`
 - エッジの方向: `source = このドキュメントの doc ID`, `target = derives_from の値`
 
-### spectrace.depends_on
+### artgraph.depends_on
 
 - 型: `string[]`
 - 必須: いいえ
@@ -47,14 +47,14 @@ spectrace:
 
 ### 有効なキー
 
-`spectrace` ブロック内で有効なキーは以下の 3 つのみ:
+`artgraph` ブロック内で有効なキーは以下の 3 つのみ:
 - `node_id`
 - `derives_from`
 - `depends_on`
 
 ### invalid-relation 警告
 
-`spectrace` ブロック内に上記 3 キー以外のキーがある場合、`invalid-relation` 警告を出力する。エッジは生成しない。
+`artgraph` ブロック内に上記 3 キー以外のキーがある場合、`invalid-relation` 警告を出力する。エッジは生成しない。
 
 警告メッセージ例:
 ```
@@ -86,7 +86,7 @@ WARNING: orphan-doc "doc:missing.md" referenced from specs/design.md
 
 ```yaml
 ---
-spectrace:
+artgraph:
   node_id: "requirements"
 ---
 # Requirements
@@ -99,7 +99,7 @@ spectrace:
 requirements.md:
 ```yaml
 ---
-spectrace:
+artgraph:
   node_id: "requirements"
 ---
 ```
@@ -107,7 +107,7 @@ spectrace:
 design.md:
 ```yaml
 ---
-spectrace:
+artgraph:
   node_id: "design"
   derives_from:
     - requirements
@@ -117,7 +117,7 @@ spectrace:
 tasks.md:
 ```yaml
 ---
-spectrace:
+artgraph:
   derives_from:
     - design
 ---
@@ -129,7 +129,7 @@ spectrace:
 
 現行の `depends_on: [{ id, relation }]` 形式:
 ```yaml
-spectrace:
+artgraph:
   node_id: "design-doc"
   depends_on:
     - id: "requirements.md"
@@ -138,7 +138,7 @@ spectrace:
 
 新しいフラット形式:
 ```yaml
-spectrace:
+artgraph:
   node_id: "design-doc"
   derives_from:
     - requirements.md
