@@ -101,6 +101,52 @@ describe("loadConfig", () => {
       const config = loadConfig(TMP_DIR);
       expect(config.reqPatterns?.heading).toBe("^(?:US|Story)(\\d+)\\s*:");
     });
+
+    // S3: capture-group counting must rely on the regex engine, not a regex
+    // heuristic that mis-judges named groups / escaped parens / char classes.
+    it("should accept a named capture group", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({ reqPatterns: { listItem: "^(?<id>JIRA-\\d+)[:\\s]" } }),
+      );
+      const config = loadConfig(TMP_DIR);
+      expect(config.reqPatterns?.listItem).toBe("^(?<id>JIRA-\\d+)[:\\s]");
+    });
+
+    it("should reject a pattern whose only parens are escaped or in a char class", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ reqPatterns: { listItem: "^\\(ID[(]\\d+" } }));
+      expect(() => loadConfig(TMP_DIR)).toThrow("must contain at least one capture group");
+    });
+
+    // S1: ReDoS mitigation — nested quantifiers and over-long patterns are rejected.
+    it("should reject nested quantifiers that risk catastrophic backtracking", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ reqPatterns: { listItem: "^(([a-z]+)+)$" } }));
+      expect(() => loadConfig(TMP_DIR)).toThrow("nested quantifiers");
+    });
+
+    it("should reject an over-long pattern", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      const longPattern = "^(" + "a".repeat(300) + "\\d+)";
+      writeFileSync(CONFIG_PATH, JSON.stringify({ reqPatterns: { listItem: longPattern } }));
+      expect(() => loadConfig(TMP_DIR)).toThrow("must not exceed");
+    });
+
+    // codeId uses whole-match semantics, so a capture group is optional.
+    it("should accept reqPatterns.codeId without a capture group", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ reqPatterns: { codeId: "\\d+" } }));
+      const config = loadConfig(TMP_DIR);
+      expect(config.reqPatterns?.codeId).toBe("\\d+");
+    });
+
+    it("should still reject an invalid regex in reqPatterns.codeId", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ reqPatterns: { codeId: "[invalid(" } }));
+      expect(() => loadConfig(TMP_DIR)).toThrow("invalid regular expression");
+    });
   });
 
   describe("lockFile path traversal prevention", () => {

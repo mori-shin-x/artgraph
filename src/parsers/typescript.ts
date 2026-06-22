@@ -4,13 +4,31 @@ import { existsSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import type { GraphNode, GraphEdge } from "../types.js";
 
-const IMPL_RE =
-  /\/\/[^\S\n]*@impl[^\S\n]+((?:(?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)[^\S\n]*)+)/gm;
-const REQ_ID_RE = /(?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)/g;
+// Default requirement-ID *token* used when no custom `reqPatterns.codeId` is set.
+// The token matches the whole ID (e.g. `FR-001`, `auth/AUTH-2`, `Requirement-3`).
+const DEFAULT_ID_TOKEN = "(?:[\\w-]+/)?(?:[A-Z][A-Za-z]*-\\d+|Requirement-\\d+)";
 
-const TEST_REQ_RE = /\[(?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)]/g;
-const TEST_ANNOTATION_RE =
-  /req:\s*["']?((?:[\w-]+\/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+))["']?/g;
+// Regexes that locate requirement IDs in code/test tags. When the project sets a
+// custom `reqPatterns.codeId`, these are rebuilt from that token so that @impl /
+// test-bracket / `req:` annotations track the same IDs the markdown parser emits.
+interface IdMatchers {
+  implRe: RegExp;
+  reqIdRe: RegExp;
+  testReqRe: RegExp;
+  testAnnotationRe: RegExp;
+}
+
+// For codeId, the whole match is the ID, so the constructed matchers below rely
+// on the token having no significance beyond what it matches.
+function buildIdMatchers(codeId?: string): IdMatchers {
+  const token = codeId ?? DEFAULT_ID_TOKEN;
+  return {
+    implRe: new RegExp(`//[^\\S\\n]*@impl[^\\S\\n]+((?:(?:${token})[^\\S\\n]*)+)`, "gm"),
+    reqIdRe: new RegExp(token, "g"),
+    testReqRe: new RegExp(`\\[(?:${token})]`, "g"),
+    testAnnotationRe: new RegExp(`req:\\s*["']?(${token})["']?`, "g"),
+  };
+}
 
 interface ParsedTS {
   nodes: GraphNode[];
@@ -27,6 +45,7 @@ export function createTSParser(
   rootDir: string,
   patterns: string[],
   mode: "file" | "symbol" = "file",
+  codeId?: string,
 ) {
   const tsconfigPath = resolve(rootDir, "tsconfig.json");
   const projectOpts = existsSync(tsconfigPath)
@@ -38,10 +57,16 @@ export function createTSParser(
     project.addSourceFilesAtPaths(resolve(rootDir, pattern));
   }
 
-  return { project, parse: () => parseProject(project, rootDir, mode) };
+  const matchers = buildIdMatchers(codeId);
+  return { project, parse: () => parseProject(project, rootDir, mode, matchers) };
 }
 
-function parseProject(project: Project, rootDir: string, mode: "file" | "symbol"): ParsedTS {
+function parseProject(
+  project: Project,
+  rootDir: string,
+  mode: "file" | "symbol",
+  matchers: IdMatchers,
+): ParsedTS {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
 
@@ -68,7 +93,7 @@ function parseProject(project: Project, rootDir: string, mode: "file" | "symbol"
     }
 
     extractImports(sourceFile, relPath, rootDir, edges, mode, isTest);
-    extractImplTags(fileContent, relPath, isTest, edges, mode, symbolRanges);
+    extractImplTags(fileContent, relPath, isTest, edges, mode, symbolRanges, matchers);
   }
 
   return { nodes, edges };
@@ -191,14 +216,16 @@ function extractImplTags(
   edges: GraphEdge[],
   mode: "file" | "symbol" = "file",
   symbolRanges: SymbolRange[] = [],
+  matchers: IdMatchers = buildIdMatchers(),
 ) {
+  const { implRe, reqIdRe, testReqRe, testAnnotationRe } = matchers;
   const fileSourceId = `file:${relPath}`;
 
   let match: RegExpExecArray | null;
 
-  IMPL_RE.lastIndex = 0;
-  while ((match = IMPL_RE.exec(content)) !== null) {
-    const reqIds = match[1].match(REQ_ID_RE);
+  implRe.lastIndex = 0;
+  while ((match = implRe.exec(content)) !== null) {
+    const reqIds = match[1].match(reqIdRe);
     if (!reqIds) continue;
 
     let sourceId = fileSourceId;
@@ -217,14 +244,14 @@ function extractImplTags(
   }
 
   if (isTest) {
-    TEST_REQ_RE.lastIndex = 0;
-    while ((match = TEST_REQ_RE.exec(content)) !== null) {
+    testReqRe.lastIndex = 0;
+    while ((match = testReqRe.exec(content)) !== null) {
       const reqId = match[0].slice(1, -1);
       edges.push({ source: fileSourceId, target: reqId, kind: "verifies" });
     }
 
-    TEST_ANNOTATION_RE.lastIndex = 0;
-    while ((match = TEST_ANNOTATION_RE.exec(content)) !== null) {
+    testAnnotationRe.lastIndex = 0;
+    while ((match = testAnnotationRe.exec(content)) !== null) {
       edges.push({ source: fileSourceId, target: match[1], kind: "verifies" });
     }
   }
