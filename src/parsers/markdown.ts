@@ -125,7 +125,7 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
     const firstParagraph = node.children?.find((c: any) => c.type === "paragraph");
     const labelText = firstParagraph ? toString(firstParagraph) : toString(node);
     const match = labelText.match(listItemRE);
-    if (!match) return;
+    if (!match || match[1] == null) return;
 
     const reqId = match[1];
     const reqHash = hash(toString(node));
@@ -142,7 +142,7 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
   visit(tree, "heading", (node: any) => {
     const text = extractText(node);
     const match = text.match(headingRE);
-    if (!match) return;
+    if (!match || match[1] == null) return;
 
     const reqId = headingRE === KIRO_HEADING_RE ? `Requirement-${match[1]}` : match[1];
     const headingContent = extractSectionContent(content, node.position.start.line);

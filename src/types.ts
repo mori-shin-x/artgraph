@@ -99,6 +99,10 @@ export interface InitOptions {
 export interface ReqPatternConfig {
   listItem?: string;
   heading?: string;
+  // Regex matching a bare requirement ID *token* as it appears in code/test tags
+  // (`@impl <id>`, `[<id>]`, `req: "<id>"`). Keep this consistent with the IDs
+  // captured by `listItem`/`heading` so spec-side and code-side IDs connect.
+  codeId?: string;
 }
 
 export interface DocGraphConfig {

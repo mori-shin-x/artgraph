@@ -160,7 +160,12 @@ export function buildGraph(
 
   // Parse TypeScript files
   const codePatterns = [...config.include, ...config.testPatterns];
-  const tsParser = createTSParser(rootDir, codePatterns, config.mode ?? "file");
+  const tsParser = createTSParser(
+    rootDir,
+    codePatterns,
+    config.mode ?? "file",
+    config.reqPatterns?.codeId,
+  );
   const tsResult = tsParser.parse();
 
   for (const node of tsResult.nodes) {

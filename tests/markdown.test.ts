@@ -224,8 +224,8 @@ spectrace:
         reqPatterns: { listItem: "^#(\\d+)[:\\s]" },
       });
       const reqIds = result.nodes.filter((n) => n.kind === "req").map((n) => n.id);
-      expect(reqIds).toContain("123");
-      expect(reqIds).toContain("456");
+      // Assert the exact set so stray/duplicate nodes are caught.
+      expect(reqIds).toEqual(["123", "456"]);
     });
 
     it("should not extract custom IDs with default pattern", () => {
@@ -294,6 +294,24 @@ spectrace:
       for (const req of reqNodes) {
         expect(req.metadata).toBeUndefined();
       }
+    });
+
+    it("should coerce non-string metadata values to strings", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/metadata-coerce.md"));
+      const doc = result.nodes.find((n) => n.kind === "doc");
+      expect(doc).toBeDefined();
+      expect(doc!.metadata).toEqual({
+        title: "123",
+        status: "true",
+        priority: "2",
+      });
+    });
+
+    it("should leave metadata undefined when frontmatter is entirely absent", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"));
+      const doc = result.nodes.find((n) => n.kind === "doc");
+      expect(doc).toBeDefined();
+      expect(doc!.metadata).toBeUndefined();
     });
   });
 
