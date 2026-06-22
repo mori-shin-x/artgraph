@@ -10,5 +10,4 @@ dist/
 .specify/
 specs/
 CLAUDE.md
-spectrace-design.md
 docs/spec-kit-integration.md
