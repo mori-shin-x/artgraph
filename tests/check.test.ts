@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
 import { buildGraph } from "../src/graph/builder.js";
 import { check } from "../src/check.js";
-import type { SpectraceConfig, LockFile } from "../src/types.js";
+import type {
+  SpectraceConfig,
+  LockFile,
+  TestResultMap,
+  ArtifactGraph,
+} from "../src/types.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
 
@@ -88,5 +93,52 @@ describe("check", () => {
     const result = check(graph, {});
 
     expect(result.pass).toBe(false);
+  });
+
+  // A minimal, fully-covered graph: one REQ with both an implements and a
+  // verifies edge, locked so drift/orphans/uncovered are all clean. This
+  // isolates the gate's reaction to test pass/fail.
+  function coveredGraph(reqId = "REQ-100"): { graph: ArtifactGraph; lock: LockFile } {
+    const graph: ArtifactGraph = {
+      nodes: new Map([
+        [reqId, { id: reqId, kind: "req", filePath: "specs/x.md", contentHash: "h1" }],
+      ]),
+      edges: [
+        { source: "file:impl.ts", target: reqId, kind: "implements" },
+        { source: "file:impl.test.ts", target: reqId, kind: "verifies" },
+      ],
+    };
+    const lock: LockFile = {
+      [reqId]: { contentHash: "h1", lastReconciled: "2025-01-01T00:00:00Z" },
+    };
+    return { graph, lock };
+  }
+
+  it("should fail the gate when a covered REQ's test fails", () => {
+    const reqId = "REQ-100";
+
+    // Passing results: gate clean.
+    const { graph, lock } = coveredGraph(reqId);
+    const passing: TestResultMap = new Map([
+      [reqId, [{ reqId, testName: "t", passed: true }]],
+    ]);
+    const passed = check(graph, lock, undefined, passing);
+    expect(passed.pass).toBe(true);
+    expect(passed.testFailures).toEqual([]);
+
+    // Failing results: gate fails and the REQ is listed under testFailures.
+    const failing: TestResultMap = new Map([
+      [reqId, [{ reqId, testName: "t", passed: false }]],
+    ]);
+    const failed = check(graph, lock, undefined, failing);
+    expect(failed.pass).toBe(false);
+    expect(failed.testFailures).toContain(reqId);
+  });
+
+  it("should leave testFailures empty (and pass) when no test results are supplied", () => {
+    const { graph, lock } = coveredGraph();
+    const result = check(graph, lock);
+    expect(result.testFailures).toEqual([]);
+    expect(result.pass).toBe(true);
   });
 });

@@ -3,12 +3,15 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import type { GraphNode, GraphEdge } from "../types.js";
+import { NAMESPACED_ID_TOKEN } from "../req-id.js";
 
 // Default requirement-ID *token* used when no custom `reqPatterns.codeId` is set.
 // The token matches the whole ID (e.g. `FR-001`, `auth/AUTH-2`, `Requirement-3`).
-// Exported so the rename rewriter and ID validator track the exact same grammar
-// the parser emits (avoids regex drift between discovery and rewriting).
-export const DEFAULT_ID_TOKEN = "(?:[\\w-]+/)?(?:[A-Z][A-Za-z]*-\\d+|Requirement-\\d+)";
+// Shared with src/test-results.ts via src/req-id.ts so code tags and test-result
+// REQ tags recognize the same ID shapes. Exported so the rename rewriter and ID
+// validator track the exact same grammar the parser emits (avoids regex drift
+// between discovery and rewriting).
+export const DEFAULT_ID_TOKEN = NAMESPACED_ID_TOKEN;
 
 // Regexes that locate requirement IDs in code/test tags. When the project sets a
 // custom `reqPatterns.codeId`, these are rebuilt from that token so that @impl /

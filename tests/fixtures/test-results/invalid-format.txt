@@ -1,0 +1,2 @@
+This is not a valid test result file.
+It is neither JSON nor XML.

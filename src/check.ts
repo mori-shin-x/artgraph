@@ -1,8 +1,8 @@
-import type { ArtifactGraph, LockFile, CheckResult, DriftEntry } from "./types.js";
+import type { ArtifactGraph, LockFile, CheckResult, DriftEntry, TestResultMap } from "./types.js";
 import { findOrphans, findUncovered } from "./graph/traverse.js";
 import { computeCoverage } from "./coverage.js";
 
-export function check(graph: ArtifactGraph, lock: LockFile, scope?: Set<string>): CheckResult {
+export function check(graph: ArtifactGraph, lock: LockFile, scope?: Set<string>, testResults?: TestResultMap): CheckResult {
   const drifted: DriftEntry[] = [];
 
   for (const [id, entry] of Object.entries(lock)) {
@@ -27,14 +27,28 @@ export function check(graph: ArtifactGraph, lock: LockFile, scope?: Set<string>)
   const allUncovered = findUncovered(graph);
   const uncovered = scope ? allUncovered.filter((id) => scope.has(id)) : allUncovered;
 
-  const allCoverage = computeCoverage(graph);
+  const allCoverage = computeCoverage(graph, testResults);
   const filtered = scope ? allCoverage.filter((c) => scope.has(c.reqId)) : allCoverage;
   const coverage = filtered.map((c) => ({
     reqId: c.reqId,
     status: c.status,
   }));
 
-  const pass = drifted.length === 0 && orphans.length === 0 && uncovered.length === 0;
+  // When test results are supplied, a requirement that has verifies edges but
+  // ends up impl-only means its tests ran and failed (or were skipped) — that is
+  // a regression the gate must catch, not just display. Without test results
+  // this set is always empty, preserving the legacy gate behavior.
+  const testFailures = testResults
+    ? filtered
+        .filter((c) => c.status === "impl-only" && c.testFiles.length > 0)
+        .map((c) => c.reqId)
+    : [];
 
-  return { drifted, orphans, uncovered, coverage, pass };
+  const pass =
+    drifted.length === 0 &&
+    orphans.length === 0 &&
+    uncovered.length === 0 &&
+    testFailures.length === 0;
+
+  return { drifted, orphans, uncovered, coverage, testFailures, pass };
 }
