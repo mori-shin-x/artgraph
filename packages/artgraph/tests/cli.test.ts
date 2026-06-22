@@ -436,6 +436,80 @@ describe("CLI: warning output", () => {
       rm(tmpRoot, { recursive: true, force: true });
     }
   });
+
+  it("should output unresolved-link warning to stderr (issue #11)", { timeout: 30000 }, () => {
+    const { mkdirSync, writeFileSync, rmSync: rm } = require("node:fs");
+    const { mkdtempSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    const tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-warn-"));
+    mkdirSync(join(tmpRoot, "specs"), { recursive: true });
+    mkdirSync(join(tmpRoot, "src"), { recursive: true });
+    writeFileSync(join(tmpRoot, "src", "app.ts"), "export const x = 1;\n");
+    writeFileSync(
+      join(tmpRoot, ".artgraph.json"),
+      JSON.stringify({ include: ["src/**/*.ts"], specDirs: ["specs"] }),
+    );
+    writeFileSync(
+      join(tmpRoot, "specs", "dead.md"),
+      `# Dead link\n\nSee [gone](./missing.md).\n`,
+    );
+
+    try {
+      const proc = spawnSync("node", [CLI, "scan"], {
+        encoding: "utf-8",
+        cwd: tmpRoot,
+        timeout: 30000,
+      });
+      expect(proc.status).toBe(0);
+      expect(proc.stderr).toContain("unresolved-link");
+      expect(proc.stderr).toContain("specs/missing.md");
+    } finally {
+      rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("should build depends_on edge from inline markdown link (issue #11)", { timeout: 30000 }, () => {
+    const { mkdirSync, writeFileSync, rmSync: rm } = require("node:fs");
+    const { mkdtempSync } = require("node:fs");
+    const { tmpdir } = require("node:os");
+    const { join } = require("node:path");
+    const tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-il-"));
+    mkdirSync(join(tmpRoot, "specs"), { recursive: true });
+    mkdirSync(join(tmpRoot, "src"), { recursive: true });
+    writeFileSync(join(tmpRoot, "src", "app.ts"), "export const x = 1;\n");
+    writeFileSync(
+      join(tmpRoot, ".artgraph.json"),
+      JSON.stringify({ include: ["src/**/*.ts"], specDirs: ["specs"] }),
+    );
+    writeFileSync(
+      join(tmpRoot, "specs", "design.md"),
+      `# Design\n\nDerived from [requirements](./requirements.md).\n`,
+    );
+    writeFileSync(
+      join(tmpRoot, "specs", "requirements.md"),
+      `# Requirements\n`,
+    );
+
+    try {
+      const proc = spawnSync("node", [CLI, "graph", "--format", "json"], {
+        encoding: "utf-8",
+        cwd: tmpRoot,
+        timeout: 30000,
+      });
+      expect(proc.status).toBe(0);
+      const out = JSON.parse(proc.stdout);
+      const edge = out.edges.find(
+        (e: any) =>
+          e.kind === "depends_on" &&
+          e.source === "doc:design.md" &&
+          e.target === "doc:requirements.md",
+      );
+      expect(edge).toBeDefined();
+    } finally {
+      rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

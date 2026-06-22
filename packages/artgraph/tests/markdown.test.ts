@@ -315,6 +315,100 @@ artgraph:
     });
   });
 
+  describe("issue #11: inline markdown links", () => {
+    it("extracts a plain inline link as an inlineLinks ref", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      const targets = result.inlineLinks.map((l) => l.targetRelPath);
+      expect(targets).toContain("specs/inline-links/target.md");
+    });
+
+    it("strips fragment and query before resolving the target", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      // 4 links in source.md hit target.md: plain, #section, ?v=1, ?v=1#x — all should normalize to the same target path
+      const toTarget = result.inlineLinks.filter(
+        (l) => l.targetRelPath === "specs/inline-links/target.md",
+      );
+      expect(toTarget.length).toBeGreaterThanOrEqual(4);
+    });
+
+    it("ignores images, external URLs, mailto, non-md, empty href and pure fragments", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      // None of the inline links should target external/non-md/etc.
+      for (const link of result.inlineLinks) {
+        expect(link.targetRelPath.endsWith(".md")).toBe(true);
+        expect(link.targetRelPath.startsWith("http")).toBe(false);
+      }
+      // The image and external/mailto/.ts entries should not appear
+      const raws = result.inlineLinks.map((l) => l.rawHref);
+      expect(raws).not.toContain("https://example.com/design.md");
+      expect(raws).not.toContain("mailto:foo@example.com");
+      expect(raws).not.toContain("./source.ts");
+      expect(raws).not.toContain("#section");
+      expect(raws).not.toContain("");
+    });
+
+    it("decodes percent-encoded paths", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      const encoded = result.inlineLinks.find((l) => l.rawHref === "./target%2Emd");
+      expect(encoded).toBeDefined();
+      expect(encoded!.targetRelPath).toBe("specs/inline-links/target.md");
+    });
+
+    it("resolves reference-style links (full, collapsed, shortcut)", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/ref-source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      const toTarget = result.inlineLinks.filter(
+        (l) => l.targetRelPath === "specs/inline-links/target.md",
+      );
+      // Three resolvable references: [target full][ref-target], [ref-target][], [ref-target]
+      expect(toTarget.length).toBe(3);
+    });
+
+    it("does not resolve reference-style links with unknown definition", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/ref-source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      // The [missing][nope] reference cites an undefined label
+      const ghost = result.inlineLinks.find((l) => l.rawHref?.includes("nope"));
+      expect(ghost).toBeUndefined();
+    });
+
+    it("ignores links inside fenced and indented code blocks and inline code", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/code-fence.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      // Only the trailing [real](./target.md) link should be picked up
+      expect(result.inlineLinks).toHaveLength(1);
+      expect(result.inlineLinks[0].targetRelPath).toBe("specs/inline-links/target.md");
+    });
+
+    it("populates sourceDocId from the source file's doc node id", () => {
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/inline-links/source.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
+      for (const link of result.inlineLinks) {
+        expect(link.sourceDocId).toBe("doc:inline-links/source.md");
+      }
+    });
+  });
+
   describe("mixed format coverage", () => {
     it("should recognize both list-item and heading formats across fixtures", () => {
       const speckitResult = parseMarkdown(resolve(FIXTURE_DIR, "specs/speckit-style.md"));

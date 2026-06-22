@@ -119,6 +119,11 @@ export type TestResultMap = Map<string, TestResultRecord[]>;
 export interface DocGraphConfig {
   autoNodes?: boolean;
   autoContains?: boolean;
+  inlineLinks?: boolean;
+  linkWarnings?: {
+    unresolved?: boolean;
+    outOfScope?: boolean;
+  };
 }
 
 export interface ArtgraphConfig {

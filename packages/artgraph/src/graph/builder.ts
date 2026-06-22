@@ -1,11 +1,19 @@
 import { resolve, relative, basename, dirname } from "node:path";
+import { existsSync } from "node:fs";
 import { globSync } from "glob";
-import { parseMarkdown, type ParseWarning } from "../parsers/markdown.js";
+import { parseMarkdown, type ParseWarning, type InlineLinkRef } from "../parsers/markdown.js";
 import { createTSParser } from "../parsers/typescript.js";
 import type { ArtifactGraph, GraphNode, GraphEdge, ArtgraphConfig } from "../types.js";
 
 export interface BuildWarning {
-  type: "duplicate-id" | "ambiguous-id" | "orphan-doc" | "invalid-relation" | "reserved-prefix";
+  type:
+    | "duplicate-id"
+    | "ambiguous-id"
+    | "orphan-doc"
+    | "invalid-relation"
+    | "reserved-prefix"
+    | "unresolved-link"
+    | "out-of-scope-link";
   id: string;
   files: string[];
   message?: string;
@@ -28,6 +36,9 @@ export function buildGraph(
 
   const autoNodes = config.docGraph?.autoNodes ?? true;
   const autoContains = config.docGraph?.autoContains ?? true;
+  const inlineLinksEnabled = config.docGraph?.inlineLinks ?? true;
+  const warnUnresolved = config.docGraph?.linkWarnings?.unresolved ?? true;
+  const warnOutOfScope = config.docGraph?.linkWarnings?.outOfScope ?? false;
   const RESERVED_PREFIXES = ["doc:", "file:", "test:", "symbol:"];
   const parseWarnings: ParseWarning[] = [];
 
@@ -35,6 +46,7 @@ export function buildGraph(
   const collected: CollectedReq[] = [];
   const nonReqNodes: GraphNode[] = [];
   const nonReqEdges: GraphEdge[] = [];
+  const allInlineLinks: InlineLinkRef[] = [];
 
   for (const specDirName of config.specDirs) {
     const specFiles = globSync(resolve(rootDir, specDirName, "**/*.md"));
@@ -48,8 +60,11 @@ export function buildGraph(
       : relFile;
     const expectedAutoDocId = `doc:${specDirRelPath}`;
 
-    // Collect parse warnings
+    // Collect parse warnings and inline-link references
     parseWarnings.push(...result.warnings);
+    if (inlineLinksEnabled) {
+      allInlineLinks.push(...result.inlineLinks);
+    }
 
     for (const node of result.nodes) {
       if (node.kind === "req") {
@@ -247,6 +262,68 @@ export function buildGraph(
           id: edge.target,
           files: [sourceNode.filePath],
           message: `referenced from ${sourceNode.filePath} but not found in graph`,
+        });
+      }
+    }
+  }
+
+  // Issue #11: Convert collected inline markdown links into depends_on edges.
+  // This must run AFTER all doc nodes are registered (so we can resolve
+  // targets) and AFTER frontmatter edges land (so we can suppress inline
+  // edges that conflict with an explicit relation), but BEFORE dedup so the
+  // existing (source|target|kind) dedup naturally collapses redundant inline
+  // links to the same target.
+  if (inlineLinksEnabled && allInlineLinks.length > 0) {
+    const docNodesByFilePath = new Map<string, GraphNode>();
+    for (const node of nodes.values()) {
+      if (node.kind === "doc") docNodesByFilePath.set(node.filePath, node);
+    }
+
+    // Pairs (source, target) already declared by frontmatter — inline links
+    // pointing at the same pair are dropped regardless of kind so an author's
+    // explicit `derives_from` always wins over an inferred `depends_on`.
+    const explicitPairs = new Set<string>();
+    for (const edge of edges) {
+      if (edge.kind !== "derives_from" && edge.kind !== "depends_on") continue;
+      const sourceNode = nodes.get(edge.source);
+      if (sourceNode?.kind === "doc") {
+        explicitPairs.add(`${edge.source}|${edge.target}`);
+      }
+    }
+
+    for (const link of allInlineLinks) {
+      const sourceNode = nodes.get(link.sourceDocId);
+      if (!sourceNode) continue; // source doc was filtered out (autoNodes=false)
+
+      const targetNode = docNodesByFilePath.get(link.targetRelPath);
+      if (targetNode) {
+        if (explicitPairs.has(`${link.sourceDocId}|${targetNode.id}`)) continue;
+        edges.push({
+          source: link.sourceDocId,
+          target: targetNode.id,
+          kind: "depends_on",
+        });
+        continue;
+      }
+
+      // No matching doc node — decide between unresolved (file missing) and
+      // out-of-scope (file present but not under specDirs).
+      const targetExists = existsSync(resolve(rootDir, link.targetRelPath));
+      if (targetExists) {
+        if (warnOutOfScope) {
+          warnings.push({
+            type: "out-of-scope-link",
+            id: link.targetRelPath,
+            files: [sourceNode.filePath],
+            message: `inline link "${link.rawHref}" targets ${link.targetRelPath} which is outside specDirs`,
+          });
+        }
+      } else if (warnUnresolved) {
+        warnings.push({
+          type: "unresolved-link",
+          id: link.targetRelPath,
+          files: [sourceNode.filePath],
+          message: `inline link "${link.rawHref}" → ${link.targetRelPath} not found`,
         });
       }
     }

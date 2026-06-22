@@ -22,9 +22,30 @@ npx artgraph init      # writes .artgraph.json
 | Spec heading (Kiro) | `### Requirement 1: description`                |
 | Implementation      | `// @impl REQ-001`                              |
 | Test                | `it("[REQ-001] …")` or `// req: "REQ-001"`      |
-| Doc relations       | frontmatter `artgraph.depends_on` / `derives_from` |
+| Doc relations       | frontmatter `artgraph.depends_on` / `derives_from`, or inline `[text](./other.md)` links |
 
 Custom grammars are configurable via `reqPatterns` in `.artgraph.json`.
+
+Inline markdown links between spec/doc files are picked up automatically and
+emitted as `depends_on` edges (e.g. `design.md` with `See [requirements](./requirements.md)`
+generates `doc:design.md --depends_on--> doc:requirements.md`). Direct, reference-style
+(`[x][ref]` + `[ref]: ./...`), and shortcut forms are all supported; anchors and
+queries are stripped; links inside code fences and inline code are ignored. A
+frontmatter relation (`derives_from` / `depends_on`) on the same `(source, target)`
+pair always wins over an inline link.
+
+```jsonc
+// .artgraph.json
+{
+  "docGraph": {
+    "inlineLinks": true,             // default true — set false to disable
+    "linkWarnings": {
+      "unresolved": true,            // default true — warn on links to missing .md
+      "outOfScope": false            // default false — warn on .md outside specDirs
+    }
+  }
+}
+```
 
 ## Commands
 
