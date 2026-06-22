@@ -1,0 +1,24 @@
+{
+  "testResults": [
+    {
+      "name": "tests/register.test.ts",
+      "assertionResults": [
+        {
+          "ancestorTitles": ["[VER-001] register"],
+          "title": "should register user",
+          "status": "failed"
+        }
+      ]
+    },
+    {
+      "name": "tests/profile.test.ts",
+      "assertionResults": [
+        {
+          "ancestorTitles": ["[VER-002] profile"],
+          "title": "should update profile",
+          "status": "passed"
+        }
+      ]
+    }
+  ]
+}

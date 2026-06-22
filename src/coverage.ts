@@ -10,14 +10,27 @@ export interface CoverageEntry {
 export function computeCoverage(graph: ArtifactGraph, testResults?: TestResultMap): CoverageEntry[] {
   const entries: CoverageEntry[] = [];
 
+  // Index edges by target once (O(edges)) rather than re-scanning every edge for
+  // each requirement (O(REQ × edges)). This matters as test-result imports grow
+  // the edge set. Iteration order is preserved so impl/test file lists keep the
+  // same ordering as the previous per-req filter.
+  const implByTarget = new Map<string, string[]>();
+  const testByTarget = new Map<string, string[]>();
+  const indexEdge = (map: Map<string, string[]>, target: string, source: string) => {
+    const list = map.get(target);
+    if (list) list.push(source);
+    else map.set(target, [source]);
+  };
+  for (const e of graph.edges) {
+    if (e.kind === "implements") indexEdge(implByTarget, e.target, e.source);
+    else if (e.kind === "verifies") indexEdge(testByTarget, e.target, e.source);
+  }
+
   for (const [id, node] of graph.nodes) {
     if (node.kind !== "req") continue;
 
-    const implEdges = graph.edges.filter((e) => e.kind === "implements" && e.target === id);
-    const testEdges = graph.edges.filter((e) => e.kind === "verifies" && e.target === id);
-
-    const implFiles = implEdges.map((e) => e.source);
-    const testFiles = testEdges.map((e) => e.source);
+    const implFiles = implByTarget.get(id) ?? [];
+    const testFiles = testByTarget.get(id) ?? [];
 
     let status: CoverageStatus;
     if (implFiles.length === 0) {

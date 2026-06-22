@@ -47,6 +47,23 @@ describe("extractReqTags", () => {
       extractReqTags("[REQ-001] and [REQ-001] duplicate"),
     ).toEqual(["REQ-001"]);
   });
+
+  // Regression: the previous `[A-Z]+-\d+` token dropped mixed-case IDs, which
+  // made Kiro's `Requirement-N` reqs and IDs like `Auth-1` impossible to match.
+  it("should extract a Kiro-style Requirement-N tag", () => {
+    expect(extractReqTags("[Requirement-001] kiro req")).toEqual([
+      "Requirement-001",
+    ]);
+  });
+
+  it("should extract a mixed-case prefixed ID", () => {
+    expect(extractReqTags("[Auth-1] auth test")).toEqual(["Auth-1"]);
+  });
+
+  it("should return empty array for non-string input", () => {
+    expect(extractReqTags(undefined as unknown as string)).toEqual([]);
+    expect(extractReqTags(null as unknown as string)).toEqual([]);
+  });
 });
 
 describe("parseVitestJson", () => {
@@ -110,6 +127,29 @@ describe("parseVitestJson", () => {
     const records = parseVitestJson("this is not json");
     expect(records).toEqual([]);
   });
+
+  it("should not crash when assertionResults lacks ancestorTitles", () => {
+    const content = JSON.stringify({
+      testResults: [
+        {
+          name: "tests/x.test.ts",
+          assertionResults: [{ title: "[REQ-001] no ancestors", status: "passed" }],
+        },
+      ],
+    });
+    const records = parseVitestJson(content);
+    expect(records).toEqual([
+      { reqId: "REQ-001", testName: "[REQ-001] no ancestors", passed: true },
+    ]);
+  });
+
+  it("should return empty array for valid JSON with a different schema", () => {
+    expect(parseVitestJson('{"foo":1}')).toEqual([]);
+  });
+
+  it("should return empty array for empty JSON object", () => {
+    expect(parseVitestJson("{}")).toEqual([]);
+  });
 });
 
 describe("parseJUnitXml", () => {
@@ -140,6 +180,38 @@ describe("parseJUnitXml", () => {
     expect(records).toHaveLength(2);
     expect(records[0]!.reqId).toBe("REQ-002");
     expect(records[1]!.reqId).toBe("REQ-002");
+  });
+
+  it("should mark a testcase with <error> as not passed", () => {
+    const records = parseJUnitXml(fixture("junit-error.xml"));
+    expect(records).toHaveLength(1);
+    expect(records[0]).toEqual({
+      reqId: "REQ-001",
+      testName: "[REQ-001] should authenticate user",
+      passed: false,
+    });
+  });
+
+  it("should mark a skipped testcase as not passed", () => {
+    const records = parseJUnitXml(fixture("junit-skipped.xml"));
+    expect(records).toHaveLength(1);
+    expect(records[0]!.passed).toBe(false);
+  });
+
+  it("should parse a testcase when the testsuite has no name attribute", () => {
+    const records = parseJUnitXml(fixture("junit-no-suite-name.xml"));
+    expect(records).toHaveLength(1);
+    expect(records[0]!.reqId).toBe("REQ-001");
+    expect(records[0]!.passed).toBe(true);
+  });
+
+  it("should read the name attribute regardless of attribute order", () => {
+    const xml =
+      '<testsuite tests="1"><testcase time="0.01" classname="C" name="[REQ-009] ordered"/></testsuite>';
+    const records = parseJUnitXml(xml);
+    expect(records).toEqual([
+      { reqId: "REQ-009", testName: "[REQ-009] ordered", passed: true },
+    ]);
   });
 
   it("should return empty array for invalid XML", () => {
@@ -258,5 +330,26 @@ describe("loadTestResults", () => {
     // There are multiple vitest-*.json files, all containing REQ-001
     expect(map.size).toBeGreaterThanOrEqual(1);
     expect(map.has("REQ-001")).toBe(true);
+  });
+
+  it("should warn (not silently ignore) when a glob matches no files", () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const map = loadTestResults(["does-not-exist-*.json"], FIXTURE_DIR);
+    expect(map.size).toBe(0);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("no files matched test-results pattern"),
+    );
+    consoleSpy.mockRestore();
+  });
+
+  it("should warn with a distinct message for malformed JSON", () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const filePath = resolve(FIXTURE_DIR, "malformed.json");
+    const map = loadTestResults([filePath], FIXTURE_DIR);
+    expect(map.size).toBe(0);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("failed to parse JSON"),
+    );
+    consoleSpy.mockRestore();
   });
 });

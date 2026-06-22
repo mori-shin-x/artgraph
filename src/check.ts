@@ -34,7 +34,21 @@ export function check(graph: ArtifactGraph, lock: LockFile, scope?: Set<string>,
     status: c.status,
   }));
 
-  const pass = drifted.length === 0 && orphans.length === 0 && uncovered.length === 0;
+  // When test results are supplied, a requirement that has verifies edges but
+  // ends up impl-only means its tests ran and failed (or were skipped) — that is
+  // a regression the gate must catch, not just display. Without test results
+  // this set is always empty, preserving the legacy gate behavior.
+  const testFailures = testResults
+    ? filtered
+        .filter((c) => c.status === "impl-only" && c.testFiles.length > 0)
+        .map((c) => c.reqId)
+    : [];
 
-  return { drifted, orphans, uncovered, coverage, pass };
+  const pass =
+    drifted.length === 0 &&
+    orphans.length === 0 &&
+    uncovered.length === 0 &&
+    testFailures.length === 0;
+
+  return { drifted, orphans, uncovered, coverage, testFailures, pass };
 }

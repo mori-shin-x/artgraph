@@ -133,6 +133,7 @@ Acceptance Scenarios:
 - FR-009: `spectrace scan` コマンドも `--test-results` オプションを受け付け、テスト結果の統計情報を出力に含める
 - FR-010: テスト名の describe ブロック（Vitest JSON の ancestorTitles / JUnit XML の testsuite name）に `[REQ-xxxx]` がある場合、その REQ タグを内部のテストケースに継承する
 - FR-011: `spectrace coverage` コマンドも `--test-results` オプションを受け付け、テスト pass/fail を反映した coverage 状態を表示する。判定ロジックは `spectrace check` と同一とする
+- FR-012: `--test-results` が指定されている場合、`verifies` エッジを持つ REQ のテストが fail/skip して `impl-only` に降格したとき、`spectrace check --gate` はその REQ を「テスト失敗」として gate 判定（exit code 2）の対象に含める。`--test-results` が指定されない場合は従来通りテスト pass/fail を gate 判定に反映しない（後方互換）
 
 ### Key Entities
 
@@ -151,6 +152,7 @@ Acceptance Scenarios:
 - SC-004: `--test-results` オプションなしの場合、従来と同一の判定結果が得られる（回帰なし）
 - SC-005: テスト結果ファイルが存在しないまたは読み込めない場合、エラーで停止せず、従来の判定にフォールバックする
 - SC-006: `spectrace coverage --test-results` と `spectrace check --test-results` が同一のテスト結果ファイルに対して一貫した coverage 判定を返す
+- SC-007: `--test-results` 指定時に `verifies` エッジを持つ REQ のテストが fail した場合、`spectrace check --gate` が exit code 2 で終了する。`--test-results` を指定しない場合は同条件でも exit code 0 となる（後方互換）
 
 ## Assumptions
 

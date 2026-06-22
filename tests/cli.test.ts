@@ -659,21 +659,52 @@ describe("CLI: test-results integration", () => {
     expect(stdout).toContain("failed=1");
   });
 
-  it("should affect coverage when test results are provided", { timeout: 30000 }, () => {
-    // Without test results: all REQs with impl+test are "verified"
-    const { stdout: withoutTR } = runAllVerified(["coverage", "--format", "json"]);
-    const coverageWithout = JSON.parse(withoutTR);
+  it("should report all REQs verified without --test-results (legacy)", { timeout: 30000 }, () => {
+    const { stdout } = runAllVerified(["coverage", "--format", "json"]);
+    const cov = JSON.parse(stdout);
+    const byId = Object.fromEntries(cov.items.map((i: any) => [i.reqId, i.status]));
+    expect(byId["VER-001"]).toBe("verified");
+    expect(byId["VER-002"]).toBe("verified");
+  });
 
-    // With failing test results for VER-001: coverage should change
-    const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-fail.json");
-    const { stdout: withTR } = runAllVerified(["coverage", "--format", "json", "--test-results", vitestPath]);
-    const coverageWith = JSON.parse(withTR);
+  it("should keep status verified when --test-results show all passing", { timeout: 30000 }, () => {
+    const passPath = resolve(TEST_RESULTS_DIR, "all-verified-pass.json");
+    const { stdout } = runAllVerified(["coverage", "--format", "json", "--test-results", passPath]);
+    const cov = JSON.parse(stdout);
+    const byId = Object.fromEntries(cov.items.map((i: any) => [i.reqId, i.status]));
+    expect(byId["VER-001"]).toBe("verified");
+    expect(byId["VER-002"]).toBe("verified");
+  });
 
-    // The fixture uses VER-001/VER-002 but vitest-fail.json uses REQ-001.
-    // Since REQ IDs don't match, coverage should remain the same.
-    // This test verifies the plumbing works without crashing.
-    expect(coverageWith.items).toBeDefined();
-    expect(coverageWith.summary).toBeDefined();
+  it("should downgrade a REQ to impl-only when its test fails (verified -> impl-only)", { timeout: 30000 }, () => {
+    const failPath = resolve(TEST_RESULTS_DIR, "all-verified-fail.json");
+    const { stdout } = runAllVerified(["coverage", "--format", "json", "--test-results", failPath]);
+    const cov = JSON.parse(stdout);
+    const byId = Object.fromEntries(cov.items.map((i: any) => [i.reqId, i.status]));
+    // VER-001's test failed -> must transition away from "verified".
+    expect(byId["VER-001"]).toBe("impl-only");
+    // VER-002's test still passes -> stays verified.
+    expect(byId["VER-002"]).toBe("verified");
+  });
+
+  it("should pass check --gate when all tests pass", { timeout: 30000 }, () => {
+    const passPath = resolve(TEST_RESULTS_DIR, "all-verified-pass.json");
+    const { exitCode } = runAllVerified(["check", "--gate", "--test-results", passPath]);
+    expect(exitCode).toBe(0);
+  });
+
+  it("should fail check --gate (exit 2) when a test fails", { timeout: 30000 }, () => {
+    const failPath = resolve(TEST_RESULTS_DIR, "all-verified-fail.json");
+    const { stdout, exitCode } = runAllVerified(["check", "--gate", "--test-results", failPath]);
+    expect(exitCode).toBe(2);
+    expect(stdout).toContain("TEST FAILURES:");
+    expect(stdout).toContain("VER-001");
+  });
+
+  it("should not fail check --gate for test failures when --test-results is absent", { timeout: 30000 }, () => {
+    // Legacy: without test results the gate ignores pass/fail entirely.
+    const { exitCode } = runAllVerified(["check", "--gate"]);
+    expect(exitCode).toBe(0);
   });
 });
 

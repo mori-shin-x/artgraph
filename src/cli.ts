@@ -35,6 +35,22 @@ function applyMode(config: SpectraceConfig, modeFlag?: string): SpectraceConfig 
   return config;
 }
 
+// Resolve test-result paths from the `--test-results` flag (preferred) or the
+// `.spectrace.json` `testResultPaths` field, then load them. Returns undefined
+// when neither is set so callers fall back to legacy (verifies-edge-only)
+// coverage. Shared by `scan`, `check`, and `coverage`.
+function resolveTestResults(
+  opts: { testResults?: string[] },
+  config: SpectraceConfig,
+  rootDir: string,
+): TestResultMap | undefined {
+  const paths = opts.testResults ?? config.testResultPaths;
+  if (paths && paths.length > 0) {
+    return loadTestResults(paths, rootDir);
+  }
+  return undefined;
+}
+
 program
   .command("init")
   .description("Initialize spectrace for this project")
@@ -104,10 +120,9 @@ program
     const config = applyMode(loadConfig(rootDir), opts.mode);
     const result = scan(rootDir, config);
 
-    const testResultPaths = opts.testResults ?? config.testResultPaths;
+    const testResults = resolveTestResults(opts, config, rootDir);
     let testResultStats: { totalTests: number; passedTests: number; failedTests: number } | undefined;
-    if (testResultPaths && testResultPaths.length > 0) {
-      const testResults = loadTestResults(testResultPaths, rootDir);
+    if (testResults) {
       let totalTests = 0;
       let passedTests = 0;
       let failedTests = 0;
@@ -222,11 +237,7 @@ program
     const { graph, warnings } = scan(rootDir, config);
     const lock = readLock(rootDir, config.lockFile);
 
-    const testResultPaths = opts.testResults ?? config.testResultPaths;
-    let testResults: TestResultMap | undefined;
-    if (testResultPaths && testResultPaths.length > 0) {
-      testResults = loadTestResults(testResultPaths, rootDir);
-    }
+    const testResults = resolveTestResults(opts, config, rootDir);
 
     let scopedNodeIds: Set<string> | undefined;
     if (opts.diff) {
@@ -284,11 +295,7 @@ program
     const config = applyMode(loadConfig(rootDir), opts.mode);
     const { graph } = scan(rootDir, config);
 
-    const testResultPaths = opts.testResults ?? config.testResultPaths;
-    let testResults: TestResultMap | undefined;
-    if (testResultPaths && testResultPaths.length > 0) {
-      testResults = loadTestResults(testResultPaths, rootDir);
-    }
+    const testResults = resolveTestResults(opts, config, rootDir);
     const entries = computeCoverage(graph, testResults);
 
     if (opts.format === "json") {
@@ -511,6 +518,10 @@ function printCheckText(result: any) {
   if (result.uncovered?.length > 0) {
     console.log("UNCOVERED:");
     for (const u of result.uncovered) console.log(`  ${u}`);
+  }
+  if (result.testFailures?.length > 0) {
+    console.log("TEST FAILURES:");
+    for (const t of result.testFailures) console.log(`  ${t}`);
   }
   if (result.coverage?.length > 0) {
     console.log("COVERAGE:");
