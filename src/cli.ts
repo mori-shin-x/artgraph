@@ -23,6 +23,8 @@ import {
 import type { SpectraceConfig, TestResultMap } from "./types.js";
 import { runInit } from "./init.js";
 import { loadTestResults } from "./test-results.js";
+import { executeRename, executeSplit, executeMerge } from "./rename-executor.js";
+import type { RenameResult } from "./rename-executor.js";
 
 const program = new Command();
 
@@ -532,6 +534,98 @@ function printCheckText(result: any) {
   if (result.pass) {
     console.log("All checks passed.");
   }
+}
+
+program
+  .command("rename")
+  .description("Rename, split, or merge spec IDs across the project")
+  .option("--from <id>", "Source ID to rename")
+  .option("--to <id>", "Target ID for rename")
+  .option("--split <id>", "Source ID to split")
+  .option("--merge <ids...>", "Source IDs to merge")
+  .option("--into <ids...>", "Target ID(s) for split or merge")
+  .option("--dry-run", "Show changes without applying them")
+  .addOption(new Option("--format <format>", "Output format").choices(["json", "text"]).default("text"))
+  .action((opts) => {
+    const rootDir = process.cwd();
+    const format: "json" | "text" = opts.format;
+    const baseOpts = { dryRun: !!opts.dryRun, format, rootDir };
+
+    const fail = (msg: string): never => {
+      // Honour --format json even on the error path so JSON consumers never
+      // have to parse a plain-text line (F7).
+      if (format === "json") {
+        console.error(JSON.stringify({ error: msg }));
+      } else {
+        console.error(`Error: ${msg}`);
+      }
+      process.exit(1);
+    };
+
+    try {
+      let result: RenameResult;
+
+      if (opts.from && opts.to) {
+        // rename mode
+        result = executeRename({ ...baseOpts, from: opts.from, to: opts.to });
+      } else if (opts.split && opts.into) {
+        // split mode
+        result = executeSplit({ ...baseOpts, splitId: opts.split, intoIds: opts.into });
+      } else if (opts.merge && opts.into) {
+        // merge mode
+        if (opts.into.length !== 1) {
+          fail("--merge requires exactly one --into target ID.");
+        }
+        result = executeMerge({ ...baseOpts, mergeIds: opts.merge, intoId: opts.into[0] });
+      } else {
+        fail("Specify --from/--to, --split/--into, or --merge/--into.");
+        return;
+      }
+
+      if (format === "json") {
+        printRenameJson(result);
+      } else {
+        printRenameText(result);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      fail(msg);
+    }
+  });
+
+function printRenameText(result: RenameResult) {
+  if (result.changes.length === 0 && result.lockChanges.length === 0) {
+    console.log("No references found.");
+    return;
+  }
+
+  if (result.operation === "rename") {
+    console.log(`Renamed ${result.from} → ${result.to}`);
+  } else if (result.operation === "split") {
+    console.log(`Split ${result.from} → ${(result.intoIds ?? []).join(", ")}`);
+  } else if (result.operation === "merge") {
+    console.log(`Merged ${(result.sourceIds ?? []).join(", ")} → ${result.to}`);
+  }
+
+  for (const c of result.changes) {
+    const before = c.before.trim().slice(0, 60);
+    const after = c.after.trim().slice(0, 60);
+    console.log(`  ${c.filePath}:${c.line}  ${before} → ${after}`);
+  }
+
+  for (const w of result.warnings) {
+    console.log(
+      `WARNING: ${w.filePath} contains @impl ${w.oldId} — manual assignment to ${w.newIds.join(", ")} needed`,
+    );
+  }
+
+  if (!result.applied) {
+    console.log("(dry-run: no files were modified)");
+  }
+}
+
+function printRenameJson(result: RenameResult) {
+  console.log(JSON.stringify(result));
 }
 
 program.parse();
