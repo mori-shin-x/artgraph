@@ -14,6 +14,15 @@ import type { BuildWarning } from "./graph/builder.js";
 const SKILLS_TEMPLATE_DIR = resolve(import.meta.dirname, "../templates/skills");
 const SKILLS_DEST_SUBDIR = join(".claude", "skills");
 
+export class SkillsInstallError extends Error {
+  readonly partiallyInstalled: string[];
+  constructor(message: string, partiallyInstalled: string[] = []) {
+    super(message);
+    this.name = "SkillsInstallError";
+    this.partiallyInstalled = partiallyInstalled;
+  }
+}
+
 export interface InitResult {
   configPath: string;
   config: ArtgraphConfig;
@@ -58,15 +67,57 @@ export function generateConfig(detection: DetectionResult): ArtgraphConfig {
   };
 }
 
-export function installSkills(rootDir: string, options: { force?: boolean } = {}): string[] {
+function readSkillTemplates(templateDir: string): string[] {
+  if (!existsSync(templateDir)) {
+    throw new SkillsInstallError(
+      `Skills template directory not found at ${templateDir}. This is likely a packaging issue.`,
+    );
+  }
+  const templates = readdirSync(templateDir).filter((f) => f.endsWith(".md"));
+  if (templates.length === 0) {
+    throw new SkillsInstallError(
+      `No skill templates (*.md) found in ${templateDir}. This is likely a packaging issue.`,
+    );
+  }
+  return templates;
+}
+
+// `templateDir` is for test injection only; production callers omit it and the
+// constant `SKILLS_TEMPLATE_DIR` (resolved relative to dist/) is used.
+export interface SkillsInstallOptions {
+  force?: boolean;
+  templateDir?: string;
+}
+
+// Throws if installation cannot proceed cleanly. Mirrors installSkills's
+// validation (templates available, no conflicts unless --force) without writing.
+// Use this as a pre-flight check before any other side effects.
+export function validateSkillsInstall(rootDir: string, options: SkillsInstallOptions = {}): void {
   const abs = resolve(rootDir);
   const destDir = resolve(abs, SKILLS_DEST_SUBDIR);
-  const templates = readdirSync(SKILLS_TEMPLATE_DIR).filter((f) => f.endsWith(".md"));
+  const templateDir = options.templateDir ?? SKILLS_TEMPLATE_DIR;
+  const templates = readSkillTemplates(templateDir);
 
   if (!options.force) {
     const conflicts = templates.filter((f) => existsSync(join(destDir, f)));
     if (conflicts.length > 0) {
-      throw new Error(
+      throw new SkillsInstallError(
+        `Skill file(s) already exist in ${SKILLS_DEST_SUBDIR}: ${conflicts.join(", ")}. Use --force to overwrite.`,
+      );
+    }
+  }
+}
+
+export function installSkills(rootDir: string, options: SkillsInstallOptions = {}): string[] {
+  const abs = resolve(rootDir);
+  const destDir = resolve(abs, SKILLS_DEST_SUBDIR);
+  const templateDir = options.templateDir ?? SKILLS_TEMPLATE_DIR;
+  const templates = readSkillTemplates(templateDir);
+
+  if (!options.force) {
+    const conflicts = templates.filter((f) => existsSync(join(destDir, f)));
+    if (conflicts.length > 0) {
+      throw new SkillsInstallError(
         `Skill file(s) already exist in ${SKILLS_DEST_SUBDIR}: ${conflicts.join(", ")}. Use --force to overwrite.`,
       );
     }
@@ -75,8 +126,16 @@ export function installSkills(rootDir: string, options: { force?: boolean } = {}
   mkdirSync(destDir, { recursive: true });
   const installed: string[] = [];
   for (const name of templates) {
-    copyFileSync(join(SKILLS_TEMPLATE_DIR, name), join(destDir, name));
-    installed.push(join(SKILLS_DEST_SUBDIR, name));
+    try {
+      copyFileSync(join(templateDir, name), join(destDir, name));
+      installed.push(join(SKILLS_DEST_SUBDIR, name));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new SkillsInstallError(
+        `Failed to copy ${name} into ${SKILLS_DEST_SUBDIR}: ${msg}`,
+        installed,
+      );
+    }
   }
   return installed;
 }
@@ -89,21 +148,30 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     throw new Error(".artgraph.json already exists. Use --force to overwrite.");
   }
 
+  // Pre-flight: fail before any write if --with-skills cannot proceed cleanly
+  // (templates missing, conflicts without --force). Keeps partial-state windows
+  // closed: validation failure leaves disk untouched.
+  if (options.withSkills) {
+    validateSkillsInstall(abs, { force: options.force });
+  }
+
   const detection = detectProject(abs);
   const config = generateConfig(detection);
 
-  const skillsInstalled = options.withSkills
-    ? installSkills(abs, { force: options.force })
-    : undefined;
-
   if (options.noScan) {
     writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+    const skillsInstalled = options.withSkills
+      ? installSkills(abs, { force: options.force })
+      : undefined;
     return { configPath, config, sddTools: detection.sddTools, warnings: [], skillsInstalled };
   }
 
   const result = scan(abs, config);
   reconcile(abs, config, result.graph);
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  const skillsInstalled = options.withSkills
+    ? installSkills(abs, { force: options.force })
+    : undefined;
 
   const lockPath = resolve(abs, config.lockFile);
 
