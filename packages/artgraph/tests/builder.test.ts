@@ -331,7 +331,7 @@ artgraph:
 });
 
 describe("buildGraph: convention inference (C-3)", () => {
-  const convConfig: SpectraceConfig = {
+  const convConfig: ArtgraphConfig = {
     include: [],
     specDirs: ["specs"],
     testPatterns: [],
@@ -345,6 +345,16 @@ describe("buildGraph: convention inference (C-3)", () => {
       (e) => e.kind === "derives_from" && e.source === source && e.target === target,
     );
 
+  // Helper: derives_from edges originating from a given dir (by source-id prefix
+  // for auto-generated doc ids; pure prefix check on `source` is enough since
+  // the fixtures don't reuse stem names across dirs in a way that overlaps).
+  const derivesFromDir = (dirPrefix: string) => (graph: {
+    edges: { source: string; target: string; kind: string }[];
+  }) =>
+    graph.edges.filter(
+      (e) => e.kind === "derives_from" && e.source.startsWith(dirPrefix),
+    );
+
   it("infers kiro chain (design→requirements, tasks→design)", () => {
     const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
 
@@ -354,6 +364,9 @@ describe("buildGraph: convention inference (C-3)", () => {
     expect(
       derivesFrom("doc:kiro-feature/tasks.md", "doc:kiro-feature/design.md")(graph),
     ).toBe(true);
+    // Lock in *exactly* two edges out of this dir — catches accidental
+    // over-generation (e.g. spec-kit pairs firing in a kiro dir).
+    expect(derivesFromDir("doc:kiro-feature/")(graph)).toHaveLength(2);
   });
 
   it("infers spec-kit chain (plan→spec, tasks→plan, research→spec)", () => {
@@ -368,6 +381,8 @@ describe("buildGraph: convention inference (C-3)", () => {
     expect(
       derivesFrom("doc:speckit-feature/research.md", "doc:speckit-feature/spec.md")(graph),
     ).toBe(true);
+    // No kiro pairs should fire here.
+    expect(derivesFromDir("doc:speckit-feature/")(graph)).toHaveLength(3);
   });
 
   it("matches file names case-insensitively", () => {
@@ -413,6 +428,46 @@ describe("buildGraph: convention inference (C-3)", () => {
     expect(crossDir).toHaveLength(0);
   });
 
+  it("in a mixed kiro+spec-kit dir, `tasks` gets BOTH parent chains", () => {
+    // Locked-in behavior: the shared `tasks` stem appears in both presets, and
+    // edge dedup keys by `source|target|kind` — so `tasks→design` and
+    // `tasks→plan` are distinct keys and both survive. This is intentional
+    // (a dir advertising both tools genuinely has two chains), but downstream
+    // `dependsOn` will list both. If this assumption ever changes, update this
+    // test, the comment in src/graph/builder.ts:CONVENTION_EDGES, and the
+    // README "Doc graph" section together.
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    expect(
+      derivesFrom("doc:mixed-tools/tasks.md", "doc:mixed-tools/design.md")(graph),
+    ).toBe(true);
+    expect(
+      derivesFrom("doc:mixed-tools/tasks.md", "doc:mixed-tools/plan.md")(graph),
+    ).toBe(true);
+    // 3 edges total in this dir: design→(no requirements here), plan→(no spec
+    // here), so only the two `tasks→…` edges fire — locking in the exact count
+    // catches accidental over-generation in this overlap case too.
+    expect(derivesFromDir("doc:mixed-tools/")(graph)).toHaveLength(2);
+  });
+
+  it("defaults autoConventions to true when the key is omitted", () => {
+    // No `docGraph` key at all on the config — should behave like enabled.
+    const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
+
+    expect(
+      derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(graph),
+    ).toBe(true);
+
+    // And `docGraph` present but without `autoConventions` → still defaults.
+    const { graph: g2 } = buildGraph(CONV_FIXTURE_DIR, {
+      ...convConfig,
+      docGraph: {},
+    });
+    expect(
+      derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(g2),
+    ).toBe(true);
+  });
+
   it("generates no convention edges when autoConventions is false", () => {
     const { graph } = buildGraph(CONV_FIXTURE_DIR, {
       ...convConfig,
@@ -425,5 +480,13 @@ describe("buildGraph: convention inference (C-3)", () => {
     expect(
       derivesFrom("doc:speckit-feature/plan.md", "doc:speckit-feature/spec.md")(graph),
     ).toBe(false);
+
+    // Total derives_from across the fixture: only the frontmatter-declared
+    // `wf-design → wf-requirements` survives. Locking in the count proves no
+    // convention edge slipped through.
+    const allDerives = graph.edges.filter((e) => e.kind === "derives_from");
+    expect(allDerives).toHaveLength(1);
+    expect(allDerives[0].source).toBe("wf-design");
+    expect(allDerives[0].target).toBe("wf-requirements");
   });
 });

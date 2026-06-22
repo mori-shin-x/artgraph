@@ -21,12 +21,19 @@ interface CollectedReq {
 // Fixed convention presets (C-3). Each entry is a [from, to] pair of file-name
 // stems (lower-cased, extension-stripped) within the *same directory*; when both
 // files exist a `derives_from` edge is generated from the `from` doc to the `to`
-// doc. We keep a single flat list rather than per-preset maps because a user is
-// unlikely to mix SDD tools in one directory, and overlapping pairs (e.g. the
-// shared `tasks` stem) are naturally collapsed by edge dedup downstream.
+// doc. A single flat list is sufficient because mixing SDD tools in one
+// directory is rare.
 //
 //   kiro:     design→requirements, tasks→design
 //   spec-kit: plan→spec, tasks→plan, research→spec
+//
+// Note: the shared `tasks` stem produces *both* `tasks→design` and `tasks→plan`
+// when a directory happens to contain both `design.md` and `plan.md`. The dedup
+// step (key: `source|target|kind`) does NOT collapse these, since the targets
+// differ. This is intentional — a directory advertising both tools genuinely
+// has two parent chains — but downstream consumers (e.g. `lock.ts`) will see
+// `tasks` listed under both `design` and `plan`. See the `mixed dir` test in
+// builder.test.ts for the locked-in behavior.
 //
 // User-defined presets are intentionally omitted (YAGNI) until there is demand.
 const CONVENTION_EDGES: ReadonlyArray<readonly [from: string, to: string]> = [
@@ -299,8 +306,8 @@ export function buildGraph(
 // Generate `derives_from` edges by matching known file-name conventions within
 // each directory. Doc nodes are grouped by their containing directory so that a
 // Spec Kit `specs/NNN-feature/` subdir is treated as its own unit. File-name
-// matching is case-insensitive and extension-agnostic (the stem is lower-cased
-// and the extension stripped), covering `.markdown` and casing variations.
+// matching is case-insensitive (the stem is lower-cased before lookup). Only
+// `.md` files participate, because doc-node collection itself globs `**/*.md`.
 function inferConventionEdges(nodes: Map<string, GraphNode>): GraphEdge[] {
   // dir -> (file-name stem -> doc node id). The actual node id is used (honoring
   // frontmatter `node_id` overrides), not the raw path.
@@ -314,8 +321,9 @@ function inferConventionEdges(nodes: Map<string, GraphNode>): GraphEdge[] {
       stems = new Map();
       byDir.set(dir, stems);
     }
-    // If two files share a stem (e.g. requirements.md + requirements.markdown),
-    // keep the first encountered — generating edges for both would be ambiguous.
+    // If two files share a stem (collision via casing, e.g. Design.md +
+    // design.md), keep the first encountered — generating edges for both
+    // would be ambiguous.
     if (!stems.has(stem)) stems.set(stem, node.id);
   }
 
