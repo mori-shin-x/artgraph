@@ -18,6 +18,24 @@ function deepCopyEntry(entry: LockEntry): LockEntry {
   return JSON.parse(JSON.stringify(entry));
 }
 
+function dedupe(arr: string[]): string[] {
+  return [...new Set(arr)];
+}
+
+/**
+ * Replace each `oldId` element of `arr` with every entry of `newIds`
+ * (one-to-many expansion), preserving order and de-duplicating.
+ */
+function expandRef(arr: string[] | undefined, oldId: string, newIds: string[]): string[] | undefined {
+  if (!arr) return arr;
+  const out: string[] = [];
+  for (const ref of arr) {
+    if (ref === oldId) out.push(...newIds);
+    else out.push(ref);
+  }
+  return dedupe(out);
+}
+
 /**
  * Replace references to oldId with newId in an entry's impl, tests, and dependsOn arrays.
  * Returns a new entry (does not mutate).
@@ -26,15 +44,26 @@ function updateReferences(entry: LockEntry, oldId: string, newId: string): LockE
   const updated = deepCopyEntry(entry);
 
   if (updated.impl) {
-    updated.impl = updated.impl.map((ref) => (ref === oldId ? newId : ref));
+    updated.impl = dedupe(updated.impl.map((ref) => (ref === oldId ? newId : ref)));
   }
   if (updated.tests) {
-    updated.tests = updated.tests.map((ref) => (ref === oldId ? newId : ref));
+    updated.tests = dedupe(updated.tests.map((ref) => (ref === oldId ? newId : ref)));
   }
   if (updated.dependsOn) {
-    updated.dependsOn = updated.dependsOn.map((ref) => (ref === oldId ? newId : ref));
+    updated.dependsOn = dedupe(updated.dependsOn.map((ref) => (ref === oldId ? newId : ref)));
   }
 
+  return updated;
+}
+
+/**
+ * Expand references to oldId into newIds across an entry's reference arrays.
+ */
+function expandReferences(entry: LockEntry, oldId: string, newIds: string[]): LockEntry {
+  const updated = deepCopyEntry(entry);
+  updated.impl = expandRef(updated.impl, oldId, newIds);
+  updated.tests = expandRef(updated.tests, oldId, newIds);
+  updated.dependsOn = expandRef(updated.dependsOn, oldId, newIds);
   return updated;
 }
 
@@ -69,7 +98,8 @@ export function renameLockKey(
 }
 
 /**
- * Delete oldId and create empty entries for each newId.
+ * Delete oldId and create empty entries for each newId. References to oldId in
+ * *other* entries are expanded to all newIds so the graph stays valid (C2).
  * Returns a deep copy — the input lock is not mutated.
  */
 export function splitLockKey(
@@ -80,27 +110,39 @@ export function splitLockKey(
   const result = deepCopyLock(lock);
   const changes: LockChange[] = [];
 
+  const sourceSpecFile = result[oldId]?.specFile;
+
   if (oldId in result) {
     delete result[oldId];
     changes.push({ kind: "delete", oldKey: oldId });
   }
 
   for (const newId of newIds) {
-    result[newId] = {
+    const entry: LockEntry = {
       contentHash: "",
       impl: [],
       tests: [],
       lastReconciled: new Date().toISOString(),
     };
+    if (sourceSpecFile) entry.specFile = sourceSpecFile;
+    result[newId] = entry;
     changes.push({ kind: "create", newKey: newId });
+  }
+
+  // Expand references to the split ID across every other entry.
+  for (const key of Object.keys(result)) {
+    if (isSymbolKey(key) || newIds.includes(key)) continue;
+    result[key] = expandReferences(result[key], oldId, newIds);
   }
 
   return { lock: result, changes };
 }
 
 /**
- * Merge multiple source entries into a single new entry.
- * Combines and deduplicates impl, tests, and dependsOn arrays.
+ * Merge multiple source entries into a single new entry. Combines and
+ * deduplicates impl, tests and dependsOn, preserves specFile (H5), updates
+ * references to any source ID in *other* entries to point at newId (C2), and
+ * drops self-references in the merged entry.
  * Returns a deep copy — the input lock is not mutated.
  */
 export function mergeLockKeys(
@@ -115,6 +157,7 @@ export function mergeLockKeys(
   const allTests: string[] = [];
   const allDependsOn: string[] = [];
   let contentHash = "";
+  let specFile: string | undefined;
   let firstFound = false;
 
   for (const sourceId of sourceIds) {
@@ -123,8 +166,10 @@ export function mergeLockKeys(
 
       if (!firstFound) {
         contentHash = entry.contentHash;
+        specFile = entry.specFile;
         firstFound = true;
       }
+      if (specFile === undefined && entry.specFile) specFile = entry.specFile;
 
       if (entry.impl) allImpl.push(...entry.impl);
       if (entry.tests) allTests.push(...entry.tests);
@@ -135,16 +180,17 @@ export function mergeLockKeys(
     changes.push({ kind: "delete", oldKey: sourceId });
   }
 
-  const dedupe = (arr: string[]): string[] => [...new Set(arr)];
-
+  const sourceSet = new Set(sourceIds);
   const merged: LockEntry = {
     contentHash,
     lastReconciled: new Date().toISOString(),
   };
+  if (specFile) merged.specFile = specFile;
 
   const dedupedImpl = dedupe(allImpl);
   const dedupedTests = dedupe(allTests);
-  const dedupedDeps = dedupe(allDependsOn);
+  // A merged requirement must not depend on its own former parts or on itself.
+  const dedupedDeps = dedupe(allDependsOn).filter((d) => !sourceSet.has(d) && d !== newId);
 
   if (dedupedImpl.length > 0) merged.impl = dedupedImpl;
   if (dedupedTests.length > 0) merged.tests = dedupedTests;
@@ -152,6 +198,17 @@ export function mergeLockKeys(
 
   result[newId] = merged;
   changes.push({ kind: "create", newKey: newId });
+
+  // Repoint references to any source ID in other entries to newId.
+  for (const key of Object.keys(result)) {
+    if (isSymbolKey(key) || key === newId) continue;
+    let entry = result[key];
+    for (const sourceId of sourceIds) {
+      if (sourceId === newId) continue;
+      entry = updateReferences(entry, sourceId, newId);
+    }
+    result[key] = entry;
+  }
 
   return { lock: result, changes };
 }
