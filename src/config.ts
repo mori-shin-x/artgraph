@@ -64,6 +64,23 @@ function validateReqPatterns(patterns: ReqPatternConfig): void {
   }
 }
 
+// `testResultPaths` is fed straight into glob, so a non-string element (e.g.
+// `[123]`) would crash deep inside globSync with an opaque error. Validate the
+// shape up front and fail with a clear, actionable message instead.
+function validateTestResultPaths(value: unknown): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    throw new Error("Invalid testResultPaths: must be an array of strings");
+  }
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      throw new Error(
+        `Invalid testResultPaths: every entry must be a string (got ${typeof entry})`,
+      );
+    }
+  }
+}
+
 export function loadConfig(rootDir: string): SpectraceConfig {
   const configPath = resolve(rootDir, CONFIG_FILE);
   if (!existsSync(configPath)) return { ...DEFAULT_CONFIG };
@@ -79,6 +96,8 @@ export function loadConfig(rootDir: string): SpectraceConfig {
   if (raw.reqPatterns) {
     validateReqPatterns(raw.reqPatterns);
   }
+
+  validateTestResultPaths(raw.testResultPaths);
 
   const lockFile = raw.lockFile ?? DEFAULT_CONFIG.lockFile;
   const resolvedLock = resolve(rootDir, lockFile);
@@ -97,5 +116,6 @@ export function loadConfig(rootDir: string): SpectraceConfig {
     reqPatterns: raw.reqPatterns,
     docGraph: raw.docGraph,
     mode: raw.mode === "symbol" ? "symbol" : "file",
+    testResultPaths: raw.testResultPaths,
   };
 }
