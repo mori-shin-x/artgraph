@@ -6,8 +6,8 @@ spectrace:
   node_id: "doc:meta-coerce"
 ---
 
-# メタデータ型変換
+# Metadata Coercion
 
 ## Requirements
 
-- COERCE-001: 非文字列メタデータの文字列化
+- COERCE-001: non-string frontmatter values are coerced to strings
