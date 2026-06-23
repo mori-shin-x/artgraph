@@ -289,6 +289,164 @@ describe("buildGraph: contains edges with autoNodes=false + explicit node_id", (
   });
 });
 
+describe("buildGraph: inline markdown links (issue #11)", () => {
+  it("creates depends_on edges from inline links to existing doc nodes", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    // source.md → target.md (which has node_id "il-target")
+    const edge = graph.edges.find(
+      (e) =>
+        e.kind === "depends_on" &&
+        e.source === "doc:inline-links/source.md" &&
+        e.target === "il-target",
+    );
+    expect(edge).toBeDefined();
+  });
+
+  it("dedupes inline-link edges so source.md contributes only one depends_on to target", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    const edges = graph.edges.filter(
+      (e) =>
+        e.kind === "depends_on" &&
+        e.source === "doc:inline-links/source.md" &&
+        e.target === "il-target",
+    );
+    expect(edges).toHaveLength(1);
+  });
+
+  it("resolves reference-style inline links to the same target", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    const edge = graph.edges.find(
+      (e) =>
+        e.kind === "depends_on" &&
+        e.source === "doc:inline-links/ref-source.md" &&
+        e.target === "il-target",
+    );
+    expect(edge).toBeDefined();
+  });
+
+  it("does not generate inline edges from code-fenced links", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    const fenced = graph.edges.filter(
+      (e) => e.source === "doc:inline-links/code-fence.md" && e.target === "il-target",
+    );
+    // Only the trailing real link creates an edge — exactly 1, not 4
+    expect(fenced).toHaveLength(1);
+  });
+
+  it("warns unresolved-link when a .md target does not exist", () => {
+    const { warnings } = buildGraph(FIXTURE_DIR, config);
+    const w = warnings.find(
+      (w) => w.type === "unresolved-link" && w.id === "specs/inline-links/missing.md",
+    );
+    expect(w).toBeDefined();
+    expect(w!.files).toContain("specs/inline-links/dead-source.md");
+  });
+
+  it("frontmatter derives_from suppresses inline depends_on to the same target", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    // conflict.md frontmatter: derives_from il-target. Inline link also points to target.md.
+    // We must keep the frontmatter edge and drop the inline one.
+    const fromConflict = graph.edges.filter(
+      (e) => e.source === "il-conflict" && e.target === "il-target",
+    );
+    expect(fromConflict).toHaveLength(1);
+    expect(fromConflict[0].kind).toBe("derives_from");
+  });
+
+  it("respects docGraph.inlineLinks=false", () => {
+    const off: ArtgraphConfig = {
+      ...config,
+      docGraph: { inlineLinks: false },
+    };
+    const { graph, warnings } = buildGraph(FIXTURE_DIR, off);
+    const inlineEdges = graph.edges.filter(
+      (e) => e.kind === "depends_on" && e.source === "doc:inline-links/source.md",
+    );
+    expect(inlineEdges).toHaveLength(0);
+    // No unresolved-link warnings either when the feature is off
+    const unresolved = warnings.filter((w) => w.type === "unresolved-link");
+    expect(unresolved).toHaveLength(0);
+  });
+
+  it("respects docGraph.linkWarnings.unresolved=false", () => {
+    const quiet: ArtgraphConfig = {
+      ...config,
+      docGraph: { linkWarnings: { unresolved: false } },
+    };
+    const { warnings } = buildGraph(FIXTURE_DIR, quiet);
+    const unresolved = warnings.filter((w) => w.type === "unresolved-link");
+    expect(unresolved).toHaveLength(0);
+  });
+
+  it("dedupes unresolved-link warnings when the same source links to the same missing target multiple times", () => {
+    const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-warn-dedup");
+    const tmpSpecs = resolve(tmpRoot, "specs");
+    mkdirSync(tmpSpecs, { recursive: true });
+    writeFileSync(
+      resolve(tmpSpecs, "loud.md"),
+      `# Loud\n\n[a](./gone.md) [b](./gone.md) [c](./gone.md)\n`,
+    );
+
+    try {
+      const tmpConfig: ArtgraphConfig = { ...config, include: [], testPatterns: [] };
+      const { warnings } = buildGraph(tmpRoot, tmpConfig);
+      const unresolved = warnings.filter(
+        (w) => w.type === "unresolved-link" && w.id === "specs/gone.md",
+      );
+      // 3 inline links → 1 warning, not 3
+      expect(unresolved).toHaveLength(1);
+      expect(unresolved[0].files).toContain("specs/loud.md");
+    } finally {
+      rmSync(tmpRoot, { recursive: true });
+    }
+  });
+
+  it("emits out-of-scope-link only when the target exists outside specDirs and the warning is enabled", () => {
+    // tmp layout:
+    //   specs/foo.md   — inline link to ../docs/notes.md
+    //   docs/notes.md  — exists, but `docs/` is NOT in specDirs
+    const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-out-of-scope");
+    const tmpSpecs = resolve(tmpRoot, "specs");
+    const tmpDocs = resolve(tmpRoot, "docs");
+    mkdirSync(tmpSpecs, { recursive: true });
+    mkdirSync(tmpDocs, { recursive: true });
+    writeFileSync(
+      resolve(tmpSpecs, "foo.md"),
+      `# Foo\n\nSee [notes](../docs/notes.md).\n`,
+    );
+    writeFileSync(resolve(tmpDocs, "notes.md"), `# Notes\n`);
+
+    try {
+      const tmpConfig: ArtgraphConfig = {
+        ...config,
+        include: [],
+        testPatterns: [],
+        // specDirs intentionally excludes "docs" so the target is "out of scope"
+        specDirs: ["specs"],
+      };
+
+      // Default (outOfScope: false) — silent
+      const silentResult = buildGraph(tmpRoot, tmpConfig);
+      expect(silentResult.warnings.some((w) => w.type === "out-of-scope-link")).toBe(false);
+      // It's also not an unresolved-link, because the file exists
+      expect(silentResult.warnings.some((w) => w.type === "unresolved-link")).toBe(false);
+
+      // Opt-in (outOfScope: true) — emits warning
+      const loudResult = buildGraph(tmpRoot, {
+        ...tmpConfig,
+        docGraph: { linkWarnings: { outOfScope: true } },
+      });
+      const w = loudResult.warnings.find(
+        (w) => w.type === "out-of-scope-link" && w.id === "docs/notes.md",
+      );
+      expect(w).toBeDefined();
+      expect(w!.files).toContain("specs/foo.md");
+    } finally {
+      rmSync(tmpRoot, { recursive: true });
+    }
+  });
+});
+
 describe("buildGraph: lock file excludes contains edges (T065)", () => {
   it("should not include contains-only dependencies in lock file", () => {
     // Use an isolated fixture where a doc has contains edges but no depends_on/derives_from

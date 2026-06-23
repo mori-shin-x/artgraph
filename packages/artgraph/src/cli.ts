@@ -576,6 +576,16 @@ function printWarnings(warnings: BuildWarning[]) {
       case "reserved-prefix":
         console.error(`WARNING: reserved prefix in ID "${w.id}" in ${w.files.join(", ")}`);
         break;
+      case "unresolved-link":
+        console.error(
+          `WARNING: unresolved-link "${w.id}" referenced from ${w.files.join(", ")}`,
+        );
+        break;
+      case "out-of-scope-link":
+        console.error(
+          `WARNING: out-of-scope-link "${w.id}" referenced from ${w.files.join(", ")} (outside specDirs)`,
+        );
+        break;
     }
   }
 }

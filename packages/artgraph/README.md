@@ -16,27 +16,28 @@ npx artgraph init      # writes .artgraph.json
 
 ## How references are expressed
 
-| Artifact            | Reference form                                                                                             |
-| ------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Spec list item      | `- REQ-001: description`                                                                                   |
-| Spec heading (Kiro) | `### Requirement 1: description`                                                                           |
-| Implementation      | `// @impl REQ-001`                                                                                         |
-| Test                | `it("[REQ-001] …")` or `// req: "REQ-001"`                                                                 |
-| Doc relations       | frontmatter `artgraph.depends_on` / `derives_from`, or inferred from kiro / spec-kit file-name conventions |
+| Artifact            | Reference form                                  |
+| ------------------- | ----------------------------------------------- |
+| Spec list item      | `- REQ-001: description`                        |
+| Spec heading (Kiro) | `### Requirement 1: description`                |
+| Implementation      | `// @impl REQ-001`                              |
+| Test                | `it("[REQ-001] …")` or `// req: "REQ-001"`      |
+| Doc relations       | frontmatter `artgraph.depends_on` / `derives_from`, inferred from kiro / spec-kit file-name conventions, or inline `[text](./other.md)` links |
 
 Custom grammars are configurable via `reqPatterns` in `.artgraph.json`.
 
 ## Doc graph (`docGraph` config)
 
 Doc nodes (one per markdown file under `specDirs`) and their relations can be
-generated three ways. All are enabled by default and can be turned off
+generated four ways. All are enabled by default and can be turned off
 individually via the `docGraph` block in `.artgraph.json`:
 
-| Key               | Default | What it does                                                                                                                                                                   |
-| ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `autoNodes`       | `true`  | Register every `*.md` under `specDirs` as a `doc` node, even without frontmatter.                                                                                              |
-| `autoContains`    | `true`  | Emit `contains` edges from each doc node to req nodes defined in the same file.                                                                                                |
-| `autoConventions` | `true`  | Emit `derives_from` edges by matching kiro / spec-kit file-name conventions within the same directory (see table below). Frontmatter-declared edges are deduped against these. |
+| Key                | Default | What it does                                                                                                                                                            |
+| ------------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autoNodes`        | `true`  | Register every `*.md` under `specDirs` as a `doc` node, even without frontmatter.                                                                                       |
+| `autoContains`     | `true`  | Emit `contains` edges from each doc node to req nodes defined in the same file.                                                                                         |
+| `autoConventions`  | `true`  | Emit `derives_from` edges by matching kiro / spec-kit file-name conventions within the same directory (see table below). Frontmatter-declared edges are deduped against these. |
+| `inlineLinks`      | `true`  | Emit `depends_on` edges from inline markdown links between spec/doc files (see "Inline links" below). Frontmatter-declared edges on the same `(source, target)` pair always win. |
 
 ### Conventions inferred by `autoConventions`
 
@@ -60,16 +61,39 @@ Notes:
   not run cycle detection — keep frontmatter edges aligned with the convention
   direction.
 
-To opt out:
+### Inline links extracted by `inlineLinks`
+
+Inline markdown links between spec/doc files are picked up automatically and
+emitted as `depends_on` edges (e.g. `design.md` with `See [requirements](./requirements.md)`
+generates `doc:design.md --depends_on--> doc:requirements.md`). Direct, reference-style
+(`[x][ref]` + `[ref]: ./...`), and shortcut forms are all supported; anchors and
+queries are stripped; links inside code fences and inline code are ignored. A
+frontmatter relation (`derives_from` / `depends_on`) on the same `(source, target)`
+pair always wins over an inline link.
+
+To opt out of any of the above:
 
 ```jsonc
 // .artgraph.json
 {
   "docGraph": {
-    "autoConventions": false,
-  },
+    "autoConventions": false,        // default true — disable file-name convention inference
+    "inlineLinks": true,             // default true — set false to disable inline-link extraction
+    "linkWarnings": {
+      "unresolved": true,            // default true — warn on links to missing .md
+      "outOfScope": false            // default false — warn on .md outside specDirs
+    }
+  }
 }
 ```
+
+> **Behavior change on upgrade.** `inlineLinks` and `linkWarnings.unresolved`
+> default to `true`, so an upgrade in place can both add `depends_on` edges to
+> the graph and emit new `WARNING: unresolved-link` lines on stderr for inline
+> links pointing at non-existent `.md` files. If you gate CI on stderr or on
+> graph stability, opt out with `"docGraph": { "inlineLinks": false }` (and/or
+> `"linkWarnings": { "unresolved": false }`) and migrate at your pace.
+
 
 ## Commands
 
