@@ -3,6 +3,8 @@ import { join, resolve } from "node:path";
 import {
   DEFAULT_CONFIG,
   type ArtgraphConfig,
+  type IntegrateResult,
+  type IntegrationProviderId,
   type ScanSummary,
   type SddToolInfo,
   type DetectionResult,
@@ -10,6 +12,7 @@ import {
 } from "./types.js";
 import { scan, reconcile } from "./scan.js";
 import type { BuildWarning } from "./graph/builder.js";
+import { getProviderStatuses, runIntegrate } from "./integrate/index.js";
 
 const SKILLS_TEMPLATE_DIR = resolve(import.meta.dirname, "../templates/skills");
 const SKILLS_DEST_SUBDIR = join(".claude", "skills");
@@ -31,6 +34,22 @@ export interface InitResult {
   warnings: BuildWarning[];
   lockPath?: string;
   skillsInstalled?: string[];
+  /**
+   * Per-provider result for any one-shot integrations triggered by
+   * `--integrate=<tools>` (FR-022/023/024). Empty / undefined when the
+   * caller did not request any integration.
+   *
+   * `id` is included alongside the `IntegrateResult` so the formatter can
+   * still report providers that were skipped (no IntegrateResult emitted)
+   * via the `integrationWarnings` array.
+   */
+  integrationResults?: IntegrateResult[];
+  /**
+   * Human-readable warnings emitted while running `--integrate=<tools>`
+   * (e.g. "kiro not detected, skipping integration"). These never fail the
+   * init itself but are surfaced in the CLI output.
+   */
+  integrationWarnings?: string[];
 }
 
 export function detectProject(rootDir: string): DetectionResult {
@@ -43,11 +62,17 @@ export function detectProject(rootDir: string): DetectionResult {
     sddTools.push({ name: "Kiro", marker: ".kiro" });
   }
 
+  // FR-019: share the `detect` / `isInstalled` logic with `integrate` by
+  // delegating to the registered providers. `getProviderStatuses` lazily
+  // registers built-ins so this works even when the CLI was never imported.
+  const integrations = getProviderStatuses(abs);
+
   return {
     hasSrc: existsSync(resolve(abs, "src")),
     hasSpecs: existsSync(resolve(abs, "specs")),
     hasDocs: existsSync(resolve(abs, "docs")),
     sddTools,
+    integrations,
   };
 }
 
@@ -163,7 +188,16 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     const skillsInstalled = options.withSkills
       ? installSkills(abs, { force: options.force })
       : undefined;
-    return { configPath, config, sddTools: detection.sddTools, warnings: [], skillsInstalled };
+    const integration = runRequestedIntegrations(abs, detection, options);
+    return {
+      configPath,
+      config,
+      sddTools: detection.sddTools,
+      warnings: [],
+      skillsInstalled,
+      integrationResults: integration.results,
+      integrationWarnings: integration.warnings,
+    };
   }
 
   const result = scan(abs, config);
@@ -174,6 +208,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     : undefined;
 
   const lockPath = resolve(abs, config.lockFile);
+  const integration = runRequestedIntegrations(abs, detection, options);
 
   return {
     configPath,
@@ -190,5 +225,64 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     warnings: result.warnings,
     lockPath,
     skillsInstalled,
+    integrationResults: integration.results,
+    integrationWarnings: integration.warnings,
+  };
+}
+
+/**
+ * Apply `--integrate=<tools>` one-shot integrations after the rest of
+ * `runInit` has finished writing `.artgraph.json` (FR-022). Each tool runs
+ * via `runIntegrate` so the on-disk effect is identical to the standalone
+ * `artgraph integrate <tool>` command (FR-024).
+ *
+ * Tools that aren't detected are warned about and skipped — the surrounding
+ * `init` always exits successfully (FR-022 末尾).
+ */
+function runRequestedIntegrations(
+  rootDir: string,
+  detection: DetectionResult,
+  options: InitOptions,
+): { results?: IntegrateResult[]; warnings?: string[] } {
+  if (!options.integrations) return {};
+
+  // Resolve the requested ids. "all" → every detected provider.
+  const statuses = detection.integrations ?? [];
+  let requested: IntegrationProviderId[];
+  if (options.integrations === "all") {
+    requested = statuses.filter((s) => s.detected).map((s) => s.providerId);
+  } else {
+    requested = options.integrations;
+  }
+
+  const results: IntegrateResult[] = [];
+  const warnings: string[] = [];
+
+  for (const id of requested) {
+    const status = statuses.find((s) => s.providerId === id);
+    if (!status) {
+      warnings.push(`unknown integration provider: ${id}`);
+      continue;
+    }
+    if (!status.detected) {
+      warnings.push(`WARNING: ${status.displayName} not detected, skipping integration`);
+      continue;
+    }
+    try {
+      const r = runIntegrate(rootDir, id, {
+        // Only speckit consumes `gate`; other providers ignore unknown opts.
+        gate: options.integrateGate,
+      });
+      results.push(r);
+    } catch (e) {
+      // Surface as a warning instead of failing the init.
+      const msg = e instanceof Error ? e.message : String(e);
+      warnings.push(`WARNING: ${id} integration failed: ${msg}`);
+    }
+  }
+
+  return {
+    results: results.length > 0 ? results : undefined,
+    warnings: warnings.length > 0 ? warnings : undefined,
   };
 }

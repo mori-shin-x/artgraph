@@ -67,6 +67,35 @@ describe("detectProject", () => {
     const result = detectProject(tmp);
     expect(result.sddTools).toEqual([]);
   });
+
+  it("returns an integrations array (one IntegrationStatus per registered provider)", () => {
+    const result = detectProject(tmp);
+    expect(Array.isArray(result.integrations)).toBe(true);
+    // At least the two built-in providers (speckit, kiro) are registered when
+    // running tests that import the CLI surface; the field itself is the
+    // contract we're checking here.
+    const ids = (result.integrations ?? []).map((s) => s.providerId);
+    expect(ids).toContain("speckit");
+    expect(ids).toContain("kiro");
+  });
+
+  it("aligns integrations[*].detected with the on-disk markers", () => {
+    mkdirSync(join(tmp, ".specify"));
+    const result = detectProject(tmp);
+    const speckit = (result.integrations ?? []).find((s) => s.providerId === "speckit")!;
+    const kiro = (result.integrations ?? []).find((s) => s.providerId === "kiro")!;
+    expect(speckit.detected).toBe(true);
+    expect(speckit.installed).toBe(false);
+    expect(kiro.detected).toBe(false);
+    expect(kiro.installed).toBe(false);
+  });
+
+  it("preserves existing sddTools field (back-compat) alongside integrations", () => {
+    mkdirSync(join(tmp, ".kiro"));
+    const result = detectProject(tmp);
+    expect(result.sddTools).toContainEqual({ name: "Kiro", marker: ".kiro" });
+    expect(result.integrations).toBeDefined();
+  });
 });
 
 describe("generateConfig", () => {
