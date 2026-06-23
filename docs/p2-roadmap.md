@@ -15,6 +15,7 @@
 | 4   | Spec Kit 残対応 (FR-007/008 + 層2/3) | `p2/speckit-remaining` | なし | S      |
 | 5   | テスト結果取り込み                   | `p2/test-results`      | なし | S      |
 | 6   | PreToolUse Hook (shell 版)           | `p2/pretool-hook`      | なし | S      |
+| 7   | SDD ツールワークフロー統合 ✅ 完了   | `feat/sdd-workflow`    | なし | M      |
 
 全て独立して進められる。依存関係なし。
 
@@ -282,6 +283,38 @@ spectrace の impact 結果を `additionalContext` として注入し、
 - HTTP デーモン (`spectrace daemon`): グラフをメモリ保持して ~50ms で応答
 - fs.watch による増分再構築
 - PID ファイルによるプロセス管理
+
+---
+
+## 7. SDD ツールワークフロー統合 ✅ リリース済
+
+**Status**: 2026-06-23 リリース（GitHub Issue [#16](https://github.com/ShintaroMorimoto/artgraph/issues/16) / branch `feat/sdd-workflow`）
+
+`artgraph integrate <tool>` で Spec Kit Extension / Kiro Steering ファイルを冪等に
+生成し、SDD ワークフロー側に scan / reconcile / check の発火点を直接埋め込む機能。
+詳細仕様: [specs/009-sdd-integration/spec.md](../specs/009-sdd-integration/spec.md)。
+
+### 実装済み
+
+- `artgraph integrate speckit` — `.specify/extensions/spectrace/` 一式 + `.specify/extensions.yml`
+  の `after_tasks` / `after_implement` / `before_implement (--gate)` への hook 追記
+  （プロバイダ抽象 + 専用 YAML エディタで comment / order 保持）
+- `artgraph integrate kiro` — `.kiro/steering/spectrace.md` を共通 agent-guidance
+  generator 経由で配置（将来 Kiro 公式 Hook API 公開時の追加モードを破壊しない
+  forward-compat 設計）
+- `artgraph integrate list` — provider × detect × installed のクロス表表示
+- `artgraph init --integrate=<tools>` / `--integrate-gate` の one-shot 統合
+- `artgraph init` 末尾の Tip: 案内（detect 済み・未 install のツールのみ）
+- 全 disk 書き込みは atomic-write + 部分失敗時の rollback
+- Quickstart の 6 シナリオを E2E + unit テストで網羅
+
+### 後続予定（このイテレーション外）
+
+- OpenSpec 用 provider 追加（[#25](https://github.com/ShintaroMorimoto/artgraph/issues/25)
+  検討中）— 既存プロバイダ抽象（FR-018）に新規 provider を 1 ファイル追加するだけで対応可
+- Kiro 公式 Hook API が公開された段階での `mode: "hook"` 追加（FR-011 のレール
+  上に乗る）
+- Claude Code Skills テンプレートの同時配布（後続イテレーションで検討）
 
 ---
 

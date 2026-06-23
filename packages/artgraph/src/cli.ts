@@ -25,6 +25,13 @@ import { runInit } from "./init.js";
 import { loadTestResults } from "./test-results.js";
 import { executeRename, executeSplit, executeMerge } from "./rename-executor.js";
 import type { RenameResult } from "./rename-executor.js";
+import { getProviderStatuses, registerBuiltinProviders, runIntegrate } from "./integrate/index.js";
+import type { IntegrateResult, IntegrationProviderId } from "./types.js";
+
+// Wire up the built-in integration providers (speckit / kiro) before
+// commander parses argv. Today the registration body is empty (T014); US1
+// / US2 fill it in.
+registerBuiltinProviders();
 
 const program = new Command();
 
@@ -62,14 +69,38 @@ program
     "--with-skills",
     "Install Claude Code skills (plan, verify, coverage, rename) into .claude/skills/",
   )
+  .option(
+    "--integrate <tools>",
+    "Comma-separated SDD tools to integrate one-shot (speckit, kiro, all)",
+  )
+  .option("--integrate-gate", "Pass --gate to speckit during one-shot integration")
+  .option("--no-integrate-gate", "Pass --no-gate to speckit during one-shot integration")
   .option("--format <format>", "Output format: json | text", "text")
   .action((opts) => {
     const rootDir = process.cwd();
+
+    // Parse --integrate: "all" stays as the literal sentinel; otherwise it's
+    // a comma-separated provider id list. Empty/undefined disables one-shot
+    // integration entirely.
+    const integrations = parseInitIntegrations(opts.integrate);
+
+    // commander stores --integrate-gate / --no-integrate-gate in
+    // `opts.integrateGate`. Preserve `undefined` so the speckit provider
+    // distinguishes "no opinion" from "explicitly off" (FR-003 mirrors).
+    const integrateGate: boolean | undefined = Object.prototype.hasOwnProperty.call(
+      opts,
+      "integrateGate",
+    )
+      ? (opts.integrateGate as boolean)
+      : undefined;
+
     try {
       const result = runInit(rootDir, {
         force: opts.force,
         noScan: !opts.scan,
         withSkills: opts.withSkills,
+        integrations,
+        integrateGate,
       });
 
       if (opts.format === "json") {
@@ -82,6 +113,8 @@ program
             warnings: result.warnings,
             lockPath: result.lockPath ?? null,
             skillsInstalled: result.skillsInstalled ?? null,
+            integrationResults: result.integrationResults ?? null,
+            integrationWarnings: result.integrationWarnings ?? null,
           }),
         );
       } else {
@@ -106,8 +139,6 @@ program
           }
           console.log(`\nCreated .artgraph.json`);
           console.log(`Created ${result.config.lockFile}`);
-          console.log(`\nRun "artgraph check" to verify traceability.`);
-          console.log(`Run "artgraph impact --diff" to see impact of your changes.`);
         } else {
           console.log(`Created .artgraph.json (scan skipped)`);
           console.log(`\nTo scan later, run: artgraph scan && artgraph reconcile`);
@@ -116,6 +147,35 @@ program
           console.log(`\nInstalled ${result.skillsInstalled.length} Claude Code skills:`);
           for (const path of result.skillsInstalled) console.log(`  ${path}`);
         }
+
+        // ---- one-shot integration output (FR-022/023): per-tool sections ----
+        if (result.integrationResults && result.integrationResults.length > 0) {
+          for (const r of result.integrationResults) {
+            console.log("");
+            console.log(`=== Integration: ${r.providerId} ===`);
+            printIntegrateText(r, r.providerId);
+          }
+        }
+        if (result.integrationWarnings && result.integrationWarnings.length > 0) {
+          for (const w of result.integrationWarnings) {
+            // Warnings already carry their own "WARNING:" prefix when needed.
+            console.error(w);
+          }
+        }
+
+        // Closing hints + integration Tips (FR-012/013). Tips appear *after*
+        // the standard next-step lines so the user sees the actionable
+        // discovery cue last.
+        if (result.scanSummary) {
+          console.log(`\nRun "artgraph check" to verify traceability.`);
+          console.log(`Run "artgraph impact --diff" to see impact of your changes.`);
+        }
+
+        // Skip Tips entirely if the user already requested one-shot integration —
+        // the per-tool sections above already cover discovery.
+        if (!integrations) {
+          printIntegrationTips(rootDir);
+        }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -123,6 +183,51 @@ program
       process.exit(1);
     }
   });
+
+/**
+ * Parse the comma-separated value passed to `--integrate`. Returns:
+ *   - undefined when the flag was not supplied
+ *   - "all" when the user passed the special sentinel
+ *   - an array of provider ids otherwise (no validation here; `runInit`
+ *     handles unknown / undetected tools with a warning)
+ */
+function parseInitIntegrations(
+  raw: string | undefined,
+): IntegrationProviderId[] | "all" | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = raw.trim();
+  if (trimmed === "") return undefined;
+  if (trimmed === "all") return "all";
+  return trimmed
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0) as IntegrationProviderId[];
+}
+
+/**
+ * Emit per-provider "Tip:" lines for any registered integration that is
+ * detected but not yet installed (FR-012/013). Silent when nothing is
+ * pending so a fully-integrated repo doesn't see stale hints.
+ */
+function printIntegrationTips(rootDir: string): void {
+  const statuses = getProviderStatuses(rootDir);
+  for (const s of statuses) {
+    if (!s.detected || s.installed) continue;
+    if (s.providerId === "speckit") {
+      console.log(
+        `\nTip: Spec Kit detected. Run "artgraph integrate speckit" to wire artgraph into the SDD workflow.`,
+      );
+    } else if (s.providerId === "kiro") {
+      console.log(
+        `\nTip: Kiro detected. Run "artgraph integrate kiro" to add a steering file for the agent.`,
+      );
+    } else {
+      console.log(
+        `\nTip: ${s.displayName} detected. Run "artgraph integrate ${s.providerId}" to integrate.`,
+      );
+    }
+  }
+}
 
 program
   .command("scan")
@@ -558,6 +663,161 @@ function printCheckText(result: any) {
   }
   if (result.pass) {
     console.log("All checks passed.");
+  }
+}
+
+// `integrate` accepts a single positional that is either a provider id
+// (`speckit` / `kiro`) or the sub-command verb `list`. Commander 13's
+// nested sub-commands struggle with this hybrid shape (the parent's
+// positional arg collides with `.command("list")`), so we dispatch on the
+// argument inside the handler. Both surfaces share the same `--format`
+// option to keep CLI ergonomics consistent.
+program
+  .command("integrate <tool>")
+  .description(
+    "Integrate artgraph into an SDD tool's workflow (speckit | kiro), or 'list' to show providers",
+  )
+  .option("--gate", "(speckit only) Add before_implement gate hook")
+  .option("--no-gate", "(speckit only) Remove before_implement gate hook")
+  .option("--force", "Overwrite existing files")
+  .option("--uninstall", "Remove the integration (delete files / hook entries)")
+  .addOption(
+    new Option("--format <format>", "Output format").choices(["text", "json"]).default("text"),
+  )
+  .action((tool: string, opts) => {
+    const rootDir = process.cwd();
+
+    // Sub-command dispatch: `integrate list` reuses the same option surface
+    // (only --format applies; the rest are ignored for `list`).
+    if (tool === "list") {
+      runIntegrateList(rootDir, opts.format);
+      return;
+    }
+
+    // commander stores --gate / --no-gate in `opts.gate`:
+    //   --gate         -> true
+    //   --no-gate      -> false
+    //   (neither)      -> undefined (option absent)
+    // We must preserve `undefined` so the provider can distinguish
+    // "no opinion" from "explicitly off" (FR-003 declarative semantics).
+    const gate: boolean | undefined = Object.prototype.hasOwnProperty.call(opts, "gate")
+      ? (opts.gate as boolean)
+      : undefined;
+
+    try {
+      const result = runIntegrate(rootDir, tool as IntegrationProviderId, {
+        force: opts.force,
+        gate,
+        uninstall: opts.uninstall,
+      });
+
+      if (opts.format === "json") {
+        console.log(JSON.stringify(result));
+      } else {
+        printIntegrateText(result, tool as IntegrationProviderId);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (opts.format === "json") {
+        console.error(JSON.stringify({ error: msg }));
+      } else {
+        console.error(`Error: ${msg}`);
+      }
+      process.exit(1);
+    }
+  });
+
+function runIntegrateList(rootDir: string, format: string): void {
+  const statuses = getProviderStatuses(rootDir);
+
+  if (format === "json") {
+    console.log(JSON.stringify({ providers: statuses.map(toListJson) }));
+    return;
+  }
+
+  // Text format: contracts/integrate-cli.md §2.
+  //   speckit    Spec Kit    [ detected: yes, installed: yes ]
+  //   kiro       Kiro        [ detected: yes, installed: no  ] → run: artgraph integrate kiro
+  const idCol = Math.max(8, ...statuses.map((s) => s.providerId.length));
+  const nameCol = Math.max(8, ...statuses.map((s) => s.displayName.length));
+
+  console.log("Available integrations:");
+  console.log("");
+  for (const s of statuses) {
+    const id = s.providerId.padEnd(idCol);
+    const name = s.displayName.padEnd(nameCol);
+    const det = s.detected ? "yes" : "no ";
+    const ins = s.installed ? "yes" : "no ";
+    const suffix = s.detected && !s.installed ? ` → run: artgraph integrate ${s.providerId}` : "";
+    console.log(`  ${id}  ${name}  [ detected: ${det}, installed: ${ins} ]${suffix}`);
+  }
+  console.log("");
+  console.log("(Future providers: openspec — coming soon)");
+}
+
+// JSON shape for `integrate list` — matches contracts/integrate-cli.md §2.
+// Using `id` (not `providerId`) on the wire for parity with the contract
+// example; internally we still carry `providerId`.
+function toListJson(s: import("./types.js").IntegrationStatus): {
+  id: string;
+  displayName: string;
+  marker: string;
+  detected: boolean;
+  installed: boolean;
+} {
+  return {
+    id: s.providerId,
+    displayName: s.displayName,
+    marker: s.marker,
+    detected: s.detected,
+    installed: s.installed,
+  };
+}
+
+// Display-name lookup for the integrate text formatter. The registry stores
+// the canonical name on the provider instance, but we don't want to depend
+// on registry state here (the registry might be cleared by tests).
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  speckit: "Spec Kit",
+  kiro: "Kiro",
+};
+
+function printIntegrateText(result: IntegrateResult, tool: string): void {
+  const display = PROVIDER_DISPLAY_NAMES[tool] ?? tool;
+  if (result.noop) {
+    console.log(`✓ Already integrated: ${tool} (${display}) — no changes`);
+    if (result.warnings.length > 0) {
+      console.log("");
+      console.log(`Warnings (${result.warnings.length}):`);
+      for (const w of result.warnings) console.log(`  ${w}`);
+    }
+    return;
+  }
+  console.log(`✓ Integrated: ${tool} (${display})`);
+  if (result.created.length > 0) {
+    console.log("");
+    console.log(`Created (${result.created.length}):`);
+    for (const p of result.created) console.log(`  ${p}`);
+  }
+  if (result.modified.length > 0) {
+    console.log("");
+    console.log(`Modified (${result.modified.length}):`);
+    for (const p of result.modified) console.log(`  ${p}`);
+  }
+  if (result.removed.length > 0) {
+    console.log("");
+    console.log(`Removed (${result.removed.length}):`);
+    for (const p of result.removed) console.log(`  ${p}`);
+  }
+  if (result.nextSteps.length > 0) {
+    console.log("");
+    console.log("Next:");
+    for (const s of result.nextSteps) console.log(`  ${s}`);
+  }
+  if (result.warnings.length > 0) {
+    console.log("");
+    console.log(`Warnings (${result.warnings.length}):`);
+    for (const w of result.warnings) console.log(`  ${w}`);
   }
 }
 

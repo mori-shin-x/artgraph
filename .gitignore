@@ -7,4 +7,5 @@ dist/
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/artgraph-*.md
+!.claude/skills/speckit-*/
 CLAUDE.md
