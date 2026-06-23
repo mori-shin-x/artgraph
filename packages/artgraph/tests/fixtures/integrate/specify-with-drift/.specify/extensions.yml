@@ -1,0 +1,24 @@
+installed:
+- agent-context
+- spectrace
+settings:
+  auto_execute_hooks: true
+hooks:
+  after_tasks:
+  - extension: spectrace
+    command: artgraph.scan-reconcile
+    enabled: true
+    optional: false
+    priority: 50
+    prompt: "Run artgraph scan && reconcile to refresh trace baseline?"
+    description: "Refresh artgraph baseline after tasks"
+    condition: null
+  after_implement:
+  - extension: spectrace
+    command: artgraph.check-diff
+    enabled: true
+    optional: false
+    priority: 50
+    prompt: "Run artgraph check --diff to verify coverage/orphan/drift?"
+    description: "Verify artgraph traceability after implementation"
+    condition: null

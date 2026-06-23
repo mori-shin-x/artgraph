@@ -41,18 +41,18 @@ individually via the `docGraph` block in `.artgraph.json`:
 
 ### Conventions inferred by `autoConventions`
 
-| Convention | Files (same dir)                              | Edges generated (`derives_from`)                              |
-| ---------- | --------------------------------------------- | ------------------------------------------------------------- |
-| kiro       | `requirements.md`, `design.md`, `tasks.md`    | `design → requirements`, `tasks → design`                     |
-| spec-kit   | `spec.md`, `plan.md`, `tasks.md`, `research.md` | `plan → spec`, `tasks → plan`, `research → spec`              |
+| Convention | Files (same dir)                                | Edges generated (`derives_from`)                 |
+| ---------- | ----------------------------------------------- | ------------------------------------------------ |
+| kiro       | `requirements.md`, `design.md`, `tasks.md`      | `design → requirements`, `tasks → design`        |
+| spec-kit   | `spec.md`, `plan.md`, `tasks.md`, `research.md` | `plan → spec`, `tasks → plan`, `research → spec` |
 
 Notes:
 
-- An edge is emitted only when *both* endpoints exist in the same directory, so
+- An edge is emitted only when _both_ endpoints exist in the same directory, so
   partial sets never produce `orphan-doc` warnings.
 - Matching is case-insensitive (`Design.md` works).
 - A directory containing both kiro and spec-kit files (e.g. `design.md` and
-  `plan.md` together) gets `tasks` linked to *both* `design` and `plan` —
+  `plan.md` together) gets `tasks` linked to _both_ `design` and `plan` —
   intentional for the mixed case, but downstream `dependsOn` will show both
   chains.
 - **Cycles**: convention edges alone form a DAG, but combining them with a
@@ -97,15 +97,15 @@ To opt out of any of the above:
 
 ## Commands
 
-| Command               | Purpose                                                        |
-| --------------------- | -------------------------------------------------------------- |
-| `artgraph scan`      | Build the artifact graph and report counts                     |
-| `artgraph check`     | Report drift / orphans / uncovered (`--gate` to fail a hook)   |
-| `artgraph coverage`  | Per-requirement coverage status                                |
-| `artgraph impact`    | Impact analysis (`--diff` scopes to the git diff)              |
-| `artgraph reconcile` | Rebuild `.trace.lock` from the current graph                   |
-| `artgraph graph`     | Emit the graph (dot / json)                                    |
-| `artgraph rename`    | Rename / split / merge requirement IDs (see below)             |
+| Command              | Purpose                                                      |
+| -------------------- | ------------------------------------------------------------ |
+| `artgraph scan`      | Build the artifact graph and report counts                   |
+| `artgraph check`     | Report drift / orphans / uncovered (`--gate` to fail a hook) |
+| `artgraph coverage`  | Per-requirement coverage status                              |
+| `artgraph impact`    | Impact analysis (`--diff` scopes to the git diff)            |
+| `artgraph reconcile` | Rebuild `.trace.lock` from the current graph                 |
+| `artgraph graph`     | Emit the graph (dot / json)                                  |
+| `artgraph rename`    | Rename / split / merge requirement IDs (see below)           |
 
 ## `artgraph rename` — ID lifecycle
 
@@ -144,6 +144,52 @@ Notes:
   ambiguous); the new IDs are reported as `uncovered` until you assign them and fill
   in their scaffolded spec lines. `check` will flag this until done.
 - IDs inside fenced code blocks are treated as examples and left untouched.
+
+## SDD tool integration
+
+`artgraph integrate` wires the scan / reconcile / check loop into the SDD tool you
+already use, so spec ↔ code drift is caught at the right workflow checkpoint
+instead of relying on a manual call.
+
+| Command                           | Purpose                                                                                                                                                             |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `artgraph integrate speckit`      | Generate `.specify/extensions/spectrace/` and register Spec Kit hooks (`after_tasks` / `after_implement`, optional `before_implement` via `--gate`)                 |
+| `artgraph integrate kiro`         | Write `.kiro/steering/spectrace.md` so the Kiro agent learns when to call `impact / check --diff / reconcile`                                                       |
+| `artgraph integrate list`         | Show every supported integration with detect / installed status                                                                                                     |
+| `artgraph init --integrate=<ids>` | One-shot: run `init` _and_ integrate the named tools (`speckit`, `kiro`, `all`); pass `--integrate-gate` to add Spec Kit's `before_implement` hook in the same call |
+
+```bash
+# Inside a repo that already has .specify/
+artgraph integrate speckit              # idempotent
+artgraph integrate speckit --gate       # also add before_implement gate
+artgraph integrate speckit --no-gate    # remove only spectrace's before_implement hook
+artgraph integrate speckit --uninstall  # remove the extension dir + every spectrace hook entry
+
+# Kiro
+artgraph integrate kiro                 # writes .kiro/steering/spectrace.md
+artgraph integrate kiro --force         # overwrite a hand-edited steering file
+
+# Discover what's available
+artgraph integrate list                 # detected / installed flags per tool
+
+# Bootstrap + integrate in one shot
+artgraph init --integrate=all --integrate-gate
+```
+
+Notes:
+
+- All write paths are **atomic** and roll back the entire `install` call if any
+  file fails to write, so a partial Spec Kit / Kiro layout never lands on disk.
+- Re-running an `integrate` command is always safe: the second invocation
+  reports `Already integrated: ... — no changes` and leaves the disk byte-for-byte
+  identical.
+- `--gate` is _declarative_: `--gate` sets the hook to present, `--no-gate`
+  removes it, and omitting the flag leaves the current state untouched. Other
+  extensions' hooks in `extensions.yml` are never touched.
+- The full design lives in
+  [specs/009-sdd-integration/spec.md](../../specs/009-sdd-integration/spec.md);
+  the end-to-end walkthrough (every scenario the E2E tests cover) is in
+  [specs/009-sdd-integration/quickstart.md](../../specs/009-sdd-integration/quickstart.md).
 
 ## Claude Code skills
 
