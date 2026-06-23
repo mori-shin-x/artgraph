@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
 import * as atomicWriteMod from "../src/integrate/atomic-write.js";
 import { SpecKitProvider } from "../src/integrate/providers/speckit.js";
 import { CLI } from "./helpers.js";
@@ -96,6 +97,13 @@ describe("E2E: artgraph integrate speckit — quickstart Scenario 1", () => {
     expect(yml).toMatch(/after_implement:/);
     // Other extension's entry preserved
     expect(yml).toMatch(/command: speckit\.agent-context\.update/);
+    // M-H1 regression: must be block style YAML, not single-line flow style.
+    // (The seed `hooks: {}` previously caused the entire hooks block to be
+    // emitted as `hooks: { after_tasks: [ ... ] }` on one line.)
+    expect(yml).not.toMatch(/hooks:\s*\{/);
+    expect(yml).toMatch(
+      /hooks:\n {2}(?:[a-z_]+:\n {2}- extension: [a-z-]+\n[\s\S]+?)*after_tasks:\n {2}- extension: spectrace\n/,
+    );
   });
 
   it("Step 2: idempotent re-run — second invocation reports 'Already integrated' and disk unchanged", () => {
@@ -158,8 +166,22 @@ hooks:
     const r = runCli(["integrate", "speckit", "--no-gate"], tmp);
     expect(r.exitCode).toBe(0);
     const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
-    expect(yml).toMatch(/command: speckit\.agent-context\.warm/);
-    expect(yml).not.toMatch(/extension: spectrace[\s\S]{0,200}command: artgraph\.check-gate/);
+    // M-H5: parse the YAML and assert structural shape. The previous regex
+    // crossed trigger boundaries, so a bug that nuked the whole
+    // before_implement array would still pass.
+    const parsed = parseYaml(yml) as {
+      hooks: {
+        before_implement?: Array<{ extension: string; command: string }>;
+        after_tasks?: Array<{ extension: string; command: string }>;
+        after_implement?: Array<{ extension: string; command: string }>;
+      };
+    };
+    expect(parsed.hooks.before_implement).toBeDefined();
+    expect(parsed.hooks.before_implement).toHaveLength(1);
+    expect(parsed.hooks.before_implement![0]!.extension).toBe("agent-context");
+    expect(parsed.hooks.before_implement![0]!.command).toBe("speckit.agent-context.warm");
+    expect(parsed.hooks.after_tasks?.some((e) => e.extension === "spectrace")).toBe(true);
+    expect(parsed.hooks.after_implement?.some((e) => e.extension === "spectrace")).toBe(true);
   });
 
   it("Step 5: --uninstall removes installed marker, extension dir, and all spectrace hooks", () => {
@@ -483,6 +505,28 @@ describe("E2E: artgraph init --integrate — one-shot integration (Scenario 4)",
     // kiro still installed normally
     expect(existsSync(join(tmp, ".kiro/steering/spectrace.md"))).toBe(true);
   });
+
+  // M-H2 regression: `--force` on the outer `init` command must reach the
+  // integration provider, otherwise a drifted extension/steering file silently
+  // survives. This violates FR-024 (`--force` is supposed to overwrite
+  // anything the init touches, including the one-shot integrations).
+  it("propagates --force to the integration provider (overwrites drifted extension.yml)", () => {
+    cpSync(join(FIXTURES, "specify-with-drift"), tmp, { recursive: true });
+    const extYmlPath = join(tmp, ".specify/extensions/spectrace/extension.yml");
+    // Sanity: fixture really is drifted.
+    expect(readFileSync(extYmlPath, "utf-8")).toMatch(/USER EDITED/);
+
+    const r = runCli(["init", "--no-scan", "--integrate", "speckit", "--force"], tmp);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/=== Integration: speckit ===/);
+
+    // The hand-edited content is gone; canonical template took its place.
+    const after = readFileSync(extYmlPath, "utf-8");
+    expect(after).not.toMatch(/USER EDITED/);
+    expect(after).not.toMatch(/0\.0\.0-drift/);
+    expect(after).toMatch(/id:\s*spectrace/);
+    expect(after).toMatch(/artgraph\.scan-reconcile/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -632,7 +676,10 @@ describe("E2E: artgraph check --gate halts on uncovered REQs (SC-006 / FR-017)",
     const parsed = JSON.parse(gate.stdout);
     expect(parsed.pass).toBe(false);
     expect(Array.isArray(parsed.uncovered)).toBe(true);
-    expect(parsed.uncovered).toEqual(expect.arrayContaining(["GATE-001", "GATE-002"]));
+    // M-M13: exact comparison so a future fixture / parser change that
+    // smuggles extra "uncovered" entries into the list is caught immediately
+    // (the previous `arrayContaining` would have silently accepted them).
+    expect(parsed.uncovered.slice().sort()).toEqual(["GATE-001", "GATE-002"]);
   });
 });
 

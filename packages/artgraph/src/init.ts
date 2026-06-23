@@ -272,6 +272,12 @@ function runRequestedIntegrations(
       const r = runIntegrate(rootDir, id, {
         // Only speckit consumes `gate`; other providers ignore unknown opts.
         gate: options.integrateGate,
+        // FR-024: --force on `init` must reach the integration provider so
+        // that drifted extension/steering files are regenerated alongside
+        // the rest of the project. Previously this was dropped silently,
+        // which made `init --integrate=<tool> --force` indistinguishable
+        // from `init --integrate=<tool>` once any user edit existed.
+        force: options.force,
       });
       results.push(r);
     } catch (e) {

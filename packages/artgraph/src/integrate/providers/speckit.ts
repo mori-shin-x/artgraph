@@ -9,6 +9,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
+import { parse as parseYaml } from "yaml";
 import * as atomicWrite from "../atomic-write.js";
 import { loadTemplate } from "../templates.js";
 import {
@@ -20,6 +21,7 @@ import {
   removeInstalled,
   serializeExtensionsYaml,
 } from "../speckit-yaml.js";
+import { validateExtensionYaml, type SpecKitExtensionManifest } from "../schemas/speckit-1.0.js";
 import type {
   HookEntry,
   InstallOptions,
@@ -109,8 +111,17 @@ export class SpecKitProvider implements IntegrationProvider {
       const plain = Array.isArray(installed)
         ? installed
         : ((doc.toJSON() as { installed?: string[] }).installed ?? []);
-      return plain.includes("spectrace");
+      if (!plain.includes("spectrace")) return false;
+      // M-M5 / FR-013: a half-broken `extension.yml` (truncated, malformed,
+      // wrong schema_version) must not count as "installed" — otherwise the
+      // init Tip would be wrongly suppressed and the user would never see the
+      // recovery hint. Validate against the frozen v1.0 schema.
+      const extManifest = parseYaml(readFileSync(extYmlPath, "utf-8")) as SpecKitExtensionManifest;
+      validateExtensionYaml(extManifest);
+      return true;
     } catch {
+      // YAML parse error or schema violation → treat as not installed so the
+      // user sees the integrate Tip again and can re-install / --force.
       return false;
     }
   }

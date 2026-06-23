@@ -129,6 +129,22 @@ describe("addHookEntry", () => {
     expect(out).toMatch(/after_tasks:/);
   });
 
+  it("emits block style (not inline flow) even when the source had `hooks: {}`", () => {
+    // Regression guard for M-H1: the yaml lib inherits flow-style from the
+    // parent `hooks: {}` node and serializes the new entry as
+    // `hooks: { after_tasks: [ {...} ] }` on one line unless we force
+    // `.flow = false` on every newly created child node.
+    const doc = parseExtensionsYaml(SAMPLE_EMPTY_HOOKS);
+    addHookEntry(doc, "after_tasks", specEntry());
+    const out = serializeExtensionsYaml(doc);
+    // No flow-style hooks block (would start with `hooks: {` or `hooks:{`).
+    expect(out).not.toMatch(/hooks:\s*\{/);
+    // Trigger sequence is a block list, not inline `[ ... ]`.
+    expect(out).not.toMatch(/after_tasks:\s*\[/);
+    // Each entry key appears on its own line — the canonical Spec Kit shape.
+    expect(out).toMatch(/hooks:\n {2}after_tasks:\n {2}- extension: spectrace\n/);
+  });
+
   it("preserves other extensions' entries when adding under the same trigger", () => {
     const doc = parseExtensionsYaml(SAMPLE_WITH_OTHER);
     // Existing entry is under after_specify, but we add another extension's
@@ -198,7 +214,12 @@ describe("removeAllSpectraceHooks", () => {
     addHookEntry(doc, "after_implement", specEntry({ command: "artgraph.check-diff" }));
     addHookEntry(doc, "before_implement", specEntry({ command: "artgraph.check-gate" }));
     const removed = removeAllSpectraceHooks(doc);
-    expect(removed.length).toBeGreaterThanOrEqual(3);
+    // M-M11: exact-3 + the specific trigger names. The previous
+    // `>=3` assertion would have masked a bug where the function returned
+    // unrelated trigger names (e.g. duplicates) on top of the three spectrace
+    // ones.
+    expect(removed).toHaveLength(3);
+    expect(removed.slice().sort()).toEqual(["after_implement", "after_tasks", "before_implement"]);
     const out = serializeExtensionsYaml(doc);
     expect(out).not.toMatch(/extension: spectrace/);
   });

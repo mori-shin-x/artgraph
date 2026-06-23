@@ -44,6 +44,10 @@ export function addInstalled(doc: Document, id: string): boolean {
     seq = new YAMLSeq();
     doc.set("installed", seq);
   }
+  // Always emit block style so `installed:` reads as a multi-line list rather
+  // than the flow-style `[a, b]` form (the latter can leak in when the parent
+  // node was originally a flow scalar like `{}` / `[]`).
+  (seq as YAMLSeq).flow = false;
   const existing = (seq as YAMLSeq).items.map(scalarValue);
   if (existing.includes(id)) {
     return false;
@@ -83,16 +87,30 @@ export function addHookEntry(doc: Document, trigger: HookTrigger, entry: HookEnt
     hooks = new YAMLMap();
     doc.set("hooks", hooks);
   }
+  // Force block style on the hooks map. When the source was `hooks: {}` (an
+  // empty flow map), yaml will otherwise inherit the parent flow style and
+  // serialize the new entries as `hooks: { after_tasks: [ { ... } ] }` on a
+  // single line. That violates Spec Kit convention and would also make `git
+  // diff` unreadable.
+  (hooks as YAMLMap).flow = false;
 
   let arr = (hooks as YAMLMap).get(trigger);
   if (!isSeq(arr)) {
     arr = new YAMLSeq();
     (hooks as YAMLMap).set(trigger, arr);
   }
+  // Same reasoning as above: ensure the trigger sequence is block-style so
+  // each hook entry appears on its own line.
+  (arr as YAMLSeq).flow = false;
 
   const seq = arr as YAMLSeq;
   const existingIdx = seq.items.findIndex((it) => extensionOf(it) === entry.extension);
   const newNode = doc.createNode(entry);
+  // The new entry map itself must also be block style so its keys (extension,
+  // command, ...) appear on separate lines.
+  if (isMap(newNode)) {
+    (newNode as YAMLMap).flow = false;
+  }
 
   if (existingIdx === -1) {
     seq.add(newNode);

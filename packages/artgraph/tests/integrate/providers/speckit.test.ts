@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { SpecKitProvider } from "../../../src/integrate/providers/speckit.js";
 import * as atomicWriteMod from "../../../src/integrate/atomic-write.js";
 
@@ -62,6 +63,44 @@ describe("SpecKitProvider", () => {
     it("returns true when both installed list and extension.yml exist", () => {
       copyFixture(join(FIXTURES, "specify-already-installed"), tmp);
       expect(provider.isInstalled(tmp)).toBe(true);
+    });
+
+    it("returns false when extension.yml is unparseable (M-M5)", () => {
+      copyFixture(join(FIXTURES, "specify-already-installed"), tmp);
+      // Garbage YAML that the parser rejects outright.
+      writeFileSync(
+        join(tmp, ".specify/extensions/spectrace/extension.yml"),
+        "schema_version: '1.0'\nthis is: : : not valid yaml ][[}\n",
+      );
+      expect(provider.isInstalled(tmp)).toBe(false);
+    });
+
+    it("returns false when extension.yml has a wrong schema_version (M-M5)", () => {
+      copyFixture(join(FIXTURES, "specify-already-installed"), tmp);
+      // Valid YAML but the frozen v1.0 contract is violated → integration is
+      // effectively broken; init Tip must surface so the user can recover.
+      writeFileSync(
+        join(tmp, ".specify/extensions/spectrace/extension.yml"),
+        [
+          'schema_version: "9.9"',
+          "extension:",
+          "  id: spectrace",
+          '  name: "x"',
+          '  version: "0.0.0"',
+          '  description: "x"',
+          "  author: artgraph",
+          "  repository: https://example.com",
+          "  license: MIT",
+          "requires:",
+          '  speckit_version: ">=0.0.0"',
+          "provides:",
+          "  commands: []",
+          "hooks: {}",
+          "tags: []",
+          "",
+        ].join("\n"),
+      );
+      expect(provider.isInstalled(tmp)).toBe(false);
     });
   });
 
@@ -136,8 +175,26 @@ describe("SpecKitProvider", () => {
       // Now run with gate=false
       provider.install(tmp, { gate: false });
       const yml = readFileSync(ymlPath, "utf-8");
-      expect(yml).toMatch(/extension: agent-context[\s\S]*command: speckit\.agent-context\.warm/);
-      expect(yml).not.toMatch(/extension: spectrace[\s\S]*command: artgraph\.check-gate/);
+      // M-H5: structural assertion — the regex `extension: spectrace[\s\S]*
+      // command: artgraph.check-gate` crosses trigger boundaries, so even a
+      // bug that wiped the entire before_implement array would pass. Parse
+      // the YAML and assert the precise shape we want.
+      const parsed = parseYaml(yml) as {
+        hooks: {
+          before_implement?: Array<{ extension: string; command: string }>;
+          after_tasks?: Array<{ extension: string; command: string }>;
+          after_implement?: Array<{ extension: string; command: string }>;
+        };
+      };
+      // before_implement: exactly the agent-context entry, no spectrace.
+      expect(parsed.hooks.before_implement).toBeDefined();
+      expect(parsed.hooks.before_implement).toHaveLength(1);
+      expect(parsed.hooks.before_implement![0]!.extension).toBe("agent-context");
+      expect(parsed.hooks.before_implement![0]!.command).toBe("speckit.agent-context.warm");
+      // The other spectrace triggers must still be present after `gate=false`
+      // (the bug would silently drop them along with before_implement).
+      expect(parsed.hooks.after_tasks?.some((e) => e.extension === "spectrace")).toBe(true);
+      expect(parsed.hooks.after_implement?.some((e) => e.extension === "spectrace")).toBe(true);
     });
 
     it("--gate=undefined does not touch before_implement", () => {
@@ -148,6 +205,42 @@ describe("SpecKitProvider", () => {
       provider.install(tmp, {});
       const after = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
       expect(after).toBe(before);
+    });
+
+    // M-H4 regression: previously every rollback test started from a fresh
+    // fixture where no `prev` content existed, so the `prev → restore`
+    // branch (speckit.ts:171-179) was uncovered. This case overwrites an
+    // existing user-edited extension.yml with --force, fails halfway, and
+    // asserts the byte-for-byte restoration of the user's edits.
+    it("restores hand-edited extension.yml byte-for-byte when --force install rolls back", () => {
+      copyFixture(join(FIXTURES, "specify-already-installed"), tmp);
+      const extYmlPath = join(tmp, ".specify/extensions/spectrace/extension.yml");
+      const sentinel = "# USER EDITED — must survive rollback\nfoo: bar\n";
+      writeFileSync(extYmlPath, sentinel);
+
+      // Fail the *second* atomic write so at least one earlier overwrite
+      // recorded a `prev` rollback op. With EXT_FILES = [extension.yml,
+      // README.md, ...3 commands] all 5 are first overwritten under --force,
+      // so call==2 reliably exercises the `prev` restore branch on
+      // extension.yml (call==1 was its overwrite, and the rollback runs in
+      // reverse order so the prev-restore for the first file fires).
+      let call = 0;
+      const real = atomicWriteMod.atomicWriteFile;
+      const spy = vi
+        .spyOn(atomicWriteMod, "atomicWriteFile")
+        .mockImplementation((dest: string, content: string) => {
+          call++;
+          if (call === 2) {
+            throw new Error("simulated EACCES on second overwrite");
+          }
+          return real(dest, content);
+        });
+
+      expect(() => provider.install(tmp, { force: true })).toThrow(/simulated|EACCES/);
+      spy.mockRestore();
+
+      // The user's sentinel content must be back on disk byte-for-byte.
+      expect(readFileSync(extYmlPath, "utf-8")).toBe(sentinel);
     });
 
     it("rolls back created files when a mid-install disk error occurs", () => {
