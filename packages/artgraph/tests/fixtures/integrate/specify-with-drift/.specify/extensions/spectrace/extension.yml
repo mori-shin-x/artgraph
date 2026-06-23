@@ -1,0 +1,18 @@
+schema_version: "1.0"
+# DRIFT: user hand-edited this file with garbage to simulate divergence
+# from the canonical bundled template. `init --integrate=speckit --force`
+# must regenerate it from the template.
+extension:
+  id: spectrace
+  name: "USER EDITED — not the canonical template"
+  version: "0.0.0-drift"
+  description: drift
+  author: someone
+  repository: https://example.com
+  license: MIT
+requires:
+  speckit_version: ">=0.0.0"
+provides:
+  commands: []
+hooks: {}
+tags: []
