@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { relative, resolve as resolvePath, dirname } from "node:path";
-import matter from "gray-matter";
+import { parse as parseYaml } from "yaml";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import { visit } from "unist-util-visit";
@@ -72,7 +72,7 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
   let frontmatter: Record<string, any> = {};
   let content: string;
   try {
-    const parsed = matter(raw, { language: "yaml", engines: {} });
+    const parsed = parseFrontmatter(raw);
     frontmatter = parsed.data;
     content = parsed.content;
   } catch {
@@ -308,4 +308,30 @@ function extractSectionContent(content: string, startLine: number): string {
 
 function hash(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+
+// Minimal YAML-frontmatter splitter. Replaces gray-matter to drop the js-yaml v3
+// advisory chain (GHSA-h67p-54hq-rp68 / issue #42); the YAML body is parsed by
+// eemeli/yaml which is already a workspace dependency.
+function parseFrontmatter(raw: string): { data: Record<string, any>; content: string } {
+  const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  const firstNl = text.indexOf("\n");
+  if (firstNl < 0) return { data: {}, content: raw };
+  const firstLine = text.slice(0, firstNl).replace(/\r$/, "");
+  if (firstLine !== "---") return { data: {}, content: raw };
+
+  const rest = text.slice(firstNl + 1);
+  const closeRe = /(?:^|\r?\n)---[ \t]*(?:\r?\n|$)/;
+  const match = closeRe.exec(rest);
+  if (!match) return { data: {}, content: raw };
+
+  const yamlBody = rest.slice(0, match.index);
+  const content = rest.slice(match.index + match[0].length);
+
+  const parsed = parseYaml(yamlBody);
+  if (parsed == null) return { data: {}, content };
+  if (typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("frontmatter is not a YAML mapping");
+  }
+  return { data: parsed as Record<string, any>, content };
 }
