@@ -148,6 +148,27 @@ describe("loadConfig", () => {
       expect(() => loadConfig(TMP_DIR)).toThrow("nested quantifiers");
     });
 
+    // ReDoS bypass shapes the original `/\([^)]*[+*]\)[+*]/` heuristic missed.
+    // Each rejects on the strengthened detectReDoSRisk traversal.
+    it.each([
+      ["alternation overlap", "^(a|a)+(\\d+)$"],
+      ["braced inner quantifier", "^(a{1,5})+(\\d+)$"],
+      ["double-nested", "^((a+))+(\\d+)$"],
+      ["non-capturing alternation overlap", "^(?:a|aa)+(\\d+)$"],
+    ])("should reject ReDoS bypass: %s", (_label, pattern) => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ reqPatterns: { listItem: pattern } }));
+      expect(() => loadConfig(TMP_DIR)).toThrow("nested quantifiers");
+    });
+
+    // codeId skips the capture-group requirement but must still apply the
+    // ReDoS guard — otherwise the codeId path is the widest attack surface.
+    it("should reject ReDoS bypass in codeId (no capture group required path)", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ reqPatterns: { codeId: "(?:a|aa)+" } }));
+      expect(() => loadConfig(TMP_DIR)).toThrow("nested quantifiers");
+    });
+
     it("should reject an over-long pattern", () => {
       mkdirSync(TMP_DIR, { recursive: true });
       const longPattern = "^(" + "a".repeat(300) + "\\d+)";
@@ -211,7 +232,7 @@ describe("loadConfig", () => {
       expect(() => loadConfig(TMP_DIR)).toThrow("name: must not be empty");
     });
 
-    it("should reject duplicate built-in name", () => {
+    it("should reject duplicate built-in name without opt-out", () => {
       mkdirSync(TMP_DIR, { recursive: true });
       writeFileSync(
         CONFIG_PATH,
@@ -221,7 +242,34 @@ describe("loadConfig", () => {
           ],
         }),
       );
-      expect(() => loadConfig(TMP_DIR)).toThrow('duplicate name "spec-kit"');
+      expect(() => loadConfig(TMP_DIR)).toThrow("collides with a built-in preset");
+    });
+
+    it("should allow a user preset to override a built-in via disableBuiltinTaskConventions", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          disableBuiltinTaskConventions: ["kiro"],
+          taskConventions: [
+            { name: "kiro", fileStems: ["tasks"], taskIdRe: "^(K-\\d+)" },
+          ],
+        }),
+      );
+      const config = loadConfig(TMP_DIR);
+      expect(config.disableBuiltinTaskConventions).toEqual(["kiro"]);
+      expect(config.taskConventions).toEqual([
+        { name: "kiro", fileStems: ["tasks"], taskIdRe: "^(K-\\d+)" },
+      ]);
+    });
+
+    it("should reject disableBuiltinTaskConventions naming a non-builtin", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({ disableBuiltinTaskConventions: ["openspec"] }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow('"openspec" is not a built-in');
     });
 
     it("should reject duplicate user name", () => {
