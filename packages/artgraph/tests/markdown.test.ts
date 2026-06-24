@@ -187,6 +187,87 @@ artgraph:
     });
   });
 
+  describe("opening fence tolerance", () => {
+    it("should accept frontmatter whose opening fence has trailing whitespace", () => {
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-fence-trailing-ws");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const tmpPath = resolve(tmpSpecs, "fence.md");
+      // `---` followed by one space then `\t`, then a normal closing fence.
+      writeFileSync(
+        tmpPath,
+        "--- \t\nartgraph:\n  node_id: \"doc:fence-trailing\"\n---\n# Body\n",
+      );
+      try {
+        const result = parseMarkdown(tmpPath, { rootDir: tmpRoot });
+        const doc = result.nodes.find((n) => n.kind === "doc");
+        expect(doc?.id).toBe("doc:fence-trailing");
+      } finally {
+        unlinkSync(tmpPath);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+  });
+
+  describe("YAML tag hardening", () => {
+    it("should not inject a Buffer into node.id via !!binary", () => {
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-binary-tag");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const tmpPath = resolve(tmpSpecs, "binary.md");
+      writeFileSync(
+        tmpPath,
+        `---
+artgraph:
+  node_id: !!binary "ZG9jOmJhZA=="
+---
+# Body
+`,
+      );
+      try {
+        const result = parseMarkdown(tmpPath, { rootDir: tmpRoot });
+        const doc = result.nodes.find((n) => n.kind === "doc");
+        expect(typeof doc?.id).toBe("string");
+        // !!binary is not resolved → typeof string guard at the consumption site
+        // also keeps a Buffer out of node.id even if a future yaml version
+        // changed the default.
+        expect(Buffer.isBuffer(doc?.id)).toBe(false);
+      } finally {
+        unlinkSync(tmpPath);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+
+    it("should fall back to the default doc id when node_id is not a string (e.g. circular alias)", () => {
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-circular-anchor");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const tmpPath = resolve(tmpSpecs, "circular.md");
+      writeFileSync(
+        tmpPath,
+        `---
+artgraph: &a
+  node_id: *a
+---
+# Body
+`,
+      );
+      try {
+        const result = parseMarkdown(tmpPath, { rootDir: tmpRoot });
+        const doc = result.nodes.find((n) => n.kind === "doc");
+        expect(typeof doc?.id).toBe("string");
+        // graph output must remain JSON-serializable
+        expect(() => JSON.stringify(doc)).not.toThrow();
+      } finally {
+        unlinkSync(tmpPath);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+  });
+
   describe("malformed YAML frontmatter", () => {
     it("should not crash on invalid YAML and fall back to treating content as body", () => {
       const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-malformed-yaml");
