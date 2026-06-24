@@ -7,13 +7,25 @@ Plan: [../plan.md](../plan.md) | Spec: [../spec.md](../spec.md) | Data Model: [.
 注釈は以下の正規表現で抽出される:
 
 ```regex
-\(\s*(depends_on|derives_from)\s*:\s*([^()]+?)\s*\)
+\(\s*(depends_on|derives_from)\s*:\s*([^()]*?)\s*\)
 ```
 
 - フラグ: `g`（同一行内の複数注釈を全て抽出）
 - 各マッチ:
   - capture group 1: キーワード（`depends_on` または `derives_from`）
   - capture group 2: ID リスト（カンマ区切りの生文字列、後段で個別 ID に分解）
+  - capture group 2 は 0 文字以上 (`*?`)。`(depends_on:)` / `(depends_on: )` は
+    マッチして `empty-annotation` 警告経路に流れる（旧 `[^()]+?` 表記は実装と
+    乖離していたため修正）。
+
+hash 計算に使う除去用正規表現（注釈と隣接空白を 1 つに正規化）:
+
+```regex
+[ \t]*\(\s*(depends_on|derives_from)\s*:\s*[^()]*?\s*\)[ \t]*
+```
+
+- 削除のとき、注釈が行頭/行末にあれば隣接空白も含めて削除、行内なら半角空白 1 つに
+  置換する。改行は決して飲み込まない（段落構造を保つ）。
 
 ## 検出位置
 
@@ -71,6 +83,10 @@ capture group 2 を以下の順に処理:
 | `[depends_on: A]` | `(` `)` 以外の括弧 |
 | 散文中の単独 `AUTH-001` 言及 | 注釈構文ではない |
 | fenced code block 内の任意の注釈 | F6 規約により全パーサで除外 |
+| インラインコードスパン内の注釈（`` `(depends_on: A)` ``） | コード片は注釈として扱わない（meta-review C1） |
+| HTML コメント内の注釈（`<!-- (depends_on: A) -->`） | コメントアウトされた注釈は edge を生成しない |
+| ブロッククォート内の list-item / 段落の注釈（`> - X: (depends_on: A)`） | 引用は注釈対象外 |
+| indented code block (4 スペースインデント) 内の注釈 | コード片は対象外 |
 
 ## 警告条件
 

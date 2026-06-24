@@ -23,7 +23,13 @@ const DEFAULT_CODE_ID_RE = /^[A-Z][A-Za-z]*-\d+$/;
 //   splits into two matches.
 // - Used for both extraction (via exec/matchAll, capture groups) and stripping
 //   (via replace, where the leading `\s*` eats any space directly before `(`).
-const ANNOTATION_RE = /\s*\(\s*(depends_on|derives_from)\s*:\s*([^()]*?)\s*\)/g;
+const ANNOTATION_RE = /\(\s*(depends_on|derives_from)\s*:\s*([^()]*?)\s*\)/g;
+// Same shape but with line-local (space/tab) padding on both sides — used by
+// stripAnnotations so the whitespace adjacent to an annotation collapses
+// consistently regardless of whether the author left a space before/after
+// the parenthesis. Adjacent newlines are NOT consumed (the surrounding
+// paragraph block keeps its line structure).
+const ANNOTATION_STRIP_RE = /[ \t]*\(\s*(?:depends_on|derives_from)\s*:\s*[^()]*?\s*\)[ \t]*/g;
 const METADATA_FIELDS = ["title", "status", "priority", "owner"] as const;
 // Matches `<scheme>:` at the start of an href (e.g. `http:`, `mailto:`, `tel:`,
 // `javascript:`). Used to skip absolute URLs — only relative paths point at
@@ -77,7 +83,13 @@ interface ParsedSpec {
 }
 
 export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions): ParsedSpec {
-  const raw = readFileSync(filePath, "utf-8");
+  // Normalize line endings so downstream offsets, regexes, and hashes see a
+  // single `\n` regardless of how the file was checked out (CRLF on Windows
+  // git workspaces, lone CR from legacy editors). Without this, an authored
+  // `(depends_on: X)\r\n` line bypasses ANNOTATION_RE_LINE in the rewriter
+  // while still being parsed as an annotation here — i.e. parser/rewriter
+  // parity breaks on CRLF files (meta-review additional F4).
+  const raw = readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const rootDir = options?.rootDir;
   const specDirPrefix = options?.specDirPrefix;
   const relPath = rootDir ? relative(rootDir, filePath) : filePath;
@@ -174,6 +186,17 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
     }
   }
 
+  // Pre-collect list-items that live inside a blockquote subtree. Annotation
+  // grammar (annotation-grammar.md §「検出位置」) does not extend to quoted
+  // content; we still register the req node itself so existing inventories
+  // aren't lost, but skip annotation extraction for it.
+  const blockquoteListItems = new WeakSet<object>();
+  visit(tree, "blockquote", (bq: any) => {
+    visit(bq, "listItem", (li: any) => {
+      blockquoteListItems.add(li);
+    });
+  });
+
   visit(tree, "listItem", (node: any) => {
     const firstParagraph = node.children?.find((c: any) => c.type === "paragraph");
     const labelText = firstParagraph ? toString(firstParagraph) : toString(node);
@@ -193,10 +216,19 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
       contentHash: reqHash,
     });
 
+    // Skip annotation extraction inside blockquote. The req itself stays in
+    // the graph but its quoted `(depends_on: ...)` doesn't create edges, in
+    // line with how inline-link extraction (extractInlineLinks) honors AST
+    // node kinds rather than flattened text.
+    if (blockquoteListItems.has(node)) return;
+
     // T012: req→req annotation edges. Extract from the first paragraph's text
-    // (where list-item annotations live), not the full node text — sub-list
-    // children should be hashed but not scanned for annotations.
-    const annotationText = firstParagraph ? toString(firstParagraph) : labelText;
+    // using an AST-walk that strips inline code, HTML comments, and code
+    // subtrees so an authored `(depends_on: …)` inside `` `...` `` or
+    // `<!-- ... -->` doesn't become a phantom edge (meta-review C1).
+    const annotationText = firstParagraph
+      ? extractAnnotationContextText(firstParagraph)
+      : labelText;
     const sourceLine = node.position?.start?.line ?? 0;
     const { extracts, warnings: annWarnings } = extractAnnotations(
       annotationText,
@@ -227,29 +259,39 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
     const headingContent = extractSectionContent(content, startLine);
     const paragraph = extractFirstParagraphAfterHeading(content, startLine);
 
-    // T018: strip annotations from the first paragraph's head/tail lines
-    // before hashing so adding/removing/changing a req→req annotation doesn't
-    // alter the heading-req's contentHash. Annotations elsewhere in the
-    // section are NOT stripped (they aren't recognized as annotations either).
-    // Lines that become empty after stripping are dropped so that a standalone
-    // `(depends_on: …)` line doesn't leave a phantom blank that differs from
-    // the no-annotation baseline.
+    // T018/meta-review C3: strip annotations from EVERY line of the first
+    // paragraph block (not just head/tail) so a req→req annotation anywhere
+    // in the paragraph keeps the heading-req's contentHash stable. When the
+    // paragraph dissolves completely (e.g. a standalone `(depends_on: …)`
+    // block), the surrounding blank line is also collapsed so the result
+    // matches the no-annotation baseline `## R\n\nbody\n`.
     let strippedContent = headingContent;
     if (paragraph) {
       const sectionLines = headingContent.split("\n");
       const sectionStartIdx = startLine - 1;
       const headIdx = paragraph.startLine - sectionStartIdx;
       const tailIdx = paragraph.endLine - sectionStartIdx;
-      const stripLines = new Set<number>([headIdx, tailIdx]);
+
+      const strippedPara: string[] = [];
+      for (let l = headIdx; l <= tailIdx; l++) {
+        strippedPara.push(stripAnnotations(sectionLines[l]));
+      }
+      const paragraphCollapsed = strippedPara.every((l) => l.trim() === "");
+
       const kept: string[] = [];
       for (let i = 0; i < sectionLines.length; i++) {
-        if (stripLines.has(i)) {
-          const after = stripAnnotations(sectionLines[i]);
-          if (after.trim() === "") continue;
-          kept.push(after);
+        if (i >= headIdx && i <= tailIdx) {
+          if (paragraphCollapsed) continue;
+          const stripped = strippedPara[i - headIdx];
+          if (stripped.trim() === "") continue;
+          kept.push(stripped);
         } else {
           kept.push(sectionLines[i]);
         }
+      }
+
+      if (paragraphCollapsed && headIdx > 0 && sectionLines[headIdx - 1].trim() === "") {
+        kept.splice(headIdx - 1, 1);
       }
       strippedContent = kept.join("\n");
     }
@@ -270,7 +312,14 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
     if (paragraph) {
       const contentLines = content.split("\n");
       const pushExtracts = (line: string, sourceLineNum: number) => {
-        const { extracts, warnings: ws } = extractAnnotations(line, reqId, sourceLineNum, {
+        // Block-level masking: blockquote prefix lines never carry req→req
+        // annotations, even when the heading itself was registered as a req.
+        if (/^\s*>/.test(line)) return;
+        // Mask inline code spans and HTML comments line-locally so a
+        // `<!-- (depends_on: X) -->` or `` `(depends_on: X)` `` in the
+        // heading's first paragraph head/tail doesn't become a phantom edge.
+        const masked = maskInlineProtectedSpans(line);
+        const { extracts, warnings: ws } = extractAnnotations(masked, reqId, sourceLineNum, {
           filePath: relPath,
           codeIdRE,
         });
@@ -406,6 +455,51 @@ function extractText(node: any): string {
   return text;
 }
 
+// Flatten an AST subtree to text for annotation extraction, skipping
+// inlineCode / code / html / blockquote children. Mirrors the kinds the
+// parser already treats as opaque (inline-link extraction in
+// extractInlineLinks skips them implicitly via remark's node typing); we
+// make the same boundary explicit for the annotation regex so a literal
+// `(depends_on: X)` inside backticks or an HTML comment does NOT create a
+// req→req edge.
+function extractAnnotationContextText(node: any): string {
+  let text = "";
+  function walk(n: any) {
+    if (!n || typeof n !== "object") return;
+    if (
+      n.type === "inlineCode" ||
+      n.type === "code" ||
+      n.type === "html" ||
+      n.type === "blockquote"
+    ) {
+      return;
+    }
+    if (typeof n.value === "string") {
+      text += n.value;
+      return;
+    }
+    if (Array.isArray(n.children)) {
+      for (const child of n.children) walk(child);
+    }
+  }
+  walk(node);
+  return text;
+}
+
+// Line-local masking for the heading-paragraph path where we work with raw
+// lines (not an AST). Replaces inline-code spans (`…`, ``…``) and HTML
+// comments (<!-- … -->) with same-length space runs so column positions stay
+// stable, and the annotation regex finds nothing inside them. Multi-line
+// comments / fenced code are not handled here on purpose — heading-paragraph
+// extraction is by definition line-scoped (head and tail of the first
+// paragraph block), and fenced code is excluded earlier by paragraph
+// boundary detection.
+export function maskInlineProtectedSpans(line: string): string {
+  return line
+    .replace(/<!--[\s\S]*?-->/g, (m) => " ".repeat(m.length))
+    .replace(/(`+)[^\n]*?\1/g, (m) => " ".repeat(m.length));
+}
+
 function extractSectionContent(content: string, startLine: number): string {
   const lines = content.split("\n");
   const headingLine = lines[startLine - 1];
@@ -442,11 +536,34 @@ function hash(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
 
-// Remove inline req→req annotations (and any whitespace immediately preceding
-// them) from `text`. Used to keep `contentHash` stable when annotations are
-// added/changed/removed — see specs/010-req-req-dependency/research.md (R3).
+// Remove inline req→req annotations from `text`, normalising the whitespace
+// that surrounded the annotation so adding/removing/changing one does not
+// flip the req's `contentHash` and trip drift — see
+// specs/010-req-req-dependency/research.md (R3).
+//
+// Rules (line-local; newlines are never collapsed):
+// - At a line edge (no character before/after, or `\n` neighbour) the
+//   annotation and its adjacent spaces are removed outright. So a
+//   standalone `(depends_on: X)` or a trailing `… (depends_on: X)` collapses
+//   cleanly to its leading text.
+// - Inside running text the annotation collapses to a single space, so
+//   `X (ann) Y` and `X(ann)Y` both stabilise to `X Y` — matching the most
+//   common authored baseline (with whitespace separators).
 export function stripAnnotations(text: string): string {
-  return text.replace(ANNOTATION_RE, "");
+  return (
+    text
+      .replace(ANNOTATION_STRIP_RE, (match, offset: number) => {
+        const left = offset === 0 ? "" : text[offset - 1];
+        const right = offset + match.length >= text.length ? "" : text[offset + match.length];
+        if (left === "" || left === "\n" || right === "" || right === "\n") return "";
+        return " ";
+      })
+      // Adjacent annotations (`X (ann1)(ann2)\n`) leave a trailing space
+      // after the first collapse since the second still sees a `(` to its
+      // right. Strip trailing line-local whitespace as a final pass so the
+      // result matches the no-annotation baseline `X` rather than `X `.
+      .replace(/[ \t]+(?=\n|$)/g, "")
+  );
 }
 
 // Extract inline req→req annotations from `text` belonging to a single req.
@@ -473,19 +590,35 @@ export function extractAnnotations(
     }
 
     const targets: string[] = [];
+    let sawInvalid = false;
     for (const raw of rawTargets.split(",")) {
+      // Drop empty/whitespace-only tokens silently — `(depends_on: A,,B)` /
+      // `(depends_on: ,A)` / `(depends_on: A,)` should yield A and B without
+      // emitting `invalid-annotation-id key=""` per separator. Fully-empty
+      // bodies are still surfaced via the empty-annotation branch above.
       let id = raw.trim();
+      if (id === "") continue;
       // Strip a single surrounding `**…**` (one pass — `***X***` → `*X*`).
+      // Re-trim afterwards so `**  A-1  **` collapses to `A-1` rather than
+      // failing the codeId pattern with internal whitespace.
       if (id.length >= 4 && id.startsWith("**") && id.endsWith("**")) {
-        id = id.slice(2, -2);
+        id = id.slice(2, -2).trim();
       }
       if (!codeIdRE.test(id)) {
         warnings.push({ type: "invalid-annotation-id", key: id, filePath: opts.filePath });
+        sawInvalid = true;
         continue;
       }
       targets.push(id);
     }
 
+    // All tokens were empty (e.g. `(depends_on: ,)` or `(depends_on: , ,)`).
+    // Emit a single empty-annotation warning so the author still sees the
+    // mistake without a flood of `key=""` invalid-id reports.
+    if (targets.length === 0 && !sawInvalid) {
+      warnings.push({ type: "empty-annotation", key: kind, filePath: opts.filePath });
+      continue;
+    }
     if (targets.length === 0) continue;
     extracts.push({ reqId, kind, targets, sourceLine });
   }

@@ -41,9 +41,9 @@ export interface GraphEdge {
 
 ```ts
 type WarningType =
-  | "orphan-edge"           // 既存
+  | "orphan-edge"           // 既存（注釈経路でも emit）
   | "invalid-relation"      // 既存
-  | "ambiguous-target"      // 既存
+  | "ambiguous-id"          // 既存
   // ↓ 追加
   | "invalid-annotation-id"
   | "empty-annotation"
@@ -123,8 +123,12 @@ buildGraph(parseResults)
 
 ## 永続化への影響
 
-- `.trace.lock` は `dependsOn: string[]` 形式を維持。注釈由来エッジも他のエッジと
-  同様に「依存先 ID の重複なし配列」として書き出される。lock スキーマ自体への
-  変更はなし。
-- `provenance` フィールドは lock には書き出さない（in-memory のグラフ表現のみ）。
-  Issue #35 の解決時に lock シリアライゼーションを再設計する想定。
+- `.trace.lock` は `dependsOn: string[]` 形式を維持。**注釈由来エッジは lock に
+  書き出さない**（`provenance === "annotation"` のエッジは `buildLockFromGraph`
+  でフィルタされる）。本 issue 内では注釈エッジを lock に乗せると `(depends_on: X)`
+  を追記しただけで lock が churn し `check --gate` が誤って失敗するため。lock
+  スキーマ自体への変更はなく、Issue #35 で req→req 依存を first-class に扱う
+  際にスキーマを再設計する想定。
+- `provenance` フィールドは graph JSON (`artgraph graph --format json`) には
+  出力されるが lock には乗らない（`format.ts` のシリアライズ層で
+  `EDGE_PROVENANCE_VALUES` のメンバ値のみ出力）。

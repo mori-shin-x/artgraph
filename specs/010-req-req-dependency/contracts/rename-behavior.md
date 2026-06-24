@@ -32,14 +32,18 @@ function rewriteAnnotationIds(
 1. `content` を行に分割
 2. `fencedLineSet(lines)` で fenced code block の行番号集合を取得
 3. 各行について、fenced 内ならスキップ
-4. 行内に対し以下の正規表現でマッチ（`g` フラグ）:
+4. ブロッククォート行（`/^\s*>/` で始まる行）はスキップ
+5. 行内のインラインコードスパン（`` `...` ``）と HTML コメント（`<!-- ... -->`）は
+   `maskInlineProtectedSpans` で同長空白に置換し、注釈マッチ判定から除外
+6. 行内に対し以下の正規表現でマッチ（`g` フラグ）:
 
    ```regex
-   \(\s*(depends_on|derives_from)\s*:\s*([^()]+?)\s*\)
+   \(\s*(depends_on|derives_from)\s*:\s*([^()]*?)\s*\)
    ```
 
-5. 各マッチについて capture group 2 の ID リストを `,` で分割し、各 ID を strip
-   後に `oldId` と比較して一致するものを `newId` に置換
+7. 各マッチについてマスク済み行で対応スパンが全空白なら（= protected
+   コンテキスト内）スキップ。それ以外は capture group 2 の ID リストを `,` で
+   分割し、各 ID を strip 後に `oldId` と比較して一致するものを `newId` に置換
 6. 置換した ID リストで注釈文字列を再構成し行に書き戻す
 7. 置換が 1 件以上発生したら `RewriteResult.changes` に記録
 
@@ -60,6 +64,10 @@ interface RewriteResult {
 | `- X: (depends_on: AUTH-001, AUTH-002, AUTH-001)` + `AUTH-001 → AUTH-100` | `- X: (depends_on: AUTH-100, AUTH-002, AUTH-100)` |
 | `- X: (depends_on: **AUTH-001**)` + `AUTH-001 → AUTH-100` | `- X: (depends_on: **AUTH-100**)`（BOLD 形式を保ったまま ID のみ置換） |
 | `\`\`\`\n(depends_on: AUTH-001)\n\`\`\`` + rename | 変更なし（fenced 内） |
+| `` `(depends_on: AUTH-001)` `` + rename | 変更なし（インラインコード内） |
+| `<!-- (depends_on: AUTH-001) -->` + rename | 変更なし（HTML コメント内） |
+| `> - X: (depends_on: AUTH-001)` + rename | 変更なし（ブロッククォート行） |
+| `- AUTH-002: (depends_on: AUTH-001)\r\n` + rename | `- AUTH-002: (depends_on: AUTH-100)\r\n`（CRLF 入力でも書換、改行コード保持） |
 | 散文中の `(depends on AUTH-001)` + rename | 変更なし（誤キーワードはマッチしない） |
 | 散文中の `AUTH-001 の説明` + rename | 注釈外なので本関数は変更しない（list-item / heading の req 定義は別 rewriter が処理） |
 

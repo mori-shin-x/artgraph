@@ -14,6 +14,16 @@ export type EdgeKind =
 // origins are added by #35.
 export type EdgeProvenance = "annotation" | "frontmatter" | "convention" | "tag";
 
+// Run-time value set for the EdgeProvenance literal union. Kept in sync with
+// the type union above so format.ts / lock.ts can validate a provenance
+// value at serialization time without trusting the wire shape.
+export const EDGE_PROVENANCE_VALUES: ReadonlySet<EdgeProvenance> = new Set([
+  "annotation",
+  "frontmatter",
+  "convention",
+  "tag",
+]);
+
 export interface GraphNode {
   id: string;
   kind: NodeKind;

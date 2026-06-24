@@ -67,8 +67,16 @@ export function buildLockFromGraph(graph: ArtifactGraph): LockFile {
       entry.tests = testEdges.map((e) => e.source);
     }
 
+    // contracts/provenance-field.md: annotation-derived edges are NOT
+    // written to the lock file in this issue's scope (#35 will redesign the
+    // lock schema to address req→req dependencies first-class). Filtering by
+    // `provenance !== "annotation"` keeps the lock surface stable so adding
+    // an inline annotation doesn't churn the lock and trip `check --gate`.
     const depEdges = graph.edges.filter(
-      (e) => (e.kind === "depends_on" || e.kind === "derives_from") && e.source === id,
+      (e) =>
+        (e.kind === "depends_on" || e.kind === "derives_from") &&
+        e.source === id &&
+        e.provenance !== "annotation",
     );
     if (depEdges.length > 0) {
       entry.dependsOn = depEdges.map((e) => e.target);
