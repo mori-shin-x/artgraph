@@ -131,8 +131,7 @@ description: "Task list for Issue #28 (FR-009 / FR-010 / FR-012) — plan.md / t
 - [ ] T029 Run `pnpm --filter artgraph knip` and `pnpm --filter artgraph build` — 未使用 export 検出ゼロ・ビルドエラーゼロを確認。Constitution 「**oxlint / knip / oxfmt が CI / pre-commit で実行可能であることを維持**」(L119-120) に準拠。
 
 - [ ] T030 Open PR with title "feat(graph): plan.md / tasks.md タスクノード化 + タグエッジ抽出 (#28)" referencing Issue #28. PR body must explicitly include:
-  - **Constitution Principle II Deviation Tracker (C1 / CV1)**: 「**累積 NodeKind 追加件数 = 1 / 改訂検討閾値 = 3**」を明示し、tracking のための フォローアップ **GitHub Issue** を新規作成（タイトル例: "Constitution Principle II — NodeKind 追加件数 1/3 (`task` 追加, #28)") して PR 本文からリンクする。次回 NodeKind 追加 PR はそのフォローアップ Issue を必ず参照・更新する運用とする
-  - Constitution Check 結果（Principle II は Complexity Tracking で justify 済 + spec.md Clarifications CV1 のガードレール明記）
+  - Constitution Check 結果（Principle II は plan.md Complexity Tracking で justify 済。Principle II は NON-NEGOTIABLE ではないため累積カウンタ等の追加 ceremony は不要）
   - quickstart 検証結果（T024 のログ／スクリーンショット）
   - NFR-002 ベンチ結果（T028）
   - 後方互換性メモ（既存プロジェクトの `tasks.md` の T### が auto-node 化される旨）

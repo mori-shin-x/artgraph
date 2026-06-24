@@ -118,9 +118,9 @@ packages/artgraph/
 |-----------|------------|--------------------------------------|
 | 新規 `task` NodeKind の追加（現行 5 NodeKind → 6 NodeKind、Constitution Principle II の 4 抽象層宣言は不変） | (a) FR-009 の `task → implements → target` は task が edge の **source** となるが、現行 `req` は `implements`/`verifies` の **target** のみ。同じ `req` 型に source/target 両方の役割を担わせると、coverage 集計 (`kind === "req"` でフィルタ) と衝突。<br>(b) Spec Kit の T001 と spec.md の FR-001 はライフサイクル・所有者・粒度が異なる（HOW vs WHAT）。区別を失うと impact 分析の精度低下。<br>(c) Constitution Principle III「Spec が ID を所有」の "Spec" はトップレベル要件であり、`tasks.md` の T001 は実装段のラベル。同一視は原則 III の境界を曖昧化する。 | **Alt-1**: `req` 流用 — 上記 (a) のとおり edge 方向矛盾と coverage 集計汚染を生む。<br>**Alt-2**: `doc` 粒度に集約（個別 task ノードを作らず `doc → target` エッジのみ） — plan.md 内の複数タスクが 1 ノードに集約され、precise impact 分析ができない（user story 3 の「spec → plan → code 完全トレース」を満たせない）。<br>**Alt-3**: edge 方向を逆向き (`target → implements → task`) に再定義 — FR-009 spec 文「タスクノードから実装先への」と矛盾し、既存 `implements` の語義（"X is implementation of Y"）に反する。 |
 
-逸脱の許容根拠: Constitution「逸脱の扱い」より、Principle II は non-negotiable ではなく Complexity Tracking で justify した場合に limited deviation が許容される。
+逸脱の許容根拠: Constitution Principle II は NON-NEGOTIABLE ではなく、「まずどのノード/エッジ型に写像できるかを検討し、追加する場合は plan.md の Constitution Check で正当性を説明する」と定める。本セクションがその justify に該当する。
 
-**ガードレール** (spec.md Clarifications §CV1 / 2026-06-24): 本 PR の 5 ノード型化は **本 feature 内での限定的逸脱** として扱い、Constitution 本文（4 ノード型宣言）は本 PR では変更しない。将来さらに NodeKind を追加する PR は同様に Complexity Tracking で個別 justify を要求し、「5 ノード型が事実上の新基準」として黙認されない運用を維持する。累積 3 件目の NodeKind 追加時には Constitution 改訂を検討する。
+将来さらに NodeKind を追加する PR も同様に各 PR 内で Complexity Tracking で個別に justify すれば十分（累積カウンタ等の追加 ceremony は設けない）。
 
 ## Post-Design Constitution Re-check
 
@@ -148,4 +148,4 @@ Phase 0 で挙げた研究項目はすべて [research.md](./research.md) で解
 | 4 | C-3 convention edges との競合 | [research.md §R4](./research.md) — edge kind が異なるため衝突なし |
 | 5 | `contains` を `doc → task` に拡張するか | [research.md §R5](./research.md) — 拡張する（tasks.md T019）|
 
-Phase 1 設計後の追加課題（実 Kiro 形式の確認、累積 NodeKind 件数追跡など）は [tasks.md T030 PR 本文](./tasks.md) で明示的にハンドリング。
+Phase 1 設計後の追加課題（実 Kiro 形式の確認など）は [tasks.md T030 PR 本文](./tasks.md) で明示的にハンドリング。
