@@ -9,17 +9,39 @@
 
 Kiro `tasks.md` のタスク ID は **チェックボックス付きリスト項目の先頭にある階層数字**（例: `1`, `1.1`, `1.1.1`）と確定する。`taskIdRe` パターンは `^(?:\[[xX ]\][\s ]+)?(\d+(?:\.\d+)*)\.?[\s ]` を採用（末尾ドット許容 `1.` を含む）。
 
-### Rationale
+### Verification (2026-06-24 web research)
 
-- 本リポジトリ内に Kiro の実 `tasks.md` フィクスチャは存在しない (`packages/artgraph/tests/fixtures/conventions/specs/kiro-feature/tasks.md` は `# Tasks` 1 行のみ)。Kiro 公式 / コミュニティ流通テンプレートで一般的な形式が階層数字付きチェックボックスのため、それを採用。
-- 実プロジェクトでの揺らぎ（`1.` のドット有無、`[ ]` 内大文字小文字）はパターン側で吸収。
-- `.artgraph.json` の `taskConventions` で上書き可能なため、ユーザが Kiro の独自カスタム形式を使っていれば override で対応。
+公式テンプレート + 公開 production リポジトリ 3 件のサンプル調査で実フォーマットを確定:
+
+- **task ID 形式**: `- [x] N. ...` (top-level、末尾ドット) または indented `- [ ] N.M ...` (sub-task)。**checkbox 必須** (`H1` fix で required 化済)。
+- **cross-link 構文**: `- _Requirements: 1.1, 2.3, 3.1_` (italic, カンマ区切り) — **`[REQ-]` でも `@impl(...)` でも無い**。Kiro 独自。
+- **`implementsTagRe`**: 未定義 (Kiro は実装ポインタを task tag で表現しない)。
+- **`verifiesTagRe`**: `(?<=Requirements:[\s\d.,]*)(\d+(?:\.\d+)*)` — mdast `toString` が emphasis underscore を strip するため `_` には依存せず、`Requirements:` ラベルと直前文字種制限で散文中の数字を除外する。
+
+**情報源**:
+
+- 公式テンプレート: [kiro tasks-phase.md](https://github.com/jasonkneen/kiro/blob/main/spec-process-guide/process/tasks-phase.md) — 「numbered checkbox list with a maximum of two levels of hierarchy」明記。
+- 実 production:
+  - [Veloera/Veloera `.kiro/specs/inbox-system/tasks.md`](https://github.com/Veloera/Veloera/blob/6525dfce816beaa270e78f0d8b762e19e54d13b8/.kiro/specs/inbox-system/tasks.md)
+  - [GreaterWMS/GreaterWMS `.kiro/specs/ci-pipeline/tasks.md`](https://github.com/GreaterWMS/GreaterWMS/blob/f8b931d02e2afcfa933c549d58a86ab581490de2/.kiro/specs/ci-pipeline/tasks.md) (ネスト sub-task)
+  - [trilogy-group/ttv-pipeline `.kiro/specs/api-server/tasks.md`](https://github.com/trilogy-group/ttv-pipeline/blob/046cf366ba793f0d5a655c8a3f88c7f746c872cc/.kiro/specs/api-server/tasks.md)
+
+### Rationale (preset 拡張)
+
+当初は `[REQ-]` / `@impl(...)` を hardcoded preset 共通として実装したが、Kiro が `_Requirements:` 形式を使う事実が判明したため、**`TaskConventionPreset` に `implementsTagRe` / `verifiesTagRe` を optional で追加**し SDD ツール別に cross-linking 構文を切り替える設計に変更:
+
+- spec-kit: `implementsTagRe = @impl(...)`, `verifiesTagRe = [REQ-...]` (従来通り)
+- kiro: `implementsTagRe = undefined`, `verifiesTagRe = (?<=Requirements:[\s\d.,]*)(\d+(?:\.\d+)*)` (新規)
+- OpenSpec 等のユーザ定義 SDD ツール: 任意の preset を `.artgraph.json` で追加可能
+
+`parsers/markdown.ts` の hardcoded `IMPL_TAG_RE` / `REQ_TAG_RE` は preset-supplied 形に置換。`data-model.md §2` の `TaskConventionPreset` 形も拡張。
 
 ### Alternatives considered
 
 - **`#1` / `#1.1` の hash-prefix 形式**: 一部のチケットツール由来の慣習だが、Markdown 見出し `#` と衝突するため不適。
 - **GitHub Issue 風 `#N` 単独**: 階層を持てないため Kiro のサブタスク構造を表現できない。
 - **強制必須ドット (`\d+\.`)**: 単一階層の場合に `1` が捕まらず実害大。
+- **hardcoded REQ/impl tag を維持して Kiro 対応を別 issue に分離**: 採用検討したが、Kiro は本 PR の builtin preset であり、preset を提供しながら cross-link 0 件は誤解を招くため却下。`TaskConventionPreset` 拡張に踏み切った。
 
 ## R2: 既存 fixture / 実 tasks.md への影響
 

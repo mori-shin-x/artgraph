@@ -316,6 +316,109 @@ describe("loadConfig", () => {
       );
       expect(() => loadConfig(TMP_DIR)).toThrow("at least one capture group");
     });
+
+    it("should accept a preset with implementsTagRe / verifiesTagRe", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            {
+              name: "openspec",
+              fileStems: ["tasks"],
+              taskIdRe: "^(OS-\\d+)",
+              implementsTagRe: "@impl\\(([^)]+)\\)",
+              verifiesTagRe: "\\[(REQ-[\\w-]+)\\]",
+            },
+          ],
+        }),
+      );
+      const config = loadConfig(TMP_DIR);
+      expect(config.taskConventions?.[0].implementsTagRe).toBe(
+        "@impl\\(([^)]+)\\)",
+      );
+      expect(config.taskConventions?.[0].verifiesTagRe).toBe(
+        "\\[(REQ-[\\w-]+)\\]",
+      );
+    });
+
+    it("should reject invalid implementsTagRe regex", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            {
+              name: "openspec",
+              fileStems: ["tasks"],
+              taskIdRe: "^(OS-\\d+)",
+              implementsTagRe: "[invalid(",
+            },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow(
+        "implementsTagRe: invalid regular expression",
+      );
+    });
+
+    it("should reject implementsTagRe without capture group", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            {
+              name: "openspec",
+              fileStems: ["tasks"],
+              taskIdRe: "^(OS-\\d+)",
+              implementsTagRe: "@impl\\([^)]+\\)",
+            },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow(
+        "implementsTagRe: regex must contain at least one capture group",
+      );
+    });
+
+    it("should reject verifiesTagRe with nested quantifier", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            {
+              name: "openspec",
+              fileStems: ["tasks"],
+              taskIdRe: "^(OS-\\d+)",
+              verifiesTagRe: "(([a-z]+)+)",
+            },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow("nested quantifiers");
+    });
+
+    it("should reject empty implementsTagRe (explicit empty string is a typo)", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            {
+              name: "openspec",
+              fileStems: ["tasks"],
+              taskIdRe: "^(OS-\\d+)",
+              implementsTagRe: "",
+            },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow(
+        "implementsTagRe: must not be empty",
+      );
+    });
   });
 
   describe("lockFile path traversal prevention", () => {

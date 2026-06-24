@@ -550,26 +550,54 @@ artgraph:
       expect(ids).toEqual(["1", "1.1", "1.2", "2"]);
     });
 
-    it("generates implements / verifies edges from nested kiro tasks", () => {
+    it("emits no implements edges (kiro has no @impl tag convention)", () => {
       const file = resolve(
         FIXTURE_DIR,
         "tasks/kiro-tasks/specs/billing/tasks.md",
       );
       const result = parseMarkdown(file);
-      const impl = result.edges
-        .filter((e) => e.kind === "implements")
-        .sort((a, b) => a.source.localeCompare(b.source));
+      expect(result.edges.filter((e) => e.kind === "implements")).toEqual([]);
+    });
+
+    it("extracts verifies edges from `_Requirements: X, Y_` italic lists", () => {
+      const file = resolve(
+        FIXTURE_DIR,
+        "tasks/kiro-tasks/specs/billing/tasks.md",
+      );
+      const result = parseMarkdown(file);
       const verifies = result.edges
         .filter((e) => e.kind === "verifies")
-        .sort((a, b) => a.source.localeCompare(b.source));
-      expect(impl).toEqual([
-        { source: "1", target: "billing-init", kind: "implements" },
-        { source: "1.1", target: "stripe-client", kind: "implements" },
-      ]);
+        .sort((a, b) =>
+          a.source === b.source
+            ? a.target.localeCompare(b.target)
+            : a.source.localeCompare(b.source),
+        );
       expect(verifies).toEqual([
-        { source: "1.2", target: "REQ-BIL-001", kind: "verifies" },
-        { source: "2", target: "REQ-BIL-002", kind: "verifies" },
+        { source: "1", target: "7.1", kind: "verifies" },
+        { source: "1", target: "7.2", kind: "verifies" },
+        { source: "1.1", target: "7.3", kind: "verifies" },
+        { source: "1.2", target: "8.1", kind: "verifies" },
+        { source: "2", target: "8.2", kind: "verifies" },
+        { source: "2", target: "9.1", kind: "verifies" },
       ]);
+    });
+
+    it("does NOT inherit nested-task _Requirements: into the parent task's scope", () => {
+      // Parent task `1` has its own `_Requirements: 7.1, 7.2_`. Nested task
+      // `1.1` (indented under `1`) has its own `_Requirements: 7.3_`. The
+      // parent must NOT pick up `7.3` — otherwise a 3-deep Kiro plan would
+      // bubble every leaf requirement to the root task and pollute traversals.
+      const file = resolve(
+        FIXTURE_DIR,
+        "tasks/kiro-tasks/specs/billing/tasks.md",
+      );
+      const result = parseMarkdown(file);
+      const task1Targets = result.edges
+        .filter((e) => e.kind === "verifies" && e.source === "1")
+        .map((e) => e.target)
+        .sort();
+      expect(task1Targets).toEqual(["7.1", "7.2"]);
+      expect(task1Targets).not.toContain("7.3");
     });
   });
 
@@ -686,7 +714,8 @@ artgraph:
           "- 1 release shipped in Q2",
           "- 2 hot-fixes planned",
           "- 3.14 GB free space",
-          "- [X] 4 actual kiro task @impl(real-task)",
+          "- [X] 4 actual kiro task",
+          "  - _Requirements: 1.2_",
           "",
         ].join("\n"),
       );
@@ -697,10 +726,11 @@ artgraph:
           .map((n) => n.id);
         // Only the checkbox-prefixed entry should be a task.
         expect(taskIds).toEqual(["4"]);
-        const impl = result.edges.find(
-          (e) => e.kind === "implements" && e.source === "4",
+        // And its _Requirements: must reach via kiro's verifiesTagRe.
+        const verifies = result.edges.find(
+          (e) => e.kind === "verifies" && e.source === "4",
         );
-        expect(impl?.target).toBe("real-task");
+        expect(verifies?.target).toBe("1.2");
       } finally {
         unlinkSync(file);
         rmdirSync(tmpDir);

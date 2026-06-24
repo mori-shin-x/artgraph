@@ -722,6 +722,11 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
           name: "openspec",
           fileStems: ["tasks"],
           taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(OS-\\d+)\\b",
+          // User presets must opt into the cross-link syntax explicitly — built-in
+          // tag regexes (spec-kit's `@impl(...)`, kiro's `_Requirements:`) are NOT
+          // inherited. Reuse the spec-kit-style `@impl(...)` here to show that
+          // any user tool can pick whichever conventions fit it.
+          implementsTagRe: "@impl\\(([^)\\n]+)\\)",
         },
       ],
     };
@@ -734,25 +739,80 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
     ]);
   });
 
-  it("dedups edges when both spec-kit and kiro presets match the same listItem", () => {
-    // kiro tasks.md fixture: built-in spec-kit's `T\d+` won't match `1`, but
-    // kiro's hierarchical `\d+(?:\.\d+)*` will. Both presets share file-stem
-    // "tasks", so the loop walks both — confirming dedup leaves one edge per
-    // (source, target, kind) tuple.
+  it("a user preset can supply a fully custom verifiesTagRe (extensibility)", () => {
+    // Demonstrates that the per-preset tag regex contract supports arbitrary
+    // SDD-tool conventions: here we invent a "→ <id>" arrow syntax and prove
+    // the parser routes it correctly into `verifies` edges. This is the
+    // mechanism that lets OpenSpec / any future SDD tool plug in without
+    // patching the parser.
+    const tmpRoot = resolve(import.meta.dirname, "fixtures/tasks-custom-tmp");
+    const specsDir = resolve(tmpRoot, "specs/demo");
+    mkdirSync(specsDir, { recursive: true });
+    writeFileSync(
+      resolve(specsDir, "tasks.md"),
+      [
+        "# Tasks",
+        "",
+        "- [X] CT-001 demo task → REQ-A",
+        "- [X] CT-002 second task → REQ-B → REQ-C",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    try {
+      const customConfig: ArtgraphConfig = {
+        ...tasksConfig,
+        taskConventions: [
+          {
+            name: "custom-arrow",
+            fileStems: ["tasks"],
+            taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(CT-\\d+)\\b",
+            verifiesTagRe: "→\\s*(REQ-[\\w-]+)",
+          },
+        ],
+      };
+      const { graph } = buildGraph(tmpRoot, customConfig);
+      const verifies = graph.edges
+        .filter((e) => e.kind === "verifies")
+        .sort((a, b) =>
+          a.source === b.source
+            ? a.target.localeCompare(b.target)
+            : a.source.localeCompare(b.source),
+        );
+      expect(verifies).toEqual([
+        { source: "CT-001", target: "REQ-A", kind: "verifies" },
+        { source: "CT-002", target: "REQ-B", kind: "verifies" },
+        { source: "CT-002", target: "REQ-C", kind: "verifies" },
+      ]);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("kiro tasks.md emits verifies edges from `_Requirements:` and no implements", () => {
+    // kiro tasks.md fixture mirrors real AWS Kiro output: `- [x] N. ...` with
+    // a sub-bullet `- _Requirements: X, Y_`. Built-in spec-kit's `T\d+` won't
+    // match `1`, but kiro's hierarchical `\d+(?:\.\d+)*` will. Kiro preset has
+    // no implementsTagRe (Kiro doesn't use `@impl(...)`), so implements edges
+    // must be empty even though spec-kit's implementsTagRe is also in scope —
+    // because spec-kit's idRe doesn't match this listItem, its tag regex is
+    // never applied.
     const { graph } = buildGraph(resolve(tasksRoot, "kiro-tasks"), tasksConfig);
-    const impl = graph.edges
-      .filter((e) => e.kind === "implements")
-      .sort((a, b) => a.source.localeCompare(b.source));
-    expect(impl).toEqual([
-      { source: "1", target: "billing-init", kind: "implements" },
-      { source: "1.1", target: "stripe-client", kind: "implements" },
-    ]);
+    expect(graph.edges.filter((e) => e.kind === "implements")).toEqual([]);
     const verifies = graph.edges
       .filter((e) => e.kind === "verifies")
-      .sort((a, b) => a.source.localeCompare(b.source));
+      .sort((a, b) =>
+        a.source === b.source
+          ? a.target.localeCompare(b.target)
+          : a.source.localeCompare(b.source),
+      );
     expect(verifies).toEqual([
-      { source: "1.2", target: "REQ-BIL-001", kind: "verifies" },
-      { source: "2", target: "REQ-BIL-002", kind: "verifies" },
+      { source: "1", target: "7.1", kind: "verifies" },
+      { source: "1", target: "7.2", kind: "verifies" },
+      { source: "1.1", target: "7.3", kind: "verifies" },
+      { source: "1.2", target: "8.1", kind: "verifies" },
+      { source: "2", target: "8.2", kind: "verifies" },
+      { source: "2", target: "9.1", kind: "verifies" },
     ]);
   });
 });

@@ -25,14 +25,23 @@ const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
 const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*:/;
 
 // Built-in task convention presets. spec-kit covers plan.md/tasks.md with the
-// `T\d+` ID shape; kiro covers tasks.md with hierarchical numerics (`1`, `1.1`).
+// `T\d+` ID shape + `@impl(...)` / `[REQ-...]` tag syntax. kiro covers tasks.md
+// with hierarchical numerics (`1`, `1.1`) + `_Requirements: X, Y_` italic lists.
 // Users add OpenSpec or other SDD tools via `.artgraph.json` `taskConventions`,
-// which are merged after these built-ins (see specs/005-speckit-remaining/research.md §R8).
+// which are merged after these built-ins (see research.md §R8).
 const BUILTIN_TASK_PRESETS: TaskConventionPreset[] = [
   {
     name: "spec-kit",
     fileStems: ["plan", "tasks"],
     taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(T\\d+)\\b",
+    // Spec Kit puts `@impl(target)` on the same line as the task ID.
+    // `[^)\n]+` keeps the target single-line (an unclosed paren can't swallow the next line).
+    implementsTagRe: "@impl\\(([^)\\n]+)\\)",
+    // Spec Kit's verifies tag preserves the bracket inner literally so a
+    // `[REQ-FR-001]` author-side ID round-trips verbatim through the graph.
+    // Two branches: chained `REQ-<...>` (e.g. REQ-FR-001) and a single
+    // NAMESPACED_ID_TOKEN (e.g. FR-001 / Requirement-3 / ns/FR-1).
+    verifiesTagRe: `\\[((?:REQ-[\\w/-]+)|(?:${NAMESPACED_ID_TOKEN}))\\]`,
   },
   {
     // Kiro tasks.md: require the checkbox prefix so ordinary numbered prose
@@ -41,19 +50,17 @@ const BUILTIN_TASK_PRESETS: TaskConventionPreset[] = [
     name: "kiro",
     fileStems: ["tasks"],
     taskIdRe: "^\\[[xX ]\\][\\s\\u00A0]+(\\d+(?:\\.\\d+)*)\\.?[\\s\\u00A0]",
+    // Kiro doesn't use `@impl(...)` — implementation pointers live in the spec
+    // narrative, not the task tag. Omit implementsTagRe.
+    //
+    // Cross-link to requirements is `_Requirements: 1.1, 2.3, 3.1_` (italic,
+    // comma-separated). mdast `toString` strips the `_` emphasis markers, so the
+    // lookbehind keys on the literal `Requirements:` label and a comma/digit-only
+    // run between it and the captured ID — that constrains matches to the
+    // requirements list and ignores stray numerics like "Set up 3 workers".
+    verifiesTagRe: "(?<=Requirements:[\\s\\d.,]*)(\\d+(?:\\.\\d+)*)",
   },
 ];
-
-// Target must be single-line — `[^)\n]+` prevents an unclosed `@impl(...` from
-// swallowing the next paragraph line via mdast's soft-wrap joining.
-const IMPL_TAG_RE = /@impl\(([^)\n]+)\)/g;
-// Accept both a `REQ-<...>` chained prefix (e.g. `[REQ-FR-001]` — spec.md FR-010
-// "prefix 維持") and a single NAMESPACED_ID_TOKEN (e.g. `[FR-001]`, `[Requirement-3]`).
-// match[0].slice(1, -1) preserves the bracket-inner verbatim as the verifies edge target.
-const REQ_TAG_RE = new RegExp(
-  `\\[(?:REQ-[\\w/-]+|${NAMESPACED_ID_TOKEN})\\]`,
-  "g",
-);
 const METADATA_FIELDS = ["title", "status", "priority", "owner"] as const;
 // Matches `<scheme>:` at the start of an href (e.g. `http:`, `mailto:`, `tel:`,
 // `javascript:`). Used to skip absolute URLs — only relative paths point at
@@ -185,16 +192,59 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
   // match this file's stem. Empty when the file isn't a recognized task
   // surface (e.g. a regular spec.md / design.md), so the visit() callback
   // skips the task-extraction branch entirely with no extra cost.
+  interface ApplicablePreset {
+    name: string;
+    idRe: RegExp;
+    implRe?: RegExp;
+    verifiesRe?: RegExp;
+  }
   const fileStem = basename(relPath)
     .replace(/\.(md|markdown)$/i, "")
     .toLowerCase();
-  const applicableTaskPresets: { name: string; re: RegExp }[] = [];
+  const applicableTaskPresets: ApplicablePreset[] = [];
   const seenPresetNames = new Set<string>();
   for (const preset of [...BUILTIN_TASK_PRESETS, ...(options?.taskConventions ?? [])]) {
     if (seenPresetNames.has(preset.name)) continue;
     seenPresetNames.add(preset.name);
     if (!preset.fileStems.includes(fileStem)) continue;
-    applicableTaskPresets.push({ name: preset.name, re: new RegExp(preset.taskIdRe) });
+    applicableTaskPresets.push({
+      name: preset.name,
+      idRe: new RegExp(preset.taskIdRe),
+      implRe: preset.implementsTagRe ? new RegExp(preset.implementsTagRe, "g") : undefined,
+      verifiesRe: preset.verifiesTagRe ? new RegExp(preset.verifiesTagRe, "g") : undefined,
+    });
+  }
+
+  // Does this listItem's first paragraph match any applicable task ID regex?
+  // Used to skip nested-task subtrees when collecting tag-scope paragraphs —
+  // otherwise a parent task would inherit edges from every nested sub-task.
+  const isTaskListItem = (li: any): boolean => {
+    if (!li || li.type !== "listItem") return false;
+    const fp = li.children?.find((c: any) => c.type === "paragraph");
+    if (!fp) return false;
+    const text = toString(fp);
+    for (const preset of applicableTaskPresets) {
+      if (preset.idRe.test(text)) return true;
+    }
+    return false;
+  };
+
+  // Yields each paragraph reachable from `taskNode`, but stops descending into
+  // any nested listItem that is itself a task. Per-paragraph iteration prevents
+  // a `(?<=Requirements:...)`-style regex from leaking across paragraph
+  // boundaries — each paragraph is matched in isolation.
+  function* paragraphsInScope(taskNode: any): Generator<string> {
+    function* walk(n: any, isRoot: boolean): Generator<string> {
+      if (!isRoot && n.type === "listItem" && isTaskListItem(n)) return;
+      if (n.type === "paragraph") {
+        yield toString(n);
+        return;
+      }
+      if (n.children) {
+        for (const child of n.children) yield* walk(child, false);
+      }
+    }
+    yield* walk(taskNode, true);
   }
 
   visit(tree, "listItem", (node: any) => {
@@ -202,15 +252,16 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
     const labelText = firstParagraph ? toString(firstParagraph) : toString(node);
 
     if (applicableTaskPresets.length > 0) {
-      let taskId: string | null = null;
+      let matched: { taskId: string; preset: ApplicablePreset } | null = null;
       for (const preset of applicableTaskPresets) {
-        const m = labelText.match(preset.re);
+        const m = labelText.match(preset.idRe);
         if (m && m[1] != null) {
-          taskId = m[1];
+          matched = { taskId: m[1], preset };
           break;
         }
       }
-      if (taskId != null) {
+      if (matched !== null) {
+        const { taskId, preset } = matched;
         nodes.push({
           id: taskId,
           kind: "task",
@@ -219,21 +270,27 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
           contentHash: hash(labelText),
         });
 
-        const paragraphText = firstParagraph ? toString(firstParagraph) : labelText;
-
-        IMPL_TAG_RE.lastIndex = 0;
-        let implMatch: RegExpExecArray | null;
-        while ((implMatch = IMPL_TAG_RE.exec(paragraphText)) !== null) {
-          const target = implMatch[1].trim();
-          if (target === "") continue;
-          edges.push({ source: taskId, target, kind: "implements" });
-        }
-
-        REQ_TAG_RE.lastIndex = 0;
-        let reqMatch: RegExpExecArray | null;
-        while ((reqMatch = REQ_TAG_RE.exec(paragraphText)) !== null) {
-          const target = reqMatch[0].slice(1, -1);
-          edges.push({ source: taskId, target, kind: "verifies" });
+        if (preset.implRe || preset.verifiesRe) {
+          for (const paragraphText of paragraphsInScope(node)) {
+            if (preset.implRe) {
+              preset.implRe.lastIndex = 0;
+              let m: RegExpExecArray | null;
+              while ((m = preset.implRe.exec(paragraphText)) !== null) {
+                const target = m[1].trim();
+                if (target === "") continue;
+                edges.push({ source: taskId, target, kind: "implements" });
+              }
+            }
+            if (preset.verifiesRe) {
+              preset.verifiesRe.lastIndex = 0;
+              let m: RegExpExecArray | null;
+              while ((m = preset.verifiesRe.exec(paragraphText)) !== null) {
+                const target = m[1].trim();
+                if (target === "") continue;
+                edges.push({ source: taskId, target, kind: "verifies" });
+              }
+            }
+          }
         }
         return;
       }

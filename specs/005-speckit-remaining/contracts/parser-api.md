@@ -51,22 +51,24 @@ taskConventions?: TaskConventionPreset[];
 
 ## 3. Output: `ParsedSpec.edges` の拡張
 
-### `task → implements → target-id`
+タグ抽出は **preset がそれぞれ供給する `implementsTagRe` / `verifiesTagRe`** に従う (parser 側に hardcoded な共通 regex は無い)。
 
-- **トリガ**: 同じ listItem 配下の paragraph 全テキストに対し regex `/@impl\(([^)]+)\)/g` でマッチ
-- **生成**: `{ source: taskId, target: targetId.trim(), kind: "implements" }` を 1 マッチごとに 1 件
-- target-id の空白 trim のみ行い、それ以上の正規化はしない（自由形式）
+### 適用スコープ
 
-### `task → verifies → target-id`
+- task ID が抽出された listItem の subtree を walk
+- 各 `paragraph` ノードに対し独立して preset の tag regex を `/g` で適用 (cross-paragraph leak を防ぐため)
+- subtree 内に **別の task** を生成する nested listItem がある場合は、そのサブツリーを除外 (親 task が子 task のタグを継承しない)
 
-- **トリガ**: 同じ listItem 配下の paragraph 全テキストに対し `NAMESPACED_ID_TOKEN` の bracket 形式（`testReqRe`）でマッチ
-- **生成**: `{ source: taskId, target: bracketInner, kind: "verifies" }` を 1 マッチごとに 1 件
-- bracket 内文字列はそのまま使用（`REQ-` prefix を含む）
+### Edge 生成
+
+- `task → implements → target`: 該当 preset の `implementsTagRe` が定義されている場合のみ。capture group 1 を `trim()` し、空でなければ edge 化
+- `task → verifies → target`: 該当 preset の `verifiesTagRe` が定義されている場合のみ。capture group 1 を `trim()` し、空でなければ edge 化
+- preset がどちらの tag regex も持たない場合、その preset から生成される edge は taskNode のみ (cross-link は無し)
 
 ### 既存タグとの共存
 
-- `[REQ-]` タグは TS パーサ (`typescript.ts:253`) と同じ token を使うため、ID 形式に完全な互換性がある
-- `@impl(...)` タグは TS パーサの `@impl REQ-001`（パーレン無し）とは regex が異なるため衝突しない
+- spec-kit の `[REQ-XXX]` token は TS パーサ (`typescript.ts:253`) の `testReqRe` と互換 (capture group は parser 側 vs builder 側で異なるが ID 形式は同じ)
+- `@impl(...)` (Markdown 側 / カッコ付き) は TS パーサの `@impl REQ-001` (コメント形式 / カッコ無し) とは regex が異なるため衝突しない
 
 ---
 
@@ -81,8 +83,10 @@ taskConventions?: TaskConventionPreset[];
 
 | 状況 | 挙動 |
 |---|---|
-| preset の `taskIdRe` が無効 regex | `config.ts` 段階で throw（既存 `reqPatterns` と同じ UX） |
-| preset の `name` が重複 | `config.ts` 段階で throw |
-| 該当ファイルでタスク行ゼロ | 正常終了（task ノード ゼロ） |
-| タスク行に `@impl()` 空内容 | エッジ生成スキップ（warning なし） |
-| `[REQ-]` の REQ- prefix なし `[FOO]` | regex (`NAMESPACED_ID_TOKEN`) にマッチしなければスキップ |
+| preset の `taskIdRe` / `implementsTagRe` / `verifiesTagRe` が無効 regex | `config.ts` 段階で throw (既存 `reqPatterns` と同じ UX) |
+| preset の `name` が重複 (builtin 名との衝突含む) | `config.ts` 段階で throw |
+| 該当ファイルでタスク行ゼロ | 正常終了 (task ノード ゼロ) |
+| タスク行のタグ capture が空 (`@impl()` 等) | エッジ生成スキップ (warning なし) |
+| preset の `implementsTagRe` 未定義 | implements edge は当該 preset からは生成されない (例: Kiro) |
+| preset の `verifiesTagRe` 未定義 | verifies edge は当該 preset からは生成されない |
+| nested task の tag が親 scope に流入する可能性 | parser 側で nested-task subtree を除外することで防止 |

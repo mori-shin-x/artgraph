@@ -60,7 +60,8 @@
 | `taskIdRe` 長さ > 200 | `Invalid taskConventions[{idx}].taskIdRe: pattern must not exceed 200 characters` |
 | `taskIdRe` nested quantifier | `Invalid taskConventions[{idx}].taskIdRe: nested quantifiers (e.g. "(a+)+") are rejected to prevent catastrophic backtracking` |
 | `taskIdRe` 無効 regex | `Invalid taskConventions[{idx}].taskIdRe: invalid regular expression — {detail}` |
-| `taskIdRe` capture group ゼロ | `Invalid taskConventions[{idx}].taskIdRe: regex must contain at least one capture group (group 1 is used as the task ID)` |
+| `taskIdRe` capture group ゼロ | `Invalid taskConventions[{idx}].taskIdRe: regex must contain at least one capture group (group 1 is used as the target ID)` |
+| `implementsTagRe` / `verifiesTagRe` (optional) | 上記 `taskIdRe` と同じ 6 ルールを field 名差し替えで適用 (空文字列も拒否 — タグ種別を持たない preset は field 自体を省略する) |
 
 ---
 
@@ -73,12 +74,15 @@
   {
     "name": "spec-kit",
     "fileStems": ["plan", "tasks"],
-    "taskIdRe": "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(T\\d+)\\b"
+    "taskIdRe": "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(T\\d+)\\b",
+    "implementsTagRe": "@impl\\(([^)\\n]+)\\)",
+    "verifiesTagRe": "\\[((?:REQ-[\\w/-]+)|(?:NAMESPACED_ID_TOKEN))\\]"
   },
   {
     "name": "kiro",
     "fileStems": ["tasks"],
-    "taskIdRe": "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(\\d+(?:\\.\\d+)*)\\.?[\\s\\u00A0]"
+    "taskIdRe": "^\\[[xX ]\\][\\s\\u00A0]+(\\d+(?:\\.\\d+)*)\\.?[\\s\\u00A0]",
+    "verifiesTagRe": "(?<=Requirements:[\\s\\d.,]*)(\\d+(?:\\.\\d+)*)"
   }
 ]
 ```

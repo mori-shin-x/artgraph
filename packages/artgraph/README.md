@@ -98,26 +98,31 @@ To opt out of any of the above:
 ## Task graph (`taskConventions` config)
 
 artgraph extracts **task nodes** from Spec Kit / Kiro `plan.md` and `tasks.md`
-files, and converts inline tags into edges:
+files, then converts each SDD tool's cross-link tags into edges. **Tag syntax
+is preset-supplied** — every SDD tool can define its own ID format and tag
+regexes; there is no global `@impl` / `[REQ-]` convention baked into the parser.
 
-| Tag in markdown        | Edge generated                                  |
-| ---------------------- | ----------------------------------------------- |
-| `@impl(target-id)`     | `task → implements → target-id` (free-form target) |
-| `[REQ-FR-001]`         | `task → verifies → REQ-FR-001` (prefix kept verbatim) |
+### Built-in presets
 
-Both tags are recognized in any file whose stem matches a registered task
-convention preset — `plan.md` and `tasks.md` for `spec-kit`, `tasks.md` for
-`kiro`. Recognition is symmetric: a `[REQ-]` tag inside `plan.md` and an
-`@impl(...)` tag inside `tasks.md` both produce edges.
+| Preset       | files (stem)        | task ID                          | `implements` tag        | `verifies` tag                                  |
+| ------------ | ------------------- | -------------------------------- | ----------------------- | ----------------------------------------------- |
+| **spec-kit** | `plan`, `tasks`     | `T\d+` (e.g. `T001`)             | `@impl(target-id)`      | `[REQ-FR-001]` / `[FR-001]` / `[Requirement-3]` |
+| **kiro**     | `tasks`             | `\d+(\.\d+)*` (e.g. `1`, `1.1`)  | *(not used by Kiro)*    | `- _Requirements: 1.1, 2.3, 3.1_` (italic list) |
 
-`doc → contains → task` edges are emitted under `docGraph.autoContains` (the
-same flag that drives `doc → req`), so impact analysis can hop from a spec file
-through its tasks to the code that implements them.
+Notes:
+- `doc → contains → task` edges are emitted under `docGraph.autoContains` (the
+  same flag that drives `doc → req`).
+- Kiro's `tasks.md` requires the `[ ]`/`[x]` checkbox on each task line — bare
+  numbered lists like `- 1 release shipped` are not treated as tasks.
+- For nested Kiro tasks (`- [x] 1.1 ...` indented under `- [x] 1. ...`), each
+  level's `_Requirements:` lists attach to its own task only; parents do not
+  inherit child requirements.
 
 ### Adding a custom SDD tool (OpenSpec, etc.)
 
-Append a preset to `taskConventions` — built-ins (`spec-kit`, `kiro`) remain
-active:
+Append a preset to `taskConventions` — built-ins remain active. Each preset
+chooses its own tag syntax via optional `implementsTagRe` / `verifiesTagRe`
+(capture group 1 = target ID, applied with `/g` semantics):
 
 ```jsonc
 // .artgraph.json
@@ -126,21 +131,26 @@ active:
     {
       "name": "openspec",
       "fileStems": ["tasks"],
-      "taskIdRe": "^(?:\\[[xX ]\\]\\s+)?(OS-\\d+)\\b"
+      "taskIdRe": "^(?:\\[[xX ]\\]\\s+)?(OS-\\d+)\\b",
+      "implementsTagRe": "@impl\\(([^)\\n]+)\\)",
+      "verifiesTagRe": "→\\s*(REQ-[\\w-]+)"
     }
   ]
 }
 ```
 
-`taskIdRe` capture group 1 is the task ID; the regex is validated the same way
-`reqPatterns` is (length, nested-quantifier rejection, capture-group required).
+All three regex fields are validated the same way `reqPatterns` is
+(≤ 200 chars, nested-quantifier rejection, capture-group required, valid regex).
+Omit `implementsTagRe` or `verifiesTagRe` if your tool doesn't have that edge
+kind (Kiro omits `implementsTagRe`).
 
 ### Upgrade note
 
-Built-in presets activate automatically on upgrade — existing
-projects whose `tasks.md` already contains `T###` lines will see new `task`
-nodes (and `doc → task` `contains` edges) appear on the next `artgraph scan`.
-Run `artgraph reconcile` to refresh the lock baseline.
+Built-in presets activate automatically on upgrade. Existing projects whose
+`tasks.md` already contains `T###` (Spec Kit) or checkbox-prefixed numerics
+(Kiro) will see new `task` nodes — and `doc → task` `contains` edges, plus
+`task → verifies → ...` edges for Kiro `_Requirements:` lists — on the next
+`artgraph scan`. Run `artgraph reconcile` to refresh the lock baseline.
 
 
 ## Commands

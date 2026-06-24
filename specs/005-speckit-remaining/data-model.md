@@ -53,36 +53,42 @@ export type NodeKind = "req" | "doc" | "file" | "symbol" | "test" | "task";
 ```ts
 // types.ts に追加
 export interface TaskConventionPreset {
-  /** プリセット表示名（エラーメッセージ・整合性確認のため）。例: "spec-kit" / "kiro" / "openspec" */
+  /** プリセット表示名 (エラーメッセージ・整合性確認のため)。例: "spec-kit" / "kiro" / "openspec" */
   name: string;
   /** 適用対象ファイルの (lowercase / 拡張子除去後) stem 配列。
    *  例: ["plan", "tasks"] (spec-kit) / ["tasks"] (kiro) */
   fileStems: string[];
-  /** タスク ID 抽出用の正規表現文字列。
-   *  - capture group 1 = task ID（必須）
-   *  - リスト項目テキストの先頭から match を試行する（multiline / global 不要）
-   *  例: spec-kit "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(T\\d+)\\b"
-   *  例: kiro    "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(\\d+(?:\\.\\d+)*)\\.?[\\s\\u00A0]"
-   */
+  /** タスク ID 抽出用の正規表現。capture group 1 = task ID。 */
   taskIdRe: string;
+  /** 実装ポインタタグ。capture group 1 = target ID。/g セマンティクスで適用。
+   *  preset がこの tag 種別を持たない場合は省略 (例: Kiro は @impl を使わない)。 */
+  implementsTagRe?: string;
+  /** 要件参照タグ。capture group 1 = target ID。/g セマンティクスで適用。
+   *  preset 別に書式が異なる: spec-kit は `[REQ-...]`、kiro は `_Requirements: X, Y_` 等。 */
+  verifiesTagRe?: string;
 }
 ```
 
 ### Built-in presets
 
-| name | fileStems | taskIdRe | 補足 |
-|---|---|---|---|
-| `spec-kit` | `["plan", "tasks"]` | `^(?:\[[xX ]\][\s ]+)?(T\d+)\b` | チェックボックス `[X]`/`[x]`/`[ ]` を許容し、後続の `T###` を捕捉 |
-| `kiro` | `["tasks"]` | `^(?:\[[xX ]\][\s ]+)?(\d+(?:\.\d+)*)\.?[\s ]` | 階層数字 `1`, `1.1`, `1.1.1`。末尾の任意のドット `.` を許容 |
+| name | fileStems | taskIdRe | implementsTagRe | verifiesTagRe |
+|---|---|---|---|---|
+| `spec-kit` | `["plan", "tasks"]` | `^(?:\[[xX ]\][\s ]+)?(T\d+)\b` | `@impl\(([^)\n]+)\)` | `\[((?:REQ-[\w/-]+)\|(?:NAMESPACED_ID_TOKEN))\]` |
+| `kiro` | `["tasks"]` | `^\[[xX ]\][\s ]+(\d+(?:\.\d+)*)\.?[\s ]` | *(未定義)* | `(?<=Requirements:[\s\d.,]*)(\d+(?:\.\d+)*)` |
+
+- spec-kit: checkbox は **optional** (T### prefix が十分 distinctive のため)
+- kiro: checkbox **required** (number-only listItem の false positive 防止、H1 fix)。verifiesTagRe は lookbehind で `Requirements:` ラベル後の `[\s\d.,]*` スコープに限定 → 散文中の数字は除外
+- spec-kit verifiesTagRe の `NAMESPACED_ID_TOKEN` は `(?:[\w-]+/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)` の展開 (req-id.ts 由来) + `REQ-` chained prefix の alternation
 
 ### Validation rules
 
-- `name` は空文字不可・unique（同名複数登録はエラー）
-- `fileStems` は空配列不可、各要素は lowercase の英数字+ハイフン
-- `taskIdRe` は `config.ts` の既存 `validateReqPatterns()` と同じバリデーション規則を適用:
+- `name` は空文字不可・unique (builtin `spec-kit`/`kiro` 名との衝突も拒否)
+- `fileStems` は空配列不可、各要素は非空 string
+- `taskIdRe` / `implementsTagRe` / `verifiesTagRe` 共通バリデーション:
   - 200 文字以内
-  - nested quantifier `(a+)+` パターン拒否（ReDoS 対策）
-  - capture group 1 が必須（whole-match ではなく capture）
+  - nested quantifier `(a+)+` パターン拒否 (ReDoS 対策)
+  - capture group 1 が必須
+  - 明示的に空文字列 `""` は拒否 (タグ種別を持たない preset は **field 自体を省略**する)
 
 ### Storage
 
@@ -164,28 +170,29 @@ export interface ParseMarkdownOptions {
 
 ---
 
-## 5. 新規パース対象: タグ
+## 5. タグ抽出: preset-supplied 正規表現
 
-### `@impl(target-id)` タグ
+タグ抽出は **preset がそれぞれ供給する `implementsTagRe` / `verifiesTagRe`** に従う (hardcoded 共通 regex は無い)。マッチした task の preset に応じて適用される regex が切り替わる。
 
-- **Where**: `taskConventions` で task ID 抽出対象となる**全ファイル** (R3 参照)
-- **Regex**: `/@impl\(([^)]+)\)/g`（target-id は capture group 1、内容は空白以外の任意文字）
-- **挙動**:
-  - リスト項目内に出現した場合、その項目に紐づく task ノードから target-id への `implements` エッジを生成
-  - リスト項目に紐づかない（task ID が抽出されない）箇所での `@impl(...)` は無視（warning なし）
-  - 1 タスク項目に複数の `@impl(...)` がある場合は複数エッジ生成
+### スコープ (どのテキストに regex を適用するか)
 
-### `[REQ-xxx]` タグ
+- task ノードが抽出された listItem の subtree を再帰的に walk し、**各 `paragraph` ごとに独立して** regex を適用する。
+- ただし、subtree 内に**別の task ノード**を生成する nested listItem がある場合は、その subtree は除外する (親 task が子 task の `_Requirements:` 等を二重計上しないため)。
+- 段落単位で適用するため、`(?<=Requirements:...)` のような lookbehind が段落境界を跨いで暴発しない。
 
-- **Where**: `taskConventions` で task ID 抽出対象となる**全ファイル**
-- **Regex**: 既存 TS パーサの `testReqRe` と同じ token (`NAMESPACED_ID_TOKEN` の bracket 形式)
-- **挙動**:
-  - リスト項目内に出現した場合、task ノードから bracket 内文字列 (prefix 維持) への `verifies` エッジを生成
-  - 1 タスク項目に複数の `[REQ-]` がある場合は複数エッジ生成
+### Built-in preset 別の挙動
 
-### 適用優先度
+| Preset | implements tag | verifies tag |
+|---|---|---|
+| **spec-kit** | `@impl(target-id)` → capture group 1 を trim、空なら edge skip (warning なし) | `[REQ-XXX]` / `[FR-001]` / `[Requirement-3]` / `[ns/FR-1]` の bracket 内文字列を verbatim で target に |
+| **kiro** | *(未定義 — Kiro は @impl を使わない)* | `_Requirements: 1.1, 2.3, 3.1_` のカンマ区切り list から各 ID を 1 件ずつ抽出 (mdast `toString` が emphasis underscore を strip するため lookbehind は `Requirements:` ラベル後の `[\s\d.,]*` でスコープ |
 
-- 1 ファイル内で `[REQ-]` と `@impl(...)` が同じ task 項目に共存する場合、両エッジを生成（互いに直交）。
+### 共通の挙動
+
+- 1 タスク項目に複数のタグがある場合は複数エッジ生成 (`/g` 適用)
+- task ID が抽出されない箇所のタグは無視 (warning なし)
+- 1 ファイル内で複数 tag 種別が同じ task に共存する場合、両エッジを生成 (直交)
+- preset が当該 tag regex を定義していない場合、その edge 種別は生成されない (Kiro の implements が空、等)
 
 ---
 

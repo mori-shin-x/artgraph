@@ -113,41 +113,49 @@ pnpm exec artgraph scan --output json > graph.json
 
 ---
 
-## Scenario 3: Kiro 階層数字 task ID
+## Scenario 3: Kiro 階層数字 task ID + `_Requirements:` cross-link
 
 ### Setup
 
 ```bash
 mkdir -p /tmp/qs-fr009/specs/002-billing
 cat > /tmp/qs-fr009/specs/002-billing/tasks.md <<'EOF'
-# Tasks
+# Implementation Plan
 
-- [X] 1 Set up billing module @impl(billing-init)
-  - [X] 1.1 Stripe SDK integration @impl(stripe-client)
-  - [ ] 1.2 webhook handler [REQ-BIL-001]
-- [ ] 2 Invoice generation [REQ-BIL-002]
+- [x] 1. Set up billing module
+  - Create database models
+  - _Requirements: 7.1, 7.2_
+  - [x] 1.1 Stripe integration
+    - _Requirements: 7.3_
+- [ ] 2. Invoice generation
+  - _Requirements: 8.1, 8.2_
 EOF
 ```
+
+実 Kiro `tasks.md` フォーマット (`kiro.dev` 公式 + 公開 production リポジトリ 3 件で確認済) を踏襲: checkbox 必須、`_Requirements: X, Y_` カンマ区切り italic で要件参照。
 
 ### Run
 
 ```bash
-pnpm exec artgraph scan --output json > graph.json
+pnpm exec artgraph graph --format json > graph.json
 ```
 
 ### Expected
 
-- `nodes`: `1`, `1.1`, `1.2`, `2` の 4 task ノード
-- `edges`:
-  - `1 → billing-init → implements`
-  - `1.1 → stripe-client → implements`
-  - `1.2 → REQ-BIL-001 → verifies`
-  - `2 → REQ-BIL-002 → verifies`
+- `nodes`: `1`, `1.1`, `2` の 3 task ノード
+- `edges` (kiro preset は `implementsTagRe` を持たないため implements は 0 件):
+  - `1 → 7.1 → verifies`
+  - `1 → 7.2 → verifies`
+  - `1.1 → 7.3 → verifies`
+  - `2 → 8.1 → verifies`
+  - `2 → 8.2 → verifies`
 - 名前空間衝突なし (single specDir)
 
 ### Pass criteria
 
-- 階層数字 ID (`1`, `1.1`, `1.2`, `2`) がそれぞれ独立した task ノードとして抽出されている
+- 階層数字 ID がそれぞれ独立した task ノードとして抽出されている
+- 親 task `1` は子 task `1.1` の `_Requirements: 7.3_` を **継承しない** (scope-exclusion)
+- 1 つの `_Requirements:` 行から複数 ID が個別の verifies edge として展開される
 
 ---
 

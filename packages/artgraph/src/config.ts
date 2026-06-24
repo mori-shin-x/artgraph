@@ -117,34 +117,62 @@ function validateTaskConventions(value: unknown): void {
       }
     }
 
-    if (typeof taskIdRe !== "string" || taskIdRe === "") {
-      throw new Error(
-        `Invalid taskConventions[${idx}].taskIdRe: must not be empty`,
-      );
+    validateTaskRegexField(idx, "taskIdRe", taskIdRe, /* required */ true);
+    validateTaskRegexField(
+      idx,
+      "implementsTagRe",
+      (preset as { implementsTagRe?: unknown }).implementsTagRe,
+      /* required */ false,
+    );
+    validateTaskRegexField(
+      idx,
+      "verifiesTagRe",
+      (preset as { verifiesTagRe?: unknown }).verifiesTagRe,
+      /* required */ false,
+    );
+  }
+}
+
+// Shared regex-shape validator for `taskIdRe` / `implementsTagRe` / `verifiesTagRe`.
+// `required = false` means `undefined` is accepted (the SDD tool doesn't use that
+// edge kind). Empty string is rejected in both modes — explicit-but-empty is a typo.
+function validateTaskRegexField(
+  idx: number,
+  field: "taskIdRe" | "implementsTagRe" | "verifiesTagRe",
+  value: unknown,
+  required: boolean,
+): void {
+  if (value === undefined) {
+    if (required) {
+      throw new Error(`Invalid taskConventions[${idx}].${field}: must not be empty`);
     }
-    if (taskIdRe.length > MAX_PATTERN_LENGTH) {
-      throw new Error(
-        `Invalid taskConventions[${idx}].taskIdRe: pattern must not exceed ${MAX_PATTERN_LENGTH} characters`,
-      );
-    }
-    if (NESTED_QUANTIFIER_RE.test(taskIdRe)) {
-      throw new Error(
-        `Invalid taskConventions[${idx}].taskIdRe: nested quantifiers (e.g. "(a+)+") are rejected to prevent catastrophic backtracking`,
-      );
-    }
-    try {
-      new RegExp(taskIdRe);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(
-        `Invalid taskConventions[${idx}].taskIdRe: invalid regular expression — ${msg}`,
-      );
-    }
-    if (countCaptureGroups(taskIdRe) < 1) {
-      throw new Error(
-        `Invalid taskConventions[${idx}].taskIdRe: regex must contain at least one capture group (group 1 is used as the task ID)`,
-      );
-    }
+    return;
+  }
+  if (typeof value !== "string" || value === "") {
+    throw new Error(`Invalid taskConventions[${idx}].${field}: must not be empty`);
+  }
+  if (value.length > MAX_PATTERN_LENGTH) {
+    throw new Error(
+      `Invalid taskConventions[${idx}].${field}: pattern must not exceed ${MAX_PATTERN_LENGTH} characters`,
+    );
+  }
+  if (NESTED_QUANTIFIER_RE.test(value)) {
+    throw new Error(
+      `Invalid taskConventions[${idx}].${field}: nested quantifiers (e.g. "(a+)+") are rejected to prevent catastrophic backtracking`,
+    );
+  }
+  try {
+    new RegExp(value);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `Invalid taskConventions[${idx}].${field}: invalid regular expression — ${msg}`,
+    );
+  }
+  if (countCaptureGroups(value) < 1) {
+    throw new Error(
+      `Invalid taskConventions[${idx}].${field}: regex must contain at least one capture group (group 1 is used as the target ID)`,
+    );
   }
 }
 
