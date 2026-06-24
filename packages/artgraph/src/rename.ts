@@ -1,4 +1,5 @@
 import type { ReqPatternConfig } from "./types.js";
+import { maskInlineProtectedSpans } from "./parsers/markdown.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -8,6 +9,7 @@ export type ReferenceKind =
   | "impl-tag"
   | "test-tag"
   | "frontmatter-depends-on"
+  | "annotation-target"
   | "lock-key";
 
 export interface RewriteChange {
@@ -520,6 +522,89 @@ export function expandFrontmatterDependsOn(
  * Apply the appropriate rewriters for the given file type and stamp each
  * returned `RewriteChange` with the provided `filePath`.
  */
+// T025: rewrite req IDs that appear inside inline req→req annotations
+// (`(depends_on: A, OLD, B)` → `(depends_on: A, NEW, B)`). Mirrors the parser
+// grammar in src/parsers/markdown.ts (ANNOTATION_RE / extractAnnotations) so
+// only annotations the parser would extract are rewritten. fenced code blocks
+// are skipped (F6). Position constraints (list-item line / heading first
+// paragraph head/tail) are NOT enforced here — see research.md R5: rewriting
+// a paren expression outside those positions is harmless because the parser
+// won't have emitted an edge for it anyway, and duplicating the position
+// gate in the rewriter would mean two sources of truth.
+const ANNOTATION_RE_LINE = /(\(\s*(?:depends_on|derives_from)\s*:\s*)([^()]*?)(\s*\))/g;
+
+export function rewriteAnnotationIds(
+  content: string,
+  oldId: string,
+  newId: string,
+  opts?: RewriteOptions,
+): RewriteResult {
+  if (oldId === newId) return { content, changes: [] };
+  const lines = content.split("\n");
+  const fenced = fencedLineSet(lines);
+  const changes: RewriteChange[] = [];
+  const escapedOld = escapeRegExp(oldId);
+  // Token boundary inside the comma-separated ID list: separator is `,` or
+  // start/end of capture group; spaces and `**` may surround the ID. Match the
+  // exact ID surrounded by these boundary chars (or `**`) so a partial token
+  // like `AUTH-001` inside `AUTH-001-X` is not rewritten. Both `**` are kept
+  // optional (the parser strips them as a pair); a degenerate `**OLD` with no
+  // matching close bold is left as-is by also requiring the boldness to be
+  // symmetrical via a backreference.
+  const idTokenRE = new RegExp(
+    `(^|,)(\\s*)(\\*\\*)?(${escapedOld})(\\*\\*)?(\\s*)(?=,|$)`,
+    "g",
+  );
+  // When provided, validate that `oldId` looks like a real ID under the
+  // user's reqPatterns.codeId. If not, the rewriter is a no-op — this keeps
+  // parser/rewriter parity (parser would reject the token via
+  // invalid-annotation-id, so the rewriter should not silently mutate it).
+  if (opts?.reqPatterns?.codeId) {
+    const codeIdRE = new RegExp(opts.reqPatterns.codeId);
+    if (!codeIdRE.test(oldId)) return { content, changes: [] };
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    if (fenced.has(i)) continue;
+    const original = lines[i];
+    // Block-level protection: blockquote prefix lines never carry req→req
+    // annotations (the parser doesn't extract them either — see meta-review
+    // C1). Skip the line wholesale so authored prose inside `> ...` stays
+    // intact.
+    if (/^\s*>/.test(original)) continue;
+    // Span-level protection: mask inline-code and HTML-comment spans so any
+    // `(depends_on: OLD)` written inside `` `...` `` or `<!-- ... -->` is
+    // preserved verbatim. We rewrite on the original line but consult the
+    // masked copy at each match position to decide whether the match sits
+    // inside a protected span.
+    const masked = maskInlineProtectedSpans(original);
+    const rewritten = original.replace(ANNOTATION_RE_LINE, (match, head, body, tail, offset) => {
+      const slice = masked.slice(offset, offset + match.length);
+      // If the same span in the masked copy is entirely whitespace, the
+      // match overlaps a protected region — leave it untouched.
+      if (slice.replace(/\s/g, "") === "") return match;
+      const newBody = body.replace(
+        idTokenRE,
+        (_m: string, sep: string, leadWS: string, bold1: string | undefined, _id: string, bold2: string | undefined, trailWS: string) =>
+          `${sep}${leadWS}${bold1 ?? ""}${newId}${bold2 ?? ""}${trailWS}`,
+      );
+      return head + newBody + tail;
+    });
+    if (rewritten !== original) {
+      changes.push({
+        filePath: "",
+        line: i + 1,
+        kind: "annotation-target",
+        before: original,
+        after: rewritten,
+      });
+      lines[i] = rewritten;
+    }
+  }
+
+  return { content: lines.join("\n"), changes };
+}
+
 export function rewriteFile(
   filePath: string,
   content: string,
@@ -529,7 +614,14 @@ export function rewriteFile(
 ): RewriteResult {
   const ext = extOf(filePath);
   const allChanges: RewriteChange[] = [];
-  let current = content;
+
+  // Normalize CRLF/CR to LF for the rewrite pipeline so line-based regexes
+  // and annotation matching behave identically across platforms. Restore the
+  // original newline style at the end (meta-review additional F4 — without
+  // this, the rewriter no-ops on Windows-checked-out spec files while the
+  // parser still produces edges).
+  const originalNewline = content.includes("\r\n") ? "\r\n" : "\n";
+  let current = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
   const apply = (fn: (c: string) => RewriteResult) => {
     const result = fn(current);
@@ -541,6 +633,7 @@ export function rewriteFile(
     apply((c) => rewriteSpecListItem(c, oldId, newId, opts));
     apply((c) => rewriteSpecHeading(c, oldId, newId, opts));
     apply((c) => rewriteFrontmatter(c, oldId, newId));
+    apply((c) => rewriteAnnotationIds(c, oldId, newId, opts));
   } else if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx") {
     apply((c) => rewriteImplTags(c, oldId, newId));
     apply((c) => rewriteTestTags(c, oldId, newId));
@@ -548,6 +641,10 @@ export function rewriteFile(
 
   for (const change of allChanges) {
     change.filePath = filePath;
+  }
+
+  if (originalNewline !== "\n") {
+    current = current.replace(/\n/g, originalNewline);
   }
 
   return { content: current, changes: allChanges };

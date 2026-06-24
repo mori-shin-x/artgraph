@@ -129,14 +129,7 @@ program
           console.log(
             `  req: ${result.scanSummary.reqCount}  doc: ${result.scanSummary.docCount}  file: ${result.scanSummary.fileCount}  test: ${result.scanSummary.testCount}`,
           );
-          for (const w of result.warnings) {
-            if (w.type === "ambiguous-id") {
-              const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
-              console.error(`WARNING: ambiguous ID "${w.id}"${hint}`);
-            } else {
-              console.error(`WARNING: duplicate ID "${w.id}" in ${w.files.join(", ")}`);
-            }
-          }
+          printWarnings(result.warnings);
           console.log(`\nCreated .artgraph.json`);
           console.log(`Created ${result.config.lockFile}`);
         } else {
@@ -568,6 +561,11 @@ function printWarnings(warnings: BuildWarning[]) {
       case "orphan-doc":
         console.error(`WARNING: orphan-doc "${w.id}" referenced from ${w.files.join(", ")}`);
         break;
+      case "orphan-edge":
+        console.error(
+          `WARNING: orphan-edge "${w.id}"${w.files.length > 0 ? ` referenced from ${w.files.join(", ")}` : ""}${w.message ? ` (${w.message})` : ""}`,
+        );
+        break;
       case "invalid-relation":
         console.error(
           `WARNING: invalid relation "${w.id}" in ${w.files.join(", ")}. Use "derives_from" or "depends_on"`,
@@ -586,6 +584,28 @@ function printWarnings(warnings: BuildWarning[]) {
           `WARNING: out-of-scope-link "${w.id}" referenced from ${w.files.join(", ")} (outside specDirs)`,
         );
         break;
+      case "invalid-annotation-id":
+        console.error(
+          `WARNING: invalid-annotation-id "${w.id}"${w.files.length > 0 ? ` in ${w.files.join(", ")}` : ""}${w.message ? ` — ${w.message}` : ""}`,
+        );
+        break;
+      case "empty-annotation":
+        console.error(
+          `WARNING: empty-annotation${w.files.length > 0 ? ` in ${w.files.join(", ")}` : ""}${w.message ? ` — ${w.message}` : ""}`,
+        );
+        break;
+      case "self-reference-annotation":
+        console.error(
+          `WARNING: self-reference-annotation "${w.id}"${w.files.length > 0 ? ` in ${w.files.join(", ")}` : ""}${w.message ? ` — ${w.message}` : ""}`,
+        );
+        break;
+      default: {
+        // Exhaustiveness check: if `BuildWarning.type` gains a new variant
+        // without a matching case, TypeScript flags the assignment below at
+        // compile time. Keeps the CLI surface in sync with the warning union.
+        const _exhaustive: never = w.type;
+        void _exhaustive;
+      }
     }
   }
 }
