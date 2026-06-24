@@ -23,8 +23,11 @@ npx artgraph init      # writes .artgraph.json
 | Implementation      | `// @impl REQ-001`                              |
 | Test                | `it("[REQ-001] …")` or `// req: "REQ-001"`      |
 | Doc relations       | frontmatter `artgraph.depends_on` / `derives_from` |
+| Req→req dependency  | inline annotation: `- REQ-002: … (depends_on: REQ-001, REQ-003)` or `(derives_from: REQ-001)` on the head/tail line of the heading's first paragraph |
 
 Custom grammars are configurable via `reqPatterns` in `.artgraph.json`.
+
+Req→req annotations are stripped before the req's `contentHash` is computed, so adding or changing a dependency does not trigger drift. `artgraph rename` also rewrites the ID inside every annotation that references it.
 
 ## Commands
 

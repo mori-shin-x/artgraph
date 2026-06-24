@@ -140,6 +140,16 @@ Non-goals: 仕様文の意味的な正しさの判定、要求の良し悪し評
 - 見出し（Kiro 形式）: `### Requirement 1: ユーザーはメールでログインできる`
 - ID パターンは設定で拡張可能。デフォルトはリスト項目の `PREFIX-NNN`（例: FR-001, SC-001, NFR-1, REQ-001）と見出しの `Requirement N`。
 
+req→req 依存（インライン注釈、issue #13）— 構造化 req 運用のプロジェクト向け:
+
+- list-item 行末尾、または heading 直下にある最初の段落ブロックの先頭行／末尾行（単一行段落の場合はその 1 行）に独立した注釈括弧を書く。
+- 文法: `(depends_on: ID1, ID2, …)` / `(derives_from: ID1, …)`。キーワードは小文字＋アンダースコアの厳密一致。`(depends on …)` のようなアンダースコア無し散文は誤検出しない。
+- 複数 ID をカンマ区切りで列挙、`**ID**` の BOLD と空白バリエーション (`( depends_on : A , B )`) を許容。
+- 注釈は req の `contentHash` 計算前に除去される（`stripAnnotations`）ため、注釈の追加・変更で drift は発生しない（NON-NEGOTIABLE 原則 I）。
+- 注釈由来エッジは `GraphEdge.provenance = "annotation"` を持つ。frontmatter / convention 由来の provenance 統一は issue #35 で扱う。
+- 同名 ID が複数 specDir に存在する場合、注釈を含む req と同じ specDir のターゲットを優先（`010-a/REQ-001`）。曖昧な場合は `ambiguous-id` 警告。
+- `artgraph rename OLD NEW` は注釈括弧内の `OLD` 参照も同時に書き換える（fenced code block は対象外）。
+
 コード: 実装シンボルの近くに `// @impl FR-001`
 
 テスト: テスト名に `[FR-001]`、または meta（`test(name, { annotations: { req: "FR-001" } })`）

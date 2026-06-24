@@ -1,4 +1,5 @@
 import type { ArtifactGraph, NodeKind, GraphNode, GraphEdge } from "../types.js";
+import { EDGE_PROVENANCE_VALUES } from "../types.js";
 
 export function formatGraphText(graph: ArtifactGraph, kindFilter?: NodeKind): string {
   const { filteredNodes, filteredEdges } = applyFilter(graph, kindFilter);
@@ -82,11 +83,21 @@ export function formatGraphJSON(graph: ArtifactGraph, kindFilter?: NodeKind): st
     contentHash: n.contentHash,
   }));
 
-  const edges = filteredEdges.map((e) => ({
-    source: e.source,
-    target: e.target,
-    kind: e.kind,
-  }));
+  const edges = filteredEdges.map((e) => {
+    // Only emit `provenance` when the value is one of the known literals.
+    // `null`, empty string, or an unknown literal (forward-incompatible
+    // payload reaching format) are dropped instead of leaking through, so
+    // downstream consumers can rely on the value being a member of the
+    // EdgeProvenance union (meta-review additional F6).
+    const includeProv =
+      typeof e.provenance === "string" && EDGE_PROVENANCE_VALUES.has(e.provenance);
+    return {
+      source: e.source,
+      target: e.target,
+      kind: e.kind,
+      ...(includeProv && { provenance: e.provenance }),
+    };
+  });
 
   return JSON.stringify({ nodes, edges }, null, 2);
 }

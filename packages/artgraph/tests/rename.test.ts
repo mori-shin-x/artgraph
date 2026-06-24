@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   rewriteSpecListItem,
   rewriteSpecHeading,
@@ -6,8 +8,11 @@ import {
   rewriteTestTags,
   rewriteFrontmatter,
   expandFrontmatterDependsOn,
+  rewriteAnnotationIds,
   rewriteFile,
 } from "../src/rename.js";
+import { buildGraph } from "../src/graph/builder.js";
+import type { ArtgraphConfig } from "../src/types.js";
 import {
   renameLockKey,
   splitLockKey,
@@ -628,5 +633,185 @@ describe("isValidTargetId", () => {
     expect(isValidTargetId("REQ-001a")).toBe(false);
     expect(isValidTargetId("req-1")).toBe(false);
     expect(isValidTargetId("doc:")).toBe(false);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// rewriteAnnotationIds (specs/010-req-req-dependency, T023)
+// ──────────────────────────────────────────────────────────────────────
+
+describe("rewriteAnnotationIds", () => {
+  // Case 1: single ID
+  it("rewrites a single-ID annotation target", () => {
+    const input = "- X: y (depends_on: AUTH-001)";
+    const { content, changes } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe("- X: y (depends_on: AUTH-100)");
+    expect(changes).toHaveLength(1);
+    expect(changes[0].kind).toBe("annotation-target");
+  });
+
+  // Case 2: multiple IDs — only the matching one rewrites
+  it("rewrites only the matching ID inside a comma list", () => {
+    const input = "- X: y (depends_on: AUTH-001, AUTH-002, AUTH-003)";
+    const { content } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe("- X: y (depends_on: AUTH-100, AUTH-002, AUTH-003)");
+  });
+
+  // Case 3: oldId appears multiple times in same annotation
+  it("rewrites all occurrences of OLD inside a single annotation", () => {
+    const input = "- X: y (depends_on: AUTH-001, AUTH-002, AUTH-001)";
+    const { content } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe("- X: y (depends_on: AUTH-100, AUTH-002, AUTH-100)");
+  });
+
+  // Case 4: derives_from kind behaves the same
+  it("rewrites derives_from annotations too", () => {
+    const input = "- X: y (derives_from: AUTH-001)";
+    const { content } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe("- X: y (derives_from: AUTH-100)");
+  });
+
+  // Case 5: BOLD form is preserved, only the ID is replaced
+  it("preserves surrounding **BOLD** when replacing the inner ID", () => {
+    const input = "- X: y (depends_on: **AUTH-001**)";
+    const { content } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe("- X: y (depends_on: **AUTH-100**)");
+  });
+
+  // Case 6: whitespace variations preserved
+  it("preserves whitespace around colons / commas", () => {
+    const input = "- X: y ( depends_on : AUTH-001 , AUTH-002 )";
+    const { content } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe("- X: y ( depends_on : AUTH-100 , AUTH-002 )");
+  });
+
+  // Case 7: fenced code block skipped
+  it("does NOT rewrite inside fenced code blocks (F6)", () => {
+    const input =
+      "- AUTH-002: y (depends_on: AUTH-001)\n```md\n- AUTH-003: z (depends_on: AUTH-001)\n```\n";
+    const { content } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe(
+      "- AUTH-002: y (depends_on: AUTH-100)\n```md\n- AUTH-003: z (depends_on: AUTH-001)\n```\n",
+    );
+  });
+
+  // Case 8: multiple annotations on one line, both touched
+  it("rewrites the target ID in each annotation when the line has multiple", () => {
+    const input = "- X: y (depends_on: AUTH-001)(derives_from: AUTH-001)";
+    const { content } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe("- X: y (depends_on: AUTH-100)(derives_from: AUTH-100)");
+  });
+
+  // Case 9: oldId === newId is a no-op
+  it("is a no-op when oldId === newId", () => {
+    const input = "- X: y (depends_on: AUTH-001)";
+    const { content, changes } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-001");
+    expect(content).toBe(input);
+    expect(changes).toEqual([]);
+  });
+
+  // Case 10: file without oldId is unchanged
+  it("returns unchanged content + empty changes when oldId never appears", () => {
+    const input = "- AUTH-002: y (depends_on: AUTH-003)";
+    const { content, changes } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe(input);
+    expect(changes).toEqual([]);
+  });
+
+  // Extra: must not touch a different annotation in the same line
+  it("does not touch substring matches outside the annotation token boundary", () => {
+    const input = "- X: y (depends_on: AUTH-0010)";
+    const { content } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe(input);
+  });
+});
+
+// T024: rewriteFile (.md) wires rewriteAnnotationIds alongside list-item /
+// heading / frontmatter rewriters in a single pass.
+describe("rewriteFile (.md) — annotation target rewriting (T024)", () => {
+  it("rewrites BOTH the list-item ID definition AND its uses in annotations", () => {
+    const input =
+      "# spec\n\n- AUTH-001: 認証\n- AUTH-002: セッション (depends_on: AUTH-001)\n";
+    const { content, changes } = rewriteFile("spec.md", input, "AUTH-001", "AUTH-100");
+    expect(content).toBe(
+      "# spec\n\n- AUTH-100: 認証\n- AUTH-002: セッション (depends_on: AUTH-100)\n",
+    );
+    // Both spec-list-item (the definition) and annotation-target (the use) appear.
+    expect(changes.find((c) => c.kind === "spec-list-item")).toBeDefined();
+    expect(changes.find((c) => c.kind === "annotation-target")).toBeDefined();
+  });
+
+  it("multi-id fixture: full file rename rewrites all annotation occurrences and preserves fenced", () => {
+    const fixturePath = resolve(
+      import.meta.dirname,
+      "fixtures/req-req-annotations/multi-id.md",
+    );
+    const original = readFileSync(fixturePath, "utf-8");
+    const { content } = rewriteFile(fixturePath, original, "AUTH-001", "AUTH-100");
+
+    // Definition rewritten
+    expect(content).toContain("- AUTH-100: 認証");
+    // All annotation occurrences of AUTH-001 outside fenced rewritten
+    expect(content).toContain("(depends_on: AUTH-100)");
+    expect(content).toContain("(depends_on: AUTH-100, AUTH-002)");
+    expect(content).toContain("(depends_on: **AUTH-100**)");
+    expect(content).toContain("(depends_on: AUTH-100, AUTH-002, AUTH-100)");
+    expect(content).toContain("( depends_on : AUTH-100 , AUTH-002 )");
+    // fenced code block untouched
+    expect(content).toContain("- AUTH-009: コード内 (depends_on: AUTH-001)");
+  });
+
+  // SC-004 invariants — rename does not change the dependency graph shape.
+  it("SC-004: edge count is unchanged and orphan-edge does not grow after rename", () => {
+    const tmpRoot = resolve(
+      import.meta.dirname,
+      "fixtures/req-req-annotations/_tmp-sc004",
+    );
+    const specDir = resolve(tmpRoot, "specs");
+    const specFile = resolve(specDir, "spec.md");
+    mkdirSync(specDir, { recursive: true });
+    writeFileSync(
+      specFile,
+      [
+        "# SC-004",
+        "",
+        "- AUTH-001: 認証",
+        "- AUTH-002: セッション (depends_on: AUTH-001)",
+        "- AUTH-003: ログアウト (derives_from: AUTH-002)",
+        "- AUTH-004: 強制 (depends_on: AUTH-001, AUTH-002)",
+        "",
+      ].join("\n"),
+    );
+
+    const cfg: ArtgraphConfig = {
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.ts"],
+      lockFile: ".trace.lock",
+    };
+
+    try {
+      const before = buildGraph(tmpRoot, cfg);
+      const beforeEdges = before.graph.edges.length;
+      const beforeOrphans = before.warnings.filter((w) => w.type === "orphan-edge").length;
+
+      const original = readFileSync(specFile, "utf-8");
+      const { content } = rewriteFile(specFile, original, "AUTH-001", "AUTH-100");
+      writeFileSync(specFile, content);
+
+      const after = buildGraph(tmpRoot, cfg);
+      const afterEdges = after.graph.edges.length;
+      const afterOrphans = after.warnings.filter((w) => w.type === "orphan-edge").length;
+
+      expect(afterEdges).toBe(beforeEdges);
+      expect(afterOrphans).toBeLessThanOrEqual(beforeOrphans);
+
+      // Targeted: the AUTH-002 / AUTH-004 annotation edges now point at AUTH-100.
+      const annAfter = after.graph.edges.filter((e) => e.provenance === "annotation");
+      expect(annAfter.find((e) => e.source === "AUTH-002" && e.target === "AUTH-100")).toBeDefined();
+      expect(annAfter.find((e) => e.source === "AUTH-004" && e.target === "AUTH-100")).toBeDefined();
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 });
