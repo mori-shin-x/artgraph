@@ -106,7 +106,11 @@ function loadScanContext(rootDir: string): ScanContext {
   return {
     config,
     existingIds: new Set(graph.nodes.keys()),
-    rewriteOpts: { reqPatterns: config.reqPatterns },
+    rewriteOpts: {
+      reqPatterns: config.reqPatterns,
+      taskConventions: config.taskConventions,
+      disableBuiltinTaskConventions: config.disableBuiltinTaskConventions,
+    },
   };
 }
 
@@ -136,7 +140,12 @@ export function executeRename(
     throw new Error(`Source and target IDs are identical ("${from}"); nothing to rename.`);
   }
   assertRenameableSource(from);
-  assertValidTargetId(to, config.reqPatterns);
+  assertValidTargetId(
+    to,
+    config.reqPatterns,
+    config.taskConventions,
+    config.disableBuiltinTaskConventions,
+  );
   if (!existingIds.has(from)) {
     throw new Error(`ID "${from}" does not exist in the project.`);
   }
@@ -194,7 +203,12 @@ export function executeSplit(
   }
   const seen = new Set<string>();
   for (const newId of intoIds) {
-    assertValidTargetId(newId, config.reqPatterns);
+    assertValidTargetId(
+      newId,
+      config.reqPatterns,
+      config.taskConventions,
+      config.disableBuiltinTaskConventions,
+    );
     if (seen.has(newId)) {
       throw new Error(`Duplicate target ID "${newId}" in --into.`);
     }
@@ -279,7 +293,12 @@ export function executeMerge(
   if (mergeIds.length < 1) {
     throw new Error(`--merge requires at least one source ID.`);
   }
-  assertValidTargetId(intoId, config.reqPatterns);
+  assertValidTargetId(
+    intoId,
+    config.reqPatterns,
+    config.taskConventions,
+    config.disableBuiltinTaskConventions,
+  );
   for (const id of mergeIds) {
     assertRenameableSource(id);
     if (!existingIds.has(id)) {
