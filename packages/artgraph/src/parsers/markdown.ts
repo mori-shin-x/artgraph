@@ -16,6 +16,14 @@ export interface ParseMarkdownOptions {
 
 const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
 const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*:/;
+const DEFAULT_CODE_ID_RE = /^[A-Z][A-Za-z]*-\d+$/;
+// Inline req→req annotation: `(depends_on: A, B, ...)` or `(derives_from: ...)`.
+// - Keywords are strict-lowercase + underscore (rejects `depends on`, `DEPENDS_ON`).
+// - `[^()]*?` (non-greedy, no nested parens) so `(depends_on: A)(depends_on: B)`
+//   splits into two matches.
+// - Used for both extraction (via exec/matchAll, capture groups) and stripping
+//   (via replace, where the leading `\s*` eats any space directly before `(`).
+const ANNOTATION_RE = /\s*\(\s*(depends_on|derives_from)\s*:\s*([^()]*?)\s*\)/g;
 const METADATA_FIELDS = ["title", "status", "priority", "owner"] as const;
 // Matches `<scheme>:` at the start of an href (e.g. `http:`, `mailto:`, `tel:`,
 // `javascript:`). Used to skip absolute URLs — only relative paths point at
@@ -26,9 +34,25 @@ const METADATA_FIELDS = ["title", "status", "priority", "owner"] as const;
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]+:/i;
 
 export interface ParseWarning {
-  type: "invalid-relation" | "reserved-prefix";
+  type:
+    | "invalid-relation"
+    | "reserved-prefix"
+    | "invalid-annotation-id"
+    | "empty-annotation";
   key: string;
   filePath: string;
+}
+
+// Extracted req→req annotation. Internal to the parser; the surrounding
+// req visit turns each AnnotationExtract into one or more GraphEdges.
+// `targets` is post-split (comma), post-trim, post-`**`-strip, and only
+// contains IDs that matched `reqPatterns.codeId`. Invalid IDs are reported
+// via warnings and do NOT appear here.
+export interface AnnotationExtract {
+  reqId: string;
+  kind: "depends_on" | "derives_from";
+  targets: string[];
+  sourceLine: number;
 }
 
 export interface InlineLinkRef {
@@ -68,6 +92,9 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
   const headingRE = options?.reqPatterns?.heading
     ? new RegExp(options.reqPatterns.heading)
     : KIRO_HEADING_RE;
+  const codeIdRE = options?.reqPatterns?.codeId
+    ? new RegExp(options.reqPatterns.codeId)
+    : DEFAULT_CODE_ID_RE;
 
   let frontmatter: Record<string, any> = {};
   let content: string;
@@ -154,7 +181,9 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
     if (!match || match[1] == null) return;
 
     const reqId = match[1];
-    const reqHash = hash(toString(node));
+    // Strip annotations BEFORE hashing so adding/removing/changing a req→req
+    // dependency annotation does not flip the req's contentHash and trip drift.
+    const reqHash = hash(stripAnnotations(toString(node)));
 
     nodes.push({
       id: reqId,
@@ -163,6 +192,29 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
       label: labelText,
       contentHash: reqHash,
     });
+
+    // T012: req→req annotation edges. Extract from the first paragraph's text
+    // (where list-item annotations live), not the full node text — sub-list
+    // children should be hashed but not scanned for annotations.
+    const annotationText = firstParagraph ? toString(firstParagraph) : labelText;
+    const sourceLine = node.position?.start?.line ?? 0;
+    const { extracts, warnings: annWarnings } = extractAnnotations(
+      annotationText,
+      reqId,
+      sourceLine,
+      { filePath: relPath, codeIdRE },
+    );
+    warnings.push(...annWarnings);
+    for (const extract of extracts) {
+      for (const target of extract.targets) {
+        edges.push({
+          source: extract.reqId,
+          target,
+          kind: extract.kind,
+          provenance: "annotation",
+        });
+      }
+    }
   });
 
   visit(tree, "heading", (node: any) => {
@@ -171,8 +223,37 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
     if (!match || match[1] == null) return;
 
     const reqId = headingRE === KIRO_HEADING_RE ? `Requirement-${match[1]}` : match[1];
-    const headingContent = extractSectionContent(content, node.position.start.line);
-    const reqHash = hash(headingContent);
+    const startLine = node.position.start.line;
+    const headingContent = extractSectionContent(content, startLine);
+    const paragraph = extractFirstParagraphAfterHeading(content, startLine);
+
+    // T018: strip annotations from the first paragraph's head/tail lines
+    // before hashing so adding/removing/changing a req→req annotation doesn't
+    // alter the heading-req's contentHash. Annotations elsewhere in the
+    // section are NOT stripped (they aren't recognized as annotations either).
+    // Lines that become empty after stripping are dropped so that a standalone
+    // `(depends_on: …)` line doesn't leave a phantom blank that differs from
+    // the no-annotation baseline.
+    let strippedContent = headingContent;
+    if (paragraph) {
+      const sectionLines = headingContent.split("\n");
+      const sectionStartIdx = startLine - 1;
+      const headIdx = paragraph.startLine - sectionStartIdx;
+      const tailIdx = paragraph.endLine - sectionStartIdx;
+      const stripLines = new Set<number>([headIdx, tailIdx]);
+      const kept: string[] = [];
+      for (let i = 0; i < sectionLines.length; i++) {
+        if (stripLines.has(i)) {
+          const after = stripAnnotations(sectionLines[i]);
+          if (after.trim() === "") continue;
+          kept.push(after);
+        } else {
+          kept.push(sectionLines[i]);
+        }
+      }
+      strippedContent = kept.join("\n");
+    }
+    const reqHash = hash(strippedContent);
 
     nodes.push({
       id: reqId,
@@ -181,6 +262,35 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
       label: text,
       contentHash: reqHash,
     });
+
+    // T017: extract annotations from heading's first paragraph head/tail
+    // lines only. Mid-paragraph lines and the heading line itself are
+    // intentionally excluded — see contracts/annotation-grammar.md §「最初の
+    // 段落ブロックの定義」.
+    if (paragraph) {
+      const contentLines = content.split("\n");
+      const pushExtracts = (line: string, sourceLineNum: number) => {
+        const { extracts, warnings: ws } = extractAnnotations(line, reqId, sourceLineNum, {
+          filePath: relPath,
+          codeIdRE,
+        });
+        warnings.push(...ws);
+        for (const extract of extracts) {
+          for (const target of extract.targets) {
+            edges.push({
+              source: extract.reqId,
+              target,
+              kind: extract.kind,
+              provenance: "annotation",
+            });
+          }
+        }
+      };
+      pushExtracts(contentLines[paragraph.startLine], paragraph.startLine + 1);
+      if (paragraph.endLine !== paragraph.startLine) {
+        pushExtracts(contentLines[paragraph.endLine], paragraph.endLine + 1);
+      }
+    }
   });
 
   const inlineLinks = extractInlineLinks(tree, {
@@ -310,8 +420,77 @@ function extractSectionContent(content: string, startLine: number): string {
   return sectionLines.join("\n");
 }
 
+// Locate the first non-blank "paragraph block" directly beneath a heading
+// (no heading or blank line between). Returns 0-based startLine/endLine
+// indices into `content.split("\n")`, or null when no such paragraph exists
+// (e.g. the heading is immediately followed by another heading or EOF).
+function extractFirstParagraphAfterHeading(
+  content: string,
+  headingLine: number,
+): { startLine: number; endLine: number } | null {
+  const lines = content.split("\n");
+  let i = headingLine; // 0-based index of the line AFTER the heading (heading is 1-based)
+  while (i < lines.length && lines[i].trim() === "") i++;
+  if (i >= lines.length) return null;
+  if (/^#+\s/.test(lines[i])) return null;
+  const startLine = i;
+  while (i < lines.length && lines[i].trim() !== "" && !/^#+\s/.test(lines[i])) i++;
+  return { startLine, endLine: i - 1 };
+}
+
 function hash(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+
+// Remove inline req→req annotations (and any whitespace immediately preceding
+// them) from `text`. Used to keep `contentHash` stable when annotations are
+// added/changed/removed — see specs/010-req-req-dependency/research.md (R3).
+export function stripAnnotations(text: string): string {
+  return text.replace(ANNOTATION_RE, "");
+}
+
+// Extract inline req→req annotations from `text` belonging to a single req.
+// The caller decides what `text` to feed (list-item line vs. heading's first
+// paragraph head/tail line) and passes positional context. Returns only valid
+// extracts; invalid IDs and empty annotations are surfaced as warnings.
+export function extractAnnotations(
+  text: string,
+  reqId: string,
+  sourceLine: number,
+  opts: { filePath: string; codeIdRE?: RegExp },
+): { extracts: AnnotationExtract[]; warnings: ParseWarning[] } {
+  const extracts: AnnotationExtract[] = [];
+  const warnings: ParseWarning[] = [];
+  const codeIdRE = opts.codeIdRE ?? DEFAULT_CODE_ID_RE;
+
+  for (const m of text.matchAll(ANNOTATION_RE)) {
+    const kind = m[1] as "depends_on" | "derives_from";
+    const rawTargets = m[2];
+
+    if (!rawTargets.trim()) {
+      warnings.push({ type: "empty-annotation", key: kind, filePath: opts.filePath });
+      continue;
+    }
+
+    const targets: string[] = [];
+    for (const raw of rawTargets.split(",")) {
+      let id = raw.trim();
+      // Strip a single surrounding `**…**` (one pass — `***X***` → `*X*`).
+      if (id.length >= 4 && id.startsWith("**") && id.endsWith("**")) {
+        id = id.slice(2, -2);
+      }
+      if (!codeIdRE.test(id)) {
+        warnings.push({ type: "invalid-annotation-id", key: id, filePath: opts.filePath });
+        continue;
+      }
+      targets.push(id);
+    }
+
+    if (targets.length === 0) continue;
+    extracts.push({ reqId, kind, targets, sourceLine });
+  }
+
+  return { extracts, warnings };
 }
 
 // Minimal YAML-frontmatter splitter. Replaces gray-matter to drop the js-yaml v3

@@ -8,6 +8,12 @@ export type EdgeKind =
   | "imports"
   | "contains";
 
+// Origin of an edge. Lets downstream consumers tell convention/frontmatter/
+// annotation-derived edges apart (see specs/010-req-req-dependency,
+// issue #35). Optional today — only annotation edges populate it; other
+// origins are added by #35.
+export type EdgeProvenance = "annotation" | "frontmatter" | "convention" | "tag";
+
 export interface GraphNode {
   id: string;
   kind: NodeKind;
@@ -21,6 +27,7 @@ export interface GraphEdge {
   source: string;
   target: string;
   kind: EdgeKind;
+  provenance?: EdgeProvenance;
 }
 
 export interface ArtifactGraph {

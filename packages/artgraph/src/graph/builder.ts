@@ -10,10 +10,14 @@ export interface BuildWarning {
     | "duplicate-id"
     | "ambiguous-id"
     | "orphan-doc"
+    | "orphan-edge"
     | "invalid-relation"
     | "reserved-prefix"
     | "unresolved-link"
-    | "out-of-scope-link";
+    | "out-of-scope-link"
+    | "invalid-annotation-id"
+    | "empty-annotation"
+    | "self-reference-annotation";
   id: string;
   files: string[];
   message?: string;
@@ -175,11 +179,30 @@ export function buildGraph(
     nodes.set(finalId, node);
 
     for (const edge of req.edges) {
-      edges.push({
-        ...edge,
-        source: edge.source === req.id ? finalId : edge.source,
-        target: edge.target === req.id ? finalId : edge.target,
-      });
+      const mappedSource = edge.source === req.id ? finalId : edge.source;
+      let mappedTarget = edge.target === req.id ? finalId : edge.target;
+      // T011/issue-13: resolve req→req annotation targets specDir-aware so a
+      // bare `(depends_on: AUTH-001)` from a 010-a req lands on 010-a/AUTH-001
+      // when AUTH-001 also exists in 010-b. Falls back to a global suffix
+      // lookup for non-colliding cross-specDir references.
+      if (edge.provenance === "annotation" && edge.target !== req.id) {
+        const resolved = resolveAnnotationTarget(
+          edge.target,
+          req.specDir,
+          idMapping,
+          collidingIds,
+        );
+        mappedTarget = resolved.target;
+        if (resolved.ambiguous) {
+          const dirs = idToDirs.get(edge.target)!;
+          warnings.push({
+            type: "ambiguous-id",
+            id: edge.target,
+            files: [...dirs],
+          });
+        }
+      }
+      edges.push({ ...edge, source: mappedSource, target: mappedTarget });
     }
   }
 
@@ -275,7 +298,55 @@ export function buildGraph(
         files: [pw.filePath],
         message: `unknown relation key. Use "derives_from" or "depends_on"`,
       });
+    } else if (pw.type === "invalid-annotation-id") {
+      warnings.push({
+        type: "invalid-annotation-id",
+        id: pw.key,
+        files: [pw.filePath],
+        message: `annotation ID "${pw.key}" does not match reqPatterns.codeId`,
+      });
+    } else if (pw.type === "empty-annotation") {
+      warnings.push({
+        type: "empty-annotation",
+        id: pw.key,
+        files: [pw.filePath],
+        message: `empty (${pw.key}: …) annotation — no edge generated`,
+      });
     }
+  }
+
+  // T014: drop self-referential annotation edges and warn. Runs AFTER req id
+  // remap so we compare final IDs (a collision-renamed `010-a/AUTH-001` cannot
+  // self-reference an annotation written as `(depends_on: AUTH-001)` from the
+  // same file).
+  for (let i = edges.length - 1; i >= 0; i--) {
+    const edge = edges[i];
+    if (edge.provenance === "annotation" && edge.source === edge.target) {
+      const sourceNode = nodes.get(edge.source);
+      warnings.push({
+        type: "self-reference-annotation",
+        id: edge.source,
+        files: sourceNode ? [sourceNode.filePath] : [],
+        message: `annotation on "${edge.source}" depends on itself — edge dropped`,
+      });
+      edges.splice(i, 1);
+    }
+  }
+
+  // C1: orphan-edge for annotation edges whose target is not in the graph.
+  // doc→req emits its own orphan handling above; this fires for req→req edges
+  // generated from inline annotations (provenance: "annotation") where the
+  // target ID was never registered as a req or doc.
+  for (const edge of edges) {
+    if (edge.provenance !== "annotation") continue;
+    if (nodes.has(edge.target)) continue;
+    const sourceNode = nodes.get(edge.source);
+    warnings.push({
+      type: "orphan-edge",
+      id: edge.target,
+      files: sourceNode ? [sourceNode.filePath] : [],
+      message: `annotation on "${edge.source}" references unknown id "${edge.target}"`,
+    });
   }
 
   // T035: orphan-doc warning - check that doc->doc edge targets exist
@@ -471,6 +542,30 @@ function remapId(id: string, idMapping: Map<string, string>, collidingIds: Set<s
 
   // If ambiguous, return as-is (warning already emitted or will be)
   return matches.length === 1 ? matches[0] : id;
+}
+
+// specDir-aware variant of remapId used by req→req annotation edges so a
+// `(depends_on: AUTH-001)` from a 010-a req prefers 010-a/AUTH-001 over
+// 010-b/AUTH-001. Returns `ambiguous: true` only when the target collides
+// and is NOT present in the same specDir as the source req.
+function resolveAnnotationTarget(
+  target: string,
+  reqSpecDir: string,
+  idMapping: Map<string, string>,
+  collidingIds: Set<string>,
+): { target: string; ambiguous: boolean } {
+  const sameDirFinal = idMapping.get(`${reqSpecDir}/${target}`);
+  if (collidingIds.has(target)) {
+    if (sameDirFinal) return { target: sameDirFinal, ambiguous: false };
+    return { target, ambiguous: true };
+  }
+  if (sameDirFinal) return { target: sameDirFinal, ambiguous: false };
+  // Not colliding, not in same specDir — find the unique mapping anywhere.
+  for (const [key, finalId] of idMapping) {
+    if (key.endsWith(`/${target}`)) return { target: finalId, ambiguous: false };
+  }
+  // Not registered at all → leave as-is; orphan-edge will be raised downstream.
+  return { target, ambiguous: false };
 }
 
 function addNodeWithDupCheck(

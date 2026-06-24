@@ -8,6 +8,7 @@ export type ReferenceKind =
   | "impl-tag"
   | "test-tag"
   | "frontmatter-depends-on"
+  | "annotation-target"
   | "lock-key";
 
 export interface RewriteChange {
@@ -520,6 +521,62 @@ export function expandFrontmatterDependsOn(
  * Apply the appropriate rewriters for the given file type and stamp each
  * returned `RewriteChange` with the provided `filePath`.
  */
+// T025: rewrite req IDs that appear inside inline req→req annotations
+// (`(depends_on: A, OLD, B)` → `(depends_on: A, NEW, B)`). Mirrors the parser
+// grammar in src/parsers/markdown.ts (ANNOTATION_RE / extractAnnotations) so
+// only annotations the parser would extract are rewritten. fenced code blocks
+// are skipped (F6). Position constraints (list-item line / heading first
+// paragraph head/tail) are NOT enforced here — see research.md R5: rewriting
+// a paren expression outside those positions is harmless because the parser
+// won't have emitted an edge for it anyway, and duplicating the position
+// gate in the rewriter would mean two sources of truth.
+const ANNOTATION_RE_LINE = /(\(\s*(?:depends_on|derives_from)\s*:\s*)([^()]*?)(\s*\))/g;
+
+export function rewriteAnnotationIds(
+  content: string,
+  oldId: string,
+  newId: string,
+): RewriteResult {
+  if (oldId === newId) return { content, changes: [] };
+  const lines = content.split("\n");
+  const fenced = fencedLineSet(lines);
+  const changes: RewriteChange[] = [];
+  const escapedOld = escapeRegExp(oldId);
+  // Token boundary inside the comma-separated ID list: separator is `,` or
+  // start/end of capture group; spaces and `**` may surround the ID. Match the
+  // exact ID surrounded by these boundary chars (or `**`) so a partial token
+  // like `AUTH-001` inside `AUTH-001-X` is not rewritten.
+  const idTokenRE = new RegExp(
+    `(^|,)(\\s*)(\\*\\*)?(${escapedOld})(\\*\\*)?(\\s*)(?=,|$)`,
+    "g",
+  );
+
+  for (let i = 0; i < lines.length; i++) {
+    if (fenced.has(i)) continue;
+    const original = lines[i];
+    const rewritten = original.replace(ANNOTATION_RE_LINE, (match, head, body, tail) => {
+      const newBody = body.replace(
+        idTokenRE,
+        (_m: string, sep: string, leadWS: string, bold1: string | undefined, _id: string, bold2: string | undefined, trailWS: string) =>
+          `${sep}${leadWS}${bold1 ?? ""}${newId}${bold2 ?? ""}${trailWS}`,
+      );
+      return head + newBody + tail;
+    });
+    if (rewritten !== original) {
+      changes.push({
+        filePath: "",
+        line: i + 1,
+        kind: "annotation-target",
+        before: original,
+        after: rewritten,
+      });
+      lines[i] = rewritten;
+    }
+  }
+
+  return { content: lines.join("\n"), changes };
+}
+
 export function rewriteFile(
   filePath: string,
   content: string,
@@ -541,6 +598,7 @@ export function rewriteFile(
     apply((c) => rewriteSpecListItem(c, oldId, newId, opts));
     apply((c) => rewriteSpecHeading(c, oldId, newId, opts));
     apply((c) => rewriteFrontmatter(c, oldId, newId));
+    apply((c) => rewriteAnnotationIds(c, oldId, newId));
   } else if (ext === ".ts" || ext === ".tsx" || ext === ".js" || ext === ".jsx") {
     apply((c) => rewriteImplTags(c, oldId, newId));
     apply((c) => rewriteTestTags(c, oldId, newId));

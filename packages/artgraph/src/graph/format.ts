@@ -86,6 +86,7 @@ export function formatGraphJSON(graph: ArtifactGraph, kindFilter?: NodeKind): st
     source: e.source,
     target: e.target,
     kind: e.kind,
+    ...(e.provenance !== undefined && { provenance: e.provenance }),
   }));
 
   return JSON.stringify({ nodes, edges }, null, 2);
