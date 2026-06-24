@@ -602,6 +602,10 @@ function printImpactText(result: any) {
     console.log("Affected REQs:");
     for (const r of result.affectedReqs) console.log(`  ${r}`);
   }
+  if (result.affectedTasks && result.affectedTasks.length > 0) {
+    console.log("Affected Tasks:");
+    for (const t of result.affectedTasks) console.log(`  ${t}`);
+  }
   if (result.affectedDocs.length > 0) {
     console.log("Affected Docs:");
     for (const d of result.affectedDocs) console.log(`  ${d}`);
@@ -615,8 +619,9 @@ function printImpactText(result: any) {
     for (const d of result.drifted) console.log(`  ${d.nodeId} (${d.kind})`);
   }
   if (result.summary) {
+    const taskPart = result.summary.tasks > 0 ? `, ${result.summary.tasks} tasks` : "";
     console.log(
-      `Summary: ${result.summary.docs} docs, ${result.summary.reqs} reqs, ${result.summary.files} files`,
+      `Summary: ${result.summary.docs} docs, ${result.summary.reqs} reqs, ${result.summary.files} files${taskPart}`,
     );
   }
 }

@@ -19,6 +19,12 @@ export interface ParseMarkdownOptions {
   specDirPrefix?: string;
   reqPatterns?: ReqPatternConfig;
   taskConventions?: TaskConventionPreset[];
+  /**
+   * Names of built-in task-convention presets to skip. Used together with a
+   * user-supplied `taskConventions` entry of the same name to fully replace a
+   * built-in (e.g. ship a Kiro variant without the `[ ]` checkbox prefix).
+   */
+  disableBuiltinTaskConventions?: string[];
 }
 
 const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
@@ -29,7 +35,7 @@ const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*:/;
 // with hierarchical numerics (`1`, `1.1`) + `_Requirements: X, Y_` italic lists.
 // Users add OpenSpec or other SDD tools via `.artgraph.json` `taskConventions`,
 // which are merged after these built-ins (see research.md §R8).
-const BUILTIN_TASK_PRESETS: TaskConventionPreset[] = [
+export const BUILTIN_TASK_PRESETS: TaskConventionPreset[] = [
   {
     name: "spec-kit",
     fileStems: ["plan", "tasks"],
@@ -203,7 +209,9 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
     .toLowerCase();
   const applicableTaskPresets: ApplicablePreset[] = [];
   const seenPresetNames = new Set<string>();
-  for (const preset of [...BUILTIN_TASK_PRESETS, ...(options?.taskConventions ?? [])]) {
+  const disabledBuiltins = new Set(options?.disableBuiltinTaskConventions ?? []);
+  const activeBuiltins = BUILTIN_TASK_PRESETS.filter((p) => !disabledBuiltins.has(p.name));
+  for (const preset of [...activeBuiltins, ...(options?.taskConventions ?? [])]) {
     if (seenPresetNames.has(preset.name)) continue;
     seenPresetNames.add(preset.name);
     if (!preset.fileStems.includes(fileStem)) continue;
@@ -267,7 +275,10 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
           kind: "task",
           filePath: relPath,
           label: labelText,
-          contentHash: hash(labelText),
+          // req と揃え、listItem subtree 全体をハッシュ化する。
+          // labelText だけだと `_Requirements:` / `@impl(...)` の差替えが
+          // hash に反映されず、グラフ/lock diff から消える。
+          contentHash: hash(toString(node)),
         });
 
         if (preset.implRe || preset.verifiesRe) {

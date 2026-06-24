@@ -789,6 +789,89 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
     }
   });
 
+  // Meta-review #3 remediation: when a task emits an `@impl(target)` edge and
+  // the target ID collides across spec dirs, the edge target must be qualified
+  // too — otherwise the edge points at the bare colliding ID with no matching
+  // node and silently orphans (and `findOrphans` is now task-source-exempt so
+  // even the warning channel is suppressed).
+  it("remaps task-emitted edge target when the target ID collides across specDirs", () => {
+    const tmpRoot = resolve(import.meta.dirname, "fixtures/tasks-cross-collision-tmp");
+    mkdirSync(resolve(tmpRoot, "specs/authA"), { recursive: true });
+    mkdirSync(resolve(tmpRoot, "specs/exportB"), { recursive: true });
+    // Two req lists each define FR-001 — collision drives qualifying to
+    // authA/FR-001 and exportB/FR-001.
+    writeFileSync(
+      resolve(tmpRoot, "specs/authA/spec.md"),
+      ["# Auth", "", "- FR-001: login flow", ""].join("\n"),
+      "utf-8",
+    );
+    writeFileSync(
+      resolve(tmpRoot, "specs/exportB/spec.md"),
+      ["# Export", "", "- FR-001: csv writer", ""].join("\n"),
+      "utf-8",
+    );
+    // A plan in authA references FR-001 — without remap the edge target stays
+    // unqualified and the implements edge silently dangles.
+    writeFileSync(
+      resolve(tmpRoot, "specs/authA/plan.md"),
+      ["# Plan", "", "- [X] T010 wire login @impl(FR-001)", ""].join("\n"),
+      "utf-8",
+    );
+    try {
+      const { graph } = buildGraph(tmpRoot, tasksConfig);
+      const implEdge = graph.edges.find(
+        (e) => e.kind === "implements" && e.source === "T010",
+      );
+      expect(implEdge).toBeDefined();
+      // The collision rewrite must rebind the target to the qualified ID that
+      // lives in the same spec dir as the emitting task.
+      expect(implEdge!.target).toBe("authA/FR-001");
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Meta-review #9 remediation: task contentHash now hashes the full subtree
+  // (matching how req nodes are hashed), so editing a `_Requirements:` line in
+  // a Kiro task changes the hash and shows up in diff/lock comparisons.
+  it("task contentHash reflects subtree changes (not just the label line)", () => {
+    const tmpDir = resolve(import.meta.dirname, "fixtures/task-hash-subtree-tmp");
+    const specsDir = resolve(tmpDir, "specs/demo");
+    mkdirSync(specsDir, { recursive: true });
+    const taskFile = resolve(specsDir, "tasks.md");
+    writeFileSync(
+      taskFile,
+      [
+        "# Tasks",
+        "",
+        "- [x] 1. set up auth",
+        "  - _Requirements: 7.1, 7.2_",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    try {
+      const { graph: g1 } = buildGraph(tmpDir, tasksConfig);
+      const h1 = g1.nodes.get("1")!.contentHash;
+      writeFileSync(
+        taskFile,
+        [
+          "# Tasks",
+          "",
+          "- [x] 1. set up auth",
+          "  - _Requirements: 7.1, 7.2, 7.3_",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      const { graph: g2 } = buildGraph(tmpDir, tasksConfig);
+      const h2 = g2.nodes.get("1")!.contentHash;
+      expect(h1).not.toBe(h2);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("kiro tasks.md emits verifies edges from `_Requirements:` and no implements", () => {
     // kiro tasks.md fixture mirrors real AWS Kiro output: `- [x] N. ...` with
     // a sub-bullet `- _Requirements: X, Y_`. Built-in spec-kit's `T\d+` won't

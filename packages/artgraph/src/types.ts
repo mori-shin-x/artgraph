@@ -45,6 +45,7 @@ export interface ImpactResult {
   affectedFiles: string[];
   affectedDocs: string[];
   affectedReqs: string[];
+  affectedTasks: string[];
   drifted: DriftEntry[];
   summary?: ImpactSummary;
 }
@@ -53,6 +54,7 @@ export interface ImpactSummary {
   docs: number;
   reqs: number;
   files: number;
+  tasks: number;
 }
 
 export interface DriftEntry {
@@ -309,6 +311,13 @@ export interface ArtgraphConfig {
   mode?: "file" | "symbol";
   testResultPaths?: string[];
   taskConventions?: TaskConventionPreset[];
+  /**
+   * Names of built-in task-convention presets to disable. With a built-in
+   * disabled the user may supply a `taskConventions` entry of the same name
+   * (e.g. to ship a Kiro variant that uses a checkbox-less ID format).
+   * Without this opt-out, built-ins silently shadow any user override.
+   */
+  disableBuiltinTaskConventions?: string[];
 }
 
 export const DEFAULT_CONFIG: ArtgraphConfig = {

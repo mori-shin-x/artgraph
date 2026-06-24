@@ -84,6 +84,7 @@ export function buildGraph(
       specDirPrefix: specDirName,
       reqPatterns: config.reqPatterns,
       taskConventions: config.taskConventions,
+      disableBuiltinTaskConventions: config.disableBuiltinTaskConventions,
     });
     const relFile = relative(rootDir, file);
     const specDir = extractSpecDir(relFile, config.specDirs);
@@ -158,18 +159,22 @@ export function buildGraph(
     }
   }
 
-  // Pass 2: register nodes with qualified IDs for collisions
+  // Pass 2a: build idMapping up front so per-req edge remap below can resolve
+  // forward references (e.g. `T001` referencing `T002` later in `collected`).
+  // Without this the order of `collected` would silently decide whether a
+  // colliding target gets requalified or stays as the bare ID.
   const idMapping = new Map<string, string>();
-
   for (const req of collected) {
-    let finalId: string;
-    if (collidingIds.has(req.id)) {
-      finalId = `${req.specDir}/${req.id}`;
-    } else {
-      finalId = req.id;
-    }
-
+    const finalId = collidingIds.has(req.id) ? `${req.specDir}/${req.id}` : req.id;
     idMapping.set(`${req.specDir}/${req.id}`, finalId);
+  }
+
+  // Pass 2b: register nodes and emit edges with collision-aware remapping for
+  // BOTH source and target. Task-emitted edges (e.g. `T001 @impl(REQ-001)`)
+  // live in `req.edges`, so without this they would stay pointing at the raw
+  // colliding ID and silently orphan after qualification.
+  for (const req of collected) {
+    const finalId = idMapping.get(`${req.specDir}/${req.id}`)!;
 
     const node: GraphNode = {
       ...req.node,
@@ -187,11 +192,33 @@ export function buildGraph(
     nodes.set(finalId, node);
 
     for (const edge of req.edges) {
-      edges.push({
-        ...edge,
-        source: edge.source === req.id ? finalId : edge.source,
-        target: edge.target === req.id ? finalId : edge.target,
-      });
+      const remappedSource = edge.source === req.id ? finalId : edge.source;
+      // edge.target === req.id is a self-edge (the source author wrote their
+      // own ID as the target). Treat it as the qualified `finalId`. Otherwise
+      // resolve the target with this req's spec dir as the disambiguator
+      // first — `T001 @impl(FR-001)` in dir `authA` should bind to
+      // `authA/FR-001`, not warn ambiguously — and only fall back to
+      // remapId for cross-dir references.
+      let remappedTarget: string;
+      if (edge.target === req.id) {
+        remappedTarget = finalId;
+      } else {
+        const sameDir = idMapping.get(`${req.specDir}/${edge.target}`);
+        remappedTarget = sameDir ?? remapId(edge.target, idMapping, collidingIds);
+      }
+      if (
+        collidingIds.has(edge.target) &&
+        remappedTarget === edge.target &&
+        edge.target !== req.id
+      ) {
+        const dirs = idToDirs.get(edge.target)!;
+        warnings.push({
+          type: "ambiguous-id",
+          id: edge.target,
+          files: [...dirs],
+        });
+      }
+      edges.push({ ...edge, source: remappedSource, target: remappedTarget });
     }
   }
 

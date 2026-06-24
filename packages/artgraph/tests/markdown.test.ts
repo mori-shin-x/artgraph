@@ -737,6 +737,132 @@ artgraph:
       }
     });
 
+    it("spec-kit verifies tag accepts direct bracket forms `[FR-001]` and `[Requirement-3]` (D-meta gap)", () => {
+      // The second branch of spec-kit's verifiesTagRe is NAMESPACED_ID_TOKEN —
+      // not just `REQ-...`. Cover the bare `[FR-001]` and `[Requirement-3]`
+      // shapes that the original PR's tests missed.
+      const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-direct-bracket");
+      mkdirSync(tmpDir, { recursive: true });
+      const file = resolve(tmpDir, "tasks.md");
+      writeFileSync(
+        file,
+        [
+          "# Tasks",
+          "",
+          "- [X] T400 check login [FR-001]",
+          "- [X] T401 check kiro [Requirement-3]",
+          "- [X] T402 namespaced [auth/FR-7]",
+          "",
+        ].join("\n"),
+      );
+      try {
+        const result = parseMarkdown(file);
+        const verifies = result.edges
+          .filter((e) => e.kind === "verifies")
+          .sort((a, b) => a.source.localeCompare(b.source));
+        expect(verifies).toEqual([
+          { source: "T400", target: "FR-001", kind: "verifies" },
+          { source: "T401", target: "Requirement-3", kind: "verifies" },
+          { source: "T402", target: "auth/FR-7", kind: "verifies" },
+        ]);
+      } finally {
+        unlinkSync(file);
+        rmdirSync(tmpDir);
+      }
+    });
+
+    it("Veloera-style flat tasks.md: top-level only, mixed checkbox states (D-meta gap)", () => {
+      // Real production Kiro (Veloera/Veloera/inbox-system/tasks.md) is flat —
+      // no nested 1.1 children at all — and mixes `[ ]` / `[x]` / `[-]`. The
+      // `[-]` (in-progress) state is NOT recognised by the kiro preset, so
+      // those listItems must remain non-tasks (a deliberate trade-off: users
+      // who want to track in-progress should override with a custom preset).
+      const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-veloera-flat");
+      mkdirSync(tmpDir, { recursive: true });
+      const file = resolve(tmpDir, "tasks.md");
+      writeFileSync(
+        file,
+        [
+          "# Inbox system",
+          "",
+          "- [x] 1. seed data model",
+          "  - _Requirements: 1.1_",
+          "- [ ] 2. add API routes",
+          "  - _Requirements: 2.1, 2.2_",
+          "- [-] 3. in-progress epic",
+          "  - _Requirements: 3.1_",
+          "- [ ] 4. completed without requirements line",
+          "",
+        ].join("\n"),
+      );
+      try {
+        const result = parseMarkdown(file);
+        const taskIds = result.nodes
+          .filter((n) => n.kind === "task")
+          .map((n) => n.id)
+          .sort();
+        // 1, 2, 4 are recognised. 3 is `[-]` and not matched by kiro's regex.
+        expect(taskIds).toEqual(["1", "2", "4"]);
+        const verifies = result.edges.filter((e) => e.kind === "verifies");
+        const targets = new Set(verifies.map((e) => e.target));
+        expect(targets.has("3.1")).toBe(false); // task 3 is gone, so its line never reaches verifiesTagRe
+        // Task 4 has no _Requirements line: zero verifies edges from it.
+        expect(verifies.some((e) => e.source === "4")).toBe(false);
+      } finally {
+        unlinkSync(file);
+        rmdirSync(tmpDir);
+      }
+    });
+
+    it("disableBuiltinTaskConventions opts the built-in out and lets a user preset shadow it", () => {
+      const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-disable-builtin");
+      mkdirSync(tmpDir, { recursive: true });
+      const file = resolve(tmpDir, "tasks.md");
+      writeFileSync(
+        file,
+        [
+          "# Tasks (no checkbox)",
+          "",
+          "- KT-001 first task @impl(target-a)",
+          "- KT-002 second task @impl(target-b)",
+          "",
+        ].join("\n"),
+      );
+      try {
+        // Without disable, kiro's `^\[[xX ]\]...` requires a checkbox — these
+        // are not tasks. spec-kit's `^(?:...)?T\d+` doesn't match either.
+        // With kiro disabled AND a user preset with the same name supplying a
+        // checkbox-less pattern, the listItems become tasks.
+        const r1 = parseMarkdown(file);
+        expect(r1.nodes.filter((n) => n.kind === "task")).toEqual([]);
+
+        const r2 = parseMarkdown(file, {
+          disableBuiltinTaskConventions: ["kiro"],
+          taskConventions: [
+            {
+              name: "kiro",
+              fileStems: ["tasks"],
+              taskIdRe: "^(KT-\\d+)\\b",
+              implementsTagRe: "@impl\\(([^)\\n]+)\\)",
+            },
+          ],
+        });
+        const ids = r2.nodes
+          .filter((n) => n.kind === "task")
+          .map((n) => n.id)
+          .sort();
+        expect(ids).toEqual(["KT-001", "KT-002"]);
+        const impl = r2.edges.filter((e) => e.kind === "implements");
+        expect(impl).toEqual([
+          { source: "KT-001", target: "target-a", kind: "implements" },
+          { source: "KT-002", target: "target-b", kind: "implements" },
+        ]);
+      } finally {
+        unlinkSync(file);
+        rmdirSync(tmpDir);
+      }
+    });
+
     it("@impl target is single-line — newline inside parens does NOT escape (M1)", () => {
       const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-m1");
       mkdirSync(tmpDir, { recursive: true });
