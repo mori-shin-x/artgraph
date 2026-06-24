@@ -93,7 +93,11 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
     | { node_id?: string; derives_from?: string[]; depends_on?: string[]; [key: string]: unknown }
     | undefined;
 
-  const docId = artgraphMeta?.node_id ?? `doc:${docRelPath}`;
+  // `node_id` is consumed downstream as a string (graph node id, JSON-serialized).
+  // A circular YAML alias or unexpected tag (e.g. !!binary) could otherwise put a
+  // non-string here and break `JSON.stringify` of the graph output.
+  const docId =
+    typeof artgraphMeta?.node_id === "string" ? artgraphMeta.node_id : `doc:${docRelPath}`;
   const metadata = extractMetadata(frontmatter);
   nodes.push({
     id: docId,
@@ -318,7 +322,10 @@ function parseFrontmatter(raw: string): { data: Record<string, any>; content: st
   const firstNl = text.indexOf("\n");
   if (firstNl < 0) return { data: {}, content: raw };
   const firstLine = text.slice(0, firstNl).replace(/\r$/, "");
-  if (firstLine !== "---") return { data: {}, content: raw };
+  // Trailing whitespace on the opening fence is symmetric with the closing fence
+  // regex below — gray-matter accepted `--- ` / `---\t` and some editors auto-insert
+  // it, so rejecting strictly would silently drop the whole frontmatter.
+  if (!/^---[ \t]*$/.test(firstLine)) return { data: {}, content: raw };
 
   const rest = text.slice(firstNl + 1);
   const closeRe = /(?:^|\r?\n)---[ \t]*(?:\r?\n|$)/;
@@ -328,7 +335,11 @@ function parseFrontmatter(raw: string): { data: Record<string, any>; content: st
   const yamlBody = rest.slice(0, match.index);
   const content = rest.slice(match.index + match[0].length);
 
-  const parsed = parseYaml(yamlBody);
+  // `resolveKnownTags: false` keeps the YAML 1.2 core schema (str/seq/map/int/
+  // float/bool/null) but drops opt-in tags like `!!binary` (→ Buffer) and
+  // `!!timestamp` (→ Date) that would silently inject non-string objects into
+  // fields the rest of the parser treats as strings.
+  const parsed = parseYaml(yamlBody, { resolveKnownTags: false });
   if (parsed == null) return { data: {}, content };
   if (typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("frontmatter is not a YAML mapping");
