@@ -444,7 +444,13 @@ program
   .description("Show the artifact graph")
   .option("--format <format>", "Output format: text | json", "text")
   .addOption(
-    new Option("--kind <kind>", "Filter by node kind").choices(["doc", "req", "file", "test"]),
+    new Option("--kind <kind>", "Filter by node kind").choices([
+      "doc",
+      "req",
+      "file",
+      "test",
+      "task",
+    ]),
   )
   .action((opts) => {
     const rootDir = process.cwd();

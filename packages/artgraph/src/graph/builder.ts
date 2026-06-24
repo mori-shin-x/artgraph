@@ -79,7 +79,12 @@ export function buildGraph(
   for (const specDirName of config.specDirs) {
     const specFiles = globSync(resolve(rootDir, specDirName, "**/*.md"));
     for (const file of specFiles) {
-    const result = parseMarkdown(file, { rootDir, specDirPrefix: specDirName, reqPatterns: config.reqPatterns });
+    const result = parseMarkdown(file, {
+      rootDir,
+      specDirPrefix: specDirName,
+      reqPatterns: config.reqPatterns,
+      taskConventions: config.taskConventions,
+    });
     const relFile = relative(rootDir, file);
     const specDir = extractSpecDir(relFile, config.specDirs);
     // Compute what the auto-generated doc ID would be for this file
@@ -95,7 +100,7 @@ export function buildGraph(
     }
 
     for (const node of result.nodes) {
-      if (node.kind === "req") {
+      if (node.kind === "req" || node.kind === "task") {
         // T028: reserved-prefix warning
         if (RESERVED_PREFIXES.some((p) => node.id.startsWith(p))) {
           const prefix = RESERVED_PREFIXES.find((p) => node.id.startsWith(p))!;
@@ -103,7 +108,7 @@ export function buildGraph(
             type: "reserved-prefix",
             id: node.id,
             files: [node.filePath],
-            message: `req ID uses reserved prefix "${prefix}". This may conflict with auto-generated node IDs`,
+            message: `${node.kind} ID uses reserved prefix "${prefix}". This may conflict with auto-generated node IDs`,
           });
         }
         collected.push({ id: node.id, specDir, node, edges: [] });
@@ -120,10 +125,17 @@ export function buildGraph(
     }
 
     for (const edge of result.edges) {
-      const isFromReq = collected.some((c) => c.node.id === edge.source || c.id === edge.source);
-      if (isFromReq) {
-        const req = collected.find((c) => c.node.id === edge.source || c.id === edge.source);
-        if (req) req.edges.push(edge);
+      // Match against the current file's collected entry to disambiguate edges
+      // when the same raw ID (e.g. `T001`) lives in multiple spec dirs. Without
+      // the filePath guard, every cross-file T001 edge would attach to the first
+      // collected T001 — silently scrambling collision-qualified targets.
+      const req = collected.find(
+        (c) =>
+          c.node.filePath === relFile &&
+          (c.node.id === edge.source || c.id === edge.source),
+      );
+      if (req) {
+        req.edges.push(edge);
       } else {
         nonReqEdges.push(edge);
       }
@@ -241,16 +253,19 @@ export function buildGraph(
     }
   }
 
-  // T045: Generate contains edges (doc -> req within the same file)
-  // Use autoContains alone; doc nodes with explicit node_id exist even when autoNodes=false
+  // T045 / Issue #28: Generate contains edges (doc -> req|task within the same file).
+  // Use autoContains alone; doc nodes with explicit node_id exist even when autoNodes=false.
   if (autoContains) {
     const docNodes = [...nodes.values()].filter((n) => n.kind === "doc");
     for (const doc of docNodes) {
-      for (const [reqId, reqNode] of nodes) {
-        if (reqNode.kind === "req" && reqNode.filePath === doc.filePath) {
+      for (const [childId, childNode] of nodes) {
+        if (
+          (childNode.kind === "req" || childNode.kind === "task") &&
+          childNode.filePath === doc.filePath
+        ) {
           edges.push({
             source: doc.id,
-            target: reqId,
+            target: childId,
             kind: "contains",
           });
         }

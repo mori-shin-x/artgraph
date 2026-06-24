@@ -490,4 +490,188 @@ artgraph:
       expect(headingReqs.length).toBeGreaterThan(0);
     });
   });
+
+  describe("US3: spec-kit task extraction (FR-009 / FR-010)", () => {
+    it("extracts T### task nodes from plan.md", () => {
+      const file = resolve(
+        FIXTURE_DIR,
+        "tasks/speckit-plan/specs/auth/plan.md",
+      );
+      const result = parseMarkdown(file);
+      const taskNodes = result.nodes.filter((n) => n.kind === "task");
+      const ids = taskNodes.map((n) => n.id).sort();
+      expect(ids).toEqual(["T001", "T002"]);
+      for (const node of taskNodes) {
+        expect(node.contentHash.length).toBe(16);
+      }
+    });
+
+    it("generates implements edges from plan.md @impl(target)", () => {
+      const file = resolve(
+        FIXTURE_DIR,
+        "tasks/speckit-plan/specs/auth/plan.md",
+      );
+      const result = parseMarkdown(file);
+      const implEdges = result.edges
+        .filter((e) => e.kind === "implements")
+        .sort((a, b) => a.source.localeCompare(b.source));
+      expect(implEdges).toEqual([
+        { source: "T001", target: "auth-login", kind: "implements" },
+        { source: "T002", target: "auth-session", kind: "implements" },
+      ]);
+    });
+
+    it("generates verifies edges from tasks.md [REQ-FR-xxx] preserving prefix", () => {
+      const file = resolve(
+        FIXTURE_DIR,
+        "tasks/speckit-tasks/specs/auth/tasks.md",
+      );
+      const result = parseMarkdown(file);
+      const verifies = result.edges
+        .filter((e) => e.kind === "verifies")
+        .sort((a, b) => a.target.localeCompare(b.target));
+      expect(verifies).toEqual([
+        { source: "T010", target: "REQ-FR-001", kind: "verifies" },
+        { source: "T011", target: "REQ-FR-002", kind: "verifies" },
+        { source: "T011", target: "REQ-FR-003", kind: "verifies" },
+      ]);
+    });
+  });
+
+  describe("US3: kiro hierarchical task extraction (FR-012)", () => {
+    it("extracts hierarchical numeric IDs as independent task nodes", () => {
+      const file = resolve(
+        FIXTURE_DIR,
+        "tasks/kiro-tasks/specs/billing/tasks.md",
+      );
+      const result = parseMarkdown(file);
+      const taskNodes = result.nodes.filter((n) => n.kind === "task");
+      const ids = taskNodes.map((n) => n.id).sort();
+      expect(ids).toEqual(["1", "1.1", "1.2", "2"]);
+    });
+
+    it("generates implements / verifies edges from nested kiro tasks", () => {
+      const file = resolve(
+        FIXTURE_DIR,
+        "tasks/kiro-tasks/specs/billing/tasks.md",
+      );
+      const result = parseMarkdown(file);
+      const impl = result.edges
+        .filter((e) => e.kind === "implements")
+        .sort((a, b) => a.source.localeCompare(b.source));
+      const verifies = result.edges
+        .filter((e) => e.kind === "verifies")
+        .sort((a, b) => a.source.localeCompare(b.source));
+      expect(impl).toEqual([
+        { source: "1", target: "billing-init", kind: "implements" },
+        { source: "1.1", target: "stripe-client", kind: "implements" },
+      ]);
+      expect(verifies).toEqual([
+        { source: "1.2", target: "REQ-BIL-001", kind: "verifies" },
+        { source: "2", target: "REQ-BIL-002", kind: "verifies" },
+      ]);
+    });
+  });
+
+  describe("US3: cross-cutting tag behavior", () => {
+    it("accepts [X], [x], and [ ] checkbox variants", () => {
+      const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp");
+      mkdirSync(tmpDir, { recursive: true });
+      const file = resolve(tmpDir, "tasks.md");
+      writeFileSync(
+        file,
+        [
+          "# Tasks",
+          "",
+          "- [X] T100 upper @impl(uX)",
+          "- [x] T101 lower @impl(uL)",
+          "- [ ] T102 empty @impl(uE)",
+          "",
+        ].join("\n"),
+      );
+      try {
+        const result = parseMarkdown(file);
+        const ids = result.nodes
+          .filter((n) => n.kind === "task")
+          .map((n) => n.id)
+          .sort();
+        expect(ids).toEqual(["T100", "T101", "T102"]);
+      } finally {
+        unlinkSync(file);
+        rmdirSync(tmpDir);
+      }
+    });
+
+    it("emits multiple verifies edges when one task carries multiple [REQ-] tags", () => {
+      const file = resolve(
+        FIXTURE_DIR,
+        "tasks/speckit-tasks/specs/auth/tasks.md",
+      );
+      const result = parseMarkdown(file);
+      const t011 = result.edges.filter(
+        (e) => e.kind === "verifies" && e.source === "T011",
+      );
+      expect(t011).toHaveLength(2);
+      expect(t011.map((e) => e.target).sort()).toEqual(["REQ-FR-002", "REQ-FR-003"]);
+    });
+
+    it("skips edge generation when @impl() target is empty", () => {
+      const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-empty");
+      mkdirSync(tmpDir, { recursive: true });
+      const file = resolve(tmpDir, "tasks.md");
+      writeFileSync(
+        file,
+        ["# Tasks", "", "- [X] T200 no target @impl()", ""].join("\n"),
+      );
+      try {
+        const result = parseMarkdown(file);
+        const impl = result.edges.filter((e) => e.kind === "implements");
+        expect(impl).toHaveLength(0);
+        const taskNodes = result.nodes.filter((n) => n.kind === "task");
+        expect(taskNodes.map((n) => n.id)).toEqual(["T200"]);
+      } finally {
+        unlinkSync(file);
+        rmdirSync(tmpDir);
+      }
+    });
+
+    it("recognizes [REQ-] inside plan.md and @impl() inside tasks.md (symmetric U1)", () => {
+      const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-symmetric");
+      mkdirSync(tmpDir, { recursive: true });
+      const planFile = resolve(tmpDir, "plan.md");
+      const tasksFile = resolve(tmpDir, "tasks.md");
+      writeFileSync(
+        planFile,
+        ["# Plan", "", "- [X] T300 review login [REQ-FR-100]", ""].join("\n"),
+      );
+      writeFileSync(
+        tasksFile,
+        ["# Tasks", "", "- [X] T301 wire login @impl(login-handler)", ""].join("\n"),
+      );
+      try {
+        const planResult = parseMarkdown(planFile);
+        const tasksResult = parseMarkdown(tasksFile);
+        expect(
+          planResult.edges.some(
+            (e) =>
+              e.kind === "verifies" &&
+              e.source === "T300" &&
+              e.target === "REQ-FR-100",
+          ),
+        ).toBe(true);
+        expect(
+          tasksResult.edges.some(
+            (e) =>
+              e.kind === "implements" &&
+              e.source === "T301" &&
+              e.target === "login-handler",
+          ),
+        ).toBe(true);
+      } finally {
+        unlinkSync(planFile);
+        unlinkSync(tasksFile);
+        rmdirSync(tmpDir);
+      }
+    });
+  });
 });

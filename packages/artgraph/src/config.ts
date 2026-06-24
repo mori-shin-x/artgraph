@@ -1,6 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, relative, isAbsolute } from "node:path";
-import { DEFAULT_CONFIG, type ArtgraphConfig, type ReqPatternConfig } from "./types.js";
+import {
+  DEFAULT_CONFIG,
+  type ArtgraphConfig,
+  type ReqPatternConfig,
+  type TaskConventionPreset,
+} from "./types.js";
 
 const CONFIG_FILE = ".artgraph.json";
 
@@ -64,6 +69,85 @@ function validateReqPatterns(patterns: ReqPatternConfig): void {
   }
 }
 
+// Names reserved by built-in task convention presets. Users can't reuse these in
+// their `.artgraph.json` because doing so would silently override (or duplicate)
+// the built-in entry. The actual built-in definitions live in parsers/markdown.ts.
+const BUILTIN_TASK_PRESET_NAMES = ["spec-kit", "kiro"] as const;
+
+function validateTaskConventions(value: unknown): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    throw new Error("Invalid taskConventions: must be an array");
+  }
+
+  const seenNames = new Set<string>();
+
+  for (let idx = 0; idx < value.length; idx++) {
+    const preset = value[idx] as Partial<TaskConventionPreset> | undefined;
+    if (!preset || typeof preset !== "object") {
+      throw new Error(`Invalid taskConventions[${idx}]: must be an object`);
+    }
+
+    const { name, fileStems, taskIdRe } = preset;
+
+    if (typeof name !== "string" || name === "") {
+      throw new Error(`Invalid taskConventions[${idx}].name: must not be empty`);
+    }
+
+    if (
+      (BUILTIN_TASK_PRESET_NAMES as readonly string[]).includes(name) ||
+      seenNames.has(name)
+    ) {
+      throw new Error(
+        `Invalid taskConventions: duplicate name "${name}". Built-in presets are "spec-kit", "kiro" — choose another name.`,
+      );
+    }
+    seenNames.add(name);
+
+    if (!Array.isArray(fileStems) || fileStems.length === 0) {
+      throw new Error(
+        `Invalid taskConventions[${idx}].fileStems: must not be empty`,
+      );
+    }
+    for (const stem of fileStems) {
+      if (typeof stem !== "string" || stem === "") {
+        throw new Error(
+          `Invalid taskConventions[${idx}].fileStems: every entry must be a non-empty string`,
+        );
+      }
+    }
+
+    if (typeof taskIdRe !== "string" || taskIdRe === "") {
+      throw new Error(
+        `Invalid taskConventions[${idx}].taskIdRe: must not be empty`,
+      );
+    }
+    if (taskIdRe.length > MAX_PATTERN_LENGTH) {
+      throw new Error(
+        `Invalid taskConventions[${idx}].taskIdRe: pattern must not exceed ${MAX_PATTERN_LENGTH} characters`,
+      );
+    }
+    if (NESTED_QUANTIFIER_RE.test(taskIdRe)) {
+      throw new Error(
+        `Invalid taskConventions[${idx}].taskIdRe: nested quantifiers (e.g. "(a+)+") are rejected to prevent catastrophic backtracking`,
+      );
+    }
+    try {
+      new RegExp(taskIdRe);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `Invalid taskConventions[${idx}].taskIdRe: invalid regular expression — ${msg}`,
+      );
+    }
+    if (countCaptureGroups(taskIdRe) < 1) {
+      throw new Error(
+        `Invalid taskConventions[${idx}].taskIdRe: regex must contain at least one capture group (group 1 is used as the task ID)`,
+      );
+    }
+  }
+}
+
 // `testResultPaths` is fed straight into glob, so a non-string element (e.g.
 // `[123]`) would crash deep inside globSync with an opaque error. Validate the
 // shape up front and fail with a clear, actionable message instead.
@@ -97,6 +181,8 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
     validateReqPatterns(raw.reqPatterns);
   }
 
+  validateTaskConventions(raw.taskConventions);
+
   validateTestResultPaths(raw.testResultPaths);
 
   const lockFile = raw.lockFile ?? DEFAULT_CONFIG.lockFile;
@@ -117,5 +203,6 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
     docGraph: raw.docGraph,
     mode: raw.mode === "symbol" ? "symbol" : "file",
     testResultPaths: raw.testResultPaths,
+    taskConventions: raw.taskConventions,
   };
 }

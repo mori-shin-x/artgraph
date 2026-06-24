@@ -1,21 +1,54 @@
 import { readFileSync } from "node:fs";
-import { relative, resolve as resolvePath, dirname } from "node:path";
+import { relative, resolve as resolvePath, dirname, basename } from "node:path";
 import matter from "gray-matter";
 import { unified } from "unified";
 import remarkParse from "remark-parse";
 import { visit } from "unist-util-visit";
 import { toString } from "mdast-util-to-string";
 import { createHash } from "node:crypto";
-import type { GraphNode, GraphEdge, ReqPatternConfig } from "../types.js";
+import type {
+  GraphNode,
+  GraphEdge,
+  ReqPatternConfig,
+  TaskConventionPreset,
+} from "../types.js";
+import { NAMESPACED_ID_TOKEN } from "../req-id.js";
 
 export interface ParseMarkdownOptions {
   rootDir?: string;
   specDirPrefix?: string;
   reqPatterns?: ReqPatternConfig;
+  taskConventions?: TaskConventionPreset[];
 }
 
 const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
 const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*:/;
+
+// Built-in task convention presets. spec-kit covers plan.md/tasks.md with the
+// `T\d+` ID shape; kiro covers tasks.md with hierarchical numerics (`1`, `1.1`).
+// Users add OpenSpec or other SDD tools via `.artgraph.json` `taskConventions`,
+// which are merged after these built-ins (see specs/005-speckit-remaining/research.md §R8).
+const BUILTIN_TASK_PRESETS: TaskConventionPreset[] = [
+  {
+    name: "spec-kit",
+    fileStems: ["plan", "tasks"],
+    taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(T\\d+)\\b",
+  },
+  {
+    name: "kiro",
+    fileStems: ["tasks"],
+    taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(\\d+(?:\\.\\d+)*)\\.?[\\s\\u00A0]",
+  },
+];
+
+const IMPL_TAG_RE = /@impl\(([^)]+)\)/g;
+// Accept both a `REQ-<...>` chained prefix (e.g. `[REQ-FR-001]` — spec.md FR-010
+// "prefix 維持") and a single NAMESPACED_ID_TOKEN (e.g. `[FR-001]`, `[Requirement-3]`).
+// match[0].slice(1, -1) preserves the bracket-inner verbatim as the verifies edge target.
+const REQ_TAG_RE = new RegExp(
+  `\\[(?:REQ-[\\w/-]+|${NAMESPACED_ID_TOKEN})\\]`,
+  "g",
+);
 const METADATA_FIELDS = ["title", "status", "priority", "owner"] as const;
 // Matches `<scheme>:` at the start of an href (e.g. `http:`, `mailto:`, `tel:`,
 // `javascript:`). Used to skip absolute URLs — only relative paths point at
@@ -143,9 +176,64 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
     }
   }
 
+  // Build the per-file list of task convention presets whose `fileStems`
+  // match this file's stem. Empty when the file isn't a recognized task
+  // surface (e.g. a regular spec.md / design.md), so the visit() callback
+  // skips the task-extraction branch entirely with no extra cost.
+  const fileStem = basename(relPath)
+    .replace(/\.(md|markdown)$/i, "")
+    .toLowerCase();
+  const applicableTaskPresets: { name: string; re: RegExp }[] = [];
+  const seenPresetNames = new Set<string>();
+  for (const preset of [...BUILTIN_TASK_PRESETS, ...(options?.taskConventions ?? [])]) {
+    if (seenPresetNames.has(preset.name)) continue;
+    seenPresetNames.add(preset.name);
+    if (!preset.fileStems.includes(fileStem)) continue;
+    applicableTaskPresets.push({ name: preset.name, re: new RegExp(preset.taskIdRe) });
+  }
+
   visit(tree, "listItem", (node: any) => {
     const firstParagraph = node.children?.find((c: any) => c.type === "paragraph");
     const labelText = firstParagraph ? toString(firstParagraph) : toString(node);
+
+    if (applicableTaskPresets.length > 0) {
+      let taskId: string | null = null;
+      for (const preset of applicableTaskPresets) {
+        const m = labelText.match(preset.re);
+        if (m && m[1] != null) {
+          taskId = m[1];
+          break;
+        }
+      }
+      if (taskId != null) {
+        nodes.push({
+          id: taskId,
+          kind: "task",
+          filePath: relPath,
+          label: labelText,
+          contentHash: hash(labelText),
+        });
+
+        const paragraphText = firstParagraph ? toString(firstParagraph) : labelText;
+
+        IMPL_TAG_RE.lastIndex = 0;
+        let implMatch: RegExpExecArray | null;
+        while ((implMatch = IMPL_TAG_RE.exec(paragraphText)) !== null) {
+          const target = implMatch[1].trim();
+          if (target === "") continue;
+          edges.push({ source: taskId, target, kind: "implements" });
+        }
+
+        REQ_TAG_RE.lastIndex = 0;
+        let reqMatch: RegExpExecArray | null;
+        while ((reqMatch = REQ_TAG_RE.exec(paragraphText)) !== null) {
+          const target = reqMatch[0].slice(1, -1);
+          edges.push({ source: taskId, target, kind: "verifies" });
+        }
+        return;
+      }
+    }
+
     const match = labelText.match(listItemRE);
     if (!match || match[1] == null) return;
 

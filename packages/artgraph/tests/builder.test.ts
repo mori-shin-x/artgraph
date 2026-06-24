@@ -674,3 +674,85 @@ describe("buildGraph: convention inference (C-3)", () => {
     expect(allDerives[0].target).toBe("wf-requirements");
   });
 });
+
+describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
+  const tasksRoot = resolve(FIXTURE_DIR, "tasks");
+  const tasksConfig: ArtgraphConfig = {
+    include: ["src/**/*.ts"],
+    specDirs: ["specs"],
+    testPatterns: ["tests/**/*.ts"],
+    lockFile: ".trace.lock",
+  };
+
+  it("generates doc → task contains edges within plan.md", () => {
+    const { graph } = buildGraph(resolve(tasksRoot, "speckit-plan"), tasksConfig);
+    const tasks = [...graph.nodes.values()].filter((n) => n.kind === "task");
+    expect(tasks.map((n) => n.id).sort()).toEqual(["T001", "T002"]);
+
+    const contains = graph.edges.filter(
+      (e) => e.kind === "contains" && e.source === "doc:auth/plan.md",
+    );
+    expect(contains.map((e) => e.target).sort()).toEqual(["T001", "T002"]);
+  });
+
+  it("qualifies task IDs with specDir on collision", () => {
+    const { graph } = buildGraph(
+      resolve(tasksRoot, "namespace-collision"),
+      tasksConfig,
+    );
+    expect(graph.nodes.has("auth/T001")).toBe(true);
+    expect(graph.nodes.has("export/T001")).toBe(true);
+    expect(graph.nodes.has("T001")).toBe(false);
+
+    const implements_ = graph.edges
+      .filter((e) => e.kind === "implements")
+      .sort((a, b) => a.source.localeCompare(b.source));
+    expect(implements_).toEqual([
+      { source: "auth/T001", target: "auth-login", kind: "implements" },
+      { source: "export/T001", target: "csv-writer", kind: "implements" },
+    ]);
+  });
+
+  it("applies user-defined OpenSpec preset on top of built-ins", () => {
+    const root = resolve(tasksRoot, "openspec-custom");
+    const userConfig: ArtgraphConfig = {
+      ...tasksConfig,
+      taskConventions: [
+        {
+          name: "openspec",
+          fileStems: ["tasks"],
+          taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(OS-\\d+)\\b",
+        },
+      ],
+    };
+    const { graph } = buildGraph(root, userConfig);
+    const tasks = [...graph.nodes.values()].filter((n) => n.kind === "task");
+    expect(tasks.map((n) => n.id)).toEqual(["OS-100"]);
+    const impl = graph.edges.filter((e) => e.kind === "implements");
+    expect(impl).toEqual([
+      { source: "OS-100", target: "openspec-target", kind: "implements" },
+    ]);
+  });
+
+  it("dedups edges when both spec-kit and kiro presets match the same listItem", () => {
+    // kiro tasks.md fixture: built-in spec-kit's `T\d+` won't match `1`, but
+    // kiro's hierarchical `\d+(?:\.\d+)*` will. Both presets share file-stem
+    // "tasks", so the loop walks both — confirming dedup leaves one edge per
+    // (source, target, kind) tuple.
+    const { graph } = buildGraph(resolve(tasksRoot, "kiro-tasks"), tasksConfig);
+    const impl = graph.edges
+      .filter((e) => e.kind === "implements")
+      .sort((a, b) => a.source.localeCompare(b.source));
+    expect(impl).toEqual([
+      { source: "1", target: "billing-init", kind: "implements" },
+      { source: "1.1", target: "stripe-client", kind: "implements" },
+    ]);
+    const verifies = graph.edges
+      .filter((e) => e.kind === "verifies")
+      .sort((a, b) => a.source.localeCompare(b.source));
+    expect(verifies).toEqual([
+      { source: "1.2", target: "REQ-BIL-001", kind: "verifies" },
+      { source: "2", target: "REQ-BIL-002", kind: "verifies" },
+    ]);
+  });
+});

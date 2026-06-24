@@ -170,6 +170,154 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("taskConventions validation (FR-012)", () => {
+    it("should default to undefined when not specified", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({}));
+      const config = loadConfig(TMP_DIR);
+      expect(config.taskConventions).toBeUndefined();
+    });
+
+    it("should accept a valid user preset", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            { name: "openspec", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" },
+          ],
+        }),
+      );
+      const config = loadConfig(TMP_DIR);
+      expect(config.taskConventions).toEqual([
+        { name: "openspec", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" },
+      ]);
+    });
+
+    it("should reject a non-array taskConventions", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ taskConventions: "openspec" }));
+      expect(() => loadConfig(TMP_DIR)).toThrow("must be an array");
+    });
+
+    it("should reject empty name", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [{ name: "", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" }],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow("name: must not be empty");
+    });
+
+    it("should reject duplicate built-in name", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            { name: "spec-kit", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow('duplicate name "spec-kit"');
+    });
+
+    it("should reject duplicate user name", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            { name: "foo", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" },
+            { name: "foo", fileStems: ["plan"], taskIdRe: "^(BAR-\\d+)" },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow('duplicate name "foo"');
+    });
+
+    it("should reject empty fileStems", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            { name: "openspec", fileStems: [], taskIdRe: "^(OS-\\d+)" },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow("fileStems: must not be empty");
+    });
+
+    it("should reject empty taskIdRe", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            { name: "openspec", fileStems: ["tasks"], taskIdRe: "" },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow("taskIdRe: must not be empty");
+    });
+
+    it("should reject over-long taskIdRe", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      const longPattern = "^(" + "a".repeat(300) + "\\d+)";
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            { name: "openspec", fileStems: ["tasks"], taskIdRe: longPattern },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow("must not exceed");
+    });
+
+    it("should reject nested quantifier in taskIdRe", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            { name: "openspec", fileStems: ["tasks"], taskIdRe: "^(([a-z]+)+)$" },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow("nested quantifiers");
+    });
+
+    it("should reject invalid regex in taskIdRe", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            { name: "openspec", fileStems: ["tasks"], taskIdRe: "[invalid(" },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow("invalid regular expression");
+    });
+
+    it("should reject taskIdRe without capture group", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          taskConventions: [
+            { name: "openspec", fileStems: ["tasks"], taskIdRe: "^OS-\\d+" },
+          ],
+        }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow("at least one capture group");
+    });
+  });
+
   describe("lockFile path traversal prevention", () => {
     it("should reject lockFile with path traversal", () => {
       mkdirSync(TMP_DIR, { recursive: true });

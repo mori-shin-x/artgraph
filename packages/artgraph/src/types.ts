@@ -1,4 +1,4 @@
-export type NodeKind = "req" | "doc" | "file" | "symbol" | "test";
+export type NodeKind = "req" | "doc" | "file" | "symbol" | "test" | "task";
 
 export type EdgeKind =
   | "depends_on"
@@ -251,6 +251,15 @@ export interface ReqPatternConfig {
   codeId?: string;
 }
 
+// Convention preset for extracting task IDs from list items in a Markdown file.
+// Built-ins (spec-kit, kiro) ship in parsers/markdown.ts; users add tools like
+// OpenSpec via `.artgraph.json` `taskConventions`. See specs/005-speckit-remaining/data-model.md §2.
+export interface TaskConventionPreset {
+  name: string;
+  fileStems: string[];
+  taskIdRe: string;
+}
+
 export interface TestResultRecord {
   reqId: string;
   testName: string;
@@ -284,6 +293,7 @@ export interface ArtgraphConfig {
   docGraph?: DocGraphConfig;
   mode?: "file" | "symbol";
   testResultPaths?: string[];
+  taskConventions?: TaskConventionPreset[];
 }
 
 export const DEFAULT_CONFIG: ArtgraphConfig = {

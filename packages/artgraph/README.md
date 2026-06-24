@@ -95,6 +95,54 @@ To opt out of any of the above:
 > `"linkWarnings": { "unresolved": false }`) and migrate at your pace.
 
 
+## Task graph (`taskConventions` config)
+
+artgraph extracts **task nodes** from Spec Kit / Kiro `plan.md` and `tasks.md`
+files, and converts inline tags into edges:
+
+| Tag in markdown        | Edge generated                                  |
+| ---------------------- | ----------------------------------------------- |
+| `@impl(target-id)`     | `task → implements → target-id` (free-form target) |
+| `[REQ-FR-001]`         | `task → verifies → REQ-FR-001` (prefix kept verbatim) |
+
+Both tags are recognized in any file whose stem matches a registered task
+convention preset — `plan.md` and `tasks.md` for `spec-kit`, `tasks.md` for
+`kiro`. Recognition is symmetric: a `[REQ-]` tag inside `plan.md` and an
+`@impl(...)` tag inside `tasks.md` both produce edges.
+
+`doc → contains → task` edges are emitted under `docGraph.autoContains` (the
+same flag that drives `doc → req`), so impact analysis can hop from a spec file
+through its tasks to the code that implements them.
+
+### Adding a custom SDD tool (OpenSpec, etc.)
+
+Append a preset to `taskConventions` — built-ins (`spec-kit`, `kiro`) remain
+active:
+
+```jsonc
+// .artgraph.json
+{
+  "taskConventions": [
+    {
+      "name": "openspec",
+      "fileStems": ["tasks"],
+      "taskIdRe": "^(?:\\[[xX ]\\]\\s+)?(OS-\\d+)\\b"
+    }
+  ]
+}
+```
+
+`taskIdRe` capture group 1 is the task ID; the regex is validated the same way
+`reqPatterns` is (length, nested-quantifier rejection, capture-group required).
+
+### Upgrade note
+
+Built-in presets activate automatically on upgrade — existing
+projects whose `tasks.md` already contains `T###` lines will see new `task`
+nodes (and `doc → task` `contains` edges) appear on the next `artgraph scan`.
+Run `artgraph reconcile` to refresh the lock baseline.
+
+
 ## Commands
 
 | Command              | Purpose                                                      |
