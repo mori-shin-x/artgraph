@@ -267,6 +267,7 @@ program
         fileCount: result.fileCount,
         symbolCount: result.symbolCount,
         testCount: result.testCount,
+        taskCount: result.taskCount,
         warnings: result.warnings,
       };
       if (testResultStats) {
@@ -275,15 +276,15 @@ program
       console.log(JSON.stringify(output));
     } else {
       console.log(`Nodes: ${result.nodeCount}  Edges: ${result.edgeCount}`);
-      if (result.symbolCount > 0) {
-        console.log(
-          `  req: ${result.reqCount}  doc: ${result.docCount}  file: ${result.fileCount}  symbol: ${result.symbolCount}  test: ${result.testCount}`,
-        );
-      } else {
-        console.log(
-          `  req: ${result.reqCount}  doc: ${result.docCount}  file: ${result.fileCount}  test: ${result.testCount}`,
-        );
-      }
+      const parts = [
+        `req: ${result.reqCount}`,
+        `doc: ${result.docCount}`,
+        `file: ${result.fileCount}`,
+      ];
+      if (result.symbolCount > 0) parts.push(`symbol: ${result.symbolCount}`);
+      parts.push(`test: ${result.testCount}`);
+      if (result.taskCount > 0) parts.push(`task: ${result.taskCount}`);
+      console.log(`  ${parts.join("  ")}`);
       if (testResultStats) {
         console.log(
           `\nTest Results: total=${testResultStats.totalTests} passed=${testResultStats.passedTests} failed=${testResultStats.failedTests}`,

@@ -673,5 +673,71 @@ artgraph:
         rmdirSync(tmpDir);
       }
     });
+
+    it("kiro preset requires a checkbox — prose numbered lists do NOT become tasks (H1)", () => {
+      const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-h1");
+      mkdirSync(tmpDir, { recursive: true });
+      const file = resolve(tmpDir, "tasks.md");
+      writeFileSync(
+        file,
+        [
+          "# Tasks",
+          "",
+          "- 1 release shipped in Q2",
+          "- 2 hot-fixes planned",
+          "- 3.14 GB free space",
+          "- [X] 4 actual kiro task @impl(real-task)",
+          "",
+        ].join("\n"),
+      );
+      try {
+        const result = parseMarkdown(file);
+        const taskIds = result.nodes
+          .filter((n) => n.kind === "task")
+          .map((n) => n.id);
+        // Only the checkbox-prefixed entry should be a task.
+        expect(taskIds).toEqual(["4"]);
+        const impl = result.edges.find(
+          (e) => e.kind === "implements" && e.source === "4",
+        );
+        expect(impl?.target).toBe("real-task");
+      } finally {
+        unlinkSync(file);
+        rmdirSync(tmpDir);
+      }
+    });
+
+    it("@impl target is single-line — newline inside parens does NOT escape (M1)", () => {
+      const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-m1");
+      mkdirSync(tmpDir, { recursive: true });
+      const file = resolve(tmpDir, "tasks.md");
+      // Soft-wrapped paragraph: an unclosed `@impl(...` on line 1 followed by
+      // text on line 2. Pre-fix, `[^)]+` would capture across the newline; now
+      // the regex requires the target to stay on one line and the malformed
+      // tag emits no edge.
+      writeFileSync(
+        file,
+        [
+          "# Tasks",
+          "",
+          "- [X] T500 something @impl(broken-target",
+          "  continuation line) more text",
+          "",
+        ].join("\n"),
+      );
+      try {
+        const result = parseMarkdown(file);
+        const impl = result.edges.filter((e) => e.kind === "implements");
+        // The malformed multi-line @impl must NOT produce an edge with an
+        // embedded newline. (It may produce zero edges, which is the intended
+        // safe behaviour — better to drop than to emit garbage.)
+        for (const e of impl) {
+          expect(e.target).not.toContain("\n");
+        }
+      } finally {
+        unlinkSync(file);
+        rmdirSync(tmpDir);
+      }
+    });
   });
 });

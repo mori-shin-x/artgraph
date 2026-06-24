@@ -35,13 +35,18 @@ const BUILTIN_TASK_PRESETS: TaskConventionPreset[] = [
     taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(T\\d+)\\b",
   },
   {
+    // Kiro tasks.md: require the checkbox prefix so ordinary numbered prose
+    // (`- 1 release shipped`) doesn't false-match as a task. Users with a
+    // checkbox-less Kiro variant can override via `.artgraph.json` `taskConventions`.
     name: "kiro",
     fileStems: ["tasks"],
-    taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(\\d+(?:\\.\\d+)*)\\.?[\\s\\u00A0]",
+    taskIdRe: "^\\[[xX ]\\][\\s\\u00A0]+(\\d+(?:\\.\\d+)*)\\.?[\\s\\u00A0]",
   },
 ];
 
-const IMPL_TAG_RE = /@impl\(([^)]+)\)/g;
+// Target must be single-line — `[^)\n]+` prevents an unclosed `@impl(...` from
+// swallowing the next paragraph line via mdast's soft-wrap joining.
+const IMPL_TAG_RE = /@impl\(([^)\n]+)\)/g;
 // Accept both a `REQ-<...>` chained prefix (e.g. `[REQ-FR-001]` — spec.md FR-010
 // "prefix 維持") and a single NAMESPACED_ID_TOKEN (e.g. `[FR-001]`, `[Requirement-3]`).
 // match[0].slice(1, -1) preserves the bracket-inner verbatim as the verifies edge target.
