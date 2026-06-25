@@ -72,6 +72,11 @@ export function formatAdditionalContext(result: ImpactResult): string {
   for (const req of result.affectedReqs) {
     parts.push(`${req} (req)`);
   }
+  // affectedTasks is post-PR — tolerate hand-built ImpactResult literals
+  // (tests, third-party callers) that predate the field.
+  for (const task of result.affectedTasks ?? []) {
+    parts.push(`${task} (task)`);
+  }
   for (const doc of result.affectedDocs) {
     parts.push(`${doc} (doc)`);
   }

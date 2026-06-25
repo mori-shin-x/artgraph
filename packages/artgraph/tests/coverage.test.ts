@@ -299,3 +299,57 @@ describe("computeCoverage with testResults", () => {
     expect(entryC!.status).toBe("untagged");
   });
 });
+
+describe("computeCoverage — task sources are excluded (Issue #28 / data-model §7)", () => {
+  it("a req with only task → implements is `untagged`", () => {
+    const graph = makeGraph(
+      [
+        { id: "REQ-1", kind: "req" },
+        { id: "T001", kind: "task" },
+      ],
+      [{ source: "T001", target: "REQ-1", kind: "implements" }],
+    );
+    const cov = computeCoverage(graph);
+    expect(cov.find((c) => c.reqId === "REQ-1")?.status).toBe("untagged");
+  });
+
+  it("a req with task → verifies but no real test stays `impl-only` (not upgraded)", () => {
+    const graph = makeGraph(
+      [
+        { id: "REQ-2", kind: "req" },
+        { id: "file:src/foo.ts", kind: "file" },
+        { id: "T002", kind: "task" },
+      ],
+      [
+        { source: "file:src/foo.ts", target: "REQ-2", kind: "implements" },
+        { source: "T002", target: "REQ-2", kind: "verifies" },
+      ],
+    );
+    const cov = computeCoverage(graph);
+    // With a real impl but only a task-source verifies, the req must NOT be
+    // labelled "verified" — task verifies are planning artefacts, not test runs.
+    expect(cov.find((c) => c.reqId === "REQ-2")?.status).toBe("impl-only");
+  });
+
+  it("a req with real test verifies stays `verified` even when a task also verifies", () => {
+    const graph = makeGraph(
+      [
+        { id: "REQ-3", kind: "req" },
+        { id: "file:src/foo.ts", kind: "file" },
+        { id: "file:tests/foo.test.ts", kind: "test" },
+        { id: "T003", kind: "task" },
+      ],
+      [
+        { source: "file:src/foo.ts", target: "REQ-3", kind: "implements" },
+        { source: "file:tests/foo.test.ts", target: "REQ-3", kind: "verifies" },
+        { source: "T003", target: "REQ-3", kind: "verifies" },
+      ],
+    );
+    const cov = computeCoverage(graph);
+    expect(cov.find((c) => c.reqId === "REQ-3")?.status).toBe("verified");
+    // testFiles must list the real test only, not the task.
+    expect(cov.find((c) => c.reqId === "REQ-3")?.testFiles).toEqual([
+      "file:tests/foo.test.ts",
+    ]);
+  });
+});

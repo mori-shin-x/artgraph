@@ -1,0 +1,14 @@
+{
+  "include": ["src/**/*.ts"],
+  "specDirs": ["specs"],
+  "testPatterns": ["**/*.test.ts"],
+  "lockFile": ".trace.lock",
+  "taskConventions": [
+    {
+      "name": "openspec",
+      "fileStems": ["tasks"],
+      "taskIdRe": "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(OS-\\d+)\\b",
+      "implementsTagRe": "@impl\\(([^)\\n]+)\\)"
+    }
+  ]
+}

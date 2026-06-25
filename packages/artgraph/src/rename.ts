@@ -1,5 +1,5 @@
-import type { ReqPatternConfig } from "./types.js";
-import { maskInlineProtectedSpans } from "./parsers/markdown.js";
+import type { ReqPatternConfig, TaskConventionPreset } from "./types.js";
+import { BUILTIN_TASK_PRESETS, maskInlineProtectedSpans } from "./parsers/markdown.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -27,6 +27,13 @@ interface RewriteResult {
 
 export interface RewriteOptions {
   reqPatterns?: ReqPatternConfig;
+  // Active task conventions so the rewriter recognises `- [x] T001 ...` /
+  // `- [x] 1.1 ...` etc. as definition lines. Without these the parser sees a
+  // task definition but the rewriter doesn't, producing the half-applied
+  // rename described in the PR meta-review (code-side @impl rewritten but
+  // spec-side definition left untouched → orphans).
+  taskConventions?: TaskConventionPreset[];
+  disableBuiltinTaskConventions?: string[];
 }
 
 // Mirror the parser defaults (src/parsers/markdown.ts) so discovery and
@@ -98,6 +105,22 @@ function listItemRegex(opts?: RewriteOptions): RegExp {
     : DEFAULT_LIST_ITEM_RE;
 }
 
+// Every active task preset's `taskIdRe`, with built-ins filtered by the disable
+// list. The rewriter tries these in addition to `listItemRegex` so a `T001` /
+// `1.1` definition can also be renamed.
+function taskItemRegexes(opts?: RewriteOptions): RegExp[] {
+  const disabled = new Set(opts?.disableBuiltinTaskConventions ?? []);
+  const presets = [
+    ...BUILTIN_TASK_PRESETS.filter((p) => !disabled.has(p.name)),
+    ...(opts?.taskConventions ?? []),
+  ];
+  return presets.map((p) => new RegExp(p.taskIdRe));
+}
+
+function listItemRegexes(opts?: RewriteOptions): RegExp[] {
+  return [listItemRegex(opts), ...taskItemRegexes(opts)];
+}
+
 function headingRegex(opts?: RewriteOptions): RegExp {
   return opts?.reqPatterns?.heading
     ? new RegExp(opts.reqPatterns.heading)
@@ -120,8 +143,11 @@ export function fencedLines(content: string): Set<number> {
 export function specDefinitionId(line: string, opts?: RewriteOptions): string | null {
   const pm = line.match(/^(\s*[-*]\s+)/);
   if (pm) {
-    const m = line.slice(pm[0].length).match(listItemRegex(opts));
-    if (m && m[1] != null) return m[1];
+    const rest = line.slice(pm[0].length);
+    for (const re of listItemRegexes(opts)) {
+      const m = rest.match(re);
+      if (m && m[1] != null) return m[1];
+    }
   }
   const hm = line.match(/^(#+\s+)(.*)$/);
   if (hm) {
@@ -154,7 +180,7 @@ export function rewriteSpecListItem(
   const lines = content.split("\n");
   const changes: RewriteChange[] = [];
   const fenced = fencedLineSet(lines);
-  const itemRe = listItemRegex(opts);
+  const itemRegexes = listItemRegexes(opts);
   // Markdown list prefix (`- ` / `* `). The parser matches its list-item
   // regex against the AST label text, which already excludes this marker.
   const prefixRe = /^(\s*[-*]\s+)/;
@@ -165,8 +191,16 @@ export function rewriteSpecListItem(
     if (!pm) continue;
 
     const rest = lines[i].slice(pm[0].length);
-    const m = rest.match(itemRe);
-    if (!m || m[1] !== oldId) continue;
+    let matched: { match: RegExpMatchArray } | null = null;
+    for (const itemRe of itemRegexes) {
+      const m = rest.match(itemRe);
+      if (m && m[1] === oldId) {
+        matched = { match: m };
+        break;
+      }
+    }
+    if (!matched) continue;
+    const m = matched.match;
 
     // Locate the captured ID within the match so bold markers / prefixes are
     // preserved, then splice in newId.

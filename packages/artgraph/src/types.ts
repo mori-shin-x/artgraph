@@ -1,4 +1,4 @@
-export type NodeKind = "req" | "doc" | "file" | "symbol" | "test";
+export type NodeKind = "req" | "doc" | "file" | "symbol" | "test" | "task";
 
 export type EdgeKind =
   | "depends_on"
@@ -62,6 +62,7 @@ export interface ImpactResult {
   affectedFiles: string[];
   affectedDocs: string[];
   affectedReqs: string[];
+  affectedTasks: string[];
   drifted: DriftEntry[];
   summary?: ImpactSummary;
 }
@@ -70,6 +71,7 @@ export interface ImpactSummary {
   docs: number;
   reqs: number;
   files: number;
+  tasks: number;
 }
 
 export interface DriftEntry {
@@ -268,6 +270,30 @@ export interface ReqPatternConfig {
   codeId?: string;
 }
 
+// Convention preset for extracting task IDs from list items in a Markdown file,
+// plus the SDD tool's cross-linking tag syntax. Built-ins (spec-kit, kiro) ship in
+// parsers/markdown.ts; users add tools like OpenSpec via `.artgraph.json`
+// `taskConventions`. See specs/005-speckit-remaining/data-model.md §2.
+export interface TaskConventionPreset {
+  name: string;
+  fileStems: string[];
+  /** Regex extracting the task ID from a list item's first paragraph. capture group 1 = task ID. */
+  taskIdRe: string;
+  /**
+   * Optional regex extracting `implements`-edge target IDs from the task's listItem subtree.
+   * Each match's capture group 1 becomes one edge target. Applied with /g semantics.
+   * Omit if the SDD tool doesn't express implementation pointers (e.g. Kiro).
+   */
+  implementsTagRe?: string;
+  /**
+   * Optional regex extracting `verifies`-edge target IDs from the task's listItem subtree.
+   * Each match's capture group 1 becomes one edge target. Applied with /g semantics.
+   * Examples: spec-kit's `[REQ-...]` brackets; kiro's `_Requirements: X, Y, Z_` lists
+   * (the regex iterates each ID via lookbehind-free alternation).
+   */
+  verifiesTagRe?: string;
+}
+
 export interface TestResultRecord {
   reqId: string;
   testName: string;
@@ -301,6 +327,14 @@ export interface ArtgraphConfig {
   docGraph?: DocGraphConfig;
   mode?: "file" | "symbol";
   testResultPaths?: string[];
+  taskConventions?: TaskConventionPreset[];
+  /**
+   * Names of built-in task-convention presets to disable. With a built-in
+   * disabled the user may supply a `taskConventions` entry of the same name
+   * (e.g. to ship a Kiro variant that uses a checkbox-less ID format).
+   * Without this opt-out, built-ins silently shadow any user override.
+   */
+  disableBuiltinTaskConventions?: string[];
 }
 
 export const DEFAULT_CONFIG: ArtgraphConfig = {
