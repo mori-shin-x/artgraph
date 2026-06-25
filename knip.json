@@ -1,5 +1,5 @@
 {
   "ignore": [".claude/**", "tests/fixtures/**"],
-  "ignoreDependencies": ["oxfmt", "oxlint"],
+  "ignoreDependencies": ["oxfmt", "oxlint", "@typescript/native-preview"],
   "ignoreExportsUsedInFile": true
 }
