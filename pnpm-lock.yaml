@@ -7,6 +7,31 @@ settings:
 importers:
 
   .:
+    dependencies:
+      commander:
+        specifier: ^13.1.0
+        version: 13.1.0
+      glob:
+        specifier: ^11.0.2
+        version: 11.1.0
+      mdast-util-to-string:
+        specifier: ^4.0.0
+        version: 4.0.0
+      remark-parse:
+        specifier: ^11.0.0
+        version: 11.0.0
+      ts-morph:
+        specifier: ^25.0.0
+        version: 25.0.1
+      unified:
+        specifier: ^11.0.5
+        version: 11.0.5
+      unist-util-visit:
+        specifier: ^5.0.0
+        version: 5.1.0
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
     devDependencies:
       '@types/node':
         specifier: ^22.15.0
