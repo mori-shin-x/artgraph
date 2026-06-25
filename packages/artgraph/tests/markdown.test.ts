@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import { resolve } from "node:path";
-import { writeFileSync, unlinkSync, mkdirSync, rmdirSync } from "node:fs";
-import { parseMarkdown } from "../src/parsers/markdown.js";
+import { writeFileSync, unlinkSync, mkdirSync, rmdirSync, rmSync } from "node:fs";
+import { parseMarkdown, stripAnnotations, extractAnnotations } from "../src/parsers/markdown.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
 
@@ -179,6 +179,87 @@ artgraph:
         expect(result.warnings).toHaveLength(1);
         expect(result.warnings[0].type).toBe("invalid-relation");
         expect(result.warnings[0].key).toBe("extends");
+      } finally {
+        unlinkSync(tmpPath);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+  });
+
+  describe("opening fence tolerance", () => {
+    it("should accept frontmatter whose opening fence has trailing whitespace", () => {
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-fence-trailing-ws");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const tmpPath = resolve(tmpSpecs, "fence.md");
+      // `---` followed by one space then `\t`, then a normal closing fence.
+      writeFileSync(
+        tmpPath,
+        "--- \t\nartgraph:\n  node_id: \"doc:fence-trailing\"\n---\n# Body\n",
+      );
+      try {
+        const result = parseMarkdown(tmpPath, { rootDir: tmpRoot });
+        const doc = result.nodes.find((n) => n.kind === "doc");
+        expect(doc?.id).toBe("doc:fence-trailing");
+      } finally {
+        unlinkSync(tmpPath);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+  });
+
+  describe("YAML tag hardening", () => {
+    it("should not inject a Buffer into node.id via !!binary", () => {
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-binary-tag");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const tmpPath = resolve(tmpSpecs, "binary.md");
+      writeFileSync(
+        tmpPath,
+        `---
+artgraph:
+  node_id: !!binary "ZG9jOmJhZA=="
+---
+# Body
+`,
+      );
+      try {
+        const result = parseMarkdown(tmpPath, { rootDir: tmpRoot });
+        const doc = result.nodes.find((n) => n.kind === "doc");
+        expect(typeof doc?.id).toBe("string");
+        // !!binary is not resolved → typeof string guard at the consumption site
+        // also keeps a Buffer out of node.id even if a future yaml version
+        // changed the default.
+        expect(Buffer.isBuffer(doc?.id)).toBe(false);
+      } finally {
+        unlinkSync(tmpPath);
+        rmdirSync(tmpSpecs);
+        rmdirSync(tmpRoot);
+      }
+    });
+
+    it("should fall back to the default doc id when node_id is not a string (e.g. circular alias)", () => {
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-circular-anchor");
+      const tmpSpecs = resolve(tmpRoot, "specs");
+      mkdirSync(tmpSpecs, { recursive: true });
+      const tmpPath = resolve(tmpSpecs, "circular.md");
+      writeFileSync(
+        tmpPath,
+        `---
+artgraph: &a
+  node_id: *a
+---
+# Body
+`,
+      );
+      try {
+        const result = parseMarkdown(tmpPath, { rootDir: tmpRoot });
+        const doc = result.nodes.find((n) => n.kind === "doc");
+        expect(typeof doc?.id).toBe("string");
+        // graph output must remain JSON-serializable
+        expect(() => JSON.stringify(doc)).not.toThrow();
       } finally {
         unlinkSync(tmpPath);
         rmdirSync(tmpSpecs);
@@ -895,5 +976,343 @@ artgraph:
         rmdirSync(tmpDir);
       }
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// req→req annotation helpers (specs/010-req-req-dependency)
+// ---------------------------------------------------------------------------
+
+describe("stripAnnotations", () => {
+  it("is a no-op when there is no annotation", () => {
+    expect(stripAnnotations("AUTH-002: セッション管理")).toBe("AUTH-002: セッション管理");
+  });
+
+  it("removes a single trailing annotation along with its leading whitespace", () => {
+    expect(stripAnnotations("AUTH-002: セッション (depends_on: AUTH-001)")).toBe(
+      "AUTH-002: セッション",
+    );
+  });
+
+  it("removes annotations regardless of keyword", () => {
+    expect(stripAnnotations("X (derives_from: Y)")).toBe("X");
+  });
+
+  it("removes multiple annotations on one line", () => {
+    expect(stripAnnotations("X (depends_on: A)(derives_from: B)")).toBe("X");
+  });
+
+  it("tolerates whitespace variations inside annotations", () => {
+    expect(stripAnnotations("X ( depends_on : A , B )")).toBe("X");
+  });
+
+  it("strips empty annotations so they do not affect the hash either", () => {
+    expect(stripAnnotations("X (depends_on:)")).toBe("X");
+    expect(stripAnnotations("X (depends_on: )")).toBe("X");
+  });
+
+  it("hash invariance: stripped text equals the unannotated original", () => {
+    const original = "AUTH-002: セッション管理";
+    const annotated = "AUTH-002: セッション管理 (depends_on: AUTH-001, AUTH-005)";
+    expect(stripAnnotations(annotated)).toBe(original);
+  });
+
+  it("ignores `(depends on ...)` without underscore (no false positive)", () => {
+    expect(stripAnnotations("text (depends on X) more")).toBe("text (depends on X) more");
+  });
+});
+
+describe("extractAnnotations", () => {
+  // Permissive ID pattern for unit-test readability. Validates that IDs start
+  // with an uppercase letter — enough to reject `foo` while accepting terse
+  // identifiers like `A`, `B`, `AUTH-001`.
+  const opts = { filePath: "spec.md", codeIdRE: /^[A-Z][A-Za-z0-9-]*$/ };
+
+  // Case 1: single ID
+  it("extracts a single-ID depends_on annotation", () => {
+    const { extracts, warnings } = extractAnnotations("(depends_on: A)", "X", 1, opts);
+    expect(warnings).toEqual([]);
+    expect(extracts).toEqual([{ reqId: "X", kind: "depends_on", targets: ["A"], sourceLine: 1 }]);
+  });
+
+  // Case 2: multiple IDs
+  it("extracts multiple IDs from one annotation", () => {
+    const { extracts, warnings } = extractAnnotations(
+      "(depends_on: A, B, C)",
+      "X",
+      2,
+      opts,
+    );
+    expect(warnings).toEqual([]);
+    expect(extracts).toEqual([
+      { reqId: "X", kind: "depends_on", targets: ["A", "B", "C"], sourceLine: 2 },
+    ]);
+  });
+
+  // Case 3: derives_from
+  it("extracts derives_from kind", () => {
+    const { extracts } = extractAnnotations("(derives_from: A)", "X", 1, opts);
+    expect(extracts[0].kind).toBe("derives_from");
+  });
+
+  // Case 4: **BOLD**
+  it("strips surrounding **BOLD** from IDs", () => {
+    const { extracts } = extractAnnotations("(depends_on: **A-1**)", "X", 1, opts);
+    expect(extracts[0].targets).toEqual(["A-1"]);
+  });
+
+  // Case 5: whitespace variations
+  it("tolerates whitespace around colon and commas", () => {
+    const { extracts } = extractAnnotations(
+      "( depends_on : A , B )",
+      "X",
+      1,
+      opts,
+    );
+    expect(extracts[0].targets).toEqual(["A", "B"]);
+  });
+
+  // Case 6: same-keyword duplicated on one line → 2 extracts
+  it("treats `(depends_on: A)(depends_on: B)` as two separate extracts", () => {
+    const { extracts } = extractAnnotations(
+      "(depends_on: A)(depends_on: B)",
+      "X",
+      1,
+      opts,
+    );
+    expect(extracts).toHaveLength(2);
+    expect(extracts.map((e) => e.targets)).toEqual([["A"], ["B"]]);
+  });
+
+  // Case 7: mixed keywords on one line
+  it("treats mixed-keyword annotations as separate extracts", () => {
+    const { extracts } = extractAnnotations(
+      "(depends_on: A)(derives_from: B)",
+      "X",
+      1,
+      opts,
+    );
+    expect(extracts).toHaveLength(2);
+    expect(extracts[0].kind).toBe("depends_on");
+    expect(extracts[1].kind).toBe("derives_from");
+  });
+
+  // Case 11: duplicate same-kind same-target produces 2 extracts (dedup is builder's job)
+  it("does not dedup same source/target/kind at extract time (builder handles it)", () => {
+    const { extracts } = extractAnnotations(
+      "(depends_on: A)(depends_on: A)",
+      "X",
+      1,
+      opts,
+    );
+    expect(extracts).toHaveLength(2);
+    expect(extracts.every((e) => e.targets[0] === "A")).toBe(true);
+  });
+
+  // Case 14: underscore-less prose
+  it("ignores `(depends on A)` without underscore (no extract, no warning)", () => {
+    const { extracts, warnings } = extractAnnotations("(depends on A)", "X", 1, opts);
+    expect(extracts).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  // Case 16: uppercase keyword
+  it("ignores uppercase `DEPENDS_ON` (no extract, no warning)", () => {
+    const { extracts, warnings } = extractAnnotations("(DEPENDS_ON: A)", "X", 1, opts);
+    expect(extracts).toEqual([]);
+    expect(warnings).toEqual([]);
+  });
+
+  // Case 17: empty annotation → empty-annotation warning
+  it("emits empty-annotation warning for `(depends_on:)`", () => {
+    const { extracts, warnings } = extractAnnotations("(depends_on:)", "X", 1, opts);
+    expect(extracts).toEqual([]);
+    expect(warnings).toEqual([
+      { type: "empty-annotation", key: "depends_on", filePath: "spec.md" },
+    ]);
+  });
+
+  it("emits empty-annotation warning for `(depends_on: )` (whitespace only)", () => {
+    const { warnings } = extractAnnotations("(depends_on: )", "X", 1, opts);
+    expect(warnings).toEqual([
+      { type: "empty-annotation", key: "depends_on", filePath: "spec.md" },
+    ]);
+  });
+
+  // Case 18: invalid ID → invalid-annotation-id warning
+  it("emits invalid-annotation-id warning when ID does not match codeId pattern", () => {
+    const { extracts, warnings } = extractAnnotations("(depends_on: foo)", "X", 1, opts);
+    expect(extracts).toEqual([]);
+    expect(warnings).toEqual([
+      { type: "invalid-annotation-id", key: "foo", filePath: "spec.md" },
+    ]);
+  });
+
+  it("keeps valid IDs alongside warnings for invalid siblings", () => {
+    const { extracts, warnings } = extractAnnotations(
+      "(depends_on: A, foo, B)",
+      "X",
+      1,
+      opts,
+    );
+    expect(extracts).toEqual([
+      { reqId: "X", kind: "depends_on", targets: ["A", "B"], sourceLine: 1 },
+    ]);
+    expect(warnings).toEqual([
+      { type: "invalid-annotation-id", key: "foo", filePath: "spec.md" },
+    ]);
+  });
+});
+
+// Integration tests through parseMarkdown — exercise list-item annotations as
+// they flow from the actual fixture into nodes/edges/warnings.
+describe("parseMarkdown — req→req annotations on list items (US1)", () => {
+  const fixturePath = resolve(FIXTURE_DIR, "req-req-annotations/list-item.md");
+
+  it("generates annotation edges for the 7 accepted patterns", () => {
+    const { edges } = parseMarkdown(fixturePath);
+    const annotationEdges = edges.filter((e) => e.provenance === "annotation");
+
+    // 1 (AUTH-002→AUTH-001) + 1 (AUTH-003→AUTH-002) + 3 (AUTH-004→A1/A2/A3) +
+    // 1 (AUTH-005→AUTH-001 via BOLD) + 2 (AUTH-006→A1/A2 via whitespace) +
+    // 2 (AUTH-007: depends_on + derives_from parallel) = 10
+    expect(annotationEdges).toHaveLength(10);
+
+    expect(annotationEdges).toContainEqual({
+      source: "AUTH-002",
+      target: "AUTH-001",
+      kind: "depends_on",
+      provenance: "annotation",
+    });
+    expect(annotationEdges).toContainEqual({
+      source: "AUTH-003",
+      target: "AUTH-002",
+      kind: "derives_from",
+      provenance: "annotation",
+    });
+    expect(annotationEdges).toContainEqual({
+      source: "AUTH-007",
+      target: "AUTH-002",
+      kind: "derives_from",
+      provenance: "annotation",
+    });
+  });
+
+  it("emits zero warnings for the prose / quoted / uppercase false-positive lines", () => {
+    const { warnings } = parseMarkdown(fixturePath);
+    // The fixture intentionally includes `(depends on AUTH-001)`, `(DEPENDS_ON: AUTH-001)`,
+    // a quoted-block annotation, and a fenced-code annotation. None should
+    // produce an annotation extract or warning.
+    expect(warnings).toEqual([]);
+  });
+
+  it("AUTH-005 BOLD form resolves to the bare ID target", () => {
+    const { edges } = parseMarkdown(fixturePath);
+    const auth5 = edges.find(
+      (e) => e.source === "AUTH-005" && e.provenance === "annotation",
+    );
+    expect(auth5).toBeDefined();
+    expect(auth5?.target).toBe("AUTH-001");
+  });
+});
+
+describe("parseMarkdown — req→req annotations on Kiro headings (US2)", () => {
+  const fixturePath = resolve(FIXTURE_DIR, "req-req-annotations/heading-kiro.md");
+
+  it("recognises annotations on the first paragraph head/tail and single-line paragraphs", () => {
+    const { edges } = parseMarkdown(fixturePath);
+    const annEdges = edges.filter((e) => e.provenance === "annotation");
+    // Req 2: head line, Req 3: tail line, Req 4: single-line head=tail. = 3 edges.
+    expect(annEdges).toHaveLength(3);
+    expect(annEdges).toContainEqual({
+      source: "Requirement-2",
+      target: "Requirement-1",
+      kind: "depends_on",
+      provenance: "annotation",
+    });
+    expect(annEdges).toContainEqual({
+      source: "Requirement-3",
+      target: "Requirement-2",
+      kind: "depends_on",
+      provenance: "annotation",
+    });
+    expect(annEdges).toContainEqual({
+      source: "Requirement-4",
+      target: "Requirement-1",
+      kind: "depends_on",
+      provenance: "annotation",
+    });
+  });
+
+  it("does NOT generate edges for heading-line or mid-paragraph parens (silent skip)", () => {
+    const { edges, warnings } = parseMarkdown(fixturePath);
+    const annEdges = edges.filter((e) => e.provenance === "annotation");
+    // Requirement-X (heading-line paren) and Requirement-Y (mid-paragraph) must NOT appear.
+    expect(annEdges.find((e) => e.target === "Requirement-X")).toBeUndefined();
+    expect(annEdges.find((e) => e.target === "Requirement-Y")).toBeUndefined();
+    // And silent — no parser warnings for those misplaced parens.
+    expect(warnings).toEqual([]);
+  });
+});
+
+// US3: hash invariance under annotation add/change/remove (SC-003, Constitution I)
+describe("parseMarkdown — contentHash invariance under annotation churn (US3)", () => {
+  // Helper: write a tiny spec.md and return the req's contentHash.
+  const tmpRoot = resolve(import.meta.dirname, "fixtures/_tmp-hash-invariance");
+
+  function hashOf(spec: string, reqId: string): string {
+    mkdirSync(tmpRoot, { recursive: true });
+    const file = resolve(tmpRoot, "spec.md");
+    writeFileSync(file, spec);
+    const { nodes } = parseMarkdown(file);
+    const node = nodes.find((n) => n.id === reqId);
+    if (!node) throw new Error(`req ${reqId} not found in parsed result`);
+    return node.contentHash;
+  }
+
+  afterAll(() => rmSync(tmpRoot, { recursive: true, force: true }));
+
+  // T019: list-item — add / change / remove annotation, hash unchanged
+  describe("list-item req", () => {
+    const baseline = "# Spec\n\n- AUTH-002: セッション管理\n";
+    const added = "# Spec\n\n- AUTH-002: セッション管理 (depends_on: AUTH-001)\n";
+    const changed = "# Spec\n\n- AUTH-002: セッション管理 (depends_on: AUTH-001, AUTH-005)\n";
+    const removed = baseline;
+
+    it("hash is unchanged when an annotation is added", () => {
+      expect(hashOf(added, "AUTH-002")).toBe(hashOf(baseline, "AUTH-002"));
+    });
+
+    it("hash is unchanged when annotation IDs are changed", () => {
+      expect(hashOf(changed, "AUTH-002")).toBe(hashOf(baseline, "AUTH-002"));
+    });
+
+    it("hash is unchanged when an annotation is removed", () => {
+      expect(hashOf(removed, "AUTH-002")).toBe(hashOf(added, "AUTH-002"));
+    });
+  });
+
+  // T020: heading — same invariants
+  describe("heading req (Kiro)", () => {
+    const baseline = "# Spec\n\n## Requirement 2: セッション管理\n\nセッションは 24 時間有効。\n";
+    const addedHead =
+      "# Spec\n\n## Requirement 2: セッション管理\n\n(depends_on: Requirement-1)\nセッションは 24 時間有効。\n";
+    const addedTail =
+      "# Spec\n\n## Requirement 2: セッション管理\n\nセッションは 24 時間有効。 (depends_on: Requirement-1)\n";
+
+    it("hash is unchanged when a head-line annotation is added", () => {
+      expect(hashOf(addedHead, "Requirement-2")).toBe(hashOf(baseline, "Requirement-2"));
+    });
+
+    it("hash is unchanged when a tail-line annotation is added", () => {
+      expect(hashOf(addedTail, "Requirement-2")).toBe(hashOf(baseline, "Requirement-2"));
+    });
+  });
+
+  // T021: regression — body text changes MUST flip the hash (strip is not over-eager)
+  it("body text changes still flip the hash (strip is not over-greedy)", () => {
+    const before = "# Spec\n\n- AUTH-002: セッション管理 (depends_on: AUTH-001)\n";
+    const after = "# Spec\n\n- AUTH-002: セッション維持 (depends_on: AUTH-001)\n";
+    expect(hashOf(before, "AUTH-002")).not.toBe(hashOf(after, "AUTH-002"));
   });
 });

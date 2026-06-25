@@ -899,3 +899,117 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// req→req annotation edges (specs/010-req-req-dependency) — US1 / T011
+// ---------------------------------------------------------------------------
+
+const ANN_FIXTURE_DIR = resolve(
+  import.meta.dirname,
+  "fixtures/req-req-annotations/collision",
+);
+
+const annConfig: ArtgraphConfig = {
+  include: ["src/**/*.ts"],
+  specDirs: ["010-a", "010-b"],
+  testPatterns: ["tests/**/*.ts"],
+  lockFile: ".trace.lock",
+};
+
+describe("buildGraph: req→req annotation edges", () => {
+  it("specDir-aware collision remap routes annotation targets to same specDir", () => {
+    const { graph } = buildGraph(ANN_FIXTURE_DIR, annConfig);
+
+    // AUTH-001 collides → both registered as qualified IDs.
+    expect(graph.nodes.has("010-a/AUTH-001")).toBe(true);
+    expect(graph.nodes.has("010-b/AUTH-001")).toBe(true);
+
+    const annEdges = graph.edges.filter((e) => e.provenance === "annotation");
+    // AUTH-002 in 010-a should point at 010-a/AUTH-001 (not 010-b/AUTH-001).
+    expect(annEdges).toContainEqual({
+      source: "AUTH-002",
+      target: "010-a/AUTH-001",
+      kind: "depends_on",
+      provenance: "annotation",
+    });
+    // AUTH-003 in 010-b should point at 010-b/AUTH-001.
+    expect(annEdges).toContainEqual({
+      source: "AUTH-003",
+      target: "010-b/AUTH-001",
+      kind: "depends_on",
+      provenance: "annotation",
+    });
+  });
+
+  it("emits orphan-edge when annotation references an unknown id", () => {
+    const tmpDir = resolve(import.meta.dirname, "fixtures/req-req-annotations/_tmp-orphan");
+    const specDir = resolve(tmpDir, "010-c");
+    mkdirSync(specDir, { recursive: true });
+    const specFile = resolve(specDir, "spec.md");
+    writeFileSync(
+      specFile,
+      "# orphan test\n\n- AUTH-100: 何か (depends_on: GHOST-999)\n",
+    );
+
+    try {
+      const { warnings } = buildGraph(tmpDir, {
+        ...annConfig,
+        specDirs: ["010-c"],
+      });
+      const orphan = warnings.find(
+        (w) => w.type === "orphan-edge" && w.id === "GHOST-999",
+      );
+      expect(orphan).toBeDefined();
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("dedups duplicate annotation edges to a single edge", () => {
+    const tmpDir = resolve(import.meta.dirname, "fixtures/req-req-annotations/_tmp-dedup");
+    const specDir = resolve(tmpDir, "specs");
+    mkdirSync(specDir, { recursive: true });
+    writeFileSync(
+      resolve(specDir, "spec.md"),
+      "# dedup test\n\n- AUTH-001: 認証\n- AUTH-002: 二重 (depends_on: AUTH-001)(depends_on: AUTH-001)\n",
+    );
+
+    try {
+      const { graph } = buildGraph(tmpDir, {
+        ...annConfig,
+        specDirs: ["specs"],
+      });
+      const annEdges = graph.edges.filter(
+        (e) => e.provenance === "annotation" && e.source === "AUTH-002",
+      );
+      expect(annEdges).toHaveLength(1);
+      expect(annEdges[0].target).toBe("AUTH-001");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("drops self-referential annotation edges with a warning", () => {
+    const tmpDir = resolve(import.meta.dirname, "fixtures/req-req-annotations/_tmp-self");
+    const specDir = resolve(tmpDir, "specs");
+    mkdirSync(specDir, { recursive: true });
+    writeFileSync(
+      resolve(specDir, "spec.md"),
+      "# self ref\n\n- AUTH-001: 認証 (depends_on: AUTH-001)\n",
+    );
+
+    try {
+      const { graph, warnings } = buildGraph(tmpDir, {
+        ...annConfig,
+        specDirs: ["specs"],
+      });
+      const annEdges = graph.edges.filter((e) => e.provenance === "annotation");
+      expect(annEdges).toEqual([]);
+      const selfRef = warnings.find((w) => w.type === "self-reference-annotation");
+      expect(selfRef).toBeDefined();
+      expect(selfRef?.id).toBe("AUTH-001");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
