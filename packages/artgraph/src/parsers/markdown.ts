@@ -787,6 +787,13 @@ export function extractAnnotations(
   return { extracts, warnings };
 }
 
+// Single fence-line grammar shared by parseFrontmatter and findFrontmatterBounds.
+// Trailing whitespace is accepted (gray-matter compat, some editors auto-insert it)
+// but leading whitespace is NOT — the parser treats only column-0 `---` as a fence.
+// Keep the two consumers locked to this regex so rename's frontmatterBounds and the
+// parser cannot drift apart (#44).
+const FRONTMATTER_FENCE_RE = /^---[ \t]*$/;
+
 // Minimal YAML-frontmatter splitter. Replaces gray-matter to drop the js-yaml v3
 // advisory chain (GHSA-h67p-54hq-rp68 / issue #42); the YAML body is parsed by
 // eemeli/yaml which is already a workspace dependency.
@@ -795,12 +802,12 @@ function parseFrontmatter(raw: string): { data: Record<string, any>; content: st
   const firstNl = text.indexOf("\n");
   if (firstNl < 0) return { data: {}, content: raw };
   const firstLine = text.slice(0, firstNl).replace(/\r$/, "");
-  // Trailing whitespace on the opening fence is symmetric with the closing fence
-  // regex below — gray-matter accepted `--- ` / `---\t` and some editors auto-insert
-  // it, so rejecting strictly would silently drop the whole frontmatter.
-  if (!/^---[ \t]*$/.test(firstLine)) return { data: {}, content: raw };
+  if (!FRONTMATTER_FENCE_RE.test(firstLine)) return { data: {}, content: raw };
 
   const rest = text.slice(firstNl + 1);
+  // Closing fence: a line whose content matches FRONTMATTER_FENCE_RE, anchored
+  // to a line boundary (start of `rest` or after `\r?\n`) and followed by `\r?\n`
+  // or EOF.
   const closeRe = /(?:^|\r?\n)---[ \t]*(?:\r?\n|$)/;
   const match = closeRe.exec(rest);
   if (!match) return { data: {}, content: raw };
@@ -818,4 +825,27 @@ function parseFrontmatter(raw: string): { data: Record<string, any>; content: st
     throw new Error("frontmatter is not a YAML mapping");
   }
   return { data: parsed as Record<string, any>, content };
+}
+
+// Line-based view of parseFrontmatter's fence detection — returns the 0-based
+// indices of the opening and closing fence lines in `raw.split("\n")`, or null
+// when the file has no frontmatter. Used by rename.ts so the rewriter and the
+// parser cannot diverge on what counts as a fence (issue #44). The grammar is
+// identical to parseFrontmatter: opening fence on line 0 only, FRONTMATTER_FENCE_RE
+// on both fences, and a leading BOM tolerated. Trailing `\r` from CRLF files is
+// stripped per line so this is safe to call before any newline normalization.
+export function findFrontmatterBounds(
+  raw: string,
+): { start: number; end: number } | null {
+  const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  const lines = text.split("\n");
+  if (lines.length < 2) return null;
+  const firstLine = lines[0].replace(/\r$/, "");
+  if (!FRONTMATTER_FENCE_RE.test(firstLine)) return null;
+  for (let i = 1; i < lines.length; i++) {
+    if (FRONTMATTER_FENCE_RE.test(lines[i].replace(/\r$/, ""))) {
+      return { start: 0, end: i };
+    }
+  }
+  return null;
 }
