@@ -349,6 +349,68 @@ describe("expandFrontmatterDependsOn", () => {
     expect(content).not.toContain('"REQ-001"');
     expect(changes).toHaveLength(2);
   });
+
+  // ── Issue #44 parity: same fence-acceptance contract as rewriteFrontmatter ──
+  //
+  // expandFrontmatterDependsOn was originally rewritten to consume the same
+  // findFrontmatterBounds helper, but the regression tests only landed on the
+  // rewriteFrontmatter side. These three mirror tests pin the same invariants
+  // so a future revert/divergence on this code path is caught locally.
+
+  it("does NOT treat a mid-document `---` block as frontmatter (issue #44)", () => {
+    const input = [
+      "# Title",
+      "",
+      "Some body prose.",
+      "",
+      "---",
+      "depends_on:",
+      '  - "REQ-001"',
+      "---",
+      "",
+      "More body.",
+    ].join("\n");
+    const { content, changes } = expandFrontmatterDependsOn(input, "REQ-001", [
+      "REQ-101",
+      "REQ-102",
+    ]);
+    expect(content).toBe(input);
+    expect(changes).toHaveLength(0);
+  });
+
+  it("does NOT treat an indented `   ---` as the opening fence (issue #44)", () => {
+    const input = [
+      "   ---",
+      "depends_on:",
+      '  - "REQ-001"',
+      "---",
+      "# Body",
+    ].join("\n");
+    const { content, changes } = expandFrontmatterDependsOn(input, "REQ-001", [
+      "REQ-101",
+      "REQ-102",
+    ]);
+    expect(content).toBe(input);
+    expect(changes).toHaveLength(0);
+  });
+
+  it("still accepts trailing whitespace on fences (gray-matter parity)", () => {
+    const input = [
+      "--- ",
+      "depends_on:",
+      '  - "REQ-001"',
+      "---\t",
+      "# Body",
+    ].join("\n");
+    const { content, changes } = expandFrontmatterDependsOn(input, "REQ-001", [
+      "REQ-101",
+      "REQ-102",
+    ]);
+    expect(content).toContain('  - "REQ-101"');
+    expect(content).toContain('  - "REQ-102"');
+    expect(content).not.toContain('"REQ-001"');
+    expect(changes).toHaveLength(2);
+  });
 });
 
 // ── rewriteFile ─────────────────────────────────────────────────────
