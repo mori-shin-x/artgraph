@@ -1,0 +1,68 @@
+name: Bug report
+description: Report a bug in artgraph
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please include enough information to reproduce the bug. A minimal repro repo or command output makes it much easier to prioritize.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is happening, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: |
+        The minimal steps to reproduce. Include the `artgraph` command(s), the relevant file layout, the expected result, and the actual result.
+      placeholder: |
+        1. `npx artgraph init`
+        2. `artgraph scan`
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / error log
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: artgraph-version
+    attributes:
+      label: artgraph version
+      placeholder: e.g. 0.1.0 / commit hash
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version
+      placeholder: e.g. 22.13.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: e.g. macOS 15 / Ubuntu 24.04 / Windows 11
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots, related issues, or any other context.

@@ -1,0 +1,30 @@
+name: Feature request
+description: Propose a new feature or behavior change
+title: "[feat] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What is the current pain point? When does it bite?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What feature, behavior, or API would solve it?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds, similar features in other tools, etc.
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Related issues, references, expected use cases.
