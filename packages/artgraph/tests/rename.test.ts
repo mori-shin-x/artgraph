@@ -274,6 +274,57 @@ describe("rewriteFrontmatter", () => {
     const { content } = rewriteFrontmatter(input, "REQ-002", "REQ-200");
     expect(content).toContain('{ id: "REQ-200", relation: implements }');
   });
+
+  // ── Issue #44: parser/rewriter acceptance-rule parity ───────────────
+  //
+  // The local frontmatterBounds used to accept any `---` (via .trim()), so
+  // a mid-document horizontal rule paired with another `---` later in the
+  // file was mis-identified as a frontmatter region and IDs inside got
+  // silently rewritten — even though parseFrontmatter never extracted any
+  // frontmatter from such a file. After the unification both modules share
+  // findFrontmatterBounds and only honour a fence on line 0.
+
+  it("does NOT treat a mid-document `---` block as frontmatter (issue #44)", () => {
+    const input = [
+      "# Title",
+      "",
+      "Some body prose.",
+      "",
+      "---",
+      'node_id: "doc:old"',
+      "---",
+      "",
+      "More body.",
+    ].join("\n");
+    const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
+    // The parser sees no frontmatter here, so the rewriter must agree.
+    expect(content).toBe(input);
+    expect(changes).toHaveLength(0);
+  });
+
+  it("does NOT treat an indented `   ---` as the opening fence (issue #44)", () => {
+    const input = [
+      "   ---",
+      'node_id: "doc:old"',
+      "---",
+      "# Body",
+    ].join("\n");
+    const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
+    expect(content).toBe(input);
+    expect(changes).toHaveLength(0);
+  });
+
+  it("still accepts trailing whitespace on fences (gray-matter parity)", () => {
+    const input = [
+      "--- ",
+      'node_id: "doc:old"',
+      "---\t",
+      "# Body",
+    ].join("\n");
+    const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
+    expect(content).toContain('node_id: "doc:new"');
+    expect(changes).toHaveLength(1);
+  });
 });
 
 // ── expandFrontmatterDependsOn (F5) ─────────────────────────────────
