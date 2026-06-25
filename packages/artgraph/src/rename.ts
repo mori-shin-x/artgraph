@@ -1,5 +1,9 @@
 import type { ReqPatternConfig, TaskConventionPreset } from "./types.js";
-import { BUILTIN_TASK_PRESETS, maskInlineProtectedSpans } from "./parsers/markdown.js";
+import {
+  BUILTIN_TASK_PRESETS,
+  findFrontmatterBounds,
+  maskInlineProtectedSpans,
+} from "./parsers/markdown.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -388,27 +392,6 @@ export function rewriteTestTags(
 const FM_BLOCK_KEY_RE = /^(\s*)(depends_on|derives_from)\s*:(.*)$/;
 const FM_NODE_ID_RE = /^(\s*node_id:\s*["']?)(.+?)(["']?\s*)$/;
 
-interface FrontmatterBounds {
-  start: number;
-  end: number;
-}
-
-function frontmatterBounds(lines: string[]): FrontmatterBounds | null {
-  let start = -1;
-  let end = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() === "---") {
-      if (start === -1) start = i;
-      else {
-        end = i;
-        break;
-      }
-    }
-  }
-  if (start === -1 || end === -1) return null;
-  return { start, end };
-}
-
 /**
  * True for a line that is part of an active `depends_on`/`derives_from` block
  * sequence (a `- …` list item or a blank continuation line).
@@ -435,7 +418,7 @@ export function rewriteFrontmatter(
   const lines = content.split("\n");
   const changes: RewriteChange[] = [];
 
-  const bounds = frontmatterBounds(lines);
+  const bounds = findFrontmatterBounds(content);
   if (!bounds) return { content, changes };
 
   const idRe = idBoundaryRegex(oldId);
@@ -502,7 +485,7 @@ export function expandFrontmatterDependsOn(
   const lines = content.split("\n");
   const changes: RewriteChange[] = [];
 
-  const bounds = frontmatterBounds(lines);
+  const bounds = findFrontmatterBounds(content);
   if (!bounds || newIds.length === 0) return { content, changes };
 
   const idRe = idBoundaryRegex(oldId);
