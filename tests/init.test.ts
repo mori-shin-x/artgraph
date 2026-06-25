@@ -487,16 +487,16 @@ describe("installSkills (direct invocation)", () => {
 });
 
 describe("skill template <-> dogfood sync", () => {
-  // Guards against drift between packages/artgraph/templates/skills/ (the
-  // distributed source of truth) and .claude/skills/ (this repo's dogfood
-  // copy). If one is updated without the other, this test fails.
+  // Guards against drift between templates/skills/ (the distributed source
+  // of truth) and .claude/skills/ (this repo's dogfood copy). If one is
+  // updated without the other, this test fails.
   function sha256(path: string): string {
     return createHash("sha256").update(readFileSync(path)).digest("hex");
   }
 
   const templateDir = resolve(import.meta.dirname, "..", "templates", "skills");
-  // From packages/artgraph/tests/ up two levels to repo root, then into .claude/.
-  const dogfoodDir = resolve(import.meta.dirname, "..", "..", "..", ".claude", "skills");
+  // From tests/ up one level to repo root, then into .claude/.
+  const dogfoodDir = resolve(import.meta.dirname, "..", ".claude", "skills");
 
   it("every template has a matching dogfood file with identical content", () => {
     // Only run when the dogfood directory actually exists (i.e. inside this

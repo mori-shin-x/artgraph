@@ -37,7 +37,7 @@ export function renderTemplate(template: string, vars: Record<string, string>): 
 const TEMPLATES_ROOT = resolve(import.meta.dirname, "../../templates/integrate");
 
 /**
- * Read a template file from `packages/artgraph/templates/integrate/<relPath>`.
+ * Read a template file from `templates/integrate/<relPath>`.
  * Throws if the file does not exist (likely a packaging bug).
  */
 export function loadTemplate(relPath: string): string {

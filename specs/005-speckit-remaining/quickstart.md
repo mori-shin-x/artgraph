@@ -3,7 +3,7 @@
 **Date**: 2026-06-24
 **Audience**: 実装後のレビュアー / QA / 統合テスト担当
 
-実装完了後、本機能が end-to-end で動くことを確認するための最小手順。完全なテストは `packages/artgraph/tests/` 内のユニット・統合テスト（vitest）が担保する。本ドキュメントは **シナリオレベル** の手動検証に絞る。
+実装完了後、本機能が end-to-end で動くことを確認するための最小手順。完全なテストは `tests/` 内のユニット・統合テスト（vitest）が担保する。本ドキュメントは **シナリオレベル** の手動検証に絞る。
 
 ---
 
@@ -11,7 +11,7 @@
 
 - Node.js >= 20
 - pnpm install 済み
-- 本ブランチ (`feat/issue-28`) をビルド済み: `pnpm --filter artgraph build`
+- 本ブランチ (`feat/issue-28`) をビルド済み: `pnpm build`
 
 ---
 

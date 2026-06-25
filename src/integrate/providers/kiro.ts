@@ -22,7 +22,7 @@ import type { InstallOptions, IntegrateResult, IntegrationProvider } from "../..
 
 /** Steering file path relative to the repo root. */
 const STEERING_REL = ".kiro/steering/spectrace.md";
-/** Bundled template under packages/artgraph/templates/integrate/kiro/. */
+/** Bundled template under templates/integrate/kiro/. */
 const TEMPLATE_REL = "kiro/spectrace.md";
 
 export class KiroProvider implements IntegrationProvider {
