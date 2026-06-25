@@ -242,3 +242,50 @@ describe("resolveStartIds (symbol mode)", () => {
     expect(defaultSymbols).toHaveLength(0);
   });
 });
+
+// Meta-review remediation: task-source edges must not "cover" a req for the
+// gate, must not be reported as orphans (planning artefacts), and must surface
+// in impact() under their own `affectedTasks` channel rather than vanishing.
+describe("task-source edge semantics (meta-review remediation)", () => {
+  function makeTaskGraph() {
+    return {
+      nodes: new Map([
+        ["FR-001", { id: "FR-001", kind: "req", filePath: "specs/auth.md", contentHash: "h1" }],
+        ["T001", { id: "T001", kind: "task", filePath: "specs/auth-tasks.md", contentHash: "h2" }],
+      ] as const),
+      edges: [
+        { source: "T001", target: "FR-001", kind: "implements" as const },
+        // verifies edge pointing at a Kiro-style numeric ID that is NOT in the
+        // node map — the task-source filter must keep this from being reported.
+        { source: "T001", target: "1.1", kind: "verifies" as const },
+      ],
+    };
+  }
+
+  it("findUncovered ignores task → implements (req must still be flagged uncovered)", () => {
+    const graph = makeTaskGraph();
+    const uncovered = findUncovered(graph as any);
+    expect(uncovered).toContain("FR-001");
+  });
+
+  it("findOrphans does not warn for task-source verifies with missing target", () => {
+    const graph = makeTaskGraph();
+    const orphans = findOrphans(graph as any);
+    expect(orphans.some((o) => o.includes("T001 -> 1.1"))).toBe(false);
+  });
+
+  it("impact() places task nodes into affectedTasks and summary.tasks", () => {
+    const graph = makeTaskGraph();
+    const result = impact(graph as any, ["T001"], {});
+    expect(result.affectedTasks).toContain("T001");
+    expect(result.affectedReqs).not.toContain("T001"); // not silently bucketed as req
+    expect(result.summary?.tasks).toBe(1);
+  });
+
+  it("ImpactResult bookkeeping has the new affectedTasks shape", () => {
+    const graph = makeTaskGraph();
+    const result = impact(graph as any, ["FR-001"], {});
+    expect(Array.isArray(result.affectedTasks)).toBe(true);
+    expect(result.summary && typeof result.summary.tasks).toBe("number");
+  });
+});

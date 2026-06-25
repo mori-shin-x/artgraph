@@ -83,7 +83,13 @@ export function buildGraph(
   for (const specDirName of config.specDirs) {
     const specFiles = globSync(resolve(rootDir, specDirName, "**/*.md"));
     for (const file of specFiles) {
-    const result = parseMarkdown(file, { rootDir, specDirPrefix: specDirName, reqPatterns: config.reqPatterns });
+    const result = parseMarkdown(file, {
+      rootDir,
+      specDirPrefix: specDirName,
+      reqPatterns: config.reqPatterns,
+      taskConventions: config.taskConventions,
+      disableBuiltinTaskConventions: config.disableBuiltinTaskConventions,
+    });
     const relFile = relative(rootDir, file);
     const specDir = extractSpecDir(relFile, config.specDirs);
     // Compute what the auto-generated doc ID would be for this file
@@ -105,7 +111,7 @@ export function buildGraph(
     const fileReqs: CollectedReq[] = [];
 
     for (const node of result.nodes) {
-      if (node.kind === "req") {
+      if (node.kind === "req" || node.kind === "task") {
         // T028: reserved-prefix warning
         if (RESERVED_PREFIXES.some((p) => node.id.startsWith(p))) {
           const prefix = RESERVED_PREFIXES.find((p) => node.id.startsWith(p))!;
@@ -113,7 +119,7 @@ export function buildGraph(
             type: "reserved-prefix",
             id: node.id,
             files: [node.filePath],
-            message: `req ID uses reserved prefix "${prefix}". This may conflict with auto-generated node IDs`,
+            message: `${node.kind} ID uses reserved prefix "${prefix}". This may conflict with auto-generated node IDs`,
           });
         }
         const cr: CollectedReq = { id: node.id, specDir, node, edges: [] };
@@ -132,6 +138,9 @@ export function buildGraph(
     }
 
     for (const edge of result.edges) {
+      // Match the source against just this file's reqs/tasks so a same-raw-ID
+      // entry in another spec dir (e.g. `T001` in two plan.md files) lands on
+      // the right collision-qualified node. fileReqs is rebuilt per file above.
       const req = fileReqs.find((c) => c.node.id === edge.source || c.id === edge.source);
       if (req) {
         req.edges.push(edge);
@@ -157,18 +166,22 @@ export function buildGraph(
     }
   }
 
-  // Pass 2: register nodes with qualified IDs for collisions
+  // Pass 2a: build idMapping up front so per-req edge remap below can resolve
+  // forward references (e.g. `T001` referencing `T002` later in `collected`).
+  // Without this the order of `collected` would silently decide whether a
+  // colliding target gets requalified or stays as the bare ID.
   const idMapping = new Map<string, string>();
-
   for (const req of collected) {
-    let finalId: string;
-    if (collidingIds.has(req.id)) {
-      finalId = `${req.specDir}/${req.id}`;
-    } else {
-      finalId = req.id;
-    }
-
+    const finalId = collidingIds.has(req.id) ? `${req.specDir}/${req.id}` : req.id;
     idMapping.set(`${req.specDir}/${req.id}`, finalId);
+  }
+
+  // Pass 2b: register nodes and emit edges with collision-aware remapping for
+  // BOTH source and target. Task-emitted edges (e.g. `T001 @impl(REQ-001)`)
+  // live in `req.edges`, so without this they would stay pointing at the raw
+  // colliding ID and silently orphan after qualification.
+  for (const req of collected) {
+    const finalId = idMapping.get(`${req.specDir}/${req.id}`)!;
 
     const node: GraphNode = {
       ...req.node,
@@ -187,12 +200,16 @@ export function buildGraph(
 
     for (const edge of req.edges) {
       const mappedSource = edge.source === req.id ? finalId : edge.source;
-      let mappedTarget = edge.target === req.id ? finalId : edge.target;
-      // T011/issue-13: resolve req→req annotation targets specDir-aware so a
-      // bare `(depends_on: AUTH-001)` from a 010-a req lands on 010-a/AUTH-001
-      // when AUTH-001 also exists in 010-b. Falls back to a global suffix
-      // lookup for non-colliding cross-specDir references.
-      if (edge.provenance === "annotation" && edge.target !== req.id) {
+      let mappedTarget: string;
+      if (edge.target === req.id) {
+        // self-edge — author wrote their own ID as the target
+        mappedTarget = finalId;
+      } else {
+        // Apply the same specDir-aware resolution to ALL req-emitted edges,
+        // not just annotation provenance: a task `@impl(FR-001)` in dir authA
+        // must bind to authA/FR-001 when FR-001 also exists in exportB, and
+        // an ambiguous task→colliding-req with no same-dir match is dropped
+        // (instead of leaking as a bare-ID orphan edge — meta-review #3).
         const resolved = resolveAnnotationTarget(
           edge.target,
           req.specDir,
@@ -200,9 +217,9 @@ export function buildGraph(
           collidingIds,
         );
         if (resolved.ambiguous) {
-          // research.md R6: ambiguous annotation targets do NOT produce an
-          // edge. Emitting ambiguous-id + the bare-id edge previously caused
-          // a duplicate orphan-edge warning downstream (meta-review C7).
+          // research.md R6 / meta-review #3: ambiguous targets do NOT produce
+          // an edge. Emitting `ambiguous-id` warning is sufficient — a stray
+          // bare-id edge would otherwise trigger a duplicate orphan-edge warning.
           const dirs = idToDirs.get(edge.target) ?? new Set<string>();
           warnings.push({
             type: "ambiguous-id",
@@ -275,16 +292,19 @@ export function buildGraph(
     }
   }
 
-  // T045: Generate contains edges (doc -> req within the same file)
-  // Use autoContains alone; doc nodes with explicit node_id exist even when autoNodes=false
+  // T045 / Issue #28: Generate contains edges (doc -> req|task within the same file).
+  // Use autoContains alone; doc nodes with explicit node_id exist even when autoNodes=false.
   if (autoContains) {
     const docNodes = [...nodes.values()].filter((n) => n.kind === "doc");
     for (const doc of docNodes) {
-      for (const [reqId, reqNode] of nodes) {
-        if (reqNode.kind === "req" && reqNode.filePath === doc.filePath) {
+      for (const [childId, childNode] of nodes) {
+        if (
+          (childNode.kind === "req" || childNode.kind === "task") &&
+          childNode.filePath === doc.filePath
+        ) {
           edges.push({
             source: doc.id,
-            target: reqId,
+            target: childId,
             kind: "contains",
           });
         }

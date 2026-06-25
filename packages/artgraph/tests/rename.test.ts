@@ -83,6 +83,24 @@ describe("rewriteSpecListItem", () => {
     expect(content).toBe(input);
     expect(changes).toHaveLength(0);
   });
+
+  // Meta-review #5: task-ID rename was previously half-applied because the
+  // rewriter only knew about req patterns. Now it also rewrites spec-kit /
+  // kiro task definition lines so `rename --from T001 --to T999` doesn't
+  // leave the spec side intact while flipping the code side.
+  it("rewrites a spec-kit task definition `- [X] T001 ...`", () => {
+    const input = "- [X] T001 implement login @impl(auth-login)";
+    const { content, changes } = rewriteSpecListItem(input, "T001", "T999");
+    expect(content).toBe("- [X] T999 implement login @impl(auth-login)");
+    expect(changes).toHaveLength(1);
+  });
+
+  it("rewrites a kiro hierarchical task ID `- [x] 1.1 ...`", () => {
+    const input = "- [x] 1.1 Stripe integration";
+    const { content, changes } = rewriteSpecListItem(input, "1.1", "1.5");
+    expect(content).toBe("- [x] 1.5 Stripe integration");
+    expect(changes).toHaveLength(1);
+  });
 });
 
 // ── rewriteSpecHeading ──────────────────────────────────────────────
@@ -633,6 +651,35 @@ describe("isValidTargetId", () => {
     expect(isValidTargetId("REQ-001a")).toBe(false);
     expect(isValidTargetId("req-1")).toBe(false);
     expect(isValidTargetId("doc:")).toBe(false);
+  });
+
+  it("accepts built-in task ID shapes (spec-kit T###, kiro N / N.M)", () => {
+    expect(isValidTargetId("T001")).toBe(true);
+    expect(isValidTargetId("T999")).toBe(true);
+    expect(isValidTargetId("1")).toBe(true);
+    expect(isValidTargetId("1.1")).toBe(true);
+    expect(isValidTargetId("2.3.4")).toBe(true);
+  });
+
+  it("respects disableBuiltinTaskConventions when checking task shapes", () => {
+    // Disabling spec-kit drops the `T\d+` acceptance.
+    expect(isValidTargetId("T001", undefined, undefined, ["spec-kit"])).toBe(false);
+    // Kiro still accepted.
+    expect(isValidTargetId("1.1", undefined, undefined, ["spec-kit"])).toBe(true);
+  });
+
+  it("accepts an ID matched by a user-defined taskConvention preset", () => {
+    // Use a lowercase shape so it doesn't accidentally match the canonical
+    // requirement-ID token (`[A-Z][A-Za-z]*-\d+`).
+    const presets = [
+      {
+        name: "openspec",
+        fileStems: ["tasks"],
+        taskIdRe: "^(os-\\d+)$",
+      },
+    ];
+    expect(isValidTargetId("os-77", undefined, presets)).toBe(true);
+    expect(isValidTargetId("os-abc", undefined, presets)).toBe(false);
   });
 });
 

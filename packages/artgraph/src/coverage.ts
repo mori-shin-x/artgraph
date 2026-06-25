@@ -22,8 +22,17 @@ export function computeCoverage(graph: ArtifactGraph, testResults?: TestResultMa
     else map.set(target, [source]);
   };
   for (const e of graph.edges) {
-    if (e.kind === "implements") indexEdge(implByTarget, e.target, e.source);
-    else if (e.kind === "verifies") indexEdge(testByTarget, e.target, e.source);
+    if (e.kind === "implements") {
+      // task → implements → req is a planning relation, not a code-claim. Filtering
+      // here keeps a req that only has `task → implements` from being upgraded out
+      // of `untagged` (data-model.md §7: task は coverage 集計対象外).
+      if (graph.nodes.get(e.source)?.kind === "task") continue;
+      indexEdge(implByTarget, e.target, e.source);
+    } else if (e.kind === "verifies") {
+      // Same rule for verifies: only code-side test sources prove a req is verified.
+      if (graph.nodes.get(e.source)?.kind === "task") continue;
+      indexEdge(testByTarget, e.target, e.source);
+    }
   }
 
   for (const [id, node] of graph.nodes) {
