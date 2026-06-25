@@ -675,6 +675,231 @@ describe("buildGraph: convention inference (C-3)", () => {
   });
 });
 
+describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
+  const tasksRoot = resolve(FIXTURE_DIR, "tasks");
+  const tasksConfig: ArtgraphConfig = {
+    include: ["src/**/*.ts"],
+    specDirs: ["specs"],
+    testPatterns: ["tests/**/*.ts"],
+    lockFile: ".trace.lock",
+  };
+
+  it("generates doc → task contains edges within plan.md", () => {
+    const { graph } = buildGraph(resolve(tasksRoot, "speckit-plan"), tasksConfig);
+    const tasks = [...graph.nodes.values()].filter((n) => n.kind === "task");
+    expect(tasks.map((n) => n.id).sort()).toEqual(["T001", "T002"]);
+
+    const contains = graph.edges.filter(
+      (e) => e.kind === "contains" && e.source === "doc:auth/plan.md",
+    );
+    expect(contains.map((e) => e.target).sort()).toEqual(["T001", "T002"]);
+  });
+
+  it("qualifies task IDs with specDir on collision", () => {
+    const { graph } = buildGraph(
+      resolve(tasksRoot, "namespace-collision"),
+      tasksConfig,
+    );
+    expect(graph.nodes.has("auth/T001")).toBe(true);
+    expect(graph.nodes.has("export/T001")).toBe(true);
+    expect(graph.nodes.has("T001")).toBe(false);
+
+    const implements_ = graph.edges
+      .filter((e) => e.kind === "implements")
+      .sort((a, b) => a.source.localeCompare(b.source));
+    expect(implements_).toEqual([
+      { source: "auth/T001", target: "auth-login", kind: "implements" },
+      { source: "export/T001", target: "csv-writer", kind: "implements" },
+    ]);
+  });
+
+  it("applies user-defined OpenSpec preset on top of built-ins", () => {
+    const root = resolve(tasksRoot, "openspec-custom");
+    const userConfig: ArtgraphConfig = {
+      ...tasksConfig,
+      taskConventions: [
+        {
+          name: "openspec",
+          fileStems: ["tasks"],
+          taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(OS-\\d+)\\b",
+          // User presets must opt into the cross-link syntax explicitly — built-in
+          // tag regexes (spec-kit's `@impl(...)`, kiro's `_Requirements:`) are NOT
+          // inherited. Reuse the spec-kit-style `@impl(...)` here to show that
+          // any user tool can pick whichever conventions fit it.
+          implementsTagRe: "@impl\\(([^)\\n]+)\\)",
+        },
+      ],
+    };
+    const { graph } = buildGraph(root, userConfig);
+    const tasks = [...graph.nodes.values()].filter((n) => n.kind === "task");
+    expect(tasks.map((n) => n.id)).toEqual(["OS-100"]);
+    const impl = graph.edges.filter((e) => e.kind === "implements");
+    expect(impl).toEqual([
+      { source: "OS-100", target: "openspec-target", kind: "implements" },
+    ]);
+  });
+
+  it("a user preset can supply a fully custom verifiesTagRe (extensibility)", () => {
+    // Demonstrates that the per-preset tag regex contract supports arbitrary
+    // SDD-tool conventions: here we invent a "→ <id>" arrow syntax and prove
+    // the parser routes it correctly into `verifies` edges. This is the
+    // mechanism that lets OpenSpec / any future SDD tool plug in without
+    // patching the parser.
+    const tmpRoot = resolve(import.meta.dirname, "fixtures/tasks-custom-tmp");
+    const specsDir = resolve(tmpRoot, "specs/demo");
+    mkdirSync(specsDir, { recursive: true });
+    writeFileSync(
+      resolve(specsDir, "tasks.md"),
+      [
+        "# Tasks",
+        "",
+        "- [X] CT-001 demo task → REQ-A",
+        "- [X] CT-002 second task → REQ-B → REQ-C",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    try {
+      const customConfig: ArtgraphConfig = {
+        ...tasksConfig,
+        taskConventions: [
+          {
+            name: "custom-arrow",
+            fileStems: ["tasks"],
+            taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(CT-\\d+)\\b",
+            verifiesTagRe: "→\\s*(REQ-[\\w-]+)",
+          },
+        ],
+      };
+      const { graph } = buildGraph(tmpRoot, customConfig);
+      const verifies = graph.edges
+        .filter((e) => e.kind === "verifies")
+        .sort((a, b) =>
+          a.source === b.source
+            ? a.target.localeCompare(b.target)
+            : a.source.localeCompare(b.source),
+        );
+      expect(verifies).toEqual([
+        { source: "CT-001", target: "REQ-A", kind: "verifies" },
+        { source: "CT-002", target: "REQ-B", kind: "verifies" },
+        { source: "CT-002", target: "REQ-C", kind: "verifies" },
+      ]);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Meta-review #3 remediation: when a task emits an `@impl(target)` edge and
+  // the target ID collides across spec dirs, the edge target must be qualified
+  // too — otherwise the edge points at the bare colliding ID with no matching
+  // node and silently orphans (and `findOrphans` is now task-source-exempt so
+  // even the warning channel is suppressed).
+  it("remaps task-emitted edge target when the target ID collides across specDirs", () => {
+    const tmpRoot = resolve(import.meta.dirname, "fixtures/tasks-cross-collision-tmp");
+    mkdirSync(resolve(tmpRoot, "specs/authA"), { recursive: true });
+    mkdirSync(resolve(tmpRoot, "specs/exportB"), { recursive: true });
+    // Two req lists each define FR-001 — collision drives qualifying to
+    // authA/FR-001 and exportB/FR-001.
+    writeFileSync(
+      resolve(tmpRoot, "specs/authA/spec.md"),
+      ["# Auth", "", "- FR-001: login flow", ""].join("\n"),
+      "utf-8",
+    );
+    writeFileSync(
+      resolve(tmpRoot, "specs/exportB/spec.md"),
+      ["# Export", "", "- FR-001: csv writer", ""].join("\n"),
+      "utf-8",
+    );
+    // A plan in authA references FR-001 — without remap the edge target stays
+    // unqualified and the implements edge silently dangles.
+    writeFileSync(
+      resolve(tmpRoot, "specs/authA/plan.md"),
+      ["# Plan", "", "- [X] T010 wire login @impl(FR-001)", ""].join("\n"),
+      "utf-8",
+    );
+    try {
+      const { graph } = buildGraph(tmpRoot, tasksConfig);
+      const implEdge = graph.edges.find(
+        (e) => e.kind === "implements" && e.source === "T010",
+      );
+      expect(implEdge).toBeDefined();
+      // The collision rewrite must rebind the target to the qualified ID that
+      // lives in the same spec dir as the emitting task.
+      expect(implEdge!.target).toBe("authA/FR-001");
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Meta-review #9 remediation: task contentHash now hashes the full subtree
+  // (matching how req nodes are hashed), so editing a `_Requirements:` line in
+  // a Kiro task changes the hash and shows up in diff/lock comparisons.
+  it("task contentHash reflects subtree changes (not just the label line)", () => {
+    const tmpDir = resolve(import.meta.dirname, "fixtures/task-hash-subtree-tmp");
+    const specsDir = resolve(tmpDir, "specs/demo");
+    mkdirSync(specsDir, { recursive: true });
+    const taskFile = resolve(specsDir, "tasks.md");
+    writeFileSync(
+      taskFile,
+      [
+        "# Tasks",
+        "",
+        "- [x] 1. set up auth",
+        "  - _Requirements: 7.1, 7.2_",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    try {
+      const { graph: g1 } = buildGraph(tmpDir, tasksConfig);
+      const h1 = g1.nodes.get("1")!.contentHash;
+      writeFileSync(
+        taskFile,
+        [
+          "# Tasks",
+          "",
+          "- [x] 1. set up auth",
+          "  - _Requirements: 7.1, 7.2, 7.3_",
+          "",
+        ].join("\n"),
+        "utf-8",
+      );
+      const { graph: g2 } = buildGraph(tmpDir, tasksConfig);
+      const h2 = g2.nodes.get("1")!.contentHash;
+      expect(h1).not.toBe(h2);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("kiro tasks.md emits verifies edges from `_Requirements:` and no implements", () => {
+    // kiro tasks.md fixture mirrors real AWS Kiro output: `- [x] N. ...` with
+    // a sub-bullet `- _Requirements: X, Y_`. Built-in spec-kit's `T\d+` won't
+    // match `1`, but kiro's hierarchical `\d+(?:\.\d+)*` will. Kiro preset has
+    // no implementsTagRe (Kiro doesn't use `@impl(...)`), so implements edges
+    // must be empty even though spec-kit's implementsTagRe is also in scope —
+    // because spec-kit's idRe doesn't match this listItem, its tag regex is
+    // never applied.
+    const { graph } = buildGraph(resolve(tasksRoot, "kiro-tasks"), tasksConfig);
+    expect(graph.edges.filter((e) => e.kind === "implements")).toEqual([]);
+    const verifies = graph.edges
+      .filter((e) => e.kind === "verifies")
+      .sort((a, b) =>
+        a.source === b.source
+          ? a.target.localeCompare(b.target)
+          : a.source.localeCompare(b.source),
+      );
+    expect(verifies).toEqual([
+      { source: "1", target: "7.1", kind: "verifies" },
+      { source: "1", target: "7.2", kind: "verifies" },
+      { source: "1.1", target: "7.3", kind: "verifies" },
+      { source: "1.2", target: "8.1", kind: "verifies" },
+      { source: "2", target: "8.2", kind: "verifies" },
+      { source: "2", target: "9.1", kind: "verifies" },
+    ]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // req→req annotation edges (specs/010-req-req-dependency) — US1 / T011
 // ---------------------------------------------------------------------------

@@ -95,6 +95,64 @@ To opt out of any of the above:
 > `"linkWarnings": { "unresolved": false }`) and migrate at your pace.
 
 
+## Task graph (`taskConventions` config)
+
+artgraph extracts **task nodes** from Spec Kit / Kiro `plan.md` and `tasks.md`
+files, then converts each SDD tool's cross-link tags into edges. **Tag syntax
+is preset-supplied** — every SDD tool can define its own ID format and tag
+regexes; there is no global `@impl` / `[REQ-]` convention baked into the parser.
+
+### Built-in presets
+
+| Preset       | files (stem)        | task ID                          | `implements` tag        | `verifies` tag                                  |
+| ------------ | ------------------- | -------------------------------- | ----------------------- | ----------------------------------------------- |
+| **spec-kit** | `plan`, `tasks`     | `T\d+` (e.g. `T001`)             | `@impl(target-id)`      | `[REQ-FR-001]` / `[FR-001]` / `[Requirement-3]` |
+| **kiro**     | `tasks`             | `\d+(\.\d+)*` (e.g. `1`, `1.1`)  | *(not used by Kiro)*    | `- _Requirements: 1.1, 2.3, 3.1_` (italic list) |
+
+Notes:
+- `doc → contains → task` edges are emitted under `docGraph.autoContains` (the
+  same flag that drives `doc → req`).
+- Kiro's `tasks.md` requires the `[ ]`/`[x]` checkbox on each task line — bare
+  numbered lists like `- 1 release shipped` are not treated as tasks.
+- For nested Kiro tasks (`- [x] 1.1 ...` indented under `- [x] 1. ...`), each
+  level's `_Requirements:` lists attach to its own task only; parents do not
+  inherit child requirements.
+
+### Adding a custom SDD tool (OpenSpec, etc.)
+
+Append a preset to `taskConventions` — built-ins remain active. Each preset
+chooses its own tag syntax via optional `implementsTagRe` / `verifiesTagRe`
+(capture group 1 = target ID, applied with `/g` semantics):
+
+```jsonc
+// .artgraph.json
+{
+  "taskConventions": [
+    {
+      "name": "openspec",
+      "fileStems": ["tasks"],
+      "taskIdRe": "^(?:\\[[xX ]\\]\\s+)?(OS-\\d+)\\b",
+      "implementsTagRe": "@impl\\(([^)\\n]+)\\)",
+      "verifiesTagRe": "→\\s*(REQ-[\\w-]+)"
+    }
+  ]
+}
+```
+
+All three regex fields are validated the same way `reqPatterns` is
+(≤ 200 chars, nested-quantifier rejection, capture-group required, valid regex).
+Omit `implementsTagRe` or `verifiesTagRe` if your tool doesn't have that edge
+kind (Kiro omits `implementsTagRe`).
+
+### Upgrade note
+
+Built-in presets activate automatically on upgrade. Existing projects whose
+`tasks.md` already contains `T###` (Spec Kit) or checkbox-prefixed numerics
+(Kiro) will see new `task` nodes — and `doc → task` `contains` edges, plus
+`task → verifies → ...` edges for Kiro `_Requirements:` lists — on the next
+`artgraph scan`. Run `artgraph reconcile` to refresh the lock baseline.
+
+
 ## Commands
 
 | Command              | Purpose                                                      |

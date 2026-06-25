@@ -46,6 +46,7 @@ export function impact(
   const affectedFileSet = new Set<string>();
   const affectedDocs: string[] = [];
   const affectedReqs: string[] = [];
+  const affectedTasks: string[] = [];
   const drifted: DriftEntry[] = [];
 
   for (const id of visited) {
@@ -63,6 +64,11 @@ export function impact(
         break;
       case "req":
         affectedReqs.push(id);
+        break;
+      case "task":
+        // task は planning node — req/doc とは別チャネルで集計する。
+        // affectedReqs に混ぜると uncovered 計算が task ID を req と誤認する。
+        affectedTasks.push(id);
         break;
     }
 
@@ -83,11 +89,13 @@ export function impact(
     affectedFiles,
     affectedDocs,
     affectedReqs,
+    affectedTasks,
     drifted,
     summary: {
       docs: affectedDocs.length,
       reqs: affectedReqs.length,
       files: affectedFiles.length,
+      tasks: affectedTasks.length,
     },
   };
 }
@@ -97,6 +105,11 @@ export function findOrphans(graph: ArtifactGraph): string[] {
 
   for (const edge of graph.edges) {
     if (edge.kind === "implements" || edge.kind === "verifies") {
+      // task → implements/verifies は planning artefact。target が必ずしも
+      // graph 上の node とは限らない(Kiro の `_Requirements: 1.1, 2.3_` の
+      // numeric ID は `Requirement-N` という別 ID として登録されるため)。
+      // task-source の orphan は警告対象外。code-claim な orphan のみ拾う。
+      if (graph.nodes.get(edge.source)?.kind === "task") continue;
       if (!graph.nodes.has(edge.target)) {
         orphans.push(`${edge.source} -> ${edge.target} (${edge.kind})`);
       }
@@ -112,7 +125,14 @@ export function findUncovered(graph: ArtifactGraph): string[] {
   for (const [id, node] of graph.nodes) {
     if (node.kind !== "req") continue;
 
-    const hasImpl = graph.edges.some((e) => e.kind === "implements" && e.target === id);
+    // coverage.ts と同じく task-source の implements は除外 — planning 関係
+    // で req を "覆われた" と誤判定するとゲートが空振りする。
+    const hasImpl = graph.edges.some(
+      (e) =>
+        e.kind === "implements" &&
+        e.target === id &&
+        graph.nodes.get(e.source)?.kind !== "task",
+    );
     if (!hasImpl) {
       uncovered.push(id);
     }

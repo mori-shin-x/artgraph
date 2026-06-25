@@ -260,6 +260,7 @@ program
         fileCount: result.fileCount,
         symbolCount: result.symbolCount,
         testCount: result.testCount,
+        taskCount: result.taskCount,
         warnings: result.warnings,
       };
       if (testResultStats) {
@@ -268,15 +269,15 @@ program
       console.log(JSON.stringify(output));
     } else {
       console.log(`Nodes: ${result.nodeCount}  Edges: ${result.edgeCount}`);
-      if (result.symbolCount > 0) {
-        console.log(
-          `  req: ${result.reqCount}  doc: ${result.docCount}  file: ${result.fileCount}  symbol: ${result.symbolCount}  test: ${result.testCount}`,
-        );
-      } else {
-        console.log(
-          `  req: ${result.reqCount}  doc: ${result.docCount}  file: ${result.fileCount}  test: ${result.testCount}`,
-        );
-      }
+      const parts = [
+        `req: ${result.reqCount}`,
+        `doc: ${result.docCount}`,
+        `file: ${result.fileCount}`,
+      ];
+      if (result.symbolCount > 0) parts.push(`symbol: ${result.symbolCount}`);
+      parts.push(`test: ${result.testCount}`);
+      if (result.taskCount > 0) parts.push(`task: ${result.taskCount}`);
+      console.log(`  ${parts.join("  ")}`);
       if (testResultStats) {
         console.log(
           `\nTest Results: total=${testResultStats.totalTests} passed=${testResultStats.passedTests} failed=${testResultStats.failedTests}`,
@@ -437,7 +438,13 @@ program
   .description("Show the artifact graph")
   .option("--format <format>", "Output format: text | json", "text")
   .addOption(
-    new Option("--kind <kind>", "Filter by node kind").choices(["doc", "req", "file", "test"]),
+    new Option("--kind <kind>", "Filter by node kind").choices([
+      "doc",
+      "req",
+      "file",
+      "test",
+      "task",
+    ]),
   )
   .action((opts) => {
     const rootDir = process.cwd();
@@ -615,6 +622,10 @@ function printImpactText(result: any) {
     console.log("Affected REQs:");
     for (const r of result.affectedReqs) console.log(`  ${r}`);
   }
+  if (result.affectedTasks && result.affectedTasks.length > 0) {
+    console.log("Affected Tasks:");
+    for (const t of result.affectedTasks) console.log(`  ${t}`);
+  }
   if (result.affectedDocs.length > 0) {
     console.log("Affected Docs:");
     for (const d of result.affectedDocs) console.log(`  ${d}`);
@@ -628,8 +639,9 @@ function printImpactText(result: any) {
     for (const d of result.drifted) console.log(`  ${d.nodeId} (${d.kind})`);
   }
   if (result.summary) {
+    const taskPart = result.summary.tasks > 0 ? `, ${result.summary.tasks} tasks` : "";
     console.log(
-      `Summary: ${result.summary.docs} docs, ${result.summary.reqs} reqs, ${result.summary.files} files`,
+      `Summary: ${result.summary.docs} docs, ${result.summary.reqs} reqs, ${result.summary.files} files${taskPart}`,
     );
   }
 }

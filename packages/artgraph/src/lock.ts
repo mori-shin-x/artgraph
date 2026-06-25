@@ -57,12 +57,23 @@ export function buildLockFromGraph(graph: ArtifactGraph): LockFile {
 
     if (node.filePath) entry.specFile = node.filePath;
 
-    const implEdges = graph.edges.filter((e) => e.kind === "implements" && e.target === id);
+    // Lock baselines only track code-claim relations: `entry.impl` is meant for
+    // implementation file/symbol sources and `entry.tests` for test sources.
+    // `task → implements/verifies` is a planning artefact (data-model.md §7 / U2)
+    // — including task IDs here would pollute drift checks and reconcile output.
+    const isTaskSource = (source: string) =>
+      graph.nodes.get(source)?.kind === "task";
+
+    const implEdges = graph.edges.filter(
+      (e) => e.kind === "implements" && e.target === id && !isTaskSource(e.source),
+    );
     if (implEdges.length > 0) {
       entry.impl = implEdges.map((e) => e.source);
     }
 
-    const testEdges = graph.edges.filter((e) => e.kind === "verifies" && e.target === id);
+    const testEdges = graph.edges.filter(
+      (e) => e.kind === "verifies" && e.target === id && !isTaskSource(e.source),
+    );
     if (testEdges.length > 0) {
       entry.tests = testEdges.map((e) => e.source);
     }

@@ -13,6 +13,7 @@ export interface ScanResult {
   fileCount: number;
   symbolCount: number;
   testCount: number;
+  taskCount: number;
 }
 
 export function scan(rootDir: string, config: ArtgraphConfig): ScanResult {
@@ -24,6 +25,7 @@ export function scan(rootDir: string, config: ArtgraphConfig): ScanResult {
   let fileCount = 0;
   let symbolCount = 0;
   let testCount = 0;
+  let taskCount = 0;
 
   for (const node of graph.nodes.values()) {
     switch (node.kind) {
@@ -42,6 +44,9 @@ export function scan(rootDir: string, config: ArtgraphConfig): ScanResult {
       case "test":
         testCount++;
         break;
+      case "task":
+        taskCount++;
+        break;
     }
   }
 
@@ -55,6 +60,7 @@ export function scan(rootDir: string, config: ArtgraphConfig): ScanResult {
     fileCount,
     symbolCount,
     testCount,
+    taskCount,
   };
 }
 

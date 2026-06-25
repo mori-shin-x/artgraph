@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
-import { run, cleanup, CLI, FIXTURE_DIR, LOCK_PATH } from "./helpers.js";
+import { run, runAt, cleanup, CLI, FIXTURE_DIR, LOCK_PATH } from "./helpers.js";
 
 const HOOKS_DIR = resolve(import.meta.dirname, "fixtures/hooks");
 
@@ -54,6 +54,23 @@ describe("CLI: scan", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Nodes:");
     expect(stdout).toContain("Edges:");
+  });
+
+  it("JSON output includes taskCount (Issue #28 / H3)", { timeout: 30000 }, () => {
+    const { stdout, exitCode } = run(["scan", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    // taskCount must be present even when 0 — otherwise downstream parsers
+    // can't tell "no tasks" from "old artgraph that didn't know about tasks".
+    expect(result).toHaveProperty("taskCount");
+    expect(typeof result.taskCount).toBe("number");
+  });
+
+  it("text output adds `task:` column when taskCount > 0 (H3)", { timeout: 30000 }, () => {
+    const taskFixture = resolve(FIXTURE_DIR, "tasks/speckit-plan");
+    const { stdout, exitCode } = runAt(taskFixture, ["scan"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toMatch(/task:\s+[1-9]/);
   });
 });
 
