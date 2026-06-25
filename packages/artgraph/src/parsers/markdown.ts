@@ -787,33 +787,38 @@ export function extractAnnotations(
   return { extracts, warnings };
 }
 
-// Single fence-line grammar shared by parseFrontmatter and findFrontmatterBounds.
-// Trailing whitespace is accepted (gray-matter compat, some editors auto-insert it)
-// but leading whitespace is NOT — the parser treats only column-0 `---` as a fence.
-// Keep the two consumers locked to this regex so rename's frontmatterBounds and the
-// parser cannot drift apart (#44).
+// Single fence-line grammar — trailing whitespace is accepted (gray-matter compat;
+// some editors auto-insert it) but leading whitespace is NOT — the parser treats
+// only column-0 `---` as a fence. `isFenceLine` is THE entry point: both
+// parseFrontmatter and findFrontmatterBounds funnel through it, so the parser
+// and the rewriter cannot drift apart (#44).
 const FRONTMATTER_FENCE_RE = /^---[ \t]*$/;
+function isFenceLine(line: string): boolean {
+  return FRONTMATTER_FENCE_RE.test(line.replace(/\r$/, ""));
+}
+
+// Internal: BOM-aware line split shared by parseFrontmatter and findFrontmatterBounds.
+// BOM is dropped only when it appears as raw's very first character (per the WHATWG
+// UTF-8 BOM convention); embedded U+FEFFs inside line content are left alone.
+function splitForFrontmatter(raw: string): string[] {
+  const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  return text.split("\n");
+}
 
 // Minimal YAML-frontmatter splitter. Replaces gray-matter to drop the js-yaml v3
 // advisory chain (GHSA-h67p-54hq-rp68 / issue #42); the YAML body is parsed by
-// eemeli/yaml which is already a workspace dependency.
-function parseFrontmatter(raw: string): { data: Record<string, any>; content: string } {
-  const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
-  const firstNl = text.indexOf("\n");
-  if (firstNl < 0) return { data: {}, content: raw };
-  const firstLine = text.slice(0, firstNl).replace(/\r$/, "");
-  if (!FRONTMATTER_FENCE_RE.test(firstLine)) return { data: {}, content: raw };
-
-  const rest = text.slice(firstNl + 1);
-  // Closing fence: a line whose content matches FRONTMATTER_FENCE_RE, anchored
-  // to a line boundary (start of `rest` or after `\r?\n`) and followed by `\r?\n`
-  // or EOF.
-  const closeRe = /(?:^|\r?\n)---[ \t]*(?:\r?\n|$)/;
-  const match = closeRe.exec(rest);
-  if (!match) return { data: {}, content: raw };
-
-  const yamlBody = rest.slice(0, match.index);
-  const content = rest.slice(match.index + match[0].length);
+// eemeli/yaml which is already a workspace dependency. The fence detection is
+// delegated to findFrontmatterBounds so there is exactly one place that decides
+// what counts as a fence — no parallel regex on the close side (#44 follow-up).
+//
+// Exported as an internal helper for parser/bounds parity tests. The parseMarkdown
+// pipeline is the only production consumer.
+export function parseFrontmatter(raw: string): { data: Record<string, any>; content: string } {
+  const bounds = findFrontmatterBounds(raw);
+  if (!bounds) return { data: {}, content: raw };
+  const lines = splitForFrontmatter(raw);
+  const yamlBody = lines.slice(1, bounds.end).join("\n");
+  const content = lines.slice(bounds.end + 1).join("\n");
 
   // `resolveKnownTags: false` keeps the YAML 1.2 core schema (str/seq/map/int/
   // float/bool/null) but drops opt-in tags like `!!binary` (→ Buffer) and
@@ -827,25 +832,22 @@ function parseFrontmatter(raw: string): { data: Record<string, any>; content: st
   return { data: parsed as Record<string, any>, content };
 }
 
-// Line-based view of parseFrontmatter's fence detection — returns the 0-based
-// indices of the opening and closing fence lines in `raw.split("\n")`, or null
-// when the file has no frontmatter. Used by rename.ts so the rewriter and the
-// parser cannot diverge on what counts as a fence (issue #44). The grammar is
-// identical to parseFrontmatter: opening fence on line 0 only, FRONTMATTER_FENCE_RE
-// on both fences, and a leading BOM tolerated. Trailing `\r` from CRLF files is
-// stripped per line so this is safe to call before any newline normalization.
-export function findFrontmatterBounds(
-  raw: string,
-): { start: number; end: number } | null {
-  const text = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
-  const lines = text.split("\n");
+// Line-based fence detector — returns the 0-based index of the closing fence
+// line, or null when the file has no frontmatter. The opening fence is always
+// line 0 by definition (parseFrontmatter's invariant), so it is omitted from
+// the result type. Used by rename.ts so the rewriter and the parser share one
+// acceptance grammar (issue #44).
+//
+// Returned `end` is a valid index for BOTH `splitForFrontmatter(raw)` (the
+// internal BOM-stripped view) and `raw.split("\n")` (the consumer-side view):
+// a leading BOM has no newline of its own, so it only shifts line-0's content,
+// not the line count or any subsequent index.
+export function findFrontmatterBounds(raw: string): { end: number } | null {
+  const lines = splitForFrontmatter(raw);
   if (lines.length < 2) return null;
-  const firstLine = lines[0].replace(/\r$/, "");
-  if (!FRONTMATTER_FENCE_RE.test(firstLine)) return null;
+  if (!isFenceLine(lines[0])) return null;
   for (let i = 1; i < lines.length; i++) {
-    if (FRONTMATTER_FENCE_RE.test(lines[i].replace(/\r$/, ""))) {
-      return { start: 0, end: i };
-    }
+    if (isFenceLine(lines[i])) return { end: i };
   }
   return null;
 }
