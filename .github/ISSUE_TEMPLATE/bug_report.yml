@@ -1,0 +1,68 @@
+name: Bug report
+description: artgraph の不具合を報告する
+title: "[bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        バグの再現に必要な情報をお願いします。最小再現リポジトリ / コマンド出力があると優先度が上がりやすいです。
+  - type: textarea
+    id: summary
+    attributes:
+      label: 概要
+      description: 何が起きているか、1〜2 行で
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 再現手順
+      description: |
+        できるだけ最小のステップで。`artgraph` のコマンド・対象ファイル構成・期待値・実際の挙動を含めてください。
+      placeholder: |
+        1. `npx artgraph init`
+        2. `artgraph scan`
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待する挙動
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の挙動 / エラーログ
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: artgraph-version
+    attributes:
+      label: artgraph のバージョン
+      placeholder: e.g. 0.1.0 / commit hash
+    validations:
+      required: true
+  - type: input
+    id: node-version
+    attributes:
+      label: Node のバージョン
+      placeholder: e.g. 20.18.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: e.g. macOS 15 / Ubuntu 24.04 / Windows 11
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: 補足
+      description: スクリーンショット、関連 issue、その他コンテキスト
