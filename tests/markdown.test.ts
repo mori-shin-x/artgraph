@@ -1,7 +1,13 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { resolve } from "node:path";
 import { writeFileSync, unlinkSync, mkdirSync, rmdirSync, rmSync } from "node:fs";
-import { parseMarkdown, stripAnnotations, extractAnnotations } from "../src/parsers/markdown.js";
+import {
+  parseMarkdown,
+  parseFrontmatter,
+  findFrontmatterBounds,
+  stripAnnotations,
+  extractAnnotations,
+} from "../src/parsers/markdown.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
 
@@ -1314,5 +1320,81 @@ describe("parseMarkdown — contentHash invariance under annotation churn (US3)"
     const before = "# Spec\n\n- AUTH-002: セッション管理 (depends_on: AUTH-001)\n";
     const after = "# Spec\n\n- AUTH-002: セッション維持 (depends_on: AUTH-001)\n";
     expect(hashOf(before, "AUTH-002")).not.toBe(hashOf(after, "AUTH-002"));
+  });
+});
+
+// ── Issue #44 follow-up: parseFrontmatter / findFrontmatterBounds parity ──
+//
+// Both functions share `isFenceLine` internally, but each still owns its own
+// outer loop (parseFrontmatter joins the YAML body / content; findFrontmatterBounds
+// only reports the closing-fence index). This meta-test pins the acceptance-rule
+// invariant: for any input, one returns "has frontmatter" iff the other does.
+// A future change that drifts either side (e.g. tweaking BOM/CR handling on one
+// path only) flips at least one fixture here.
+describe("parseFrontmatter / findFrontmatterBounds parity (#44)", () => {
+  const cases: Array<{ name: string; input: string; hasFrontmatter: boolean }> = [
+    { name: "empty file", input: "", hasFrontmatter: false },
+    { name: "single line, no newline", input: "---", hasFrontmatter: false },
+    { name: "opening fence only, no close", input: "---\nfoo: 1\n", hasFrontmatter: false },
+    { name: "valid baseline", input: "---\ntitle: x\n---\nbody\n", hasFrontmatter: true },
+    { name: "immediate close (empty body)", input: "---\n---\nbody\n", hasFrontmatter: true },
+    { name: "BOM-prefixed valid", input: "﻿---\ntitle: x\n---\nbody\n", hasFrontmatter: true },
+    { name: "CRLF valid", input: "---\r\ntitle: x\r\n---\r\nbody\r\n", hasFrontmatter: true },
+    { name: "trailing space on both fences", input: "--- \ntitle: x\n--- \nbody\n", hasFrontmatter: true },
+    { name: "trailing tab on both fences", input: "---\t\ntitle: x\n---\t\nbody\n", hasFrontmatter: true },
+    { name: "indented opening fence (rejected)", input: "   ---\ntitle: x\n---\nbody\n", hasFrontmatter: false },
+    { name: "indented closing fence skipped, second close accepted", input: "---\ntitle: x\n   ---\nmore\n---\nbody\n", hasFrontmatter: true },
+    { name: "mid-document `---` pair only (no opening fence)", input: "# Title\n\n---\nnode_id: x\n---\nbody\n", hasFrontmatter: false },
+    { name: "fence at EOF with no trailing newline", input: "---\ntitle: x\n---", hasFrontmatter: true },
+    { name: "fence with stray CR at EOF", input: "---\ntitle: x\n---\r", hasFrontmatter: true },
+    { name: "four-dash fence rejected", input: "----\ntitle: x\n----\nbody\n", hasFrontmatter: false },
+  ];
+
+  // parseFrontmatter signals "no frontmatter" by returning the raw input verbatim
+  // with an empty data map. It signals "frontmatter present" by either populating
+  // data, returning a distinct content, OR throwing (fences were detected but the
+  // YAML body inside was malformed — parseMarkdown catches this exact throw, so
+  // it counts as "frontmatter present" for the parity invariant).
+  const pfHasFrontmatter = (input: string): boolean => {
+    try {
+      const pf = parseFrontmatter(input);
+      return pf.content !== input || Object.keys(pf.data).length > 0;
+    } catch {
+      return true;
+    }
+  };
+
+  it.each(cases)("$name → both agree (hasFrontmatter=$hasFrontmatter)", ({ input, hasFrontmatter }) => {
+    const fb = findFrontmatterBounds(input);
+    expect({ fb: fb !== null, pf: pfHasFrontmatter(input) }).toEqual({
+      fb: hasFrontmatter,
+      pf: hasFrontmatter,
+    });
+  });
+
+  // Beyond bool parity: when parseFrontmatter parses cleanly, the closing-fence
+  // line index reported by findFrontmatterBounds must point at the same physical
+  // line that parseFrontmatter consumed as the close. We verify by checking that
+  // `splitForFrontmatter(input)[bounds.end]` matches the fence shape AND that
+  // everything after it is what parseFrontmatter returned as `content`. Cases
+  // whose YAML body would make parseFrontmatter throw are excluded here because
+  // there is no `content` to compare against.
+  const alignmentCases = cases.filter((c) => {
+    if (!c.hasFrontmatter) return false;
+    try {
+      parseFrontmatter(c.input);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  it.each(alignmentCases)("$name → bounds.end aligns with parseFrontmatter content split", ({ input }) => {
+    const fb = findFrontmatterBounds(input);
+    const pf = parseFrontmatter(input);
+    if (!fb) throw new Error("expected frontmatter");
+    const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
+    const lines = text.split("\n");
+    expect(lines[fb.end].replace(/\r$/, "")).toMatch(/^---[ \t]*$/);
+    expect(lines.slice(fb.end + 1).join("\n")).toBe(pf.content);
   });
 });
