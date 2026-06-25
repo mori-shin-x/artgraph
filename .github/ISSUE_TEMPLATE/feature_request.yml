@@ -1,5 +1,5 @@
 name: Feature request
-description: 新機能や挙動の改善を提案する
+description: Propose a new feature or behavior change
 title: "[feat] "
 labels:
   - enhancement
@@ -7,24 +7,24 @@ body:
   - type: textarea
     id: problem
     attributes:
-      label: 解決したい課題
-      description: いま何が困っていますか?どんな場面で詰まりますか?
+      label: Problem to solve
+      description: What is the current pain point? When does it bite?
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: 提案
-      description: どんな機能・挙動・API があると解決しますか?
+      label: Proposed solution
+      description: What feature, behavior, or API would solve it?
     validations:
       required: true
   - type: textarea
     id: alternatives
     attributes:
-      label: 検討した代替案
-      description: ワークアラウンドや他ツールでの解決方法など
+      label: Alternatives considered
+      description: Workarounds, similar features in other tools, etc.
   - type: textarea
     id: additional
     attributes:
-      label: 補足
-      description: 関連 issue、参考実装、想定ユースケースなど
+      label: Additional context
+      description: Related issues, references, expected use cases.

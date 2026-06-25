@@ -1,5 +1,5 @@
 name: Bug report
-description: artgraph の不具合を報告する
+description: Report a bug in artgraph
 title: "[bug] "
 labels:
   - bug
@@ -7,20 +7,20 @@ body:
   - type: markdown
     attributes:
       value: |
-        バグの再現に必要な情報をお願いします。最小再現リポジトリ / コマンド出力があると優先度が上がりやすいです。
+        Please include enough information to reproduce the bug. A minimal repro repo or command output makes it much easier to prioritize.
   - type: textarea
     id: summary
     attributes:
-      label: 概要
-      description: 何が起きているか、1〜2 行で
+      label: Summary
+      description: What is happening, in one or two sentences.
     validations:
       required: true
   - type: textarea
     id: repro
     attributes:
-      label: 再現手順
+      label: Reproduction steps
       description: |
-        できるだけ最小のステップで。`artgraph` のコマンド・対象ファイル構成・期待値・実際の挙動を含めてください。
+        The minimal steps to reproduce. Include the `artgraph` command(s), the relevant file layout, the expected result, and the actual result.
       placeholder: |
         1. `npx artgraph init`
         2. `artgraph scan`
@@ -30,28 +30,28 @@ body:
   - type: textarea
     id: expected
     attributes:
-      label: 期待する挙動
+      label: Expected behavior
     validations:
       required: true
   - type: textarea
     id: actual
     attributes:
-      label: 実際の挙動 / エラーログ
+      label: Actual behavior / error log
       render: shell
     validations:
       required: true
   - type: input
     id: artgraph-version
     attributes:
-      label: artgraph のバージョン
+      label: artgraph version
       placeholder: e.g. 0.1.0 / commit hash
     validations:
       required: true
   - type: input
     id: node-version
     attributes:
-      label: Node のバージョン
-      placeholder: e.g. 20.18.0
+      label: Node version
+      placeholder: e.g. 22.13.0
     validations:
       required: true
   - type: input
@@ -64,5 +64,5 @@ body:
   - type: textarea
     id: additional
     attributes:
-      label: 補足
-      description: スクリーンショット、関連 issue、その他コンテキスト
+      label: Additional context
+      description: Screenshots, related issues, or any other context.

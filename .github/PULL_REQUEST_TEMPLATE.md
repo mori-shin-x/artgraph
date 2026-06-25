@@ -1,33 +1,33 @@
-<!-- PR タイトルは `type(scope): summary` 形式が望ましいです (例: `feat(graph): ...`) -->
+<!-- PR title preferred form: `type(scope): summary` (e.g. `feat(graph): ...`) -->
 
-## 変更概要
+## Summary
 
-<!-- 何を、なぜ変えたのか。背景となる issue があれば `Closes #123` で紐付け -->
+<!-- What changed and why. Link the related issue (e.g. `Closes #123`) when applicable. -->
 
-## 変更タイプ
+## Change type
 
-- [ ] feat (新機能)
-- [ ] fix (バグ修正)
-- [ ] refactor (挙動を変えないリファクタ)
-- [ ] docs (ドキュメントのみ)
-- [ ] chore / build / ci (ツールチェイン)
-- [ ] test (テストのみ)
+- [ ] feat (new feature)
+- [ ] fix (bug fix)
+- [ ] refactor (no behavior change)
+- [ ] docs (documentation only)
+- [ ] chore / build / ci (toolchain)
+- [ ] test (tests only)
 
-## テスト
+## Testing
 
-<!-- 追加 / 変更したテスト、手元での確認手順、CI 以外で確認したことなど -->
+<!-- Tests added or changed, manual verification steps, anything you confirmed outside CI. -->
 
-- [ ] 既存テストが通る (`pnpm -r test`)
-- [ ] 必要に応じてテストを追加した
-- [ ] `pnpm -r knip` / `pnpm -r build` を確認した
+- [ ] Existing tests pass (`pnpm -r test`)
+- [ ] Added tests where needed
+- [ ] Ran `pnpm -r knip` and `pnpm -r build`
 
 ## Breaking change
 
-- [ ] あり (内容を以下に記載)
-- [ ] なし
+- [ ] Yes (described below)
+- [ ] No
 
-<!-- ある場合: 何が破壊的か / 影響範囲 / マイグレーション手順 -->
+<!-- If yes: what breaks / who is affected / migration steps. -->
 
-## 補足
+## Notes
 
-<!-- スクリーンショット、設計判断、フォローアップ予定など -->
+<!-- Screenshots, design decisions, follow-up work, etc. -->
