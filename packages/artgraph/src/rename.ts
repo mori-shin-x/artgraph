@@ -424,7 +424,9 @@ export function rewriteFrontmatter(
   const idRe = idBoundaryRegex(oldId);
   let inBlock = false;
 
-  for (let i = bounds.start + 1; i < bounds.end; i++) {
+  // Opening fence is always line 0 (findFrontmatterBounds invariant); body lines
+  // sit at 1..bounds.end-1.
+  for (let i = 1; i < bounds.end; i++) {
     const line = lines[i];
 
     // node_id: "<id>"
@@ -495,7 +497,8 @@ export function expandFrontmatterDependsOn(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    if (i <= bounds.start || i >= bounds.end) {
+    // Skip the opening fence (line 0) and everything at/after the closing fence.
+    if (i === 0 || i >= bounds.end) {
       out.push(line);
       continue;
     }
