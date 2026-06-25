@@ -2,7 +2,7 @@
 
 **Date**: 2026-06-24
 
-本機能の追加で導入される型・拡張される型・新規エッジ生成ルールをまとめる。実装ファイル: `packages/artgraph/src/types.ts` を中心に、`parsers/markdown.ts` / `graph/builder.ts` / `config.ts` に波及。
+本機能の追加で導入される型・拡張される型・新規エッジ生成ルールをまとめる。実装ファイル: `src/types.ts` を中心に、`parsers/markdown.ts` / `graph/builder.ts` / `config.ts` に波及。
 
 ---
 

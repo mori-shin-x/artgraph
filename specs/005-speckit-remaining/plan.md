@@ -25,7 +25,7 @@ Spec Kit の `plan.md` / `tasks.md`、および Kiro の `tasks.md` 等から **
 
 **Target Platform**: Node.js CLI（Linux/macOS/Windows、`relative()`/`dirname()` は既存のパス正規化を踏襲）
 
-**Project Type**: pnpm workspace モノレポ、`packages/artgraph` が単一 CLI。
+**Project Type**: 単一パッケージ CLI（`src/` 直下、配布物は `dist/` と `templates/` のみ）。
 
 **Performance Goals**:
 - 既存 `parseMarkdown` 関数内に regex マッチを追加するのみ。1 ファイルあたり追加コストはタスク行数 × 数十 ns 程度。

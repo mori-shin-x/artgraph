@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Changed
+
+- **Package layout**: pnpm workspace を撤廃し単一パッケージ構成に変更
+  (`packages/artgraph/{src,tests,templates,...}` → リポジトリ直下)。
+  `eslint-plugin` 別パッケージ化計画 (#24) が見送られ workspace 層を維持する
+  便益が無くなったため。配布物 (`dist/` + `templates/` + `bin/artgraph`) と
+  npm install 経由の挙動は不変。Constitution v1.0.0 → v1.1.0
+  (§技術基盤と制約 の Monorepo 規定を Package layout 規定に改訂)。
+
 ### Fixed (meta-review remediation for req⇔req inline annotations)
 
 - **Blocker**: collision で同名 req の注釈 edge が最初の specDir の req に集約される
