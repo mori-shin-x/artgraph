@@ -67,8 +67,8 @@ describe("formatGraphText: derives_from chain root detection", () => {
         ["doc:C", { id: "doc:C", kind: "doc", filePath: "c.md", contentHash: "h3" }],
       ]),
       edges: [
-        { source: "doc:B", target: "doc:A", kind: "derives_from" },
-        { source: "doc:C", target: "doc:B", kind: "derives_from" },
+        { source: "doc:B", target: "doc:A", kind: "derives_from", provenances: ["convention"] },
+        { source: "doc:C", target: "doc:B", kind: "derives_from", provenances: ["convention"] },
       ],
     };
 
@@ -150,15 +150,93 @@ describe("formatGraphText: cyclic graph", () => {
         ["doc:C", { id: "doc:C", kind: "doc", filePath: "c.md", contentHash: "h3" }],
       ]),
       edges: [
-        { source: "doc:A", target: "doc:B", kind: "derives_from" },
-        { source: "doc:B", target: "doc:C", kind: "derives_from" },
-        { source: "doc:C", target: "doc:A", kind: "derives_from" },
+        { source: "doc:A", target: "doc:B", kind: "derives_from", provenances: ["convention"] },
+        { source: "doc:B", target: "doc:C", kind: "derives_from", provenances: ["convention"] },
+        { source: "doc:C", target: "doc:A", kind: "derives_from", provenances: ["convention"] },
       ],
     };
     const text = formatGraphText(graph);
     expect(text).toContain("doc:A");
     expect(text).toContain("doc:B");
     expect(text).toContain("doc:C");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #35 — provenance output invariants (INV-O1..O4)
+// ---------------------------------------------------------------------------
+
+describe("formatGraphText: provenance label", () => {
+  it("INV-O1 / INV-O2: text output appends `{prov,...}` after kind, sorted", () => {
+    const graph: ArtifactGraph = {
+      nodes: new Map([
+        ["doc:A", { id: "doc:A", kind: "doc", filePath: "a.md", contentHash: "h1" }],
+        ["doc:B", { id: "doc:B", kind: "doc", filePath: "b.md", contentHash: "h2" }],
+      ]),
+      edges: [
+        {
+          source: "doc:B",
+          target: "doc:A",
+          kind: "derives_from",
+          provenances: ["frontmatter", "convention"],
+        },
+      ],
+    };
+    const text = formatGraphText(graph);
+    // Sorted ascending: convention then frontmatter.
+    expect(text).toContain("└─[derives_from {convention,frontmatter}]─ doc:B");
+  });
+
+  it("text output still shows `{...}` for a single-provenance edge", () => {
+    const graph: ArtifactGraph = {
+      nodes: new Map([
+        ["doc:A", { id: "doc:A", kind: "doc", filePath: "a.md", contentHash: "h1" }],
+        ["AUTH-001", { id: "AUTH-001", kind: "req", filePath: "a.md", contentHash: "h2" }],
+      ]),
+      edges: [
+        { source: "doc:A", target: "AUTH-001", kind: "contains", provenances: ["structural"] },
+      ],
+    };
+    const text = formatGraphText(graph);
+    expect(text).toContain("└─[contains {structural}]─ AUTH-001");
+  });
+});
+
+describe("formatGraphJSON: provenances field", () => {
+  it("INV-O3: every edge has provenances length>=1", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    const out = JSON.parse(formatGraphJSON(graph));
+    for (const edge of out.edges) {
+      expect(Array.isArray(edge.provenances)).toBe(true);
+      expect(edge.provenances.length).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("INV-O4: legacy singular `provenance` field absent from JSON", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    const out = JSON.parse(formatGraphJSON(graph));
+    for (const edge of out.edges) {
+      expect(edge).not.toHaveProperty("provenance");
+    }
+  });
+
+  it("INV-O1: provenances are sorted in JSON output", () => {
+    const graph: ArtifactGraph = {
+      nodes: new Map([
+        ["doc:A", { id: "doc:A", kind: "doc", filePath: "a.md", contentHash: "h1" }],
+        ["doc:B", { id: "doc:B", kind: "doc", filePath: "b.md", contentHash: "h2" }],
+      ]),
+      edges: [
+        {
+          source: "doc:B",
+          target: "doc:A",
+          kind: "derives_from",
+          provenances: ["frontmatter", "convention"],
+        },
+      ],
+    };
+    const out = JSON.parse(formatGraphJSON(graph));
+    expect(out.edges[0].provenances).toEqual(["convention", "frontmatter"]);
   });
 });
 

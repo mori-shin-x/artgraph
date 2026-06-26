@@ -31,6 +31,7 @@ describe("check", () => {
           source: "file:fake-impl.ts",
           target: id,
           kind: "implements",
+          provenances: ["code-tag"],
         });
       }
     }
@@ -74,6 +75,7 @@ describe("check", () => {
       source: "file:src/auth/login.ts",
       target: "FAKE-9999",
       kind: "implements",
+      provenances: ["code-tag"],
     });
 
     const result = check(graph, {});
@@ -104,8 +106,8 @@ describe("check", () => {
         [reqId, { id: reqId, kind: "req", filePath: "specs/x.md", contentHash: "h1" }],
       ]),
       edges: [
-        { source: "file:impl.ts", target: reqId, kind: "implements" },
-        { source: "file:impl.test.ts", target: reqId, kind: "verifies" },
+        { source: "file:impl.ts", target: reqId, kind: "implements", provenances: ["code-tag"] },
+        { source: "file:impl.test.ts", target: reqId, kind: "verifies", provenances: ["code-tag"] },
       ],
     };
     const lock: LockFile = {
@@ -140,5 +142,35 @@ describe("check", () => {
     const result = check(graph, lock);
     expect(result.testFailures).toEqual([]);
     expect(result.pass).toBe(true);
+  });
+
+  // SC-006: annotation churn (added/removed `(depends_on: …)` notes) must not
+  // affect drift judgement because drift is computed from `contentHash` only.
+  // See specs/011-edge-provenance/contracts/lock-schema-v2.md §CLI.
+  it("SC-006: lock dependsOn churn (annotation added) does not trip --gate", () => {
+    const reqId = "REQ-200";
+    const graph: ArtifactGraph = {
+      nodes: new Map([
+        [reqId, { id: reqId, kind: "req", filePath: "specs/x.md", contentHash: "h-stable" }],
+        ["REQ-201", { id: "REQ-201", kind: "req", filePath: "specs/x.md", contentHash: "h-other" }],
+      ]),
+      edges: [
+        { source: "file:impl.ts", target: reqId, kind: "implements", provenances: ["code-tag"] },
+        { source: "file:impl.test.ts", target: reqId, kind: "verifies", provenances: ["code-tag"] },
+        { source: "file:impl.ts", target: "REQ-201", kind: "implements", provenances: ["code-tag"] },
+        { source: "file:impl.test.ts", target: "REQ-201", kind: "verifies", provenances: ["code-tag"] },
+        // A newly-added annotation edge — must not influence drift judgement.
+        { source: reqId, target: "REQ-201", kind: "depends_on", provenances: ["annotation"] },
+      ],
+    };
+    // Lock has the OLD contentHash (no `dependsOn` because the annotation was
+    // just added). The contentHash is what matters; the dependsOn diff is not.
+    const lock: LockFile = {
+      [reqId]: { contentHash: "h-stable", lastReconciled: "2025-01-01T00:00:00Z" },
+      "REQ-201": { contentHash: "h-other", lastReconciled: "2025-01-01T00:00:00Z" },
+    };
+    const result = check(graph, lock);
+    expect(result.pass).toBe(true);
+    expect(result.drifted).toEqual([]);
   });
 });

@@ -306,6 +306,7 @@ export function buildGraph(
             source: doc.id,
             target: childId,
             kind: "contains",
+            provenances: ["structural"],
           });
         }
       }
@@ -352,7 +353,7 @@ export function buildGraph(
   // same file).
   for (let i = edges.length - 1; i >= 0; i--) {
     const edge = edges[i];
-    if (edge.provenance === "annotation" && edge.source === edge.target) {
+    if (edge.provenances.includes("annotation") && edge.source === edge.target) {
       const sourceNode = nodes.get(edge.source);
       warnings.push({
         type: "self-reference-annotation",
@@ -369,7 +370,7 @@ export function buildGraph(
   // generated from inline annotations (provenance: "annotation") where the
   // target ID was never registered as a req or doc.
   for (const edge of edges) {
-    if (edge.provenance !== "annotation") continue;
+    if (!edge.provenances.includes("annotation")) continue;
     if (nodes.has(edge.target)) continue;
     const sourceNode = nodes.get(edge.source);
     warnings.push({
@@ -459,6 +460,7 @@ export function buildGraph(
           source: link.sourceDocId,
           target: targetNode.id,
           kind: "depends_on",
+          provenances: ["inline-link"],
         });
         continue;
       }
@@ -492,17 +494,27 @@ export function buildGraph(
     }
   }
 
-  // T037: Edge deduplication (FR-006)
+  // T037 / Issue #35: Edge deduplication. Same (source, target, kind) is
+  // collapsed into one edge whose `provenances` is the sorted set-union of all
+  // contributing edges. Iteration is stable on the source `edges` array so
+  // the kept edge always comes from the first occurrence (INV-T3 — final
+  // order is determined by sort, not by which path inserted first).
   const edgeKey = (e: GraphEdge) => `${e.source}|${e.target}|${e.kind}`;
-  const seen = new Set<string>();
-  const dedupedEdges: GraphEdge[] = [];
+  const dedupMap = new Map<string, GraphEdge>();
   for (const edge of edges) {
     const key = edgeKey(edge);
-    if (!seen.has(key)) {
-      seen.add(key);
-      dedupedEdges.push(edge);
+    const existing = dedupMap.get(key);
+    if (!existing) {
+      // Defensive copy with sorted provenances so even a single-source edge
+      // satisfies INV-T2/T3.
+      const sorted = [...new Set(edge.provenances)].sort() as unknown as GraphEdge["provenances"];
+      dedupMap.set(key, { ...edge, provenances: sorted });
+    } else {
+      const merged = [...new Set([...existing.provenances, ...edge.provenances])].sort();
+      existing.provenances = merged as unknown as GraphEdge["provenances"];
     }
   }
+  const dedupedEdges = Array.from(dedupMap.values());
 
   return { graph: { nodes, edges: dedupedEdges }, warnings };
 }
@@ -540,7 +552,7 @@ function inferConventionEdges(nodes: Map<string, GraphNode>): GraphEdge[] {
       const target = stems.get(toStem);
       // Only emit when both endpoints exist, so no orphan-doc is ever produced.
       if (source && target && source !== target) {
-        edges.push({ source, target, kind: "derives_from" });
+        edges.push({ source, target, kind: "derives_from", provenances: ["convention"] });
       }
     }
   }

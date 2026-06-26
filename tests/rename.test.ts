@@ -519,13 +519,15 @@ describe("renameLockKey", () => {
       },
       "REQ-002": {
         contentHash: "def",
-        dependsOn: ["REQ-001"],
+        dependsOn: [{ id: "REQ-001", provenances: ["frontmatter"] }],
         lastReconciled: "2025-01-01T00:00:00Z",
       },
     };
 
     const { lock: result } = renameLockKey(lock, "REQ-001", "REQ-100");
-    expect(result["REQ-002"].dependsOn).toEqual(["REQ-100"]);
+    expect(result["REQ-002"].dependsOn).toEqual([
+      { id: "REQ-100", provenances: ["frontmatter"] },
+    ]);
   });
 
   it("returns unchanged lock when oldId does not exist", () => {
@@ -551,14 +553,68 @@ describe("renameLockKey", () => {
       },
       "symbol:auth": {
         contentHash: "sym",
-        dependsOn: ["REQ-001"],
+        dependsOn: [{ id: "REQ-001", provenances: ["code-tag"] }],
         lastReconciled: "2025-01-01T00:00:00Z",
       },
     };
 
     const { lock: result } = renameLockKey(lock, "REQ-001", "REQ-100");
     // symbol: keys are skipped during reference updates
-    expect(result["symbol:auth"].dependsOn).toEqual(["REQ-001"]);
+    expect(result["symbol:auth"].dependsOn).toEqual([
+      { id: "REQ-001", provenances: ["code-tag"] },
+    ]);
+  });
+
+  // Issue #35 / SC-005: rename must rewrite the `id` field only — the
+  // `provenances` array is preserved verbatim (order + contents).
+  it("SC-005: preserves multi-element provenances array on rename", () => {
+    const lock: LockFile = {
+      "REQ-001": { contentHash: "a", lastReconciled: "t" },
+      "REQ-002": {
+        contentHash: "b",
+        dependsOn: [
+          {
+            id: "REQ-001",
+            provenances: ["annotation", "convention", "frontmatter"],
+          },
+        ],
+        lastReconciled: "t",
+      },
+    };
+    const { lock: result } = renameLockKey(lock, "REQ-001", "REQ-100");
+    expect(result["REQ-002"].dependsOn).toEqual([
+      {
+        id: "REQ-100",
+        provenances: ["annotation", "convention", "frontmatter"],
+      },
+    ]);
+  });
+
+  // Issue #35: a rename followed by `buildLockFromGraph` (on a graph whose IDs
+  // already reflect the rename) must produce a lock that is byte-equivalent to
+  // the post-rename lock. The renameLockKey result, when piped through a
+  // hypothetical re-scan, should not introduce drift in `dependsOn` shape.
+  it("SC-003: post-rename lock shape preserves dependsOn invariants (id sorted, provenances sorted)", () => {
+    const lock: LockFile = {
+      "REQ-001": { contentHash: "a", lastReconciled: "t" },
+      "REQ-099": { contentHash: "z", lastReconciled: "t" },
+      "REQ-002": {
+        contentHash: "b",
+        dependsOn: [
+          { id: "REQ-099", provenances: ["frontmatter"] },
+          { id: "REQ-001", provenances: ["annotation", "convention"] },
+        ],
+        lastReconciled: "t",
+      },
+    };
+    const { lock: result } = renameLockKey(lock, "REQ-001", "REQ-100");
+    // The resulting dependsOn must be id-sorted (INV-L1) and each provenances
+    // sub-array must still be sorted (INV-L2), exactly as buildLockFromGraph
+    // would emit.
+    expect(result["REQ-002"].dependsOn).toEqual([
+      { id: "REQ-099", provenances: ["frontmatter"] },
+      { id: "REQ-100", provenances: ["annotation", "convention"] },
+    ]);
   });
 });
 
@@ -609,14 +665,22 @@ describe("splitLockKey", () => {
       "REQ-001": { contentHash: "a", lastReconciled: "t" },
       "REQ-003": {
         contentHash: "c",
-        dependsOn: ["REQ-001", "REQ-002"],
+        dependsOn: [
+          { id: "REQ-001", provenances: ["frontmatter"] },
+          { id: "REQ-002", provenances: ["frontmatter"] },
+        ],
         lastReconciled: "t",
       },
     };
 
     const { lock: result } = splitLockKey(lock, "REQ-001", ["REQ-101", "REQ-102"]);
     // No dangling reference to the removed REQ-001 — it expands to both new IDs.
-    expect(result["REQ-003"].dependsOn).toEqual(["REQ-101", "REQ-102", "REQ-002"]);
+    // Output is id-sorted per INV-L1.
+    expect(result["REQ-003"].dependsOn).toEqual([
+      { id: "REQ-002", provenances: ["frontmatter"] },
+      { id: "REQ-101", provenances: ["frontmatter"] },
+      { id: "REQ-102", provenances: ["frontmatter"] },
+    ]);
   });
 
   it("carries the split source's specFile onto the new entries (H5)", () => {
@@ -720,14 +784,19 @@ describe("mergeLockKeys", () => {
       "REQ-002": { contentHash: "b", lastReconciled: "t" },
       "REQ-003": {
         contentHash: "c",
-        dependsOn: ["REQ-001", "REQ-002"],
+        dependsOn: [
+          { id: "REQ-001", provenances: ["frontmatter"] },
+          { id: "REQ-002", provenances: ["annotation"] },
+        ],
         lastReconciled: "t",
       },
     };
 
     const { lock: result } = mergeLockKeys(lock, ["REQ-001", "REQ-002"], "REQ-100");
-    // Both former references collapse onto the merge target, de-duplicated.
-    expect(result["REQ-003"].dependsOn).toEqual(["REQ-100"]);
+    // Both former references collapse onto the merge target; provenances union.
+    expect(result["REQ-003"].dependsOn).toEqual([
+      { id: "REQ-100", provenances: ["annotation", "frontmatter"] },
+    ]);
   });
 
   it("preserves specFile and drops self-references (H5)", () => {
@@ -735,7 +804,7 @@ describe("mergeLockKeys", () => {
       "REQ-001": {
         specFile: "specs/a.md",
         contentHash: "a",
-        dependsOn: ["REQ-002"],
+        dependsOn: [{ id: "REQ-002", provenances: ["annotation"] }],
         lastReconciled: "t",
       },
       "REQ-002": { specFile: "specs/a.md", contentHash: "b", lastReconciled: "t" },
@@ -967,7 +1036,7 @@ describe("rewriteFile (.md) — annotation target rewriting (T024)", () => {
       expect(afterOrphans).toBeLessThanOrEqual(beforeOrphans);
 
       // Targeted: the AUTH-002 / AUTH-004 annotation edges now point at AUTH-100.
-      const annAfter = after.graph.edges.filter((e) => e.provenance === "annotation");
+      const annAfter = after.graph.edges.filter((e) => e.provenances?.includes("annotation"));
       expect(annAfter.find((e) => e.source === "AUTH-002" && e.target === "AUTH-100")).toBeDefined();
       expect(annAfter.find((e) => e.source === "AUTH-004" && e.target === "AUTH-100")).toBeDefined();
     } finally {

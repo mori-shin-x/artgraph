@@ -212,6 +212,28 @@ Built-in presets activate automatically on upgrade. Existing projects whose
 `artgraph scan`. Run `artgraph reconcile` to refresh the lock baseline.
 
 
+## Edge provenance
+
+Every edge in the graph carries a `provenances: EdgeProvenance[]` array
+explaining where it came from. The eight values cover all generation sites:
+
+| Value         | Source                                              |
+| ------------- | --------------------------------------------------- |
+| `annotation`  | inline `(depends_on: …)` / `(derives_from: …)` notes |
+| `frontmatter` | YAML `artgraph.depends_on` / `derives_from`         |
+| `convention`  | folder/file-stem conventions (kiro / spec-kit presets) |
+| `code-tag`    | `// @impl` / `// @verifies` / `req:` in TS code     |
+| `task-tag`    | task preset `_Requirements:` / `[REQ-…]` brackets   |
+| `inline-link` | markdown inline `[text](path)` links between docs   |
+| `ts-import`   | `import` statements                                 |
+| `structural`  | doc → req / task auto-`contains` within the same file |
+
+When the same `(source, target, kind)` is produced by multiple paths, the
+arrays are union-merged and sorted (e.g. `["convention", "frontmatter"]`). The
+`.trace.lock` mirrors this by storing each `dependsOn` element as
+`{id, provenances}`. See [specs/011-edge-provenance/](specs/011-edge-provenance/)
+for the formalisation.
+
 ## Commands
 
 | Command              | Purpose                                                      |

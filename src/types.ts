@@ -8,20 +8,36 @@ export type EdgeKind =
   | "imports"
   | "contains";
 
+// Tuple type alias enforcing "at least one element" statically.
+// See specs/011-edge-provenance/contracts/edge-provenance-type.md.
+export type NonEmptyArray<T> = readonly [T, ...T[]];
+
 // Origin of an edge. Lets downstream consumers tell convention/frontmatter/
-// annotation-derived edges apart (see specs/010-req-req-dependency,
-// issue #35). Optional today — only annotation edges populate it; other
-// origins are added by #35.
-export type EdgeProvenance = "annotation" | "frontmatter" | "convention" | "tag";
+// annotation/inline-link/code-tag/task-tag/ts-import/structural-derived edges
+// apart. See specs/011-edge-provenance/ for the formalisation (issue #35).
+export type EdgeProvenance =
+  | "annotation"
+  | "frontmatter"
+  | "convention"
+  | "code-tag"
+  | "task-tag"
+  | "inline-link"
+  | "ts-import"
+  | "structural";
 
 // Run-time value set for the EdgeProvenance literal union. Kept in sync with
 // the type union above so format.ts / lock.ts can validate a provenance
 // value at serialization time without trusting the wire shape.
+// SC-008 / INV-T4: type union element count == set size.
 export const EDGE_PROVENANCE_VALUES: ReadonlySet<EdgeProvenance> = new Set([
   "annotation",
   "frontmatter",
   "convention",
-  "tag",
+  "code-tag",
+  "task-tag",
+  "inline-link",
+  "ts-import",
+  "structural",
 ]);
 
 export interface GraphNode {
@@ -37,7 +53,9 @@ export interface GraphEdge {
   source: string;
   target: string;
   kind: EdgeKind;
-  provenance?: EdgeProvenance;
+  // NonEmpty: every edge must record at least one provenance.
+  // See specs/011-edge-provenance/contracts/edge-provenance-type.md §INV-T1.
+  provenances: NonEmptyArray<EdgeProvenance>;
 }
 
 export interface ArtifactGraph {
@@ -50,7 +68,9 @@ export interface LockEntry {
   contentHash: string;
   impl?: string[];
   tests?: string[];
-  dependsOn?: string[];
+  // Schema v2: structured to carry provenance per reference.
+  // See specs/011-edge-provenance/contracts/lock-schema-v2.md.
+  dependsOn?: Array<{ id: string; provenances: EdgeProvenance[] }>;
   lastReconciled: string;
 }
 

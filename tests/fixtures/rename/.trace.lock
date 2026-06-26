@@ -20,7 +20,10 @@
       "tests/feature.test.ts"
     ],
     "dependsOn": [
-      "REQ-001"
+      {
+        "id": "REQ-001",
+        "provenances": ["frontmatter"]
+      }
     ],
     "lastReconciled": "2025-01-01T00:00:00.000Z"
   },
@@ -28,7 +31,10 @@
     "specFile": "specs/feature.md",
     "contentHash": "mno345pqr678",
     "dependsOn": [
-      "REQ-002"
+      {
+        "id": "REQ-002",
+        "provenances": ["frontmatter"]
+      }
     ],
     "lastReconciled": "2025-01-01T00:00:00.000Z"
   }

@@ -67,6 +67,7 @@ describe("findOrphans", () => {
       source: "file:src/auth/login.ts",
       target: "FAKE-9999",
       kind: "implements",
+      provenances: ["code-tag"],
     });
 
     const orphans = findOrphans(graph);
@@ -181,9 +182,9 @@ describe("impact: cyclic doc-to-doc graph", () => {
         ["doc:C", { id: "doc:C", kind: "doc" as const, filePath: "c.md", contentHash: "h3" }],
       ]),
       edges: [
-        { source: "doc:A", target: "doc:B", kind: "derives_from" as const },
-        { source: "doc:B", target: "doc:C", kind: "derives_from" as const },
-        { source: "doc:C", target: "doc:A", kind: "derives_from" as const },
+        { source: "doc:A", target: "doc:B", kind: "derives_from" as const, provenances: ["convention"] as const },
+        { source: "doc:B", target: "doc:C", kind: "derives_from" as const, provenances: ["convention"] as const },
+        { source: "doc:C", target: "doc:A", kind: "derives_from" as const, provenances: ["convention"] as const },
       ],
     };
     const result = impact(cyclicGraph, ["doc:A"], {});
@@ -203,9 +204,9 @@ describe("impact: cyclic doc-to-doc graph", () => {
         ["doc:D", { id: "doc:D", kind: "doc" as const, filePath: "d.md", contentHash: "h4" }],
       ]),
       edges: [
-        { source: "doc:B", target: "doc:A", kind: "derives_from" as const },
-        { source: "doc:C", target: "doc:B", kind: "derives_from" as const },
-        { source: "doc:D", target: "doc:C", kind: "derives_from" as const },
+        { source: "doc:B", target: "doc:A", kind: "derives_from" as const, provenances: ["convention"] as const },
+        { source: "doc:C", target: "doc:B", kind: "derives_from" as const, provenances: ["convention"] as const },
+        { source: "doc:D", target: "doc:C", kind: "derives_from" as const, provenances: ["convention"] as const },
       ],
     };
     // From B with depth=1: reaches A (backward via B->A) and C (forward via C->B)
@@ -254,10 +255,10 @@ describe("task-source edge semantics (meta-review remediation)", () => {
         ["T001", { id: "T001", kind: "task", filePath: "specs/auth-tasks.md", contentHash: "h2" }],
       ] as const),
       edges: [
-        { source: "T001", target: "FR-001", kind: "implements" as const },
+        { source: "T001", target: "FR-001", kind: "implements" as const, provenances: ["task-tag"] as const },
         // verifies edge pointing at a Kiro-style numeric ID that is NOT in the
         // node map — the task-source filter must keep this from being reported.
-        { source: "T001", target: "1.1", kind: "verifies" as const },
+        { source: "T001", target: "1.1", kind: "verifies" as const, provenances: ["task-tag"] as const },
       ],
     };
   }

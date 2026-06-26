@@ -724,8 +724,8 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
       .filter((e) => e.kind === "implements")
       .sort((a, b) => a.source.localeCompare(b.source));
     expect(implements_).toEqual([
-      { source: "auth/T001", target: "auth-login", kind: "implements" },
-      { source: "export/T001", target: "csv-writer", kind: "implements" },
+      { source: "auth/T001", target: "auth-login", kind: "implements", provenances: ["task-tag"] },
+      { source: "export/T001", target: "csv-writer", kind: "implements", provenances: ["task-tag"] },
     ]);
   });
 
@@ -751,7 +751,7 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
     expect(tasks.map((n) => n.id)).toEqual(["OS-100"]);
     const impl = graph.edges.filter((e) => e.kind === "implements");
     expect(impl).toEqual([
-      { source: "OS-100", target: "openspec-target", kind: "implements" },
+      { source: "OS-100", target: "openspec-target", kind: "implements", provenances: ["task-tag"] },
     ]);
   });
 
@@ -796,9 +796,9 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
             : a.source.localeCompare(b.source),
         );
       expect(verifies).toEqual([
-        { source: "CT-001", target: "REQ-A", kind: "verifies" },
-        { source: "CT-002", target: "REQ-B", kind: "verifies" },
-        { source: "CT-002", target: "REQ-C", kind: "verifies" },
+        { source: "CT-001", target: "REQ-A", kind: "verifies", provenances: ["task-tag"] },
+        { source: "CT-002", target: "REQ-B", kind: "verifies", provenances: ["task-tag"] },
+        { source: "CT-002", target: "REQ-C", kind: "verifies", provenances: ["task-tag"] },
       ]);
     } finally {
       rmSync(tmpRoot, { recursive: true, force: true });
@@ -906,12 +906,12 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
           : a.source.localeCompare(b.source),
       );
     expect(verifies).toEqual([
-      { source: "1", target: "7.1", kind: "verifies" },
-      { source: "1", target: "7.2", kind: "verifies" },
-      { source: "1.1", target: "7.3", kind: "verifies" },
-      { source: "1.2", target: "8.1", kind: "verifies" },
-      { source: "2", target: "8.2", kind: "verifies" },
-      { source: "2", target: "9.1", kind: "verifies" },
+      { source: "1", target: "7.1", kind: "verifies", provenances: ["task-tag"] },
+      { source: "1", target: "7.2", kind: "verifies", provenances: ["task-tag"] },
+      { source: "1.1", target: "7.3", kind: "verifies", provenances: ["task-tag"] },
+      { source: "1.2", target: "8.1", kind: "verifies", provenances: ["task-tag"] },
+      { source: "2", target: "8.2", kind: "verifies", provenances: ["task-tag"] },
+      { source: "2", target: "9.1", kind: "verifies", provenances: ["task-tag"] },
     ]);
   });
 });
@@ -940,20 +940,20 @@ describe("buildGraph: req→req annotation edges", () => {
     expect(graph.nodes.has("010-a/AUTH-001")).toBe(true);
     expect(graph.nodes.has("010-b/AUTH-001")).toBe(true);
 
-    const annEdges = graph.edges.filter((e) => e.provenance === "annotation");
+    const annEdges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
     // AUTH-002 in 010-a should point at 010-a/AUTH-001 (not 010-b/AUTH-001).
     expect(annEdges).toContainEqual({
       source: "AUTH-002",
       target: "010-a/AUTH-001",
       kind: "depends_on",
-      provenance: "annotation",
+      provenances: ["annotation"],
     });
     // AUTH-003 in 010-b should point at 010-b/AUTH-001.
     expect(annEdges).toContainEqual({
       source: "AUTH-003",
       target: "010-b/AUTH-001",
       kind: "depends_on",
-      provenance: "annotation",
+      provenances: ["annotation"],
     });
   });
 
@@ -996,7 +996,7 @@ describe("buildGraph: req→req annotation edges", () => {
         specDirs: ["specs"],
       });
       const annEdges = graph.edges.filter(
-        (e) => e.provenance === "annotation" && e.source === "AUTH-002",
+        (e) => e.provenances?.includes("annotation") && e.source === "AUTH-002",
       );
       expect(annEdges).toHaveLength(1);
       expect(annEdges[0].target).toBe("AUTH-001");
@@ -1019,7 +1019,7 @@ describe("buildGraph: req→req annotation edges", () => {
         ...annConfig,
         specDirs: ["specs"],
       });
-      const annEdges = graph.edges.filter((e) => e.provenance === "annotation");
+      const annEdges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
       expect(annEdges).toEqual([]);
       const selfRef = warnings.find((w) => w.type === "self-reference-annotation");
       expect(selfRef).toBeDefined();
@@ -1027,5 +1027,163 @@ describe("buildGraph: req→req annotation edges", () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #35: provenance tagging at edge generation sites + dedup union
+// ---------------------------------------------------------------------------
+
+describe("buildGraph: provenance tagging (issue #35)", () => {
+  const ALL_EIGHT = resolve(import.meta.dirname, "fixtures/edge-provenance/all-eight");
+  const allEightConfig: ArtgraphConfig = {
+    include: ["src/**/*.ts"],
+    specDirs: ["specs"],
+    testPatterns: ["tests/**/*.test.ts"],
+    lockFile: ".trace.lock",
+  };
+
+  it("structural: auto-contains edges carry provenances: ['structural']", () => {
+    const { graph } = buildGraph(ALL_EIGHT, allEightConfig);
+    const contains = graph.edges.filter((e) => e.kind === "contains");
+    expect(contains.length).toBeGreaterThan(0);
+    for (const edge of contains) {
+      expect(edge.provenances).toEqual(["structural"]);
+    }
+  });
+
+  it("inline-link: doc inline links generate depends_on with provenances: ['inline-link']", () => {
+    const { graph } = buildGraph(ALL_EIGHT, allEightConfig);
+    // `specs/design.md` body has `[spec](./spec.md)` — inline link → depends_on.
+    const link = graph.edges.find(
+      (e) =>
+        e.kind === "depends_on" &&
+        e.source === "doc:design.md" &&
+        e.target === "doc:spec.md",
+    );
+    expect(link).toBeDefined();
+    expect(link?.provenances).toEqual(["inline-link"]);
+  });
+
+  it("convention only: when no frontmatter collides, convention edge has provenances: ['convention']", () => {
+    const { graph } = buildGraph(ALL_EIGHT, allEightConfig);
+    // `tasks → design` from the kiro preset has no frontmatter counterpart.
+    const tasksDesign = graph.edges.find(
+      (e) =>
+        e.kind === "derives_from" &&
+        e.source === "doc:tasks.md" &&
+        e.target === "doc:design.md",
+    );
+    expect(tasksDesign).toBeDefined();
+    expect(tasksDesign?.provenances).toEqual(["convention"]);
+  });
+});
+
+describe("buildGraph: dedup union (issue #35 US2)", () => {
+  const TWO_PATHS = resolve(import.meta.dirname, "fixtures/edge-provenance/two-paths");
+  const config: ArtgraphConfig = {
+    include: [],
+    specDirs: ["specs"],
+    testPatterns: [],
+    lockFile: ".trace.lock",
+  };
+
+  it("two paths (frontmatter+convention) collapse to one edge with sorted union", () => {
+    const { graph } = buildGraph(TWO_PATHS, config);
+    const edges = graph.edges.filter(
+      (e) =>
+        e.kind === "derives_from" &&
+        e.source === "doc:feature-a/design.md" &&
+        e.target === "doc:feature-a/requirements.md",
+    );
+    expect(edges).toHaveLength(1);
+    expect(edges[0].provenances).toEqual(["convention", "frontmatter"]);
+  });
+
+  it("INV-T2: repeated same provenance (e.g. duplicate @impl in same file) does not duplicate", () => {
+    const tmpRoot = resolve(import.meta.dirname, "fixtures/_dedup-same-tmp");
+    rmSync(tmpRoot, { recursive: true, force: true });
+    mkdirSync(resolve(tmpRoot, "specs"), { recursive: true });
+    mkdirSync(resolve(tmpRoot, "src"), { recursive: true });
+    writeFileSync(
+      resolve(tmpRoot, "specs/spec.md"),
+      "# Spec\n\n- FR-001: do\n",
+      "utf-8",
+    );
+    writeFileSync(
+      resolve(tmpRoot, "src/dup.ts"),
+      "// @impl FR-001\n// @impl FR-001\nexport const x = 1;\n",
+      "utf-8",
+    );
+    try {
+      const { graph } = buildGraph(tmpRoot, {
+        ...config,
+        include: ["src/**/*.ts"],
+      });
+      const impl = graph.edges.filter(
+        (e) =>
+          e.kind === "implements" &&
+          e.source === "file:src/dup.ts" &&
+          e.target === "FR-001",
+      );
+      expect(impl).toHaveLength(1);
+      expect(impl[0].provenances).toEqual(["code-tag"]);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("INV-T3: source-order independence — same input always sorts identically", () => {
+    // Two passes against the same fixture must yield the same sorted union.
+    const { graph: g1 } = buildGraph(TWO_PATHS, config);
+    const { graph: g2 } = buildGraph(TWO_PATHS, config);
+    const e1 = g1.edges.find(
+      (e) =>
+        e.kind === "derives_from" &&
+        e.source === "doc:feature-a/design.md" &&
+        e.target === "doc:feature-a/requirements.md",
+    );
+    const e2 = g2.edges.find(
+      (e) =>
+        e.kind === "derives_from" &&
+        e.source === "doc:feature-a/design.md" &&
+        e.target === "doc:feature-a/requirements.md",
+    );
+    expect(e1?.provenances).toEqual(e2?.provenances);
+  });
+});
+
+// SC-004: provenance 化前後で (source,target,kind) 集合が変化しない
+describe("buildGraph: SC-004 edge-set baseline invariance", () => {
+  it("(source,target,kind) triple set matches the pre-#35 baseline for fixtures/conventions", async () => {
+    const fs = await import("node:fs");
+    const baselinePath = resolve(
+      import.meta.dirname,
+      "__snapshots__/edge-set-baseline.json",
+    );
+    if (!fs.existsSync(baselinePath)) {
+      // Baseline not yet captured — emit a skip-like assertion that documents the dependency.
+      expect.fail(
+        `baseline missing at ${baselinePath}. Generate via the procedure in tasks.md T018a.`,
+      );
+      return;
+    }
+    const baseline: Array<{ source: string; target: string; kind: string }> = JSON.parse(
+      fs.readFileSync(baselinePath, "utf-8"),
+    );
+    const fixturesConventions = resolve(import.meta.dirname, "fixtures/conventions");
+    const fixturesConfig: ArtgraphConfig = {
+      include: [],
+      specDirs: ["specs"],
+      testPatterns: [],
+      lockFile: ".trace.lock",
+    };
+    const { graph } = buildGraph(fixturesConventions, fixturesConfig);
+    const current = graph.edges
+      .map((e) => ({ source: e.source, target: e.target, kind: e.kind }))
+      .sort((a, b) =>
+        JSON.stringify(a).localeCompare(JSON.stringify(b)),
+      );
+    expect(current).toEqual(baseline);
   });
 });

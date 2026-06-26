@@ -1,0 +1,47 @@
+[
+  {
+    "source": "doc:case-variant/DESIGN.md",
+    "target": "doc:case-variant/Requirements.md",
+    "kind": "derives_from"
+  },
+  {
+    "source": "doc:kiro-feature/design.md",
+    "target": "doc:kiro-feature/requirements.md",
+    "kind": "derives_from"
+  },
+  {
+    "source": "doc:kiro-feature/tasks.md",
+    "target": "doc:kiro-feature/design.md",
+    "kind": "derives_from"
+  },
+  {
+    "source": "doc:mixed-tools/tasks.md",
+    "target": "doc:mixed-tools/design.md",
+    "kind": "derives_from"
+  },
+  {
+    "source": "doc:mixed-tools/tasks.md",
+    "target": "doc:mixed-tools/plan.md",
+    "kind": "derives_from"
+  },
+  {
+    "source": "doc:speckit-feature/plan.md",
+    "target": "doc:speckit-feature/spec.md",
+    "kind": "derives_from"
+  },
+  {
+    "source": "doc:speckit-feature/research.md",
+    "target": "doc:speckit-feature/spec.md",
+    "kind": "derives_from"
+  },
+  {
+    "source": "doc:speckit-feature/tasks.md",
+    "target": "doc:speckit-feature/plan.md",
+    "kind": "derives_from"
+  },
+  {
+    "source": "wf-design",
+    "target": "wf-requirements",
+    "kind": "derives_from"
+  }
+]

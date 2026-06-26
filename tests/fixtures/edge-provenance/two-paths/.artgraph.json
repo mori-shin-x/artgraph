@@ -1,0 +1,6 @@
+{
+  "include": [],
+  "specDirs": ["specs"],
+  "testPatterns": [],
+  "lockFile": ".trace.lock"
+}

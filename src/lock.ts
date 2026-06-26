@@ -78,19 +78,23 @@ export function buildLockFromGraph(graph: ArtifactGraph): LockFile {
       entry.tests = testEdges.map((e) => e.source);
     }
 
-    // contracts/provenance-field.md: annotation-derived edges are NOT
-    // written to the lock file in this issue's scope (#35 will redesign the
-    // lock schema to address req→req dependencies first-class). Filtering by
-    // `provenance !== "annotation"` keeps the lock surface stable so adding
-    // an inline annotation doesn't churn the lock and trip `check --gate`.
+    // Schema v2 (issue #35): `dependsOn` is `Array<{id, provenances}>` and
+    // includes annotation-derived edges as well. The output is sorted by `id`
+    // ascending and each `provenances` array is sorted ascending so identical
+    // graph inputs produce byte-identical lock outputs (INV-L1, INV-L2,
+    // INV-L4). See specs/011-edge-provenance/contracts/lock-schema-v2.md.
     const depEdges = graph.edges.filter(
       (e) =>
         (e.kind === "depends_on" || e.kind === "derives_from") &&
-        e.source === id &&
-        e.provenance !== "annotation",
+        e.source === id,
     );
     if (depEdges.length > 0) {
-      entry.dependsOn = depEdges.map((e) => e.target);
+      entry.dependsOn = depEdges
+        .map((e) => ({
+          id: e.target,
+          provenances: [...e.provenances].sort(),
+        }))
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     }
 
     lock[id] = entry;
