@@ -1,0 +1,6 @@
+{
+  "include": ["src/**/*.ts"],
+  "specDirs": [".kiro/specs"],
+  "testPatterns": ["tests/**/*.test.ts"],
+  "lockFile": ".trace.lock"
+}
