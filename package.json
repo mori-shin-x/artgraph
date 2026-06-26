@@ -14,7 +14,9 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "artgraph": "node --enable-source-maps ./dist/cli.js",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config vitest.perf.config.ts",
+    "test:unit": "vitest run",
+    "test:perf": "vitest run --config vitest.perf.config.ts",
     "test:watch": "vitest",
     "knip": "knip",
     "prepublishOnly": "pnpm test && rm -rf dist && tsc"

@@ -1,6 +1,15 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { resolve } from "node:path";
-import { writeFileSync, unlinkSync, existsSync, mkdirSync, rmdirSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
+import {
+  writeFileSync,
+  unlinkSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmdirSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { buildGraph } from "../src/graph/builder.js";
 import { buildLockFromGraph } from "../src/lock.js";
 import type { ArtgraphConfig } from "../src/types.js";
@@ -238,9 +247,15 @@ describe("buildGraph: contains edges (US3)", () => {
   });
 
   it("T028: should warn on reserved-prefix in req IDs", () => {
-    const tmpPath = resolve(FIXTURE_DIR, "specs/reserved-prefix-test.md");
+    // Build in an isolated tmp tree so the spec file is never visible to
+    // other test workers' globs of the shared `tests/fixtures/specs/` dir
+    // (was a race: traverse.test.ts hit ENOENT after our glob, before our
+    // unlink, on a fast in-process suite).
+    const tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-reserved-prefix-"));
+    const tmpSpecs = resolve(tmpRoot, "specs");
+    mkdirSync(tmpSpecs, { recursive: true });
     writeFileSync(
-      tmpPath,
+      resolve(tmpSpecs, "reserved-prefix-test.md"),
       `---
 artgraph:
   node_id: "reserved-test"
@@ -252,7 +267,8 @@ artgraph:
     );
 
     try {
-      const { warnings } = buildGraph(FIXTURE_DIR, config);
+      const tmpConfig: ArtgraphConfig = { ...config, include: [], testPatterns: [] };
+      const { warnings } = buildGraph(tmpRoot, tmpConfig);
       const reservedWarnings = warnings.filter(
         (w) => w.type === "reserved-prefix" && w.id === "doc:FR-001",
       );
@@ -261,7 +277,7 @@ artgraph:
       // as it starts with lowercase "doc:". This is actually correct behavior:
       // the reserved-prefix check only triggers for IDs that DO match the req pattern.
     } finally {
-      unlinkSync(tmpPath);
+      rmSync(tmpRoot, { recursive: true, force: true });
     }
   });
 });
