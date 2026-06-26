@@ -1,7 +1,13 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { resolve } from "node:path";
-import { mkdirSync, rmSync, symlinkSync, existsSync } from "node:fs";
-import { writeLock, buildLockFromGraph } from "../src/lock.js";
+import {
+  mkdirSync,
+  rmSync,
+  symlinkSync,
+  existsSync,
+  readFileSync,
+} from "node:fs";
+import { writeLock, readLock, buildLockFromGraph } from "../src/lock.js";
 import type { ArtifactGraph, GraphNode, GraphEdge } from "../src/types.js";
 
 const TMP = resolve(import.meta.dirname, "fixtures/lock-test");
@@ -130,6 +136,92 @@ describe("buildLockFromGraph — schema v2 dependsOn", () => {
     ]);
   });
 
+  // E4 (PR#94 review): the 2-element case above only proves a single swap. Pin
+  // the sort across larger cardinalities so a future "stable sort short-circuit"
+  // micro-optimisation can't silently regress INV-L2 for >2 elements.
+  it("INV-L2 E4: 3-element provenances sort ascending (frontmatter+convention+annotation)", () => {
+    const g = graph(
+      [node("A", "req"), node("B", "req")],
+      [
+        {
+          source: "A",
+          target: "B",
+          kind: "depends_on",
+          provenances: ["frontmatter", "convention", "annotation"],
+        },
+      ],
+    );
+    const lock = buildLockFromGraph(g);
+    expect(lock["A"].dependsOn).toEqual([
+      { id: "B", provenances: ["annotation", "convention", "frontmatter"] },
+    ]);
+  });
+
+  it("INV-L2 E4: 4-element provenances sort ascending (ts-import+code-tag+structural+task-tag)", () => {
+    // Note: this is an artificial DepRef cardinality — annotation/structural
+    // edges normally don't carry a ts-import provenance — but the sort
+    // contract is provenance-agnostic and must hold for any non-empty
+    // tuple. Locking this in catches a "sort by category bucket" regression.
+    const g = graph(
+      [node("A", "req"), node("B", "req")],
+      [
+        {
+          source: "A",
+          target: "B",
+          kind: "depends_on",
+          provenances: ["ts-import", "code-tag", "structural", "task-tag"],
+        },
+      ],
+    );
+    const lock = buildLockFromGraph(g);
+    expect(lock["A"].dependsOn).toEqual([
+      { id: "B", provenances: ["code-tag", "structural", "task-tag", "ts-import"] },
+    ]);
+  });
+
+  it("INV-L2 E4: all-eight provenances sort to canonical alphabetical order", () => {
+    // The maximal case: every EdgeProvenance value present once. Pins the
+    // canonical sort order so type-union expansion has a concrete expectation
+    // to update against. If `EDGE_PROVENANCE_VALUES` grows past 8, this test
+    // must be updated alongside `req-req-invariants.test.ts SC-008`.
+    const g = graph(
+      [node("A", "req"), node("B", "req")],
+      [
+        {
+          source: "A",
+          target: "B",
+          kind: "depends_on",
+          provenances: [
+            "task-tag",
+            "structural",
+            "ts-import",
+            "code-tag",
+            "annotation",
+            "convention",
+            "inline-link",
+            "frontmatter",
+          ],
+        },
+      ],
+    );
+    const lock = buildLockFromGraph(g);
+    expect(lock["A"].dependsOn).toEqual([
+      {
+        id: "B",
+        provenances: [
+          "annotation",
+          "code-tag",
+          "convention",
+          "frontmatter",
+          "inline-link",
+          "structural",
+          "task-tag",
+          "ts-import",
+        ],
+      },
+    ]);
+  });
+
   it("includes annotation-derived dependsOn (issue #35: no provenance filter)", () => {
     const g = graph(
       [node("REQ-A", "req"), node("REQ-B", "req")],
@@ -172,5 +264,67 @@ describe("buildLockFromGraph — schema v2 dependsOn", () => {
     } finally {
       global.Date = real;
     }
+  });
+});
+
+// E1 (PR#94 review): the INV-L4 test above only exercises the in-memory
+// `buildLockFromGraph` twice. It does NOT round-trip through the disk. The
+// reviewer's concern is that `writeLock → readLock → writeLock` must also
+// produce byte-identical output, without any Date stub — because the Phase 1
+// idempotency fix in `buildLockFromGraph(graph, prevLock?)` preserves
+// `lastReconciled` from `prevLock` when nothing structural changed. The test
+// below proves that property end-to-end on the real filesystem.
+describe("INV-L4 / SC-003 round-trip via fs (PR#94 E1)", () => {
+  const TMP = resolve(import.meta.dirname, "fixtures/_lock-roundtrip-tmp");
+  afterEach(() => rmSync(TMP, { recursive: true, force: true }));
+
+  function node(id: string, kind: GraphNode["kind"]): GraphNode {
+    return { id, kind, filePath: `${id}.md`, contentHash: "abc" };
+  }
+  function graph(nodes: GraphNode[], edges: GraphEdge[]): ArtifactGraph {
+    const map = new Map<string, GraphNode>();
+    for (const n of nodes) map.set(n.id, n);
+    return { nodes: map, edges };
+  }
+
+  it("writeLock → readLock → buildLockFromGraph(g, prev) → writeLock yields byte-identical files (NO Date stub)", () => {
+    const g = graph(
+      [node("X", "req"), node("Y", "req"), node("Z", "req")],
+      [
+        { source: "X", target: "Y", kind: "depends_on", provenances: ["frontmatter", "convention"] },
+        { source: "X", target: "Z", kind: "derives_from", provenances: ["annotation"] },
+      ],
+    );
+
+    // Set up two sibling output dirs so we can write twice and `Buffer.compare`
+    // both files independently.
+    const dirA = resolve(TMP, "a");
+    const dirB = resolve(TMP, "b");
+    mkdirSync(dirA, { recursive: true });
+    mkdirSync(dirB, { recursive: true });
+
+    // Pass 1: build from scratch and persist.
+    const lock1 = buildLockFromGraph(g);
+    writeLock(dirA, ".trace.lock", lock1);
+
+    // Pass 2: read back from disk, then rebuild using prevLock — the
+    // idempotency contract is what makes lastReconciled survive verbatim.
+    const prev = readLock(dirA, ".trace.lock");
+    const lock2 = buildLockFromGraph(g, prev);
+    writeLock(dirB, ".trace.lock", lock2);
+
+    // Byte-level comparison: anything weaker (e.g. JSON.stringify of the
+    // in-memory objects) would not catch a trailing-newline or whitespace
+    // regression in `writeLock`.
+    const bufA = readFileSync(resolve(dirA, ".trace.lock"));
+    const bufB = readFileSync(resolve(dirB, ".trace.lock"));
+    expect(Buffer.compare(bufA, bufB)).toBe(0);
+
+    // Belt-and-suspenders: the same property at the parsed-object level.
+    // If this passed but the buffer compare failed we'd know the difference
+    // is whitespace / formatting and not structure.
+    expect(JSON.parse(bufA.toString("utf-8"))).toEqual(
+      JSON.parse(bufB.toString("utf-8")),
+    );
   });
 });

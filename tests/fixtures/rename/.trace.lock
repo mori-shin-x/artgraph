@@ -22,7 +22,9 @@
     "dependsOn": [
       {
         "id": "REQ-001",
-        "provenances": ["frontmatter"]
+        "provenances": [
+          "frontmatter"
+        ]
       }
     ],
     "lastReconciled": "2025-01-01T00:00:00.000Z"
@@ -33,7 +35,9 @@
     "dependsOn": [
       {
         "id": "REQ-002",
-        "provenances": ["frontmatter"]
+        "provenances": [
+          "frontmatter"
+        ]
       }
     ],
     "lastReconciled": "2025-01-01T00:00:00.000Z"

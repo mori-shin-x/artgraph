@@ -2,6 +2,14 @@
 
 Plan: [../plan.md](../plan.md) | Data Model: [../data-model.md](../data-model.md) | Related Issue: [#35](https://github.com/ShintaroMorimoto/artgraph/issues/35)
 
+> **Note on consumers (Issue #35, 確認 2026-06-26)**: 本 schema の `dependsOn`
+> フィールドは現状 runtime で参照されない。drift 判定 (`check.ts`) は
+> `contentHash` のみ参照し、coverage / traverse / impact も `graph.edges` を
+> 直接走査する。`dependsOn` の存在価値は (a) `git diff .trace.lock` で PR
+> レビュー時に依存変化を可視化する presentational 用途、(b) `artgraph rename`
+> 時の参照書き換え対象 (`rename-lock.ts` のみが `entry.dependsOn` を読む)、
+> の 2 点のみ。**1st-class consumer (`artgraph diff` 等) は future work**。
+
 ## 型定義
 
 `packages/artgraph/src/types.ts`:
@@ -137,9 +145,13 @@ updated.dependsOn = updated.dependsOn
 | `artgraph reconcile` | 同上 |
 | `artgraph check` | drift 判定は `contentHash` 比較のみ。`dependsOn` 変動は判定に使われない |
 | `artgraph check --gate` | 同上。注釈追記による lock churn では gate 失敗しない |
-| `artgraph diff` | `dependsOn` の構造比較を `{id, provenances}` 単位で実施 |
-| `artgraph impact` | `dependsOn[i].id` を読む。`provenances` は表示用のみ |
-| `artgraph rename` | 上記 `rename-lock.ts` 修正により新 schema 維持 |
+| `artgraph impact` | グラフ走査ベース (`graph.edges` を直接読む)。`dependsOn` は参照しない |
+| `artgraph rename` | `rename-lock.ts` のみが `entry.dependsOn` を読み、新 schema を維持して書き換える |
+
+**Future work (out of scope of #35)**: `artgraph diff` を実装し dependsOn を
+1st-class consumer に繋ぐ。現状の schema v2 `dependsOn` は `git diff .trace.lock`
+で人間が読む presentational 用途 (+ rename 時の参照書き換え) のみで、runtime
+コードからは参照されない。
 
 ## テスト要件（contracts として）
 

@@ -200,6 +200,37 @@ describe("formatGraphText: provenance label", () => {
     const text = formatGraphText(graph);
     expect(text).toContain("└─[contains {structural}]─ AUTH-001");
   });
+
+  it("INV-O2: empty `{}` label is never emitted in text", () => {
+    // An edge whose every provenance is forward-incompatible (unknown to
+    // EDGE_PROVENANCE_VALUES) must be dropped from text output entirely —
+    // matching formatGraphJSON's edge-omit behavior. Otherwise the edge
+    // would render as `{}`, violating cli-output-format.md §INV-O2 and
+    // diverging from JSON's edge count for the same graph.
+    const graph: ArtifactGraph = {
+      nodes: new Map([
+        ["doc:A", { id: "doc:A", kind: "doc", filePath: "a.md", contentHash: "h1" }],
+        ["doc:B", { id: "doc:B", kind: "doc", filePath: "b.md", contentHash: "h2" }],
+      ]),
+      edges: [
+        {
+          source: "doc:B",
+          target: "doc:A",
+          kind: "derives_from",
+          // `as any` simulates a future EdgeProvenance value not yet known
+          // to this build (forward-incompatible payload).
+          provenances: ["__future__"] as any,
+        },
+      ],
+    };
+    const text = formatGraphText(graph);
+    expect(text).not.toContain("{}");
+    // The dropped edge must not appear at all — neither label nor recursion.
+    expect(text).not.toContain("derives_from");
+    // And JSON must agree: zero edges for this graph.
+    const json = JSON.parse(formatGraphJSON(graph));
+    expect(json.edges).toEqual([]);
+  });
 });
 
 describe("formatGraphJSON: provenances field", () => {

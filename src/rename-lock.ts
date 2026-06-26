@@ -31,7 +31,10 @@ function sortDeps(deps: DepRef[]): DepRef[] {
 // Union dependsOn entries by `id`: collapse duplicates, set-union their
 // `provenances`, and emit a single sorted array. Mirrors the dedup union in
 // builder.ts so the lock-level shape matches the graph-level invariants.
-function unionDeps(deps: DepRef[]): DepRef[] {
+// Exported so `buildLockFromGraph` (lock.ts) can apply the same id-based
+// union when the same target appears under both `depends_on` and
+// `derives_from` (review C4).
+export function unionDeps(deps: DepRef[]): DepRef[] {
   const byId = new Map<string, Set<EdgeProvenance>>();
   for (const d of deps) {
     let provs = byId.get(d.id);

@@ -234,6 +234,15 @@ arrays are union-merged and sorted (e.g. `["convention", "frontmatter"]`). The
 `{id, provenances}`. See [specs/011-edge-provenance/](specs/011-edge-provenance/)
 for the formalisation.
 
+> **Note on lock `dependsOn` consumers.** The structured `dependsOn` field in
+> `.trace.lock` is currently not consumed by runtime code paths: `artgraph
+> check` decides drift purely from `contentHash`, and `coverage` / `impact` /
+> `traverse` walk `graph.edges` directly. Its present value is (a) a
+> presentational diff target when reviewers read `git diff .trace.lock`, and
+> (b) the input that `artgraph rename` rewrites when an ID changes. A
+> first-class consumer (e.g. an `artgraph diff` subcommand surfacing
+> dependency churn) is **future work** — the `diff` CLI does not exist yet.
+
 ## Commands
 
 | Command              | Purpose                                                      |

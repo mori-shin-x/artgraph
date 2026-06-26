@@ -54,7 +54,11 @@ function dfs(
   // Find outgoing edges from this node (source === nodeId, meaning node -> target direction)
   // For derives_from / depends_on: the source is the dependent, the target is the dependency
   // For display purposes, we show children that point TO this node (reverse direction)
-  const childEdges = edges.filter((e) => e.target === nodeId && !visited.has(e.source));
+  // Per #35 / INV-O2: drop edges whose every provenance is forward-incompatible
+  // (mirrors formatGraphJSON's edge-omit behavior so text and JSON stay aligned).
+  const childEdges = edges.filter(
+    (e) => e.target === nodeId && !visited.has(e.source) && hasValidProvenance(e),
+  );
 
   for (const edge of childEdges) {
     const indent = "  ".repeat(depth + 1);
@@ -63,13 +67,22 @@ function dfs(
   }
 
   // Also show edges where this node is the source (contains, implements, etc.)
-  const forwardEdges = edges.filter((e) => e.source === nodeId && !visited.has(e.target));
+  const forwardEdges = edges.filter(
+    (e) => e.source === nodeId && !visited.has(e.target) && hasValidProvenance(e),
+  );
 
   for (const edge of forwardEdges) {
     const indent = "  ".repeat(depth + 1);
     lines.push(`${indent}└─[${edge.kind} ${formatProvLabel(edge)}]─ ${edge.target}`);
     dfs(edge.target, depth + 1, nodes, edges, visited, lines);
   }
+}
+
+// Returns true iff at least one provenance value survives the
+// EDGE_PROVENANCE_VALUES filter — used by both dfs() and formatGraphJSON()
+// to drop edges whose payload is entirely forward-incompatible (INV-O2/O3).
+function hasValidProvenance(edge: GraphEdge): boolean {
+  return edge.provenances.some((p) => EDGE_PROVENANCE_VALUES.has(p));
 }
 
 // `└─[<kind> {p1,p2,...}]─` — text-output provenance label per #35 / INV-O1, O2.

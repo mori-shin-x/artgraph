@@ -1,6 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { resolve } from "node:path";
+import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { buildGraph } from "../src/graph/builder.js";
+import { buildLockFromGraph } from "../src/lock.js";
 import { check } from "../src/check.js";
 import type {
   ArtgraphConfig,
@@ -147,30 +149,108 @@ describe("check", () => {
   // SC-006: annotation churn (added/removed `(depends_on: …)` notes) must not
   // affect drift judgement because drift is computed from `contentHash` only.
   // See specs/011-edge-provenance/contracts/lock-schema-v2.md §CLI.
-  it("SC-006: lock dependsOn churn (annotation added) does not trip --gate", () => {
-    const reqId = "REQ-200";
-    const graph: ArtifactGraph = {
-      nodes: new Map([
-        [reqId, { id: reqId, kind: "req", filePath: "specs/x.md", contentHash: "h-stable" }],
-        ["REQ-201", { id: "REQ-201", kind: "req", filePath: "specs/x.md", contentHash: "h-other" }],
-      ]),
-      edges: [
-        { source: "file:impl.ts", target: reqId, kind: "implements", provenances: ["code-tag"] },
-        { source: "file:impl.test.ts", target: reqId, kind: "verifies", provenances: ["code-tag"] },
-        { source: "file:impl.ts", target: "REQ-201", kind: "implements", provenances: ["code-tag"] },
-        { source: "file:impl.test.ts", target: "REQ-201", kind: "verifies", provenances: ["code-tag"] },
-        // A newly-added annotation edge — must not influence drift judgement.
-        { source: reqId, target: "REQ-201", kind: "depends_on", provenances: ["annotation"] },
-      ],
+  //
+  // Reviewer D1 remediation (PR#94): the original SC-006 test fixed
+  // `contentHash: "h-stable"` by hand, which proves nothing about the actual
+  // strip-annotations code path. The end-to-end version below writes two
+  // versions of the same `.md` file to a tmp dir (annotation absent / present),
+  // verifies that `buildGraph` produces the SAME `contentHash` for the req,
+  // then builds a lock from the no-annotation graph and checks the
+  // with-annotation graph against it — drift must be empty.
+  describe("SC-006 end-to-end (D1 / E3): annotation churn does not flip drift", () => {
+    const TMP = resolve(import.meta.dirname, "fixtures/_sc006-tmp");
+    afterEach(() => rmSync(TMP, { recursive: true, force: true }));
+
+    const sc006Config: ArtgraphConfig = {
+      include: [],
+      specDirs: ["specs"],
+      testPatterns: [],
+      lockFile: ".trace.lock",
     };
-    // Lock has the OLD contentHash (no `dependsOn` because the annotation was
-    // just added). The contentHash is what matters; the dependsOn diff is not.
-    const lock: LockFile = {
-      [reqId]: { contentHash: "h-stable", lastReconciled: "2025-01-01T00:00:00Z" },
-      "REQ-201": { contentHash: "h-other", lastReconciled: "2025-01-01T00:00:00Z" },
-    };
-    const result = check(graph, lock);
-    expect(result.pass).toBe(true);
-    expect(result.drifted).toEqual([]);
+
+    function writeSpec(annotated: boolean) {
+      rmSync(TMP, { recursive: true, force: true });
+      mkdirSync(resolve(TMP, "specs"), { recursive: true });
+      const body = annotated
+        ? [
+            "# Spec",
+            "",
+            "- REQ-201: dependency target",
+            "- REQ-200: feature (depends_on: REQ-201)",
+            "",
+          ].join("\n")
+        : [
+            "# Spec",
+            "",
+            "- REQ-201: dependency target",
+            "- REQ-200: feature",
+            "",
+          ].join("\n");
+      writeFileSync(resolve(TMP, "specs/x.md"), body, "utf-8");
+    }
+
+    it("D1: stripAnnotations holds — REQ-200 contentHash is identical with vs without `(depends_on: …)`", () => {
+      writeSpec(false);
+      const { graph: gNo } = buildGraph(TMP, sc006Config);
+      writeSpec(true);
+      const { graph: gYes } = buildGraph(TMP, sc006Config);
+      // The annotation MUST be observable (it landed as an edge)…
+      const annEdges = gYes.edges.filter((e) => e.provenances.includes("annotation"));
+      expect(annEdges).toHaveLength(1);
+      expect(annEdges[0].source).toBe("REQ-200");
+      expect(annEdges[0].target).toBe("REQ-201");
+      // …yet the contentHash MUST be byte-identical: this is the
+      // contract that lets drift survive annotation churn.
+      const hNo = gNo.nodes.get("REQ-200")!.contentHash;
+      const hYes = gYes.nodes.get("REQ-200")!.contentHash;
+      expect(hYes).toBe(hNo);
+    });
+
+    it("SC-006 forward: annotation ADDED to graph, but lock built from no-annotation version → no REQ-level drift", () => {
+      // Step 1: spec without annotation → lock baseline
+      writeSpec(false);
+      const { graph: noAnn } = buildGraph(TMP, sc006Config);
+      const lock = buildLockFromGraph(noAnn);
+
+      // Step 2: spec WITH annotation → new graph
+      writeSpec(true);
+      const { graph: withAnn } = buildGraph(TMP, sc006Config);
+
+      // Step 3: gate must accept the REQ-level drift channel — the annotation
+      // does not change req hashes. The doc node `doc:x.md` does hash the
+      // entire file body (which includes the annotation), so it WILL drift
+      // here. That is a doc-level concern, not the req-level SC-006 claim, so
+      // we filter by kind: only req entries are the subject of SC-006.
+      const result = check(withAnn, lock);
+      const reqDrift = result.drifted.filter((d) => d.kind === "req");
+      expect(reqDrift).toEqual([]);
+    });
+
+    // E3: SC-006 reverse — annotation REMOVED from graph but the OLD lock
+    // still carries `dependsOn` from the previous scan. The lock's stale
+    // dependsOn must NOT trip drift on the req channel; only contentHash
+    // matters and the req hash is annotation-invariant.
+    it("SC-006 reverse: annotation REMOVED from graph but lock still carries dependsOn → no REQ-level drift", () => {
+      // Step 1: spec WITH annotation → lock baseline carries dependsOn
+      writeSpec(true);
+      const { graph: withAnn } = buildGraph(TMP, sc006Config);
+      const lockWithDep = buildLockFromGraph(withAnn);
+      expect(lockWithDep["REQ-200"]?.dependsOn).toEqual([
+        { id: "REQ-201", provenances: ["annotation"] },
+      ]);
+
+      // Step 2: spec without annotation → no annotation edge in graph
+      writeSpec(false);
+      const { graph: noAnn } = buildGraph(TMP, sc006Config);
+      const annEdges = noAnn.edges.filter((e) => e.provenances.includes("annotation"));
+      expect(annEdges).toEqual([]);
+
+      // Step 3: check the new (no-annotation) graph against the OLD lock that
+      // still contains dependsOn. drift on the req channel must be empty —
+      // the stale `dependsOn` is structural metadata, not a hash input.
+      const result = check(noAnn, lockWithDep);
+      const reqDrift = result.drifted.filter((d) => d.kind === "req");
+      expect(reqDrift).toEqual([]);
+    });
   });
 });

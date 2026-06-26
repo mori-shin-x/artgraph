@@ -3,7 +3,13 @@ import { existsSync } from "node:fs";
 import { globSync } from "glob";
 import { parseMarkdown, type ParseWarning, type InlineLinkRef } from "../parsers/markdown.js";
 import { createTSParser } from "../parsers/typescript.js";
-import type { ArtifactGraph, GraphNode, GraphEdge, ArtgraphConfig } from "../types.js";
+import type {
+  ArtifactGraph,
+  GraphNode,
+  GraphEdge,
+  ArtgraphConfig,
+  EdgeProvenance,
+} from "../types.js";
 
 export interface BuildWarning {
   type:
@@ -498,8 +504,25 @@ export function buildGraph(
   // collapsed into one edge whose `provenances` is the sorted set-union of all
   // contributing edges. Iteration is stable on the source `edges` array so
   // the kept edge always comes from the first occurrence (INV-T3 — final
-  // order is determined by sort, not by which path inserted first).
+  // order is determined by the post-dedup sort below, not by which path
+  // inserted first nor by globSync/ts-morph traversal order).
   const edgeKey = (e: GraphEdge) => `${e.source}|${e.target}|${e.kind}`;
+  // Narrower replacement for the previous `as unknown as` cast: keeps the
+  // NonEmpty invariant visible at the type level and asserts it at runtime
+  // (defense-in-depth for B3/C2 from PR#94 review). A violation means the
+  // upstream parser handed us an edge with zero provenances — that is a bug
+  // in the caller, not user input, so we throw rather than swallow.
+  const assertNonEmpty = (
+    arr: readonly EdgeProvenance[],
+    edge: GraphEdge,
+  ): [EdgeProvenance, ...EdgeProvenance[]] => {
+    if (arr.length === 0) {
+      throw new Error(
+        `buildGraph: NonEmpty invariant violation — edge has empty provenances: ${JSON.stringify(edge)}`,
+      );
+    }
+    return arr as [EdgeProvenance, ...EdgeProvenance[]];
+  };
   const dedupMap = new Map<string, GraphEdge>();
   for (const edge of edges) {
     const key = edgeKey(edge);
@@ -507,16 +530,39 @@ export function buildGraph(
     if (!existing) {
       // Defensive copy with sorted provenances so even a single-source edge
       // satisfies INV-T2/T3.
-      const sorted = [...new Set(edge.provenances)].sort() as unknown as GraphEdge["provenances"];
-      dedupMap.set(key, { ...edge, provenances: sorted });
+      const sorted = [...new Set(edge.provenances)].sort();
+      dedupMap.set(key, { ...edge, provenances: assertNonEmpty(sorted, edge) });
     } else {
       const merged = [...new Set([...existing.provenances, ...edge.provenances])].sort();
-      existing.provenances = merged as unknown as GraphEdge["provenances"];
+      existing.provenances = assertNonEmpty(merged, edge);
     }
   }
   const dedupedEdges = Array.from(dedupMap.values());
 
-  return { graph: { nodes, edges: dedupedEdges }, warnings };
+  // PR#94 review B3: make edge order deterministic across OSes. Without this
+  // step `dedupedEdges` reflects Map insertion order, which traces back to
+  // globSync / ts-morph / per-directory Map iteration (see inferConventionEdges
+  // below — its `byDir` traversal is insertion-order, intentionally absorbed
+  // here so the convention pass needs no internal sort). Use `<`/`>` rather
+  // than `localeCompare` so the order is fixed UTF-16 codeunit comparison —
+  // locale-independent, byte-identical across Windows/macOS/Linux. This is
+  // load-bearing for INV-L4 (lock byte-identity) and INV-O1 family.
+  dedupedEdges.sort((a, b) => {
+    const ka = edgeKey(a);
+    const kb = edgeKey(b);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+
+  // PR#94 review B3: sort the `nodes` Map by id ascending too. Map iteration
+  // is insertion-order, which here traces back to file traversal — fine for
+  // single-OS runs but observably divergent cross-OS (and exposed downstream
+  // via `for (const [id, node] of graph.nodes)` in lock.ts / format.ts).
+  // Rebuilding the Map with sorted entries is the minimal surface change.
+  const sortedNodes = new Map(
+    [...nodes.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
+
+  return { graph: { nodes: sortedNodes, edges: dedupedEdges }, warnings };
 }
 
 // Generate `derives_from` edges by matching known file-name conventions within
@@ -524,6 +570,13 @@ export function buildGraph(
 // Spec Kit `specs/NNN-feature/` subdir is treated as its own unit. File-name
 // matching is case-insensitive (the stem is lower-cased before lookup). Only
 // `.md` files participate, because doc-node collection itself globs `**/*.md`.
+//
+// PR#94 review Meta-C blind-spot 2: the internal `byDir` Map and inner CONVENTION_EDGES
+// loop emit edges in insertion order (dir -> file -> preset). That order is OS-
+// and traversal-dependent, but it is intentionally NOT defended here — every
+// pushed edge is folded into `buildGraph`'s post-dedup sort (see B3 there), so
+// the final `graph.edges` array is deterministic regardless of which order this
+// helper emits in. Adding a local sort would be dead code.
 function inferConventionEdges(nodes: Map<string, GraphNode>): GraphEdge[] {
   // dir -> (file-name stem -> doc node id). The actual node id is used (honoring
   // frontmatter `node_id` overrides), not the raw path.
