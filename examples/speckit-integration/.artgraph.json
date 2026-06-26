@@ -1,0 +1,6 @@
+{
+  "include": ["src/**/*.ts"],
+  "specDirs": [".specify/specs"],
+  "testPatterns": ["tests/**/*.test.ts"],
+  "lockFile": ".trace.lock"
+}
