@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { buildGraph, type BuildWarning } from "./graph/builder.js";
-import { writeLock, buildLockFromGraph } from "./lock.js";
+import { writeLock, buildLockFromGraph, readLock } from "./lock.js";
 import type { ArtifactGraph, ArtgraphConfig } from "./types.js";
 
 export interface ScanResult {
@@ -65,6 +65,11 @@ export function scan(rootDir: string, config: ArtgraphConfig): ScanResult {
 }
 
 export function reconcile(rootDir: string, config: ArtgraphConfig, graph: ArtifactGraph): void {
-  const lock = buildLockFromGraph(graph);
+  // Pass the previous lock (if any) so structurally-identical entries keep
+  // their lastReconciled timestamp. Without this, every `scan` writes new
+  // timestamps for every entry and INV-L4 (byte-identical round-trip) is
+  // broken in real use even though the test stubs `Date`. Review B1.
+  const prevLock = readLock(rootDir, config.lockFile);
+  const lock = buildLockFromGraph(graph, prevLock);
   writeLock(rootDir, config.lockFile, lock);
 }

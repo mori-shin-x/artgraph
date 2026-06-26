@@ -1,10 +1,12 @@
-import type { LockFile, LockEntry } from "./types.js";
+import type { LockFile, LockEntry, EdgeProvenance } from "./types.js";
 
 export interface LockChange {
   kind: "rename" | "delete" | "create";
   oldKey?: string;
   newKey?: string;
 }
+
+type DepRef = { id: string; provenances: EdgeProvenance[] };
 
 function isSymbolKey(key: string): boolean {
   return key.startsWith("symbol:");
@@ -22,6 +24,33 @@ function dedupe(arr: string[]): string[] {
   return [...new Set(arr)];
 }
 
+function sortDeps(deps: DepRef[]): DepRef[] {
+  return [...deps].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+// Union dependsOn entries by `id`: collapse duplicates, set-union their
+// `provenances`, and emit a single sorted array. Mirrors the dedup union in
+// builder.ts so the lock-level shape matches the graph-level invariants.
+// Exported so `buildLockFromGraph` (lock.ts) can apply the same id-based
+// union when the same target appears under both `depends_on` and
+// `derives_from` (review C4).
+export function unionDeps(deps: DepRef[]): DepRef[] {
+  const byId = new Map<string, Set<EdgeProvenance>>();
+  for (const d of deps) {
+    let provs = byId.get(d.id);
+    if (!provs) {
+      provs = new Set();
+      byId.set(d.id, provs);
+    }
+    for (const p of d.provenances) provs.add(p);
+  }
+  const result: DepRef[] = [];
+  for (const [id, provs] of byId) {
+    result.push({ id, provenances: [...provs].sort() });
+  }
+  return sortDeps(result);
+}
+
 /**
  * Replace each `oldId` element of `arr` with every entry of `newIds`
  * (one-to-many expansion), preserving order and de-duplicating.
@@ -37,7 +66,33 @@ function expandRef(arr: string[] | undefined, oldId: string, newIds: string[]): 
 }
 
 /**
+ * Replace each `dependsOn` entry whose `id === oldId` with N copies that share
+ * the same `provenances` (one-to-many expansion), preserving order and merging
+ * collisions via set-union of `provenances`.
+ */
+function expandDepRef(
+  arr: DepRef[] | undefined,
+  oldId: string,
+  newIds: string[],
+): DepRef[] | undefined {
+  if (!arr) return arr;
+  const out: DepRef[] = [];
+  for (const ref of arr) {
+    if (ref.id === oldId) {
+      for (const nid of newIds) {
+        out.push({ id: nid, provenances: [...ref.provenances] });
+      }
+    } else {
+      out.push({ id: ref.id, provenances: [...ref.provenances] });
+    }
+  }
+  return unionDeps(out);
+}
+
+/**
  * Replace references to oldId with newId in an entry's impl, tests, and dependsOn arrays.
+ * `dependsOn` is the schema-v2 `{id, provenances}` form (issue #35) — only the
+ * `id` field is rewritten; the `provenances` array is preserved verbatim.
  * Returns a new entry (does not mutate).
  */
 function updateReferences(entry: LockEntry, oldId: string, newId: string): LockEntry {
@@ -50,7 +105,10 @@ function updateReferences(entry: LockEntry, oldId: string, newId: string): LockE
     updated.tests = dedupe(updated.tests.map((ref) => (ref === oldId ? newId : ref)));
   }
   if (updated.dependsOn) {
-    updated.dependsOn = dedupe(updated.dependsOn.map((ref) => (ref === oldId ? newId : ref)));
+    const rewritten = updated.dependsOn.map((ref) =>
+      ref.id === oldId ? { id: newId, provenances: [...ref.provenances] } : { ...ref },
+    );
+    updated.dependsOn = unionDeps(rewritten);
   }
 
   return updated;
@@ -63,7 +121,7 @@ function expandReferences(entry: LockEntry, oldId: string, newIds: string[]): Lo
   const updated = deepCopyEntry(entry);
   updated.impl = expandRef(updated.impl, oldId, newIds);
   updated.tests = expandRef(updated.tests, oldId, newIds);
-  updated.dependsOn = expandRef(updated.dependsOn, oldId, newIds);
+  updated.dependsOn = expandDepRef(updated.dependsOn, oldId, newIds);
   return updated;
 }
 
@@ -155,7 +213,7 @@ export function mergeLockKeys(
 
   const allImpl: string[] = [];
   const allTests: string[] = [];
-  const allDependsOn: string[] = [];
+  const allDependsOn: DepRef[] = [];
   let contentHash = "";
   let specFile: string | undefined;
   let firstFound = false;
@@ -173,7 +231,11 @@ export function mergeLockKeys(
 
       if (entry.impl) allImpl.push(...entry.impl);
       if (entry.tests) allTests.push(...entry.tests);
-      if (entry.dependsOn) allDependsOn.push(...entry.dependsOn);
+      if (entry.dependsOn) {
+        for (const d of entry.dependsOn) {
+          allDependsOn.push({ id: d.id, provenances: [...d.provenances] });
+        }
+      }
 
       delete result[sourceId];
     }
@@ -190,11 +252,12 @@ export function mergeLockKeys(
   const dedupedImpl = dedupe(allImpl);
   const dedupedTests = dedupe(allTests);
   // A merged requirement must not depend on its own former parts or on itself.
-  const dedupedDeps = dedupe(allDependsOn).filter((d) => !sourceSet.has(d) && d !== newId);
+  // Provenances are set-unioned per `id` (issue #35 lock schema v2).
+  const unionedDeps = unionDeps(allDependsOn).filter((d) => !sourceSet.has(d.id) && d.id !== newId);
 
   if (dedupedImpl.length > 0) merged.impl = dedupedImpl;
   if (dedupedTests.length > 0) merged.tests = dedupedTests;
-  if (dedupedDeps.length > 0) merged.dependsOn = dedupedDeps;
+  if (unionedDeps.length > 0) merged.dependsOn = unionedDeps;
 
   result[newId] = merged;
   changes.push({ kind: "create", newKey: newId });

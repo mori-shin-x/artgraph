@@ -212,6 +212,37 @@ Built-in presets activate automatically on upgrade. Existing projects whose
 `artgraph scan`. Run `artgraph reconcile` to refresh the lock baseline.
 
 
+## Edge provenance
+
+Every edge in the graph carries a `provenances: EdgeProvenance[]` array
+explaining where it came from. The eight values cover all generation sites:
+
+| Value         | Source                                              |
+| ------------- | --------------------------------------------------- |
+| `annotation`  | inline `(depends_on: …)` / `(derives_from: …)` notes |
+| `frontmatter` | YAML `artgraph.depends_on` / `derives_from`         |
+| `convention`  | folder/file-stem conventions (kiro / spec-kit presets) |
+| `code-tag`    | `// @impl` / `// @verifies` / `req:` in TS code     |
+| `task-tag`    | task preset `_Requirements:` / `[REQ-…]` brackets   |
+| `inline-link` | markdown inline `[text](path)` links between docs   |
+| `ts-import`   | `import` statements                                 |
+| `structural`  | doc → req / task auto-`contains` within the same file |
+
+When the same `(source, target, kind)` is produced by multiple paths, the
+arrays are union-merged and sorted (e.g. `["convention", "frontmatter"]`). The
+`.trace.lock` mirrors this by storing each `dependsOn` element as
+`{id, provenances}`. See [specs/011-edge-provenance/](specs/011-edge-provenance/)
+for the formalisation.
+
+> **Note on lock `dependsOn` consumers.** The structured `dependsOn` field in
+> `.trace.lock` is currently not consumed by runtime code paths: `artgraph
+> check` decides drift purely from `contentHash`, and `coverage` / `impact` /
+> `traverse` walk `graph.edges` directly. Its present value is (a) a
+> presentational diff target when reviewers read `git diff .trace.lock`, and
+> (b) the input that `artgraph rename` rewrites when an ID changes. A
+> first-class consumer (e.g. an `artgraph diff` subcommand surfacing
+> dependency churn) is **future work** — the `diff` CLI does not exist yet.
+
 ## Commands
 
 | Command              | Purpose                                                      |
