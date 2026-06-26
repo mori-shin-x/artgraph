@@ -2,3 +2,4 @@
 # starting state stays reproducible.
 **/.trace.lock
 speckit-integration/.specify/extensions/spectrace/
+kiro-integration/.kiro/steering/

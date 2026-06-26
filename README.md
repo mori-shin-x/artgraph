@@ -59,8 +59,19 @@ COVERAGE:
 Add `--gate` (`npx artgraph check --gate`) to a CI step or pre-commit hook to
 exit non-zero whenever drift, orphans, or uncovered requirements are present.
 
-A runnable copy of this flow lives in [`examples/basic/`](./examples/basic). For
-Spec Kit integration, see [`examples/speckit-integration/`](./examples/speckit-integration).
+A runnable copy of this flow lives in [`examples/basic/`](./examples/basic).
+
+### Using an SDD tool?
+
+artgraph wires into Spec Kit and Kiro via [`artgraph integrate`](#sdd-tool-integration),
+so drift detection runs at the right workflow checkpoint instead of relying on
+a manual `check` call. Each example below installs the integration, walks the
+full workflow, and shows the exact diff against `extensions.yml` / steering:
+
+- **Spec Kit** — [`examples/speckit-integration/`](./examples/speckit-integration):
+  `after_tasks` / `after_implement` hooks and the opt-in `before_implement` gate.
+- **Kiro** — [`examples/kiro-integration/`](./examples/kiro-integration):
+  steering file that teaches the Kiro agent when to call `impact` / `check --diff` / `reconcile`.
 
 ## How references are expressed
 
