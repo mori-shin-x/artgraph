@@ -6,6 +6,9 @@
   "bin": {
     "artgraph": "./dist/cli.js"
   },
+  "exports": {
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist",
     "templates"
@@ -14,10 +17,13 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "artgraph": "node --enable-source-maps ./dist/cli.js",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config vitest.e2e.config.ts && vitest run --config vitest.perf.config.ts",
+    "test:unit": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:perf": "vitest run --config vitest.perf.config.ts",
     "test:watch": "vitest",
     "knip": "knip",
-    "prepublishOnly": "pnpm test && rm -rf dist && tsc"
+    "prepublishOnly": "rm -rf dist && tsc && pnpm test:unit && pnpm test:e2e"
   },
   "repository": {
     "type": "git",

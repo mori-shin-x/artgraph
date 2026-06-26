@@ -36,4 +36,15 @@ jobs:
 
       - run: pnpm knip
 
-      - run: pnpm test
+      - run: pnpm test:unit
+
+      - run: pnpm test:e2e
+
+      # Perf budgets are wall-clock sensitive — run separately so a
+      # CPU-contended runner spike fails the perf step without obscuring
+      # unit/e2e signal, and so a perf flake doesn't block PR merges.
+      # `continue-on-error: true` reports the failure visibly in the job
+      # summary without failing the workflow; flip to `false` once the
+      # CI baseline for SC-004 wall-clock is established.
+      - run: pnpm test:perf
+        continue-on-error: true

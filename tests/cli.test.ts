@@ -1,27 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { execFileSync, spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
-import { run, runAt, cleanup, CLI, FIXTURE_DIR, LOCK_PATH } from "./helpers.js";
+import {
+  run,
+  runAt,
+  runWithStdin as runWithStdinHelper,
+  cleanup,
+  FIXTURE_DIR,
+  LOCK_PATH,
+  type RunResult,
+} from "./helpers.js";
 
 const HOOKS_DIR = resolve(import.meta.dirname, "fixtures/hooks");
 
-function runWithStdin(
-  args: string[],
-  stdin: string,
-  cwd?: string,
-): { stdout: string; stderr: string; exitCode: number } {
-  const result = spawnSync("node", [CLI, ...args], {
-    encoding: "utf-8",
-    cwd: cwd ?? FIXTURE_DIR,
-    input: stdin,
-    timeout: 30000,
-  });
-  return {
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-    exitCode: result.status ?? 1,
-  };
+function runWithStdin(args: string[], stdin: string, cwd?: string): Promise<RunResult> {
+  return runWithStdinHelper(args, stdin, cwd);
 }
 
 afterEach(cleanup);
@@ -30,8 +23,8 @@ afterEach(cleanup);
 // scan
 // ---------------------------------------------------------------------------
 describe("CLI: scan", () => {
-  it("should output graph summary as JSON", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["scan", "--format", "json"]);
+  it("should output graph summary as JSON", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["scan", "--format", "json"]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
@@ -40,8 +33,8 @@ describe("CLI: scan", () => {
     expect(result.reqCount).toBeGreaterThanOrEqual(2);
   });
 
-  it("should output human-readable text by default", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["scan"]);
+  it("should output human-readable text by default", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["scan"]);
     expect(exitCode).toBe(0);
     expect(stdout).toMatch(/Nodes:\s+[1-9]/);
     expect(stdout).toMatch(/Edges:\s+[1-9]/);
@@ -49,15 +42,15 @@ describe("CLI: scan", () => {
     expect(stdout).toContain("file:");
   });
 
-  it("should output text with --format text", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["scan", "--format", "text"]);
+  it("should output text with --format text", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["scan", "--format", "text"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Nodes:");
     expect(stdout).toContain("Edges:");
   });
 
-  it("JSON output includes taskCount (Issue #28 / H3)", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["scan", "--format", "json"]);
+  it("JSON output includes taskCount (Issue #28 / H3)", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["scan", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
     // taskCount must be present even when 0 — otherwise downstream parsers
@@ -66,9 +59,9 @@ describe("CLI: scan", () => {
     expect(typeof result.taskCount).toBe("number");
   });
 
-  it("text output adds `task:` column when taskCount > 0 (H3)", { timeout: 30000 }, () => {
+  it("text output adds `task:` column when taskCount > 0 (H3)", { timeout: 30000 }, async () => {
     const taskFixture = resolve(FIXTURE_DIR, "tasks/speckit-plan");
-    const { stdout, exitCode } = runAt(taskFixture, ["scan"]);
+    const { stdout, exitCode } = await runAt(taskFixture, ["scan"]);
     expect(exitCode).toBe(0);
     expect(stdout).toMatch(/task:\s+[1-9]/);
   });
@@ -78,8 +71,8 @@ describe("CLI: scan", () => {
 // impact
 // ---------------------------------------------------------------------------
 describe("CLI: impact", () => {
-  it("should show impact for a REQ-ID", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["impact", "AUTH-001", "--format", "json"]);
+  it("should show impact for a REQ-ID", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["impact", "AUTH-001", "--format", "json"]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
@@ -87,23 +80,23 @@ describe("CLI: impact", () => {
     expect(result.affectedReqs).toContain("AUTH-001");
   });
 
-  it("should show impact for a file path", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["impact", "src/auth/login.ts", "--format", "json"]);
+  it("should show impact for a file path", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["impact", "src/auth/login.ts", "--format", "json"]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
     expect(result.affectedReqs).toContain("AUTH-001");
   });
 
-  it("should output human-readable text by default", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["impact", "AUTH-001"]);
+  it("should output human-readable text by default", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["impact", "AUTH-001"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Affected REQs:");
     expect(stdout).toContain("AUTH-001");
   });
 
-  it("should show impact for multiple targets", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run([
+  it("should show impact for multiple targets", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run([
       "impact",
       "AUTH-001",
       "src/auth/session.ts",
@@ -117,22 +110,22 @@ describe("CLI: impact", () => {
     expect(result.affectedFiles.length).toBeGreaterThan(0);
   });
 
-  it("should fail when no targets are given", { timeout: 30000 }, () => {
-    const { exitCode, stderr } = run(["impact"]);
+  it("should fail when no targets are given", { timeout: 30000 }, async () => {
+    const { exitCode, stderr } = await run(["impact"]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("No targets specified");
   });
 
-  it("should fail when target does not match any node", { timeout: 30000 }, () => {
-    const { exitCode, stderr } = run(["impact", "NONEXISTENT-ID"]);
+  it("should fail when target does not match any node", { timeout: 30000 }, async () => {
+    const { exitCode, stderr } = await run(["impact", "NONEXISTENT-ID"]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("No matching nodes found");
   });
 
   // Smoke test: --diff depends on real git state so the result is non-deterministic.
   // A proper test would need a temporary git repo with a controlled diff.
-  it("should not crash with --diff flag", { timeout: 30000 }, () => {
-    const { exitCode } = run(["impact", "--diff"]);
+  it("should not crash with --diff flag", { timeout: 30000 }, async () => {
+    const { exitCode } = await run(["impact", "--diff"]);
     expect([0, 1]).toContain(exitCode);
   });
 });
@@ -141,23 +134,23 @@ describe("CLI: impact", () => {
 // check
 // ---------------------------------------------------------------------------
 describe("CLI: check", () => {
-  it("should exit 2 with --gate when issues exist", { timeout: 30000 }, () => {
+  it("should exit 2 with --gate when issues exist", { timeout: 30000 }, async () => {
     cleanup();
-    const { exitCode } = run(["check", "--gate"]);
+    const { exitCode } = await run(["check", "--gate"]);
     expect(exitCode).toBe(2);
   });
 
-  it("should report issues in JSON format", { timeout: 30000 }, () => {
+  it("should report issues in JSON format", { timeout: 30000 }, async () => {
     cleanup();
-    const { stdout } = run(["check", "--format", "json"]);
+    const { stdout } = await run(["check", "--format", "json"]);
     const result = JSON.parse(stdout);
 
     expect(result.uncovered.length).toBeGreaterThan(0);
   });
 
-  it("should output human-readable text by default", { timeout: 30000 }, () => {
+  it("should output human-readable text by default", { timeout: 30000 }, async () => {
     cleanup();
-    const { stdout } = run(["check"]);
+    const { stdout } = await run(["check"]);
     // Without a lock file, there will be uncovered items.
     expect(stdout).toContain("UNCOVERED:");
     expect(stdout).toContain("COVERAGE:");
@@ -165,9 +158,9 @@ describe("CLI: check", () => {
 
   // Smoke test: --diff depends on real git state so the result is non-deterministic.
   // A proper test would need a temporary git repo with a controlled diff.
-  it("should not crash with --diff flag", { timeout: 30000 }, () => {
+  it("should not crash with --diff flag", { timeout: 30000 }, async () => {
     cleanup();
-    const { exitCode } = run(["check", "--diff"]);
+    const { exitCode } = await run(["check", "--diff"]);
     // Without --gate, check never calls process.exit(2).
     expect(exitCode).toBe(0);
   });
@@ -177,9 +170,9 @@ describe("CLI: check", () => {
 // reconcile
 // ---------------------------------------------------------------------------
 describe("CLI: reconcile", () => {
-  it("should create a lock file after reconcile", { timeout: 30000 }, () => {
+  it("should create a lock file after reconcile", { timeout: 30000 }, async () => {
     cleanup();
-    const { exitCode, stdout } = run(["reconcile"]);
+    const { exitCode, stdout } = await run(["reconcile"]);
     expect(exitCode).toBe(0);
     expect(existsSync(LOCK_PATH)).toBe(true);
     expect(stdout).toContain("Lock file updated");
@@ -191,18 +184,18 @@ describe("CLI: reconcile", () => {
 // reconcile -> check scenario (no drift expected)
 // ---------------------------------------------------------------------------
 describe("CLI: reconcile then check (no drift)", () => {
-  it("should have no drift immediately after reconcile", { timeout: 30000 }, () => {
+  it("should have no drift immediately after reconcile", { timeout: 30000 }, async () => {
     cleanup();
 
     // Step 1: reconcile to create a fresh lock.
-    const rec = run(["reconcile"]);
+    const rec = await run(["reconcile"]);
     expect(rec.exitCode).toBe(0);
     expect(existsSync(LOCK_PATH)).toBe(true);
 
     // Step 2: check should report zero drift and zero orphans.
     // Note: pass may still be false due to uncovered REQs in the fixture
     // (AUTH-003 has no @impl), but drift should be empty.
-    const chk = run(["check", "--format", "json"]);
+    const chk = await run(["check", "--format", "json"]);
     expect(chk.exitCode).toBe(0);
 
     const result = JSON.parse(chk.stdout);
@@ -213,13 +206,13 @@ describe("CLI: reconcile then check (no drift)", () => {
     expect(result.uncovered).toContain("AUTH-003");
   });
 
-  it("should include coverage information after reconcile", { timeout: 30000 }, () => {
+  it("should include coverage information after reconcile", { timeout: 30000 }, async () => {
     cleanup();
 
-    const rec = run(["reconcile"]);
+    const rec = await run(["reconcile"]);
     expect(rec.exitCode).toBe(0);
 
-    const chk = run(["check", "--format", "json"]);
+    const chk = await run(["check", "--format", "json"]);
     expect(chk.exitCode).toBe(0);
 
     const result = JSON.parse(chk.stdout);
@@ -232,13 +225,13 @@ describe("CLI: reconcile then check (no drift)", () => {
     cleanup();
   });
 
-  it("should show COVERAGE in text output after reconcile", { timeout: 30000 }, () => {
+  it("should show COVERAGE in text output after reconcile", { timeout: 30000 }, async () => {
     cleanup();
 
-    const rec = run(["reconcile"]);
+    const rec = await run(["reconcile"]);
     expect(rec.exitCode).toBe(0);
 
-    const chk = run(["check"]);
+    const chk = await run(["check"]);
     expect(chk.exitCode).toBe(0);
     expect(chk.stdout).toContain("COVERAGE:");
 
@@ -250,14 +243,14 @@ describe("CLI: reconcile then check (no drift)", () => {
 // graph
 // ---------------------------------------------------------------------------
 describe("CLI: graph", () => {
-  it("T054: should output text format by default", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["graph"]);
+  it("T054: should output text format by default", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["graph"]);
     expect(exitCode).toBe(0);
     expect(stdout.length).toBeGreaterThan(0);
   });
 
-  it("T054b: should output JSON format with --format json", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["graph", "--format", "json"]);
+  it("T054b: should output JSON format with --format json", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["graph", "--format", "json"]);
     expect(exitCode).toBe(0);
 
     const parsed = JSON.parse(stdout);
@@ -267,8 +260,8 @@ describe("CLI: graph", () => {
     expect(Array.isArray(parsed.edges)).toBe(true);
   });
 
-  it("T054c: should filter by --kind doc", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["graph", "--format", "json", "--kind", "doc"]);
+  it("T054c: should filter by --kind doc", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["graph", "--format", "json", "--kind", "doc"]);
     expect(exitCode).toBe(0);
 
     const parsed = JSON.parse(stdout);
@@ -282,16 +275,16 @@ describe("CLI: graph", () => {
 // impact --depth
 // ---------------------------------------------------------------------------
 describe("CLI: impact --depth", () => {
-  it("T058: should accept --depth option", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["impact", "AUTH-001", "--depth", "1", "--format", "json"]);
+  it("T058: should accept --depth option", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["impact", "AUTH-001", "--depth", "1", "--format", "json"]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
     expect(result.affectedReqs).toContain("AUTH-001");
   });
 
-  it("T059: should show summary in text output", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["impact", "AUTH-001"]);
+  it("T059: should show summary in text output", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["impact", "AUTH-001"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Summary:");
     expect(stdout).toMatch(/\d+ docs/);
@@ -304,14 +297,14 @@ describe("CLI: impact --depth", () => {
 // impact --depth validation
 // ---------------------------------------------------------------------------
 describe("CLI: impact --depth validation", () => {
-  it("should error on NaN --depth value", { timeout: 30000 }, () => {
-    const { exitCode, stderr } = run(["impact", "AUTH-001", "--depth", "abc"]);
+  it("should error on NaN --depth value", { timeout: 30000 }, async () => {
+    const { exitCode, stderr } = await run(["impact", "AUTH-001", "--depth", "abc"]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("Invalid --depth value");
   });
 
-  it("should error on negative --depth value", { timeout: 30000 }, () => {
-    const { exitCode, stderr } = run(["impact", "AUTH-001", "--depth", "-1"]);
+  it("should error on negative --depth value", { timeout: 30000 }, async () => {
+    const { exitCode, stderr } = await run(["impact", "AUTH-001", "--depth", "-1"]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("Invalid --depth value");
   });
@@ -321,8 +314,8 @@ describe("CLI: impact --depth validation", () => {
 // graph --kind validation
 // ---------------------------------------------------------------------------
 describe("CLI: graph --kind validation", () => {
-  it("should error on invalid --kind value", { timeout: 30000 }, () => {
-    const { exitCode, stderr } = run(["graph", "--kind", "invalid"]);
+  it("should error on invalid --kind value", { timeout: 30000 }, async () => {
+    const { exitCode, stderr } = await run(["graph", "--kind", "invalid"]);
     expect(exitCode).not.toBe(0);
     expect(stderr).toMatch(/allowed choices|invalid/i);
   });
@@ -332,10 +325,10 @@ describe("CLI: graph --kind validation", () => {
 // impact: 3-stage dependency chain E2E
 // ---------------------------------------------------------------------------
 describe("CLI: impact 3-stage dependency chain", () => {
-  it("should trace through full doc derives_from chain", { timeout: 30000 }, () => {
+  it("should trace through full doc derives_from chain", { timeout: 30000 }, async () => {
     // requirements -> design -> tasks (via derives_from chain in doc-chain fixtures)
     // Starting from "requirements" should reach the whole chain including tasks
-    const { stdout, exitCode } = run(["impact", "requirements", "--format", "json"]);
+    const { stdout, exitCode } = await run(["impact", "requirements", "--format", "json"]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
@@ -351,10 +344,10 @@ describe("CLI: impact 3-stage dependency chain", () => {
 // impact: contains reverse + --depth limit
 // ---------------------------------------------------------------------------
 describe("CLI: impact contains reverse + --depth limit", () => {
-  it("should reach req from doc via contains within depth limit", { timeout: 30000 }, () => {
+  it("should reach req from doc via contains within depth limit", { timeout: 30000 }, async () => {
     // doc:auth-design --contains--> AUTH-001
     // With depth=1, starting from doc:auth-design should reach AUTH-001
-    const { stdout, exitCode } = run([
+    const { stdout, exitCode } = await run([
       "impact",
       "doc:auth-design",
       "--depth",
@@ -368,10 +361,10 @@ describe("CLI: impact contains reverse + --depth limit", () => {
     expect(result.affectedReqs).toContain("AUTH-001");
   });
 
-  it("should not reach impl files from doc with --depth 1", { timeout: 30000 }, () => {
+  it("should not reach impl files from doc with --depth 1", { timeout: 30000 }, async () => {
     // doc:auth-design --contains(depth1)--> AUTH-001 --implements(depth2)--> file:src/auth/login.ts
     // With depth=1, should NOT reach the implementation files (they are at depth 2)
-    const { stdout, exitCode } = run([
+    const { stdout, exitCode } = await run([
       "impact",
       "doc:auth-design",
       "--depth",
@@ -390,7 +383,7 @@ describe("CLI: impact contains reverse + --depth limit", () => {
 // CLI warnings (orphan-doc, invalid-relation)
 // ---------------------------------------------------------------------------
 describe("CLI: warning output", () => {
-  it("should output orphan-doc warning to stderr", { timeout: 30000 }, () => {
+  it("should output orphan-doc warning to stderr", { timeout: 30000 }, async () => {
     const { mkdirSync, writeFileSync, rmSync: rm } = require("node:fs");
     const { mkdtempSync } = require("node:fs");
     const { tmpdir } = require("node:os");
@@ -409,12 +402,8 @@ describe("CLI: warning output", () => {
     );
 
     try {
-      const proc = spawnSync("node", [CLI, "scan"], {
-        encoding: "utf-8",
-        cwd: tmpRoot,
-        timeout: 30000,
-      });
-      expect(proc.status).toBe(0);
+      const proc = await runAt(tmpRoot, ["scan"]);
+      expect(proc.exitCode).toBe(0);
       expect(proc.stderr).toContain("orphan-doc");
       expect(proc.stderr).toContain("nonexistent-target");
     } finally {
@@ -422,7 +411,7 @@ describe("CLI: warning output", () => {
     }
   });
 
-  it("should output invalid-relation warning to stderr", { timeout: 30000 }, () => {
+  it("should output invalid-relation warning to stderr", { timeout: 30000 }, async () => {
     const { mkdirSync, writeFileSync, rmSync: rm } = require("node:fs");
     const { mkdtempSync } = require("node:fs");
     const { tmpdir } = require("node:os");
@@ -441,12 +430,8 @@ describe("CLI: warning output", () => {
     );
 
     try {
-      const proc = spawnSync("node", [CLI, "scan"], {
-        encoding: "utf-8",
-        cwd: tmpRoot,
-        timeout: 30000,
-      });
-      expect(proc.status).toBe(0);
+      const proc = await runAt(tmpRoot, ["scan"]);
+      expect(proc.exitCode).toBe(0);
       expect(proc.stderr).toContain("invalid relation");
       expect(proc.stderr).toContain("extends");
     } finally {
@@ -454,7 +439,7 @@ describe("CLI: warning output", () => {
     }
   });
 
-  it("should output unresolved-link warning to stderr (issue #11)", { timeout: 30000 }, () => {
+  it("should output unresolved-link warning to stderr (issue #11)", { timeout: 30000 }, async () => {
     const { mkdirSync, writeFileSync, rmSync: rm } = require("node:fs");
     const { mkdtempSync } = require("node:fs");
     const { tmpdir } = require("node:os");
@@ -473,12 +458,8 @@ describe("CLI: warning output", () => {
     );
 
     try {
-      const proc = spawnSync("node", [CLI, "scan"], {
-        encoding: "utf-8",
-        cwd: tmpRoot,
-        timeout: 30000,
-      });
-      expect(proc.status).toBe(0);
+      const proc = await runAt(tmpRoot, ["scan"]);
+      expect(proc.exitCode).toBe(0);
       expect(proc.stderr).toContain("unresolved-link");
       expect(proc.stderr).toContain("specs/missing.md");
     } finally {
@@ -486,7 +467,7 @@ describe("CLI: warning output", () => {
     }
   });
 
-  it("should build depends_on edge from inline markdown link (issue #11)", { timeout: 30000 }, () => {
+  it("should build depends_on edge from inline markdown link (issue #11)", { timeout: 30000 }, async () => {
     const { mkdirSync, writeFileSync, rmSync: rm } = require("node:fs");
     const { mkdtempSync } = require("node:fs");
     const { tmpdir } = require("node:os");
@@ -515,12 +496,8 @@ describe("CLI: warning output", () => {
     );
 
     try {
-      const proc = spawnSync("node", [CLI, "graph", "--format", "json"], {
-        encoding: "utf-8",
-        cwd: tmpRoot,
-        timeout: 30000,
-      });
-      expect(proc.status).toBe(0);
+      const proc = await runAt(tmpRoot, ["graph", "--format", "json"]);
+      expect(proc.exitCode).toBe(0);
       const out = JSON.parse(proc.stdout);
       const edge = out.edges.find(
         (e: any) =>
@@ -541,17 +518,8 @@ describe("CLI: warning output", () => {
 describe("CLI: init", () => {
   let initTmp: string;
 
-  function runInit(args: string[]): { stdout: string; stderr: string; exitCode: number } {
-    try {
-      const stdout = execFileSync("node", [CLI, "init", ...args], {
-        encoding: "utf-8",
-        cwd: initTmp,
-        timeout: 30000,
-      });
-      return { stdout, stderr: "", exitCode: 0 };
-    } catch (e: any) {
-      return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.status ?? 1 };
-    }
+  function runInit(args: string[]): Promise<RunResult> {
+    return runAt(initTmp, ["init", ...args]);
   }
 
   beforeEach(() => {
@@ -568,16 +536,16 @@ describe("CLI: init", () => {
     rmSync(initTmp, { recursive: true, force: true });
   });
 
-  it("should create .artgraph.json and .trace.lock", { timeout: 30000 }, () => {
-    const { exitCode, stdout } = runInit([]);
+  it("should create .artgraph.json and .trace.lock", { timeout: 30000 }, async () => {
+    const { exitCode, stdout } = await runInit([]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Created .artgraph.json");
     expect(stdout).toContain("Created .trace.lock");
     expect(stdout).toContain("Nodes:");
   });
 
-  it("should output JSON with --format json", { timeout: 30000 }, () => {
-    const { exitCode, stdout } = runInit(["--format", "json"]);
+  it("should output JSON with --format json", { timeout: 30000 }, async () => {
+    const { exitCode, stdout } = await runInit(["--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
     expect(result.configPath).toBeDefined();
@@ -586,37 +554,37 @@ describe("CLI: init", () => {
     expect(result.warnings).toBeDefined();
   });
 
-  it("should fail when .artgraph.json already exists", { timeout: 30000 }, () => {
+  it("should fail when .artgraph.json already exists", { timeout: 30000 }, async () => {
     const { writeFileSync } = require("node:fs");
     const { join } = require("node:path");
     writeFileSync(join(initTmp, ".artgraph.json"), "{}\n");
 
-    const { exitCode, stderr } = runInit([]);
+    const { exitCode, stderr } = await runInit([]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("already exists");
   });
 
-  it("should succeed with --force when .artgraph.json exists", { timeout: 30000 }, () => {
+  it("should succeed with --force when .artgraph.json exists", { timeout: 30000 }, async () => {
     const { writeFileSync } = require("node:fs");
     const { join } = require("node:path");
     writeFileSync(join(initTmp, ".artgraph.json"), "{}\n");
 
-    const { exitCode, stdout } = runInit(["--force"]);
+    const { exitCode, stdout } = await runInit(["--force"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Created .artgraph.json");
   });
 
-  it("should skip scan with --no-scan", { timeout: 30000 }, () => {
-    const { exitCode, stdout } = runInit(["--no-scan"]);
+  it("should skip scan with --no-scan", { timeout: 30000 }, async () => {
+    const { exitCode, stdout } = await runInit(["--no-scan"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("scan skipped");
     expect(stdout).not.toContain("Nodes:");
   });
 
-  it("should install skills with --with-skills (text output)", { timeout: 30000 }, () => {
+  it("should install skills with --with-skills (text output)", { timeout: 30000 }, async () => {
     const { existsSync } = require("node:fs");
     const { join } = require("node:path");
-    const { exitCode, stdout } = runInit(["--no-scan", "--with-skills"]);
+    const { exitCode, stdout } = await runInit(["--no-scan", "--with-skills"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Installed");
     expect(stdout).toContain("Claude Code skills");
@@ -627,8 +595,8 @@ describe("CLI: init", () => {
     expect(existsSync(join(initTmp, ".claude", "skills", "artgraph-rename.md"))).toBe(true);
   });
 
-  it("should report skillsInstalled in JSON output with --with-skills", { timeout: 30000 }, () => {
-    const { exitCode, stdout } = runInit(["--no-scan", "--with-skills", "--format", "json"]);
+  it("should report skillsInstalled in JSON output with --with-skills", { timeout: 30000 }, async () => {
+    const { exitCode, stdout } = await runInit(["--no-scan", "--with-skills", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
     expect(Array.isArray(result.skillsInstalled)).toBe(true);
@@ -636,10 +604,10 @@ describe("CLI: init", () => {
     expect(result.skillsInstalled).toContain(".claude/skills/artgraph-plan.md");
   });
 
-  it("should not install skills by default", { timeout: 30000 }, () => {
+  it("should not install skills by default", { timeout: 30000 }, async () => {
     const { existsSync } = require("node:fs");
     const { join } = require("node:path");
-    const { exitCode, stdout } = runInit(["--no-scan"]);
+    const { exitCode, stdout } = await runInit(["--no-scan"]);
     expect(exitCode).toBe(0);
     expect(stdout).not.toContain("Installed");
     expect(existsSync(join(initTmp, ".claude", "skills"))).toBe(false);
@@ -648,13 +616,13 @@ describe("CLI: init", () => {
   it(
     "should fail and not write .artgraph.json when skill files conflict",
     { timeout: 30000 },
-    () => {
+    async () => {
       const { mkdirSync, writeFileSync, existsSync } = require("node:fs");
       const { join } = require("node:path");
       mkdirSync(join(initTmp, ".claude", "skills"), { recursive: true });
       writeFileSync(join(initTmp, ".claude", "skills", "artgraph-plan.md"), "user\n");
 
-      const { exitCode, stderr } = runInit(["--no-scan", "--with-skills"]);
+      const { exitCode, stderr } = await runInit(["--no-scan", "--with-skills"]);
       expect(exitCode).toBe(1);
       expect(stderr).toMatch(/artgraph-plan\.md.*--force/);
       // Pre-flight validation must reject before any write.
@@ -667,27 +635,27 @@ describe("CLI: init", () => {
 // error cases
 // ---------------------------------------------------------------------------
 describe("CLI: error cases", () => {
-  it("should show usage info when no command is given", { timeout: 30000 }, () => {
-    const { stderr, exitCode } = run([]);
+  it("should show usage info when no command is given", { timeout: 30000 }, async () => {
+    const { stderr, exitCode } = await run([]);
     // Commander exits 1 and prints usage info to stderr when no command is provided.
     expect(exitCode).toBe(1);
     expect(stderr).toContain("Usage:");
   });
 
-  it("should fail for unknown command", { timeout: 30000 }, () => {
-    const { exitCode, stderr } = run(["foobar"]);
+  it("should fail for unknown command", { timeout: 30000 }, async () => {
+    const { exitCode, stderr } = await run(["foobar"]);
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("unknown command");
   });
 
-  it("should show version with --version", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["--version"]);
+  it("should show version with --version", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["--version"]);
     expect(exitCode).toBe(0);
     expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it("should show help with --help", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["--help"]);
+  it("should show help with --help", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["--help"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("scan");
     expect(stdout).toContain("impact");
@@ -703,17 +671,8 @@ describe("CLI: error cases", () => {
 const SYM_FIXTURE = resolve(import.meta.dirname, "fixtures/symbol-level");
 const SYM_LOCK_PATH = resolve(SYM_FIXTURE, ".trace.lock");
 
-function runSym(args: string[]): { stdout: string; stderr: string; exitCode: number } {
-  try {
-    const stdout = execFileSync("node", [CLI, ...args], {
-      encoding: "utf-8",
-      cwd: SYM_FIXTURE,
-      timeout: 30000,
-    });
-    return { stdout, stderr: "", exitCode: 0 };
-  } catch (e: any) {
-    return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.status ?? 1 };
-  }
+function runSym(args: string[]): Promise<RunResult> {
+  return runAt(SYM_FIXTURE, args);
 }
 
 describe("CLI: symbol mode", () => {
@@ -721,20 +680,20 @@ describe("CLI: symbol mode", () => {
     if (existsSync(SYM_LOCK_PATH)) unlinkSync(SYM_LOCK_PATH);
   });
 
-  it("should show symbol count with --mode symbol", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = runSym(["scan", "--mode", "symbol"]);
+  it("should show symbol count with --mode symbol", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await runSym(["scan", "--mode", "symbol"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("symbol:");
   });
 
-  it("should not show symbol count in file mode", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = runSym(["scan"]);
+  it("should not show symbol count in file mode", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await runSym(["scan"]);
     expect(exitCode).toBe(0);
     expect(stdout).not.toContain("symbol:");
   });
 
-  it("should include symbolCount in JSON output", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = runSym(["scan", "--mode", "symbol", "--format", "json"]);
+  it("should include symbolCount in JSON output", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await runSym(["scan", "--mode", "symbol", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
     expect(result.symbolCount).toBeGreaterThan(0);
@@ -748,17 +707,8 @@ const TEST_RESULTS_DIR = resolve(import.meta.dirname, "fixtures/test-results");
 const ALL_VERIFIED_DIR = resolve(import.meta.dirname, "fixtures/all-verified");
 const ALL_VERIFIED_LOCK = resolve(ALL_VERIFIED_DIR, ".trace.lock");
 
-function runAllVerified(args: string[]): { stdout: string; stderr: string; exitCode: number } {
-  try {
-    const stdout = execFileSync("node", [CLI, ...args], {
-      encoding: "utf-8",
-      cwd: ALL_VERIFIED_DIR,
-      timeout: 30000,
-    });
-    return { stdout, stderr: "", exitCode: 0 };
-  } catch (e: any) {
-    return { stdout: e.stdout ?? "", stderr: e.stderr ?? "", exitCode: e.status ?? 1 };
-  }
+function runAllVerified(args: string[]): Promise<RunResult> {
+  return runAt(ALL_VERIFIED_DIR, args);
 }
 
 describe("CLI: test-results integration", () => {
@@ -769,9 +719,9 @@ describe("CLI: test-results integration", () => {
   it(
     "should accept --test-results option on check command without crash",
     { timeout: 30000 },
-    () => {
+    async () => {
       const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
-      const { exitCode } = runAllVerified(["check", "--test-results", vitestPath]);
+      const { exitCode } = await runAllVerified(["check", "--test-results", vitestPath]);
       // Without --gate, check always exits 0 even with issues
       expect(exitCode).toBe(0);
     },
@@ -780,9 +730,9 @@ describe("CLI: test-results integration", () => {
   it(
     "should accept --test-results option on coverage command without crash",
     { timeout: 30000 },
-    () => {
+    async () => {
       const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
-      const { exitCode } = runAllVerified(["coverage", "--test-results", vitestPath]);
+      const { exitCode } = await runAllVerified(["coverage", "--test-results", vitestPath]);
       expect(exitCode).toBe(0);
     },
   );
@@ -790,16 +740,16 @@ describe("CLI: test-results integration", () => {
   it(
     "should accept --test-results option on scan command without crash",
     { timeout: 30000 },
-    () => {
+    async () => {
       const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
-      const { exitCode } = runAllVerified(["scan", "--test-results", vitestPath]);
+      const { exitCode } = await runAllVerified(["scan", "--test-results", vitestPath]);
       expect(exitCode).toBe(0);
     },
   );
 
-  it("should include testResultStats in scan JSON output", { timeout: 30000 }, () => {
+  it("should include testResultStats in scan JSON output", { timeout: 30000 }, async () => {
     const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-mixed.json");
-    const { stdout, exitCode } = runAllVerified([
+    const { stdout, exitCode } = await runAllVerified([
       "scan",
       "--format",
       "json",
@@ -814,26 +764,26 @@ describe("CLI: test-results integration", () => {
     expect(result.testResultStats.failedTests).toBe(1);
   });
 
-  it("should show test result stats in scan text output", { timeout: 30000 }, () => {
+  it("should show test result stats in scan text output", { timeout: 30000 }, async () => {
     const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-mixed.json");
-    const { stdout, exitCode } = runAllVerified(["scan", "--test-results", vitestPath]);
+    const { stdout, exitCode } = await runAllVerified(["scan", "--test-results", vitestPath]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Test Results:");
     expect(stdout).toContain("passed=1");
     expect(stdout).toContain("failed=1");
   });
 
-  it("should report all REQs verified without --test-results (legacy)", { timeout: 30000 }, () => {
-    const { stdout } = runAllVerified(["coverage", "--format", "json"]);
+  it("should report all REQs verified without --test-results (legacy)", { timeout: 30000 }, async () => {
+    const { stdout } = await runAllVerified(["coverage", "--format", "json"]);
     const cov = JSON.parse(stdout);
     const byId = Object.fromEntries(cov.items.map((i: any) => [i.reqId, i.status]));
     expect(byId["VER-001"]).toBe("verified");
     expect(byId["VER-002"]).toBe("verified");
   });
 
-  it("should keep status verified when --test-results show all passing", { timeout: 30000 }, () => {
+  it("should keep status verified when --test-results show all passing", { timeout: 30000 }, async () => {
     const passPath = resolve(TEST_RESULTS_DIR, "all-verified-pass.json");
-    const { stdout } = runAllVerified(["coverage", "--format", "json", "--test-results", passPath]);
+    const { stdout } = await runAllVerified(["coverage", "--format", "json", "--test-results", passPath]);
     const cov = JSON.parse(stdout);
     const byId = Object.fromEntries(cov.items.map((i: any) => [i.reqId, i.status]));
     expect(byId["VER-001"]).toBe("verified");
@@ -843,9 +793,9 @@ describe("CLI: test-results integration", () => {
   it(
     "should downgrade a REQ to impl-only when its test fails (verified -> impl-only)",
     { timeout: 30000 },
-    () => {
+    async () => {
       const failPath = resolve(TEST_RESULTS_DIR, "all-verified-fail.json");
-      const { stdout } = runAllVerified([
+      const { stdout } = await runAllVerified([
         "coverage",
         "--format",
         "json",
@@ -861,15 +811,15 @@ describe("CLI: test-results integration", () => {
     },
   );
 
-  it("should pass check --gate when all tests pass", { timeout: 30000 }, () => {
+  it("should pass check --gate when all tests pass", { timeout: 30000 }, async () => {
     const passPath = resolve(TEST_RESULTS_DIR, "all-verified-pass.json");
-    const { exitCode } = runAllVerified(["check", "--gate", "--test-results", passPath]);
+    const { exitCode } = await runAllVerified(["check", "--gate", "--test-results", passPath]);
     expect(exitCode).toBe(0);
   });
 
-  it("should fail check --gate (exit 2) when a test fails", { timeout: 30000 }, () => {
+  it("should fail check --gate (exit 2) when a test fails", { timeout: 30000 }, async () => {
     const failPath = resolve(TEST_RESULTS_DIR, "all-verified-fail.json");
-    const { stdout, exitCode } = runAllVerified(["check", "--gate", "--test-results", failPath]);
+    const { stdout, exitCode } = await runAllVerified(["check", "--gate", "--test-results", failPath]);
     expect(exitCode).toBe(2);
     expect(stdout).toContain("TEST FAILURES:");
     expect(stdout).toContain("VER-001");
@@ -878,9 +828,9 @@ describe("CLI: test-results integration", () => {
   it(
     "should not fail check --gate for test failures when --test-results is absent",
     { timeout: 30000 },
-    () => {
+    async () => {
       // Legacy: without test results the gate ignores pass/fail entirely.
-      const { exitCode } = runAllVerified(["check", "--gate"]);
+      const { exitCode } = await runAllVerified(["check", "--gate"]);
       expect(exitCode).toBe(0);
     },
   );
@@ -891,9 +841,9 @@ describe("CLI: test-results integration", () => {
 // ---------------------------------------------------------------------------
 
 describe("CLI: hook-pretool", () => {
-  it("should output valid hookSpecificOutput for Edit input", { timeout: 30000 }, () => {
+  it("should output valid hookSpecificOutput for Edit input", { timeout: 30000 }, async () => {
     const stdin = readFileSync(resolve(HOOKS_DIR, "edit-input.json"), "utf-8");
-    const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
     expect(exitCode).toBe(0);
     const output = JSON.parse(stdout);
     expect(output.hookSpecificOutput).toBeDefined();
@@ -901,9 +851,9 @@ describe("CLI: hook-pretool", () => {
     expect(output.hookSpecificOutput.additionalContext).toBe("artgraph impact: (none)");
   });
 
-  it("should output valid hookSpecificOutput for Write input", { timeout: 30000 }, () => {
+  it("should output valid hookSpecificOutput for Write input", { timeout: 30000 }, async () => {
     const stdin = readFileSync(resolve(HOOKS_DIR, "write-input.json"), "utf-8");
-    const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
     expect(exitCode).toBe(0);
     const output = JSON.parse(stdout);
     expect(output.hookSpecificOutput).toBeDefined();
@@ -911,9 +861,9 @@ describe("CLI: hook-pretool", () => {
     expect(output.hookSpecificOutput.additionalContext).toBe("artgraph impact: (none)");
   });
 
-  it("should output valid hookSpecificOutput for MultiEdit input", { timeout: 30000 }, () => {
+  it("should output valid hookSpecificOutput for MultiEdit input", { timeout: 30000 }, async () => {
     const stdin = readFileSync(resolve(HOOKS_DIR, "multiedit-input.json"), "utf-8");
-    const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
     expect(exitCode).toBe(0);
     const output = JSON.parse(stdout);
     expect(output.hookSpecificOutput).toBeDefined();
@@ -921,24 +871,24 @@ describe("CLI: hook-pretool", () => {
     expect(output.hookSpecificOutput.additionalContext).toBe("artgraph impact: (none)");
   });
 
-  it("should include impact info for a tracked file", { timeout: 30000 }, () => {
+  it("should include impact info for a tracked file", { timeout: 30000 }, async () => {
     const stdin = JSON.stringify({
       tool_name: "Edit",
       tool_input: { file_path: "src/auth/login.ts", old_string: "x", new_string: "y" },
     });
-    const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
     expect(exitCode).toBe(0);
     const output = JSON.parse(stdout);
     expect(output.hookSpecificOutput.additionalContext).toContain("artgraph impact:");
     expect(output.hookSpecificOutput.additionalContext).toContain("AUTH-001");
   });
 
-  it("should output (none) for an untracked file like README.md", { timeout: 30000 }, () => {
+  it("should output (none) for an untracked file like README.md", { timeout: 30000 }, async () => {
     const stdin = JSON.stringify({
       tool_name: "Edit",
       tool_input: { file_path: "README.md", old_string: "x", new_string: "y" },
     });
-    const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
     expect(exitCode).toBe(0);
     const output = JSON.parse(stdout);
     expect(output.hookSpecificOutput.additionalContext).toBe("artgraph impact: (none)");
@@ -952,17 +902,17 @@ describe("CLI: hook-pretool graceful degradation", () => {
   it(
     "should exit 0 with empty additionalContext when .artgraph.json is missing",
     { timeout: 30000 },
-    () => {
+    async () => {
       const stdin = readFileSync(resolve(HOOKS_DIR, "edit-input.json"), "utf-8");
-      const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin, "/tmp");
+      const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin, "/tmp");
       expect(exitCode).toBe(0);
       const output = JSON.parse(stdout);
       expect(output.hookSpecificOutput.additionalContext).toBe("");
     },
   );
 
-  it("should exit 0 with empty additionalContext for invalid JSON", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = runWithStdin(["hook-pretool"], "{not valid json}");
+  it("should exit 0 with empty additionalContext for invalid JSON", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await runWithStdin(["hook-pretool"], "{not valid json}");
     expect(exitCode).toBe(0);
     const output = JSON.parse(stdout);
     expect(output.hookSpecificOutput.additionalContext).toBe("");
@@ -971,9 +921,9 @@ describe("CLI: hook-pretool graceful degradation", () => {
   it(
     "should exit 0 with empty additionalContext when file_path is missing",
     { timeout: 30000 },
-    () => {
+    async () => {
       const stdin = JSON.stringify({ tool_name: "Edit", tool_input: {} });
-      const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin);
+      const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
       expect(exitCode).toBe(0);
       const output = JSON.parse(stdout);
       expect(output.hookSpecificOutput.additionalContext).toBe("");
@@ -983,7 +933,7 @@ describe("CLI: hook-pretool graceful degradation", () => {
   it(
     "should exit 0 with empty additionalContext when scan fails (broken config)",
     { timeout: 30000 },
-    () => {
+    async () => {
       // Write a .artgraph.json with invalid specDirs to trigger scan failure
       writeFileSync(
         resolve("/tmp", ".artgraph.json"),
@@ -999,7 +949,7 @@ describe("CLI: hook-pretool graceful degradation", () => {
           tool_name: "Edit",
           tool_input: { file_path: "src/foo.ts", old_string: "x", new_string: "y" },
         });
-        const { stdout, exitCode } = runWithStdin(["hook-pretool"], stdin, "/tmp");
+        const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin, "/tmp");
         expect(exitCode).toBe(0);
         const output = JSON.parse(stdout);
         // Should either be empty or (none) — not crash
@@ -1020,19 +970,19 @@ describe("CLI: hook-pretool stderr", () => {
   it(
     "should output 'failed to parse hook input' to stderr for invalid JSON",
     { timeout: 30000 },
-    () => {
-      const { stderr, exitCode } = runWithStdin(["hook-pretool"], "{not valid json}");
+    async () => {
+      const { stderr, exitCode } = await runWithStdin(["hook-pretool"], "{not valid json}");
       expect(exitCode).toBe(0);
       expect(stderr).toContain("artgraph: failed to parse hook input");
     },
   );
 
-  it("should output 'completed in' to stderr on successful run", { timeout: 30000 }, () => {
+  it("should output 'completed in' to stderr on successful run", { timeout: 30000 }, async () => {
     const stdin = JSON.stringify({
       tool_name: "Edit",
       tool_input: { file_path: "src/auth/login.ts", old_string: "x", new_string: "y" },
     });
-    const { stderr, exitCode } = runWithStdin(["hook-pretool"], stdin);
+    const { stderr, exitCode } = await runWithStdin(["hook-pretool"], stdin);
     expect(exitCode).toBe(0);
     expect(stderr).toContain("artgraph: hook-pretool completed in");
   });

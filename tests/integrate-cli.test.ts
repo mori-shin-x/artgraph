@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
@@ -14,7 +13,7 @@ import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import * as atomicWriteMod from "../src/integrate/atomic-write.js";
 import { SpecKitProvider } from "../src/integrate/providers/speckit.js";
-import { CLI } from "./helpers.js";
+import { runAt } from "./helpers.js";
 
 const FIXTURES = resolve(import.meta.dirname, "fixtures/integrate");
 
@@ -24,17 +23,12 @@ interface SpawnResult {
   exitCode: number;
 }
 
-function runCli(args: string[], cwd: string): SpawnResult {
-  const res = spawnSync("node", [CLI, ...args], {
-    encoding: "utf-8",
-    cwd,
-    timeout: 30000,
-  });
-  return {
-    stdout: res.stdout ?? "",
-    stderr: res.stderr ?? "",
-    exitCode: res.status ?? 1,
-  };
+function runCli(args: string[], cwd: string): Promise<SpawnResult> {
+  // Delegate to the shared in-process helper so each call avoids the
+  // ~150–300 ms Node spawn + ts-morph reload that this file used to pay
+  // per invocation. The SC-004 wall-clock budget tests still spawn the
+  // real bin — they live in tests/perf/ and run under vitest.perf.config.ts.
+  return runAt(cwd, args);
 }
 
 const SEED_EXTENSIONS_YAML = `installed:
@@ -69,9 +63,9 @@ describe("E2E: artgraph integrate speckit — quickstart Scenario 1", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("Step 1: integrates on a fresh .specify/ repo", () => {
+  it("Step 1: integrates on a fresh .specify/ repo", async () => {
     seedSpecKitRepo(tmp);
-    const r = runCli(["integrate", "speckit"], tmp);
+    const r = await runCli(["integrate", "speckit"], tmp);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("✓ Integrated: speckit (Spec Kit)");
     expect(r.stdout).toMatch(/Created \(/);
@@ -106,9 +100,9 @@ describe("E2E: artgraph integrate speckit — quickstart Scenario 1", () => {
     );
   });
 
-  it("Step 2: idempotent re-run — second invocation reports 'Already integrated' and disk unchanged", () => {
+  it("Step 2: idempotent re-run — second invocation reports 'Already integrated' and disk unchanged", async () => {
     seedSpecKitRepo(tmp);
-    const r1 = runCli(["integrate", "speckit"], tmp);
+    const r1 = await runCli(["integrate", "speckit"], tmp);
     expect(r1.exitCode).toBe(0);
     const ymlAfter1 = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
     const extAfter1 = readFileSync(
@@ -116,7 +110,7 @@ describe("E2E: artgraph integrate speckit — quickstart Scenario 1", () => {
       "utf-8",
     );
 
-    const r2 = runCli(["integrate", "speckit"], tmp);
+    const r2 = await runCli(["integrate", "speckit"], tmp);
     expect(r2.exitCode).toBe(0);
     expect(r2.stdout).toContain("✓ Already integrated: speckit (Spec Kit) — no changes");
     const ymlAfter2 = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
@@ -128,17 +122,17 @@ describe("E2E: artgraph integrate speckit — quickstart Scenario 1", () => {
     expect(extAfter2).toBe(extAfter1);
   });
 
-  it("Step 3: --gate adds a before_implement hook entry", () => {
+  it("Step 3: --gate adds a before_implement hook entry", async () => {
     seedSpecKitRepo(tmp);
-    runCli(["integrate", "speckit"], tmp);
-    const r = runCli(["integrate", "speckit", "--gate"], tmp);
+    await runCli(["integrate", "speckit"], tmp);
+    const r = await runCli(["integrate", "speckit", "--gate"], tmp);
     expect(r.exitCode).toBe(0);
     const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
     expect(yml).toMatch(/before_implement:/);
     expect(yml).toMatch(/command: artgraph\.check-gate/);
   });
 
-  it("Step 4: --no-gate removes only spectrace's before_implement entry, preserving others", () => {
+  it("Step 4: --no-gate removes only spectrace's before_implement entry, preserving others", async () => {
     seedSpecKitRepo(tmp);
     // Inject an additional non-spectrace before_implement entry so we can
     // verify it survives the --no-gate removal.
@@ -162,8 +156,8 @@ hooks:
     );
 
     // First add gate, then remove it.
-    runCli(["integrate", "speckit", "--gate"], tmp);
-    const r = runCli(["integrate", "speckit", "--no-gate"], tmp);
+    await runCli(["integrate", "speckit", "--gate"], tmp);
+    const r = await runCli(["integrate", "speckit", "--no-gate"], tmp);
     expect(r.exitCode).toBe(0);
     const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
     // M-H5: parse the YAML and assert structural shape. The previous regex
@@ -184,11 +178,11 @@ hooks:
     expect(parsed.hooks.after_implement?.some((e) => e.extension === "spectrace")).toBe(true);
   });
 
-  it("Step 5: --uninstall removes installed marker, extension dir, and all spectrace hooks", () => {
+  it("Step 5: --uninstall removes installed marker, extension dir, and all spectrace hooks", async () => {
     seedSpecKitRepo(tmp);
-    runCli(["integrate", "speckit"], tmp);
+    await runCli(["integrate", "speckit"], tmp);
     expect(existsSync(join(tmp, ".specify/extensions/spectrace"))).toBe(true);
-    const r = runCli(["integrate", "speckit", "--uninstall"], tmp);
+    const r = await runCli(["integrate", "speckit", "--uninstall"], tmp);
     expect(r.exitCode).toBe(0);
     expect(existsSync(join(tmp, ".specify/extensions/spectrace"))).toBe(false);
     const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
@@ -198,17 +192,17 @@ hooks:
     expect(yml).toMatch(/command: speckit\.agent-context\.update/);
   });
 
-  it("fails (exit 1) when .specify/ is absent, leaving disk unchanged", () => {
-    const r = runCli(["integrate", "speckit"], tmp);
+  it("fails (exit 1) when .specify/ is absent, leaving disk unchanged", async () => {
+    const r = await runCli(["integrate", "speckit"], tmp);
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toMatch(/not detected/i);
     // Nothing was written
     expect(existsSync(join(tmp, ".specify"))).toBe(false);
   });
 
-  it("--format=json emits a parseable IntegrateResult", () => {
+  it("--format=json emits a parseable IntegrateResult", async () => {
     seedSpecKitRepo(tmp);
-    const r = runCli(["integrate", "speckit", "--format", "json"], tmp);
+    const r = await runCli(["integrate", "speckit", "--format", "json"], tmp);
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.providerId).toBe("speckit");
@@ -233,9 +227,9 @@ describe("E2E: artgraph integrate kiro — quickstart Scenario 2", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("Step 1: integrates on a fresh .kiro/ repo (creates .kiro/steering/spectrace.md)", () => {
+  it("Step 1: integrates on a fresh .kiro/ repo (creates .kiro/steering/spectrace.md)", async () => {
     seedKiroRepo(tmp);
-    const r = runCli(["integrate", "kiro"], tmp);
+    const r = await runCli(["integrate", "kiro"], tmp);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("✓ Integrated: kiro (Kiro)");
     expect(r.stdout).toMatch(/Created \(1\):/);
@@ -252,25 +246,25 @@ describe("E2E: artgraph integrate kiro — quickstart Scenario 2", () => {
     expect(body.endsWith("\n")).toBe(true);
   });
 
-  it("Step 2: idempotent re-run — second invocation reports 'Already integrated' and disk unchanged", () => {
+  it("Step 2: idempotent re-run — second invocation reports 'Already integrated' and disk unchanged", async () => {
     seedKiroRepo(tmp);
-    const r1 = runCli(["integrate", "kiro"], tmp);
+    const r1 = await runCli(["integrate", "kiro"], tmp);
     expect(r1.exitCode).toBe(0);
     const before = readFileSync(join(tmp, ".kiro/steering/spectrace.md"), "utf-8");
 
-    const r2 = runCli(["integrate", "kiro"], tmp);
+    const r2 = await runCli(["integrate", "kiro"], tmp);
     expect(r2.exitCode).toBe(0);
     expect(r2.stdout).toContain("✓ Already integrated: kiro (Kiro) — no changes");
     const after = readFileSync(join(tmp, ".kiro/steering/spectrace.md"), "utf-8");
     expect(after).toBe(before);
   });
 
-  it("Step 3: --force regenerates a hand-edited spectrace.md (Modified, not Created)", () => {
+  it("Step 3: --force regenerates a hand-edited spectrace.md (Modified, not Created)", async () => {
     seedKiroRepo(tmp);
     const dest = join(tmp, ".kiro/steering/spectrace.md");
     writeFileSync(dest, "# manually edited\n");
 
-    const r = runCli(["integrate", "kiro", "--force"], tmp);
+    const r = await runCli(["integrate", "kiro", "--force"], tmp);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain("✓ Integrated: kiro (Kiro)");
     expect(r.stdout).toMatch(/Modified \(1\):/);
@@ -281,16 +275,16 @@ describe("E2E: artgraph integrate kiro — quickstart Scenario 2", () => {
     expect(body).toMatch(/artgraph \(spectrace\) integration for Kiro/);
   });
 
-  it("Step 4: fails (exit 1) when .kiro/ is absent, leaving disk unchanged", () => {
-    const r = runCli(["integrate", "kiro"], tmp);
+  it("Step 4: fails (exit 1) when .kiro/ is absent, leaving disk unchanged", async () => {
+    const r = await runCli(["integrate", "kiro"], tmp);
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toMatch(/Kiro not detected/i);
     expect(existsSync(join(tmp, ".kiro"))).toBe(false);
   });
 
-  it("--format=json emits a parseable IntegrateResult", () => {
+  it("--format=json emits a parseable IntegrateResult", async () => {
     seedKiroRepo(tmp);
-    const r = runCli(["integrate", "kiro", "--format", "json"], tmp);
+    const r = await runCli(["integrate", "kiro", "--format", "json"], tmp);
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout);
     expect(parsed.providerId).toBe("kiro");
@@ -298,12 +292,12 @@ describe("E2E: artgraph integrate kiro — quickstart Scenario 2", () => {
     expect(parsed.noop).toBe(false);
   });
 
-  it("warns (but exits 0) on a hand-edited spectrace.md without --force", () => {
+  it("warns (but exits 0) on a hand-edited spectrace.md without --force", async () => {
     seedKiroRepo(tmp);
     const dest = join(tmp, ".kiro/steering/spectrace.md");
     writeFileSync(dest, "# user wrote this\n");
 
-    const r = runCli(["integrate", "kiro"], tmp);
+    const r = await runCli(["integrate", "kiro"], tmp);
     expect(r.exitCode).toBe(0);
     // No changes were made to the file
     expect(readFileSync(dest, "utf-8")).toBe("# user wrote this\n");
@@ -329,8 +323,8 @@ describe("E2E: artgraph integrate list — quickstart Scenario 3", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("lists both providers in registration order on an empty repo (all not detected)", () => {
-    const r = runCli(["integrate", "list"], tmp);
+  it("lists both providers in registration order on an empty repo (all not detected)", async () => {
+    const r = await runCli(["integrate", "list"], tmp);
     expect(r.exitCode).toBe(0);
     // Text format: header + speckit row above kiro row (registration order).
     expect(r.stdout).toMatch(/Available integrations:/);
@@ -341,13 +335,13 @@ describe("E2E: artgraph integrate list — quickstart Scenario 3", () => {
     expect(r.stdout).toMatch(/detected:\s*no/);
   });
 
-  it("reflects detect+install state for both providers", () => {
+  it("reflects detect+install state for both providers", async () => {
     seedSpecKitRepo(tmp);
     seedKiroRepo(tmp);
     // Integrate speckit so installed=yes for that one.
-    runCli(["integrate", "speckit"], tmp);
+    await runCli(["integrate", "speckit"], tmp);
 
-    const r = runCli(["integrate", "list"], tmp);
+    const r = await runCli(["integrate", "list"], tmp);
     expect(r.exitCode).toBe(0);
     // speckit: detected yes, installed yes
     expect(r.stdout).toMatch(/speckit[\s\S]*detected:\s*yes[\s\S]*installed:\s*yes/);
@@ -356,9 +350,9 @@ describe("E2E: artgraph integrate list — quickstart Scenario 3", () => {
     expect(r.stdout).toMatch(/artgraph integrate kiro/);
   });
 
-  it("emits a JSON payload matching the IntegrationStatus[] schema", () => {
+  it("emits a JSON payload matching the IntegrationStatus[] schema", async () => {
     seedSpecKitRepo(tmp);
-    const r = runCli(["integrate", "list", "--format", "json"], tmp);
+    const r = await runCli(["integrate", "list", "--format", "json"], tmp);
     expect(r.exitCode).toBe(0);
     const parsed = JSON.parse(r.stdout) as {
       providers: Array<{
@@ -397,27 +391,27 @@ describe("E2E: artgraph init — integrate Tip lines (Scenario 5)", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("shows a Tip when Spec Kit is detected but not yet integrated", () => {
+  it("shows a Tip when Spec Kit is detected but not yet integrated", async () => {
     mkdirSync(join(tmp, ".specify"));
-    const r = runCli(["init", "--no-scan"], tmp);
+    const r = await runCli(["init", "--no-scan"], tmp);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/Tip:\s*Spec Kit detected\..*artgraph integrate speckit/);
   });
 
-  it("suppresses the Spec Kit Tip once the integration is installed", () => {
+  it("suppresses the Spec Kit Tip once the integration is installed", async () => {
     seedSpecKitRepo(tmp);
     // Install spectrace into the Spec Kit project first.
-    runCli(["integrate", "speckit"], tmp);
+    await runCli(["integrate", "speckit"], tmp);
     // Now re-run init — the Tip line must not appear (already installed).
-    const r = runCli(["init", "--no-scan", "--force"], tmp);
+    const r = await runCli(["init", "--no-scan", "--force"], tmp);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).not.toMatch(/Tip:\s*Spec Kit detected/);
   });
 
-  it("shows separate Tip lines for both Spec Kit and Kiro when both are detected", () => {
+  it("shows separate Tip lines for both Spec Kit and Kiro when both are detected", async () => {
     mkdirSync(join(tmp, ".specify"));
     mkdirSync(join(tmp, ".kiro"));
-    const r = runCli(["init", "--no-scan"], tmp);
+    const r = await runCli(["init", "--no-scan"], tmp);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/Tip:\s*Spec Kit detected/);
     expect(r.stdout).toMatch(/Tip:\s*Kiro detected/);
@@ -439,9 +433,9 @@ describe("E2E: artgraph init --integrate — one-shot integration (Scenario 4)",
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("runs only the requested provider with --integrate=speckit", () => {
+  it("runs only the requested provider with --integrate=speckit", async () => {
     seedSpecKitRepo(tmp);
-    const r = runCli(["init", "--no-scan", "--integrate", "speckit"], tmp);
+    const r = await runCli(["init", "--no-scan", "--integrate", "speckit"], tmp);
     expect(r.exitCode).toBe(0);
     // Section heading
     expect(r.stdout).toMatch(/=== Integration: speckit ===/);
@@ -451,19 +445,19 @@ describe("E2E: artgraph init --integrate — one-shot integration (Scenario 4)",
     expect(r.stdout).not.toMatch(/=== Integration: kiro ===/);
   });
 
-  it("runs only the requested provider with --integrate=kiro", () => {
+  it("runs only the requested provider with --integrate=kiro", async () => {
     mkdirSync(join(tmp, ".kiro"));
-    const r = runCli(["init", "--no-scan", "--integrate", "kiro"], tmp);
+    const r = await runCli(["init", "--no-scan", "--integrate", "kiro"], tmp);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/=== Integration: kiro ===/);
     expect(existsSync(join(tmp, ".kiro/steering/spectrace.md"))).toBe(true);
     expect(r.stdout).not.toMatch(/=== Integration: speckit ===/);
   });
 
-  it("runs every detected provider with --integrate=all and shows per-tool sections", () => {
+  it("runs every detected provider with --integrate=all and shows per-tool sections", async () => {
     seedSpecKitRepo(tmp);
     mkdirSync(join(tmp, ".kiro"));
-    const r = runCli(["init", "--no-scan", "--integrate", "all"], tmp);
+    const r = await runCli(["init", "--no-scan", "--integrate", "all"], tmp);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/=== Integration: speckit ===/);
     expect(r.stdout).toMatch(/=== Integration: kiro ===/);
@@ -477,10 +471,10 @@ describe("E2E: artgraph init --integrate — one-shot integration (Scenario 4)",
     expect(ki).toBeGreaterThan(sp);
   });
 
-  it("warns and skips (but still exits 0) when an unrequested provider is missing", () => {
+  it("warns and skips (but still exits 0) when an unrequested provider is missing", async () => {
     // Only kiro on disk; ask for both → kiro succeeds, speckit warns.
     mkdirSync(join(tmp, ".kiro"));
-    const r = runCli(["init", "--no-scan", "--integrate", "speckit,kiro"], tmp);
+    const r = await runCli(["init", "--no-scan", "--integrate", "speckit,kiro"], tmp);
     expect(r.exitCode).toBe(0);
     // Warning is surfaced for the missing tool (either id or displayName).
     expect(`${r.stdout}\n${r.stderr}`).toMatch(/WARNING.*(speckit|Spec Kit).*not detected/i);
@@ -489,18 +483,18 @@ describe("E2E: artgraph init --integrate — one-shot integration (Scenario 4)",
     expect(existsSync(join(tmp, ".kiro/steering/spectrace.md"))).toBe(true);
   });
 
-  it("propagates --integrate-gate to the speckit provider", () => {
+  it("propagates --integrate-gate to the speckit provider", async () => {
     seedSpecKitRepo(tmp);
-    const r = runCli(["init", "--no-scan", "--integrate", "speckit", "--integrate-gate"], tmp);
+    const r = await runCli(["init", "--no-scan", "--integrate", "speckit", "--integrate-gate"], tmp);
     expect(r.exitCode).toBe(0);
     const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
     expect(yml).toMatch(/before_implement:/);
     expect(yml).toMatch(/command:\s*artgraph\.check-gate/);
   });
 
-  it("ignores --integrate-gate for non-speckit providers without warning or error", () => {
+  it("ignores --integrate-gate for non-speckit providers without warning or error", async () => {
     mkdirSync(join(tmp, ".kiro"));
-    const r = runCli(["init", "--no-scan", "--integrate", "kiro", "--integrate-gate"], tmp);
+    const r = await runCli(["init", "--no-scan", "--integrate", "kiro", "--integrate-gate"], tmp);
     expect(r.exitCode).toBe(0);
     // kiro still installed normally
     expect(existsSync(join(tmp, ".kiro/steering/spectrace.md"))).toBe(true);
@@ -510,13 +504,13 @@ describe("E2E: artgraph init --integrate — one-shot integration (Scenario 4)",
   // integration provider, otherwise a drifted extension/steering file silently
   // survives. This violates FR-024 (`--force` is supposed to overwrite
   // anything the init touches, including the one-shot integrations).
-  it("propagates --force to the integration provider (overwrites drifted extension.yml)", () => {
+  it("propagates --force to the integration provider (overwrites drifted extension.yml)", async () => {
     cpSync(join(FIXTURES, "specify-with-drift"), tmp, { recursive: true });
     const extYmlPath = join(tmp, ".specify/extensions/spectrace/extension.yml");
     // Sanity: fixture really is drifted.
     expect(readFileSync(extYmlPath, "utf-8")).toMatch(/USER EDITED/);
 
-    const r = runCli(["init", "--no-scan", "--integrate", "speckit", "--force"], tmp);
+    const r = await runCli(["init", "--no-scan", "--integrate", "speckit", "--force"], tmp);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/=== Integration: speckit ===/);
 
@@ -640,13 +634,13 @@ describe("E2E: artgraph check --gate halts on uncovered REQs (SC-006 / FR-017)",
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("exits 2 from `check --gate` after `integrate speckit --gate` registers the hook", () => {
+  it("exits 2 from `check --gate` after `integrate speckit --gate` registers the hook", async () => {
     // (a) Stage the gate-failure fixture (uncovered REQs + seeded extensions.yml).
     cpSync(join(FIXTURES, "specify-with-gate-failure"), tmp, { recursive: true });
 
     // (b) Install the spectrace gate via `integrate speckit --gate`. We also
     // run `init --no-scan` so .artgraph.json exists for subsequent scan/check.
-    const integrate = runCli(
+    const integrate = await runCli(
       ["init", "--no-scan", "--integrate", "speckit", "--integrate-gate"],
       tmp,
     );
@@ -657,7 +651,7 @@ describe("E2E: artgraph check --gate halts on uncovered REQs (SC-006 / FR-017)",
     expect(yml).toMatch(/command:\s*artgraph\.check-gate/);
 
     // (c) Run the *exact* command Spec Kit's before_implement hook would fire.
-    const gate = runCli(["check", "--gate"], tmp);
+    const gate = await runCli(["check", "--gate"], tmp);
 
     // (d) Halt condition: exit code 2 (artgraph's gate-fail signal) — this is
     // what stops Spec Kit /speckit-implement (FR-017 / SC-006).
@@ -668,10 +662,10 @@ describe("E2E: artgraph check --gate halts on uncovered REQs (SC-006 / FR-017)",
     expect(gate.stdout).toMatch(/GATE-002/);
   });
 
-  it("`check --gate` JSON output exposes the failing artifacts for downstream hook consumers", () => {
+  it("`check --gate` JSON output exposes the failing artifacts for downstream hook consumers", async () => {
     cpSync(join(FIXTURES, "specify-with-gate-failure"), tmp, { recursive: true });
-    runCli(["init", "--no-scan", "--integrate", "speckit", "--integrate-gate"], tmp);
-    const gate = runCli(["check", "--gate", "--format", "json"], tmp);
+    await runCli(["init", "--no-scan", "--integrate", "speckit", "--integrate-gate"], tmp);
+    const gate = await runCli(["check", "--gate", "--format", "json"], tmp);
     expect(gate.exitCode).toBe(2);
     const parsed = JSON.parse(gate.stdout);
     expect(parsed.pass).toBe(false);
@@ -683,62 +677,6 @@ describe("E2E: artgraph check --gate halts on uncovered REQs (SC-006 / FR-017)",
   });
 });
 
-// ---------------------------------------------------------------------------
-// Phase 7 — T067 / T068: SC-004 wall-clock budget for detect-failure paths
-//
-// `artgraph integrate <tool>` on a repo without the SDD marker must exit
-// quickly (under 1000ms expected, 1500ms hard ceiling per spec). We measure
-// the whole CLI start→exit time so process-spawn overhead is included
-// (Node 20 / warm cache is the spec's reference environment).
-// ---------------------------------------------------------------------------
-
-describe("Perf: `artgraph integrate <tool>` detect-failure wall-clock (SC-004)", () => {
-  let tmp: string;
-
-  beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "artgraph-sc004-"));
-  });
-
-  afterEach(() => {
-    rmSync(tmp, { recursive: true, force: true });
-  });
-
-  function measure(args: string[]): { exitCode: number; stderr: string; elapsedMs: number } {
-    const t0 = process.hrtime.bigint();
-    const res = spawnSync("node", [CLI, ...args], { encoding: "utf-8", cwd: tmp, timeout: 30000 });
-    const elapsedMs = Number(process.hrtime.bigint() - t0) / 1_000_000;
-    return { exitCode: res.status ?? 1, stderr: res.stderr ?? "", elapsedMs };
-  }
-
-  it("integrate speckit exits with detect-failure in <1500ms when .specify/ is absent", () => {
-    // Warm the loader once so subsequent runs see a warm Node module cache
-    // (matches the spec's "warm cache" reference environment).
-    measure(["--version"]);
-
-    const r = measure(["integrate", "speckit"]);
-    expect(r.exitCode).toBe(1);
-    expect(r.stderr).toMatch(/not detected/i);
-    // Hard ceiling — fails the test if exceeded.
-    expect(r.elapsedMs).toBeLessThan(1500);
-    // Soft target — logs a warning if we slip past 1s without failing.
-    if (r.elapsedMs > 1000) {
-      console.warn(
-        `SC-004 soft target slip: integrate speckit detect-fail took ${r.elapsedMs.toFixed(0)}ms (expected <1000ms)`,
-      );
-    }
-  });
-
-  it("integrate kiro exits with detect-failure in <1500ms when .kiro/ is absent", () => {
-    measure(["--version"]);
-
-    const r = measure(["integrate", "kiro"]);
-    expect(r.exitCode).toBe(1);
-    expect(r.stderr).toMatch(/not detected/i);
-    expect(r.elapsedMs).toBeLessThan(1500);
-    if (r.elapsedMs > 1000) {
-      console.warn(
-        `SC-004 soft target slip: integrate kiro detect-fail took ${r.elapsedMs.toFixed(0)}ms (expected <1000ms)`,
-      );
-    }
-  });
-});
+// SC-004 wall-clock budget tests moved to `tests/perf/integrate-detect.perf.test.ts`.
+// They run under `vitest.perf.config.ts` in a single forked process so the
+// spawned bin owns the CPU during measurement.

@@ -1,33 +1,29 @@
-import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { existsSync, unlinkSync } from "node:fs";
+import { runCli } from "../src/cli.js";
 
+// Kept as a public export so a small set of tests (SC-004 perf, hook-pretool
+// stdin tests) can still spawn the real bin via subprocess.
 export const CLI = resolve(import.meta.dirname, "../dist/cli.js");
 export const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
 export const LOCK_PATH = resolve(FIXTURE_DIR, ".trace.lock");
 
-export function run(args: string[]): { stdout: string; stderr: string; exitCode: number } {
+export interface RunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+export function run(args: string[]): Promise<RunResult> {
   return runAt(FIXTURE_DIR, args);
 }
 
-export function runAt(
-  cwd: string,
-  args: string[],
-): { stdout: string; stderr: string; exitCode: number } {
-  try {
-    const stdout = execFileSync("node", [CLI, ...args], {
-      encoding: "utf-8",
-      cwd,
-      timeout: 30000,
-    });
-    return { stdout, stderr: "", exitCode: 0 };
-  } catch (e: any) {
-    return {
-      stdout: e.stdout ?? "",
-      stderr: e.stderr ?? "",
-      exitCode: e.status ?? 1,
-    };
-  }
+export function runAt(cwd: string, args: string[]): Promise<RunResult> {
+  return runCli(args, { cwd });
+}
+
+export function runWithStdin(args: string[], stdin: string, cwd?: string): Promise<RunResult> {
+  return runCli(args, { cwd: cwd ?? FIXTURE_DIR, stdin });
 }
 
 export function cleanup() {
