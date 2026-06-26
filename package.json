@@ -19,6 +19,7 @@
     "artgraph": "node --enable-source-maps ./dist/cli.js",
     "test": "vitest run && vitest run --config vitest.e2e.config.ts && vitest run --config vitest.perf.config.ts",
     "test:unit": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:perf": "vitest run --config vitest.perf.config.ts",
     "test:watch": "vitest",
@@ -59,6 +60,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@vitest/coverage-v8": "^4.1.9",
     "knip": "^6.17.1",
     "oxfmt": "^0.55.0",
     "oxlint": "^1.70.0",
