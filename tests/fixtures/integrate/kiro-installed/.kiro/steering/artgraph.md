@@ -1,4 +1,4 @@
-# artgraph (spectrace) integration for Kiro
+# artgraph — Kiro integration
 
 This steering file tells the Kiro agent how to use artgraph to keep code, specs, and tests in sync.
 

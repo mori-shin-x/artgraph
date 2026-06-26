@@ -10,8 +10,12 @@ Thanks for your interest in artgraph. This document covers the development setup
 ## Setup
 
 ```bash
+git clone https://github.com/ShintaroMorimoto/artgraph.git
+cd artgraph
 pnpm install --frozen-lockfile
 ```
+
+The repository name is `artgraph`, matching the npm package and the CLI binary.
 
 ## Common commands
 
