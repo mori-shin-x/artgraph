@@ -17,13 +17,29 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "knip": "knip",
-    "prepublishOnly": "rm -rf dist && tsc"
+    "prepublishOnly": "pnpm test && rm -rf dist && tsc"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ShintaroMorimoto/artgraph.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ShintaroMorimoto/artgraph/issues"
+  },
+  "homepage": "https://github.com/ShintaroMorimoto/artgraph#readme",
   "keywords": [
     "traceability",
     "spec-driven-development",
-    "impact-analysis"
+    "impact-analysis",
+    "spec-kit",
+    "kiro",
+    "requirements",
+    "drift-detection",
+    "monorepo",
+    "typescript",
+    "cli"
   ],
+  "author": "Shintaro Morimoto",
   "license": "MIT",
   "dependencies": {
     "commander": "^13.1.0",
@@ -45,5 +61,6 @@
   },
   "engines": {
     "node": ">=22"
-  }
+  },
+  "packageManager": "pnpm@11.8.0"
 }
