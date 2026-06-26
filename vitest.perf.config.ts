@@ -14,5 +14,9 @@ export default defineConfig({
     forks: { singleFork: true },
     fileParallelism: false,
     globalSetup: ["./tests/perf/global-setup.ts"],
+    // Wall-clock budgets are noisy on shared CI runners. One retry absorbs
+    // single-spike GC pauses without masking a real regression — a
+    // genuinely slow CLI fails both attempts and bubbles up.
+    retry: 1,
   },
 });

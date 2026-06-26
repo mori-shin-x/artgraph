@@ -36,8 +36,10 @@ describe("Perf: `artgraph integrate <tool>` detect-failure wall-clock (SC-004)",
   }
 
   it("integrate speckit exits with detect-failure in <1500ms when .specify/ is absent", () => {
-    // Warm the loader once so subsequent runs see a warm Node module cache
-    // (matches the spec's "warm cache" reference environment).
+    // Touch dist/cli.js once so the OS page cache is warm for the timed
+    // run — `spawnSync` always starts a fresh Node process, so the Node
+    // module cache itself is NOT carried over between calls. The spec's
+    // "warm cache" reference environment means warm OS file cache only.
     measure(["--version"]);
 
     const r = measure(["integrate", "speckit"]);

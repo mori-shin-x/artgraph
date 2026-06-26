@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
 import { Command, CommanderError, Option } from "commander";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
-import { Readable } from "node:stream";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
@@ -965,6 +964,13 @@ function printRenameJson(result: RenameResult) {
 }
 }
 
+/**
+ * @internal
+ * Test seam — intentionally hidden from the public package surface via the
+ * `exports` field in package.json. Mutates global process state during the
+ * call (cwd / exit / console / stdout / stderr) and is unsafe for external
+ * use. Tests reach it via the in-repo path `../src/cli.js`.
+ */
 export interface RunCliOptions {
   /** Working directory the CLI sees as `process.cwd()` for the duration of the call. */
   cwd?: string;
@@ -972,6 +978,7 @@ export interface RunCliOptions {
   stdin?: string;
 }
 
+/** @internal */
 export interface RunCliResult {
   stdout: string;
   stderr: string;
@@ -987,16 +994,17 @@ class CliExitError extends Error {
 }
 
 /**
+ * @internal
  * Run the artgraph CLI in-process and capture its stdout/stderr/exitCode.
  * Used by the test suite to avoid the ~150–300 ms per-spawn Node startup +
  * ts-morph reload cost. Behaves like a fresh `artgraph <argv>` invocation:
  * builds a new commander tree, redirects console/process.stdout/process.stderr,
  * intercepts `process.exit`, and temporarily chdirs into `opts.cwd`.
  *
- * Not safe to call concurrently within a single Node process — the cwd /
- * console / process.exit hooks are global. Vitest runs files in separate
- * worker processes and tests within a file sequentially, so this is fine
- * for the existing suite.
+ * NOT a public API — the package's `exports` field deliberately blocks
+ * deep imports so external consumers cannot reach this. It mutates global
+ * process state (cwd / exit / console / stdout / stderr) and is unsafe
+ * to call concurrently within a single Node process.
  */
 export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<RunCliResult> {
   const stdoutChunks: string[] = [];
@@ -1097,15 +1105,23 @@ function chunkToString(chunk: unknown): string {
 
 // Only invoke commander when this module is the entry point of a real CLI
 // process. Importing `cli.ts` from tests must not trigger argv parsing.
-const _entryHref =
-  typeof process.argv[1] === "string" ? pathToFileURL(process.argv[1]).href : "";
-if (import.meta.url === _entryHref) {
-  // Touch the imported helper so the unused-import lint doesn't flip; the
-  // symbol is only needed for the entry-point comparison above.
-  void fileURLToPath;
-  // Use Readable to silence "unused import" — kept around as part of the
-  // public surface for future stdin-injection helpers.
-  void Readable;
+//
+// `realpathSync` is essential: when invoked via an npm/pnpm bin shim
+// (`./node_modules/.bin/artgraph`), Node's ESM loader resolves the module
+// URL to the symlink target (the real `dist/cli.js`), but `process.argv[1]`
+// stays as the shim path. Without realpath normalization the two are
+// different strings and the guard never fires — bin-shim invocations
+// would silently exit without parsing argv. See PR #99 review.
+function resolveEntryHref(): string {
+  const argv1 = process.argv[1];
+  if (typeof argv1 !== "string") return "";
+  try {
+    return pathToFileURL(realpathSync(argv1)).href;
+  } catch {
+    return "";
+  }
+}
+if (import.meta.url === resolveEntryHref()) {
   const program = buildProgram();
   program.parse();
 }
