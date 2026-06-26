@@ -1,5 +1,11 @@
 # artgraph
 
+[![CI](https://github.com/ShintaroMorimoto/artgraph/actions/workflows/ci.yml/badge.svg)](https://github.com/ShintaroMorimoto/artgraph/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/artgraph.svg)](https://www.npmjs.com/package/artgraph)
+[![npm downloads](https://img.shields.io/npm/dm/artgraph.svg)](https://www.npmjs.com/package/artgraph)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
+
 Typed artifact graph for TS/JS — trace specs, docs, code, and tests bidirectionally.
 
 artgraph builds a graph that links requirement IDs in your specs to the code that
@@ -7,12 +13,54 @@ implements them (`@impl` tags) and the tests that verify them (`[ID]` / `req:` t
 then detects **drift** (spec changed but code/tests didn't), **orphans**, and
 **uncovered** requirements.
 
-## Install
+## Quickstart
 
 ```bash
 npm install -D artgraph
 npx artgraph init      # writes .artgraph.json
 ```
+
+### End-to-end: spec → `@impl` → `check`
+
+```bash
+# 1. Write a requirement
+mkdir -p specs && cat > specs/auth.md <<'EOF'
+- REQ-001: Users can sign in with email and password.
+EOF
+
+# 2. Tag the implementation
+cat > src/auth.ts <<'EOF'
+// @impl REQ-001
+export function signIn(email: string, password: string) { /* … */ }
+EOF
+
+# 3. Tag the test
+cat > tests/auth.test.ts <<'EOF'
+import { describe, it } from "vitest";
+describe("auth", () => {
+  it("[REQ-001] accepts non-empty credentials", () => { /* … */ });
+});
+EOF
+
+# 4. Snapshot the baseline, then change the spec to see drift surface
+npx artgraph reconcile
+sed -i 's/email and password\./email, password, and TOTP./' specs/auth.md
+npx artgraph check
+```
+
+```
+DRIFT:
+  REQ-001 (req)
+  doc:auth.md (doc)
+COVERAGE:
+  REQ-001: verified
+```
+
+Add `--gate` (`npx artgraph check --gate`) to a CI step or pre-commit hook to
+exit non-zero whenever drift, orphans, or uncovered requirements are present.
+
+A runnable copy of this flow lives in [`examples/basic/`](./examples/basic). For
+Spec Kit integration, see [`examples/speckit-integration/`](./examples/speckit-integration).
 
 ## How references are expressed
 
@@ -245,9 +293,9 @@ Notes:
   removes it, and omitting the flag leaves the current state untouched. Other
   extensions' hooks in `extensions.yml` are never touched.
 - The full design lives in
-  [specs/009-sdd-integration/spec.md](../../specs/009-sdd-integration/spec.md);
+  [specs/009-sdd-integration/spec.md](./specs/009-sdd-integration/spec.md);
   the end-to-end walkthrough (every scenario the E2E tests cover) is in
-  [specs/009-sdd-integration/quickstart.md](../../specs/009-sdd-integration/quickstart.md).
+  [specs/009-sdd-integration/quickstart.md](./specs/009-sdd-integration/quickstart.md).
 
 ## Claude Code skills
 

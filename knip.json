@@ -1,5 +1,5 @@
 {
-  "ignore": [".claude/**", "tests/fixtures/**"],
+  "ignore": [".claude/**", "tests/fixtures/**", "examples/**"],
   "ignoreDependencies": ["oxfmt", "oxlint"],
   "ignoreExportsUsedInFile": true
 }
