@@ -37,7 +37,22 @@ function makeGraph(
       contentHash: "abc",
     });
   }
-  return { nodes: nodeMap, edges };
+  // Issue #35: every edge now requires a non-empty `provenances`. For these
+  // unit-test fixtures the value is informational only (coverage logic ignores
+  // it), so pick a kind-appropriate default per the mapping in
+  // contracts/edge-provenance-type.md.
+  const provDefault: Record<EdgeKind, "annotation" | "frontmatter" | "convention" | "code-tag" | "task-tag" | "inline-link" | "ts-import" | "structural"> = {
+    depends_on: "annotation",
+    derives_from: "frontmatter",
+    implements: "code-tag",
+    verifies: "code-tag",
+    imports: "ts-import",
+    contains: "structural",
+  };
+  return {
+    nodes: nodeMap,
+    edges: edges.map((e) => ({ ...e, provenances: [provDefault[e.kind]] })),
+  };
 }
 
 /* ------------------------------------------------------------------ */

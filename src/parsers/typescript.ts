@@ -167,10 +167,20 @@ function extractImports(
       const namespaceImport = decl.getNamespaceImport();
 
       if (namespaceImport) {
-        edges.push({ source: sourceId, target: `file:${targetRel}`, kind: "imports" });
+        edges.push({
+          source: sourceId,
+          target: `file:${targetRel}`,
+          kind: "imports",
+          provenances: ["ts-import"],
+        });
       } else {
         if (defaultImport) {
-          edges.push({ source: sourceId, target: `symbol:${targetRel}#default`, kind: "imports" });
+          edges.push({
+            source: sourceId,
+            target: `symbol:${targetRel}#default`,
+            kind: "imports",
+            provenances: ["ts-import"],
+          });
         }
         for (const named of namedImports) {
           const importName = named.getAliasNode() ? named.getNameNode().getText() : named.getName();
@@ -178,14 +188,25 @@ function extractImports(
             source: sourceId,
             target: `symbol:${targetRel}#${importName}`,
             kind: "imports",
+            provenances: ["ts-import"],
           });
         }
         if (!defaultImport && namedImports.length === 0 && !namespaceImport) {
-          edges.push({ source: sourceId, target: `file:${targetRel}`, kind: "imports" });
+          edges.push({
+            source: sourceId,
+            target: `file:${targetRel}`,
+            kind: "imports",
+            provenances: ["ts-import"],
+          });
         }
       }
     } else {
-      edges.push({ source: sourceId, target: `file:${targetRel}`, kind: "imports" });
+      edges.push({
+        source: sourceId,
+        target: `file:${targetRel}`,
+        kind: "imports",
+        provenances: ["ts-import"],
+      });
     }
   }
 
@@ -199,6 +220,7 @@ function extractImports(
           source: sourceId,
           target: `file:${targetRel}`,
           kind: "imports",
+          provenances: ["ts-import"],
         });
       }
     }
@@ -244,7 +266,12 @@ function extractImplTags(
     }
 
     for (const reqId of reqIds) {
-      edges.push({ source: sourceId, target: reqId, kind: "implements" });
+      edges.push({
+        source: sourceId,
+        target: reqId,
+        kind: "implements",
+        provenances: ["code-tag"],
+      });
     }
   }
 
@@ -252,12 +279,22 @@ function extractImplTags(
     testReqRe.lastIndex = 0;
     while ((match = testReqRe.exec(content)) !== null) {
       const reqId = match[0].slice(1, -1);
-      edges.push({ source: fileSourceId, target: reqId, kind: "verifies" });
+      edges.push({
+        source: fileSourceId,
+        target: reqId,
+        kind: "verifies",
+        provenances: ["code-tag"],
+      });
     }
 
     testAnnotationRe.lastIndex = 0;
     while ((match = testAnnotationRe.exec(content)) !== null) {
-      edges.push({ source: fileSourceId, target: match[1], kind: "verifies" });
+      edges.push({
+        source: fileSourceId,
+        target: match[1],
+        kind: "verifies",
+        provenances: ["code-tag"],
+      });
     }
   }
 }

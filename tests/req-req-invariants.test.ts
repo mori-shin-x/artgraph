@@ -41,7 +41,7 @@ describe("req-req invariants (meta-review remediation)", () => {
       "specs/010-b/spec.md": "- AUTH-001: b (depends_on: SUP-200)\n- SUP-200: y\n",
     });
     const { graph } = buildGraph(TMP_BASE, baseConfig);
-    const annEdges = graph.edges.filter((e) => e.provenance === "annotation");
+    const annEdges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
 
     const aEdges = annEdges.filter((e) => e.source === "010-a/AUTH-001");
     const bEdges = annEdges.filter((e) => e.source === "010-b/AUTH-001");
@@ -57,7 +57,7 @@ describe("req-req invariants (meta-review remediation)", () => {
         "- INLN-001: foo `(depends_on: AUTH-001)` baz\n- AUTH-001: x\n",
     });
     const { graph } = buildGraph(TMP_BASE, baseConfig);
-    const edges = graph.edges.filter((e) => e.provenance === "annotation");
+    const edges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
     expect(edges).toHaveLength(0);
   });
 
@@ -67,7 +67,7 @@ describe("req-req invariants (meta-review remediation)", () => {
         "- HTML-001: foo <!-- (depends_on: AUTH-001) --> baz\n- AUTH-001: x\n",
     });
     const { graph } = buildGraph(TMP_BASE, baseConfig);
-    const edges = graph.edges.filter((e) => e.provenance === "annotation");
+    const edges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
     expect(edges).toHaveLength(0);
   });
 
@@ -77,7 +77,7 @@ describe("req-req invariants (meta-review remediation)", () => {
         "> - BQ-001: y (depends_on: AUTH-001)\n\n- AUTH-001: x\n",
     });
     const { graph } = buildGraph(TMP_BASE, baseConfig);
-    const edges = graph.edges.filter((e) => e.provenance === "annotation");
+    const edges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
     expect(edges).toHaveLength(0);
   });
 
@@ -115,7 +115,7 @@ describe("req-req invariants (meta-review remediation)", () => {
     });
     const { graph, warnings } = buildGraph(TMP_BASE, baseConfig);
 
-    const annEdges = graph.edges.filter((e) => e.provenance === "annotation");
+    const annEdges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
     expect(annEdges).toHaveLength(0);
 
     const ambig = warnings.filter(
@@ -135,7 +135,7 @@ describe("req-req invariants (meta-review remediation)", () => {
     });
     const { graph, warnings } = buildGraph(TMP_BASE, baseConfig);
 
-    const annEdges = graph.edges.filter((e) => e.provenance === "annotation");
+    const annEdges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
     expect(annEdges.map((e) => e.target).sort()).toEqual(["A-1", "B-2"]);
 
     const emptyKey = warnings.filter(
@@ -223,16 +223,18 @@ describe("req-req invariants (meta-review remediation)", () => {
     expect(/[^\r]\n/.test(result.content)).toBe(false);
   });
 
-  it("追加F2: annotation edge は lock の dependsOn に含まれない", () => {
+  it("追加F2 (issue #35 で反転): annotation edge も lock の dependsOn に含まれる", () => {
     setupTmp({
       "specs/010-a/spec.md": "- A-1: foo (depends_on: A-2)\n- A-2: bar\n",
     });
     const { graph } = buildGraph(TMP_BASE, baseConfig);
     const lock = buildLockFromGraph(graph);
-    expect(lock["A-1"]?.dependsOn).toBeUndefined();
+    expect(lock["A-1"]?.dependsOn).toEqual([
+      { id: "A-2", provenances: ["annotation"] },
+    ]);
   });
 
-  it("追加F6: provenance が不正な値ならば JSON 出力で省略される", () => {
+  it("追加F6 (issue #35): 不正な provenance 値は要素単位で除外され、全要素 invalid なら edge ごと drop", () => {
     const fakeGraph: ArtifactGraph = {
       nodes: new Map([
         [
@@ -257,39 +259,66 @@ describe("req-req invariants (meta-review remediation)", () => {
         ],
       ]),
       edges: [
+        // Mixed valid + invalid → invalid element filtered out, edge survives.
         {
           source: "A",
           target: "B",
           kind: "depends_on",
-          provenance: "annotation",
+          provenances: ["annotation", "bogus" as unknown as "annotation"],
         },
+        // All invalid → edge dropped entirely (NonEmpty invariant).
         {
           source: "A",
           target: "B",
           kind: "depends_on",
-          provenance: "" as unknown as undefined,
+          provenances: ["bogus" as unknown as "annotation"],
         },
-        {
-          source: "A",
-          target: "B",
-          kind: "depends_on",
-          provenance: null as unknown as undefined,
-        },
-        {
-          source: "A",
-          target: "B",
-          kind: "depends_on",
-          provenance: "bogus" as unknown as undefined,
-        },
-        { source: "A", target: "B", kind: "depends_on" },
       ],
     };
     const json = JSON.parse(formatGraphJSON(fakeGraph));
-    expect(json.edges).toHaveLength(5);
-    expect(json.edges[0].provenance).toBe("annotation");
-    for (let i = 1; i < json.edges.length; i++) {
-      expect(json.edges[i].provenance).toBeUndefined();
+    expect(json.edges).toHaveLength(1);
+    expect(json.edges[0].provenances).toEqual(["annotation"]);
+    // Legacy `provenance` field MUST NOT appear (INV-O4).
+    for (const edge of json.edges) {
+      expect(edge.provenance).toBeUndefined();
     }
+  });
+
+  // SC-007 / INV-T1: every edge produced by buildGraph has provenances.length >= 1.
+  it("SC-007 / INV-T1: 全 buildGraph fixture を走査して provenances.length>=1 を保証", () => {
+    const fixturesRoot = resolve(import.meta.dirname, "fixtures");
+    const targetRoots = [
+      resolve(fixturesRoot, "conventions"),
+      resolve(fixturesRoot, "all-verified"),
+      resolve(fixturesRoot, "edge-provenance/all-eight"),
+    ];
+    for (const root of targetRoots) {
+      if (!existsSync(root)) continue;
+      const { graph } = buildGraph(root, {
+        ...baseConfig,
+        include: ["src/**/*.ts"],
+        testPatterns: ["tests/**/*.test.ts"],
+      });
+      for (const edge of graph.edges) {
+        expect(edge.provenances.length).toBeGreaterThanOrEqual(1);
+      }
+    }
+  });
+
+  // SC-008 / INV-T4: EdgeProvenance type union and runtime Set are the same size (8).
+  it("SC-008 / INV-T4: EDGE_PROVENANCE_VALUES.size === 8 and matches the type union", async () => {
+    const types = await import("../src/types.js");
+    expect(types.EDGE_PROVENANCE_VALUES.size).toBe(8);
+    expect([...types.EDGE_PROVENANCE_VALUES].sort()).toEqual([
+      "annotation",
+      "code-tag",
+      "convention",
+      "frontmatter",
+      "inline-link",
+      "structural",
+      "task-tag",
+      "ts-import",
+    ]);
   });
 
   it("rename round-trip: 注釈 edge 集合が rename 前後で同型", () => {
@@ -300,7 +329,7 @@ describe("req-req invariants (meta-review remediation)", () => {
     });
     const { graph: g1 } = buildGraph(TMP_BASE, baseConfig);
     const set1 = g1.edges
-      .filter((e) => e.provenance === "annotation")
+      .filter((e) => e.provenances?.includes("annotation"))
       .map((e) => `${e.source}->${e.target}:${e.kind}`)
       .sort();
 
@@ -311,7 +340,7 @@ describe("req-req invariants (meta-review remediation)", () => {
 
     const { graph: g2 } = buildGraph(TMP_BASE, baseConfig);
     const set2 = g2.edges
-      .filter((e) => e.provenance === "annotation")
+      .filter((e) => e.provenances?.includes("annotation"))
       .map((e) => `${e.source}->${e.target}:${e.kind}`)
       .sort();
 

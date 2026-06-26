@@ -218,6 +218,7 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
             source: docId,
             target,
             kind: "derives_from",
+            provenances: ["frontmatter"],
           });
         }
       }
@@ -231,6 +232,7 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
             source: docId,
             target,
             kind: "depends_on",
+            provenances: ["frontmatter"],
           });
         }
       }
@@ -343,7 +345,12 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
               while ((m = preset.implRe.exec(paragraphText)) !== null) {
                 const target = m[1].trim();
                 if (target === "") continue;
-                edges.push({ source: taskId, target, kind: "implements" });
+                edges.push({
+                  source: taskId,
+                  target,
+                  kind: "implements",
+                  provenances: ["task-tag"],
+                });
               }
             }
             if (preset.verifiesRe) {
@@ -352,7 +359,12 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
               while ((m = preset.verifiesRe.exec(paragraphText)) !== null) {
                 const target = m[1].trim();
                 if (target === "") continue;
-                edges.push({ source: taskId, target, kind: "verifies" });
+                edges.push({
+                  source: taskId,
+                  target,
+                  kind: "verifies",
+                  provenances: ["task-tag"],
+                });
               }
             }
           }
@@ -404,7 +416,7 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
           source: extract.reqId,
           target,
           kind: extract.kind,
-          provenance: "annotation",
+          provenances: ["annotation"],
         });
       }
     }
@@ -491,7 +503,7 @@ export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions):
               source: extract.reqId,
               target,
               kind: extract.kind,
-              provenance: "annotation",
+              provenances: ["annotation"],
             });
           }
         }
