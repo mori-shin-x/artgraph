@@ -238,7 +238,7 @@ describe("E2E: artgraph integrate kiro — quickstart Scenario 2", () => {
     const dest = join(tmp, ".kiro/steering/artgraph.md");
     expect(existsSync(dest)).toBe(true);
     const body = readFileSync(dest, "utf-8");
-    expect(body).toMatch(/artgraph \(artgraph\) integration for Kiro/);
+    expect(body).toMatch(/artgraph — Kiro integration/);
     expect(body).toMatch(/## When to run artgraph/);
     expect(body).toMatch(/artgraph impact/);
     expect(body).toMatch(/artgraph check --diff/);
@@ -272,7 +272,7 @@ describe("E2E: artgraph integrate kiro — quickstart Scenario 2", () => {
 
     const body = readFileSync(dest, "utf-8");
     expect(body).not.toContain("manually edited");
-    expect(body).toMatch(/artgraph \(artgraph\) integration for Kiro/);
+    expect(body).toMatch(/artgraph — Kiro integration/);
   });
 
   it("Step 4: fails (exit 1) when .kiro/ is absent, leaving disk unchanged", async () => {
