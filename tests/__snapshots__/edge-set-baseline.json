@@ -1,0 +1,237 @@
+{
+  "conventions": [
+    {
+      "source": "doc:case-variant/DESIGN.md",
+      "target": "doc:case-variant/Requirements.md",
+      "kind": "derives_from",
+      "provenances": [
+        "convention"
+      ]
+    },
+    {
+      "source": "doc:kiro-feature/design.md",
+      "target": "doc:kiro-feature/requirements.md",
+      "kind": "derives_from",
+      "provenances": [
+        "convention"
+      ]
+    },
+    {
+      "source": "doc:kiro-feature/tasks.md",
+      "target": "doc:kiro-feature/design.md",
+      "kind": "derives_from",
+      "provenances": [
+        "convention"
+      ]
+    },
+    {
+      "source": "doc:mixed-tools/tasks.md",
+      "target": "doc:mixed-tools/design.md",
+      "kind": "derives_from",
+      "provenances": [
+        "convention"
+      ]
+    },
+    {
+      "source": "doc:mixed-tools/tasks.md",
+      "target": "doc:mixed-tools/plan.md",
+      "kind": "derives_from",
+      "provenances": [
+        "convention"
+      ]
+    },
+    {
+      "source": "doc:speckit-feature/plan.md",
+      "target": "doc:speckit-feature/spec.md",
+      "kind": "derives_from",
+      "provenances": [
+        "convention"
+      ]
+    },
+    {
+      "source": "doc:speckit-feature/research.md",
+      "target": "doc:speckit-feature/spec.md",
+      "kind": "derives_from",
+      "provenances": [
+        "convention"
+      ]
+    },
+    {
+      "source": "doc:speckit-feature/tasks.md",
+      "target": "doc:speckit-feature/plan.md",
+      "kind": "derives_from",
+      "provenances": [
+        "convention"
+      ]
+    },
+    {
+      "source": "wf-design",
+      "target": "wf-requirements",
+      "kind": "derives_from",
+      "provenances": [
+        "convention",
+        "frontmatter"
+      ]
+    }
+  ],
+  "req-req-annotations-collision": [
+    {
+      "source": "AUTH-002",
+      "target": "010-a/AUTH-001",
+      "kind": "depends_on",
+      "provenances": [
+        "annotation"
+      ]
+    },
+    {
+      "source": "AUTH-003",
+      "target": "010-b/AUTH-001",
+      "kind": "depends_on",
+      "provenances": [
+        "annotation"
+      ]
+    },
+    {
+      "source": "doc:spec.md",
+      "target": "010-b/AUTH-001",
+      "kind": "contains",
+      "provenances": [
+        "structural"
+      ]
+    },
+    {
+      "source": "doc:spec.md",
+      "target": "AUTH-003",
+      "kind": "contains",
+      "provenances": [
+        "structural"
+      ]
+    }
+  ],
+  "edge-provenance-all-eight": [
+    {
+      "source": "AUTH-003",
+      "target": "AUTH-001",
+      "kind": "depends_on",
+      "provenances": [
+        "annotation"
+      ]
+    },
+    {
+      "source": "doc:design.md",
+      "target": "doc:requirements.md",
+      "kind": "derives_from",
+      "provenances": [
+        "convention",
+        "frontmatter"
+      ]
+    },
+    {
+      "source": "doc:design.md",
+      "target": "doc:spec.md",
+      "kind": "depends_on",
+      "provenances": [
+        "inline-link"
+      ]
+    },
+    {
+      "source": "doc:requirements.md",
+      "target": "REQ-001",
+      "kind": "contains",
+      "provenances": [
+        "structural"
+      ]
+    },
+    {
+      "source": "doc:spec.md",
+      "target": "AUTH-001",
+      "kind": "contains",
+      "provenances": [
+        "structural"
+      ]
+    },
+    {
+      "source": "doc:spec.md",
+      "target": "AUTH-002",
+      "kind": "contains",
+      "provenances": [
+        "structural"
+      ]
+    },
+    {
+      "source": "doc:spec.md",
+      "target": "AUTH-003",
+      "kind": "contains",
+      "provenances": [
+        "structural"
+      ]
+    },
+    {
+      "source": "doc:spec.md",
+      "target": "doc:design.md",
+      "kind": "depends_on",
+      "provenances": [
+        "inline-link"
+      ]
+    },
+    {
+      "source": "doc:tasks.md",
+      "target": "doc:design.md",
+      "kind": "derives_from",
+      "provenances": [
+        "convention"
+      ]
+    },
+    {
+      "source": "doc:tasks.md",
+      "target": "T001",
+      "kind": "contains",
+      "provenances": [
+        "structural"
+      ]
+    },
+    {
+      "source": "file:src/auth.ts",
+      "target": "AUTH-001",
+      "kind": "implements",
+      "provenances": [
+        "code-tag"
+      ]
+    },
+    {
+      "source": "file:src/auth.ts",
+      "target": "file:src/db.ts",
+      "kind": "imports",
+      "provenances": [
+        "ts-import"
+      ]
+    },
+    {
+      "source": "T001",
+      "target": "AUTH-001",
+      "kind": "implements",
+      "provenances": [
+        "task-tag"
+      ]
+    },
+    {
+      "source": "T001",
+      "target": "REQ-FR-001",
+      "kind": "verifies",
+      "provenances": [
+        "task-tag"
+      ]
+    }
+  ],
+  "edge-provenance-two-paths": [
+    {
+      "source": "doc:feature-a/design.md",
+      "target": "doc:feature-a/requirements.md",
+      "kind": "derives_from",
+      "provenances": [
+        "convention",
+        "frontmatter"
+      ]
+    }
+  ]
+}

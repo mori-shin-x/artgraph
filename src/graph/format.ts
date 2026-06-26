@@ -54,22 +54,44 @@ function dfs(
   // Find outgoing edges from this node (source === nodeId, meaning node -> target direction)
   // For derives_from / depends_on: the source is the dependent, the target is the dependency
   // For display purposes, we show children that point TO this node (reverse direction)
-  const childEdges = edges.filter((e) => e.target === nodeId && !visited.has(e.source));
+  // Per #35 / INV-O2: drop edges whose every provenance is forward-incompatible
+  // (mirrors formatGraphJSON's edge-omit behavior so text and JSON stay aligned).
+  const childEdges = edges.filter(
+    (e) => e.target === nodeId && !visited.has(e.source) && hasValidProvenance(e),
+  );
 
   for (const edge of childEdges) {
     const indent = "  ".repeat(depth + 1);
-    lines.push(`${indent}└─[${edge.kind}]─ ${edge.source}`);
+    lines.push(`${indent}└─[${edge.kind} ${formatProvLabel(edge)}]─ ${edge.source}`);
     dfs(edge.source, depth + 1, nodes, edges, visited, lines);
   }
 
   // Also show edges where this node is the source (contains, implements, etc.)
-  const forwardEdges = edges.filter((e) => e.source === nodeId && !visited.has(e.target));
+  const forwardEdges = edges.filter(
+    (e) => e.source === nodeId && !visited.has(e.target) && hasValidProvenance(e),
+  );
 
   for (const edge of forwardEdges) {
     const indent = "  ".repeat(depth + 1);
-    lines.push(`${indent}└─[${edge.kind}]─ ${edge.target}`);
+    lines.push(`${indent}└─[${edge.kind} ${formatProvLabel(edge)}]─ ${edge.target}`);
     dfs(edge.target, depth + 1, nodes, edges, visited, lines);
   }
+}
+
+// Returns true iff at least one provenance value survives the
+// EDGE_PROVENANCE_VALUES filter — used by both dfs() and formatGraphJSON()
+// to drop edges whose payload is entirely forward-incompatible (INV-O2/O3).
+function hasValidProvenance(edge: GraphEdge): boolean {
+  return edge.provenances.some((p) => EDGE_PROVENANCE_VALUES.has(p));
+}
+
+// `└─[<kind> {p1,p2,...}]─` — text-output provenance label per #35 / INV-O1, O2.
+// Always emits the `{...}` braces (NonEmpty invariant is visible).
+// Filters out unknown values (forward-incompatible payloads in test fixtures).
+function formatProvLabel(edge: GraphEdge): string {
+  const valid = edge.provenances.filter((p) => EDGE_PROVENANCE_VALUES.has(p));
+  const sorted = [...valid].sort();
+  return `{${sorted.join(",")}}`;
 }
 
 export function formatGraphJSON(graph: ArtifactGraph, kindFilter?: NodeKind): string {
@@ -83,20 +105,22 @@ export function formatGraphJSON(graph: ArtifactGraph, kindFilter?: NodeKind): st
     contentHash: n.contentHash,
   }));
 
-  const edges = filteredEdges.map((e) => {
-    // Only emit `provenance` when the value is one of the known literals.
-    // `null`, empty string, or an unknown literal (forward-incompatible
-    // payload reaching format) are dropped instead of leaking through, so
-    // downstream consumers can rely on the value being a member of the
-    // EdgeProvenance union (meta-review additional F6).
-    const includeProv =
-      typeof e.provenance === "string" && EDGE_PROVENANCE_VALUES.has(e.provenance);
-    return {
-      source: e.source,
-      target: e.target,
-      kind: e.kind,
-      ...(includeProv && { provenance: e.provenance }),
-    };
+  // Per #35 / INV-O3, INV-O4: emit `provenances` (plural array) only. Element-
+  // level filtering via EDGE_PROVENANCE_VALUES drops forward-incompatible
+  // payloads silently; if every element is rejected, the edge itself is
+  // omitted from the JSON output so the NonEmpty invariant survives the wire.
+  const edges = filteredEdges.flatMap((e) => {
+    const valid = e.provenances.filter((p) => EDGE_PROVENANCE_VALUES.has(p));
+    if (valid.length === 0) return [];
+    const sorted = [...valid].sort();
+    return [
+      {
+        source: e.source,
+        target: e.target,
+        kind: e.kind,
+        provenances: sorted,
+      },
+    ];
   });
 
   return JSON.stringify({ nodes, edges }, null, 2);

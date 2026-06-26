@@ -603,8 +603,8 @@ artgraph:
         .filter((e) => e.kind === "implements")
         .sort((a, b) => a.source.localeCompare(b.source));
       expect(implEdges).toEqual([
-        { source: "T001", target: "auth-login", kind: "implements" },
-        { source: "T002", target: "auth-session", kind: "implements" },
+        { source: "T001", target: "auth-login", kind: "implements", provenances: ["task-tag"] },
+        { source: "T002", target: "auth-session", kind: "implements", provenances: ["task-tag"] },
       ]);
     });
 
@@ -618,9 +618,9 @@ artgraph:
         .filter((e) => e.kind === "verifies")
         .sort((a, b) => a.target.localeCompare(b.target));
       expect(verifies).toEqual([
-        { source: "T010", target: "REQ-FR-001", kind: "verifies" },
-        { source: "T011", target: "REQ-FR-002", kind: "verifies" },
-        { source: "T011", target: "REQ-FR-003", kind: "verifies" },
+        { source: "T010", target: "REQ-FR-001", kind: "verifies", provenances: ["task-tag"] },
+        { source: "T011", target: "REQ-FR-002", kind: "verifies", provenances: ["task-tag"] },
+        { source: "T011", target: "REQ-FR-003", kind: "verifies", provenances: ["task-tag"] },
       ]);
     });
   });
@@ -660,12 +660,12 @@ artgraph:
             : a.source.localeCompare(b.source),
         );
       expect(verifies).toEqual([
-        { source: "1", target: "7.1", kind: "verifies" },
-        { source: "1", target: "7.2", kind: "verifies" },
-        { source: "1.1", target: "7.3", kind: "verifies" },
-        { source: "1.2", target: "8.1", kind: "verifies" },
-        { source: "2", target: "8.2", kind: "verifies" },
-        { source: "2", target: "9.1", kind: "verifies" },
+        { source: "1", target: "7.1", kind: "verifies", provenances: ["task-tag"] },
+        { source: "1", target: "7.2", kind: "verifies", provenances: ["task-tag"] },
+        { source: "1.1", target: "7.3", kind: "verifies", provenances: ["task-tag"] },
+        { source: "1.2", target: "8.1", kind: "verifies", provenances: ["task-tag"] },
+        { source: "2", target: "8.2", kind: "verifies", provenances: ["task-tag"] },
+        { source: "2", target: "9.1", kind: "verifies", provenances: ["task-tag"] },
       ]);
     });
 
@@ -848,9 +848,9 @@ artgraph:
           .filter((e) => e.kind === "verifies")
           .sort((a, b) => a.source.localeCompare(b.source));
         expect(verifies).toEqual([
-          { source: "T400", target: "FR-001", kind: "verifies" },
-          { source: "T401", target: "Requirement-3", kind: "verifies" },
-          { source: "T402", target: "auth/FR-7", kind: "verifies" },
+          { source: "T400", target: "FR-001", kind: "verifies", provenances: ["task-tag"] },
+          { source: "T401", target: "Requirement-3", kind: "verifies", provenances: ["task-tag"] },
+          { source: "T402", target: "auth/FR-7", kind: "verifies", provenances: ["task-tag"] },
         ]);
       } finally {
         unlinkSync(file);
@@ -941,8 +941,8 @@ artgraph:
         expect(ids).toEqual(["KT-001", "KT-002"]);
         const impl = r2.edges.filter((e) => e.kind === "implements");
         expect(impl).toEqual([
-          { source: "KT-001", target: "target-a", kind: "implements" },
-          { source: "KT-002", target: "target-b", kind: "implements" },
+          { source: "KT-001", target: "target-a", kind: "implements", provenances: ["task-tag"] },
+          { source: "KT-002", target: "target-b", kind: "implements", provenances: ["task-tag"] },
         ]);
       } finally {
         unlinkSync(file);
@@ -1177,7 +1177,7 @@ describe("parseMarkdown — req→req annotations on list items (US1)", () => {
 
   it("generates annotation edges for the 7 accepted patterns", () => {
     const { edges } = parseMarkdown(fixturePath);
-    const annotationEdges = edges.filter((e) => e.provenance === "annotation");
+    const annotationEdges = edges.filter((e) => e.provenances?.includes("annotation"));
 
     // 1 (AUTH-002→AUTH-001) + 1 (AUTH-003→AUTH-002) + 3 (AUTH-004→A1/A2/A3) +
     // 1 (AUTH-005→AUTH-001 via BOLD) + 2 (AUTH-006→A1/A2 via whitespace) +
@@ -1188,19 +1188,19 @@ describe("parseMarkdown — req→req annotations on list items (US1)", () => {
       source: "AUTH-002",
       target: "AUTH-001",
       kind: "depends_on",
-      provenance: "annotation",
+      provenances: ["annotation"],
     });
     expect(annotationEdges).toContainEqual({
       source: "AUTH-003",
       target: "AUTH-002",
       kind: "derives_from",
-      provenance: "annotation",
+      provenances: ["annotation"],
     });
     expect(annotationEdges).toContainEqual({
       source: "AUTH-007",
       target: "AUTH-002",
       kind: "derives_from",
-      provenance: "annotation",
+      provenances: ["annotation"],
     });
   });
 
@@ -1215,7 +1215,7 @@ describe("parseMarkdown — req→req annotations on list items (US1)", () => {
   it("AUTH-005 BOLD form resolves to the bare ID target", () => {
     const { edges } = parseMarkdown(fixturePath);
     const auth5 = edges.find(
-      (e) => e.source === "AUTH-005" && e.provenance === "annotation",
+      (e) => e.source === "AUTH-005" && e.provenances?.includes("annotation"),
     );
     expect(auth5).toBeDefined();
     expect(auth5?.target).toBe("AUTH-001");
@@ -1227,32 +1227,32 @@ describe("parseMarkdown — req→req annotations on Kiro headings (US2)", () =>
 
   it("recognises annotations on the first paragraph head/tail and single-line paragraphs", () => {
     const { edges } = parseMarkdown(fixturePath);
-    const annEdges = edges.filter((e) => e.provenance === "annotation");
+    const annEdges = edges.filter((e) => e.provenances?.includes("annotation"));
     // Req 2: head line, Req 3: tail line, Req 4: single-line head=tail. = 3 edges.
     expect(annEdges).toHaveLength(3);
     expect(annEdges).toContainEqual({
       source: "Requirement-2",
       target: "Requirement-1",
       kind: "depends_on",
-      provenance: "annotation",
+      provenances: ["annotation"],
     });
     expect(annEdges).toContainEqual({
       source: "Requirement-3",
       target: "Requirement-2",
       kind: "depends_on",
-      provenance: "annotation",
+      provenances: ["annotation"],
     });
     expect(annEdges).toContainEqual({
       source: "Requirement-4",
       target: "Requirement-1",
       kind: "depends_on",
-      provenance: "annotation",
+      provenances: ["annotation"],
     });
   });
 
   it("does NOT generate edges for heading-line or mid-paragraph parens (silent skip)", () => {
     const { edges, warnings } = parseMarkdown(fixturePath);
-    const annEdges = edges.filter((e) => e.provenance === "annotation");
+    const annEdges = edges.filter((e) => e.provenances?.includes("annotation"));
     // Requirement-X (heading-line paren) and Requirement-Y (mid-paragraph) must NOT appear.
     expect(annEdges.find((e) => e.target === "Requirement-X")).toBeUndefined();
     expect(annEdges.find((e) => e.target === "Requirement-Y")).toBeUndefined();

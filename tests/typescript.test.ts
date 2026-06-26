@@ -31,6 +31,15 @@ describe("createTSParser", () => {
     expect(loginImports[0].target).toBe("file:src/auth/session.ts");
   });
 
+  // Issue #35: every import edge carries `provenances: ["ts-import"]`.
+  it("tags all import edges with provenances=['ts-import']", () => {
+    const importEdges = result.edges.filter((e) => e.kind === "imports");
+    expect(importEdges.length).toBeGreaterThan(0);
+    for (const edge of importEdges) {
+      expect(edge.provenances).toEqual(["ts-import"]);
+    }
+  });
+
   it("should extract @impl tags with single REQ", () => {
     const implEdges = result.edges.filter(
       (e) => e.kind === "implements" && e.source === "file:src/auth/login.ts",
@@ -38,6 +47,7 @@ describe("createTSParser", () => {
 
     expect(implEdges).toHaveLength(1);
     expect(implEdges[0].target).toBe("AUTH-001");
+    expect(implEdges[0].provenances).toEqual(["code-tag"]);
   });
 
   it("should extract @impl tags with multiple REQs", () => {
@@ -57,6 +67,7 @@ describe("createTSParser", () => {
 
     expect(verifyEdges.length).toBeGreaterThanOrEqual(1);
     expect(verifyEdges[0].target).toBe("AUTH-001");
+    expect(verifyEdges[0].provenances).toEqual(["code-tag"]);
   });
 
   it("should extract @impl with PREFIX-NNN pattern (US1)", () => {
@@ -166,6 +177,7 @@ describe("createTSParser (symbol mode)", () => {
       source: "file:src/consumer.ts",
       target: "symbol:src/utils.ts#foo",
       kind: "imports",
+      provenances: ["ts-import"],
     });
   });
 
@@ -178,6 +190,7 @@ describe("createTSParser (symbol mode)", () => {
       source: "file:src/ns-consumer.ts",
       target: "file:src/utils.ts",
       kind: "imports",
+      provenances: ["ts-import"],
     });
     const symbolTargets = importEdges.filter((e) => e.target.startsWith("symbol:"));
     expect(symbolTargets).toHaveLength(0);
@@ -192,6 +205,7 @@ describe("createTSParser (symbol mode)", () => {
       source: "file:src/consumer.ts",
       target: "symbol:src/defaults.ts#default",
       kind: "imports",
+      provenances: ["ts-import"],
     });
   });
 
@@ -211,6 +225,7 @@ describe("createTSParser (symbol mode)", () => {
       source: "file:src/consumer.ts",
       target: "symbol:src/utils.ts#bar",
       kind: "imports",
+      provenances: ["ts-import"],
     });
   });
 

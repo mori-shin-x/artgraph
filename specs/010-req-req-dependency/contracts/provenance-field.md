@@ -46,6 +46,14 @@ export interface GraphEdge {
 
 本 issue では (1) のみ部分的に着手（注釈経路のみ）。(2)〜(4) は #35 のスコープに残す。
 
+> **Status (2026-06): #35 resolved** — 上記 (1)〜(4) は
+> [`specs/011-edge-provenance/`](../../011-edge-provenance/) で実装完了。
+> 単一フィールド `provenance` は `NonEmptyArray<EdgeProvenance>` の `provenances`
+> に置換され、lock の `dependsOn` も `{id, provenances}` 構造化された。詳細は
+> [contracts/edge-provenance-type.md](../../011-edge-provenance/contracts/edge-provenance-type.md)
+> と [contracts/lock-schema-v2.md](../../011-edge-provenance/contracts/lock-schema-v2.md)
+> を参照（本 010 ドキュメントは過渡期の design として保存）。
+
 ## 後方互換性
 
 - 既存テスト・既存 fixture は `provenance` を持たない GraphEdge を作る。
