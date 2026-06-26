@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-import { Command, Option } from "commander";
-import { existsSync } from "node:fs";
+import { Command, CommanderError, Option } from "commander";
+import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
 import { impact, resolveStartIds } from "./graph/traverse.js";
@@ -33,9 +34,19 @@ import type { IntegrateResult, IntegrationProviderId } from "./types.js";
 // / US2 fill it in.
 registerBuiltinProviders();
 
-const program = new Command();
+// Test seam: when set, hook-pretool reads this string instead of process.stdin.
+// Lets `runCli({stdin})` drive hook-pretool entirely in-process without having
+// to mock the global stdin stream.
+let _hookStdinOverride: string | undefined;
 
-program.name("artgraph").description("Typed artifact graph for TS/JS").version("0.1.0");
+function buildProgram(): Command {
+  const program = new Command();
+  program.name("artgraph").description("Typed artifact graph for TS/JS").version("0.1.0");
+  registerCommands(program);
+  return program;
+}
+
+function registerCommands(program: Command): void {
 
 function applyMode(config: ArtgraphConfig, modeFlag?: string): ArtgraphConfig {
   if (modeFlag === "symbol" || modeFlag === "file") {
@@ -468,11 +479,16 @@ program
     const rootDir = process.cwd();
 
     try {
-      const chunks: Buffer[] = [];
-      for await (const chunk of process.stdin) {
-        chunks.push(chunk);
+      let stdinText: string;
+      if (_hookStdinOverride !== undefined) {
+        stdinText = _hookStdinOverride;
+      } else {
+        const chunks: Buffer[] = [];
+        for await (const chunk of process.stdin) {
+          chunks.push(chunk);
+        }
+        stdinText = Buffer.concat(chunks).toString("utf-8");
       }
-      const stdinText = Buffer.concat(chunks).toString("utf-8");
 
       const input = parseHookInput(stdinText);
       if (!input) {
@@ -946,5 +962,166 @@ function printRenameText(result: RenameResult) {
 function printRenameJson(result: RenameResult) {
   console.log(JSON.stringify(result));
 }
+}
 
-program.parse();
+/**
+ * @internal
+ * Test seam — intentionally hidden from the public package surface via the
+ * `exports` field in package.json. Mutates global process state during the
+ * call (cwd / exit / console / stdout / stderr) and is unsafe for external
+ * use. Tests reach it via the in-repo path `../src/cli.js`.
+ */
+export interface RunCliOptions {
+  /** Working directory the CLI sees as `process.cwd()` for the duration of the call. */
+  cwd?: string;
+  /** Optional stdin string injected into hook-pretool (replaces process.stdin reads). */
+  stdin?: string;
+}
+
+/** @internal */
+export interface RunCliResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+class CliExitError extends Error {
+  exitCode: number;
+  constructor(exitCode: number) {
+    super(`artgraph CLI exited with code ${exitCode}`);
+    this.exitCode = exitCode;
+  }
+}
+
+/**
+ * @internal
+ * Run the artgraph CLI in-process and capture its stdout/stderr/exitCode.
+ * Used by the test suite to avoid the ~150–300 ms per-spawn Node startup +
+ * ts-morph reload cost. Behaves like a fresh `artgraph <argv>` invocation:
+ * builds a new commander tree, redirects console/process.stdout/process.stderr,
+ * intercepts `process.exit`, and temporarily chdirs into `opts.cwd`.
+ *
+ * NOT a public API — the package's `exports` field deliberately blocks
+ * deep imports so external consumers cannot reach this. It mutates global
+ * process state (cwd / exit / console / stdout / stderr) and is unsafe
+ * to call concurrently within a single Node process.
+ */
+export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<RunCliResult> {
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+
+  const origCwd = process.cwd();
+  const origExit = process.exit;
+  const origLog = console.log;
+  const origErr = console.error;
+  const origStdoutWrite = process.stdout.write.bind(process.stdout);
+  const origStderrWrite = process.stderr.write.bind(process.stderr);
+  const hadStdinOverride = _hookStdinOverride !== undefined;
+  const prevStdinOverride = _hookStdinOverride;
+
+  const pushStdout = (s: string) => stdoutChunks.push(s);
+  const pushStderr = (s: string) => stderrChunks.push(s);
+
+  let exitCode = 0;
+
+  try {
+    if (opts.cwd) process.chdir(opts.cwd);
+    if (opts.stdin !== undefined) _hookStdinOverride = opts.stdin;
+
+    console.log = (...args: unknown[]) => {
+      pushStdout(args.map(formatLogArg).join(" ") + "\n");
+    };
+    console.error = (...args: unknown[]) => {
+      pushStderr(args.map(formatLogArg).join(" ") + "\n");
+    };
+    process.stdout.write = ((chunk: unknown) => {
+      pushStdout(chunkToString(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: unknown) => {
+      pushStderr(chunkToString(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    process.exit = ((code?: number) => {
+      throw new CliExitError(code ?? 0);
+    }) as typeof process.exit;
+
+    const program = buildProgram();
+    program.exitOverride();
+    program.configureOutput({
+      writeOut: pushStdout,
+      writeErr: pushStderr,
+    });
+
+    try {
+      await program.parseAsync(argv, { from: "user" });
+    } catch (e) {
+      if (e instanceof CliExitError) {
+        exitCode = e.exitCode;
+      } else if (e instanceof CommanderError) {
+        // Help / version exits are conventionally success.
+        const code = e.code;
+        if (code === "commander.helpDisplayed" || code === "commander.version") {
+          exitCode = 0;
+        } else {
+          exitCode = e.exitCode ?? 1;
+        }
+      } else {
+        throw e;
+      }
+    }
+  } finally {
+    process.chdir(origCwd);
+    process.exit = origExit;
+    console.log = origLog;
+    console.error = origErr;
+    process.stdout.write = origStdoutWrite;
+    process.stderr.write = origStderrWrite;
+    _hookStdinOverride = hadStdinOverride ? prevStdinOverride : undefined;
+  }
+
+  return {
+    stdout: stdoutChunks.join(""),
+    stderr: stderrChunks.join(""),
+    exitCode,
+  };
+}
+
+function formatLogArg(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (v instanceof Error) return v.stack ?? v.message;
+  try {
+    return typeof v === "object" ? JSON.stringify(v) : String(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function chunkToString(chunk: unknown): string {
+  if (typeof chunk === "string") return chunk;
+  if (chunk instanceof Uint8Array) return Buffer.from(chunk).toString("utf-8");
+  return String(chunk);
+}
+
+// Only invoke commander when this module is the entry point of a real CLI
+// process. Importing `cli.ts` from tests must not trigger argv parsing.
+//
+// `realpathSync` is essential: when invoked via an npm/pnpm bin shim
+// (`./node_modules/.bin/artgraph`), Node's ESM loader resolves the module
+// URL to the symlink target (the real `dist/cli.js`), but `process.argv[1]`
+// stays as the shim path. Without realpath normalization the two are
+// different strings and the guard never fires — bin-shim invocations
+// would silently exit without parsing argv. See PR #99 review.
+function resolveEntryHref(): string {
+  const argv1 = process.argv[1];
+  if (typeof argv1 !== "string") return "";
+  try {
+    return pathToFileURL(realpathSync(argv1)).href;
+  } catch {
+    return "";
+  }
+}
+if (import.meta.url === resolveEntryHref()) {
+  const program = buildProgram();
+  program.parse();
+}
