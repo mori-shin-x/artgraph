@@ -202,7 +202,7 @@ export interface InstallOptions {
   /**
    * Spec Kit の --gate / --no-gate 宣言型フラグ（FR-003）。
    * - true: before_implement に check --gate hook を追加
-   * - false: spectrace が登録した before_implement hook を削除
+   * - false: artgraph が登録した before_implement hook を削除
    * - undefined: 何もしない（gate なし状態と等価。明示削除はしない）
    *
    * 注: speckit 以外の provider は本フラグを無視する。
@@ -262,7 +262,7 @@ export interface IntegrationProvider {
 
 /** 共通 agent-guidance generator の入力。 */
 export interface GuidanceWriteRequest {
-  /** 出力先（絶対パス推奨）。例: ".kiro/steering/spectrace.md" */
+  /** 出力先（絶対パス推奨）。例: ".kiro/steering/artgraph.md" */
   destPath: string;
   /** 書き込む内容。テンプレート展開済みの最終 string */
   content: string;

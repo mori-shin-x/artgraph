@@ -3,7 +3,7 @@ import {
   addHookEntry,
   addInstalled,
   parseExtensionsYaml,
-  removeAllSpectraceHooks,
+  removeAllArtgraphHooks,
   removeHookEntry,
   removeInstalled,
   serializeExtensionsYaml,
@@ -36,7 +36,7 @@ hooks: {}
 
 function specEntry(overrides: Partial<HookEntry> = {}): HookEntry {
   return {
-    extension: "spectrace",
+    extension: "artgraph",
     command: "artgraph.scan-reconcile",
     enabled: true,
     optional: false,
@@ -75,19 +75,19 @@ describe("parseExtensionsYaml / serializeExtensionsYaml", () => {
 });
 
 describe("addInstalled", () => {
-  it("appends spectrace to the installed list", () => {
+  it("appends artgraph to the installed list", () => {
     const doc = parseExtensionsYaml(SAMPLE_WITH_OTHER);
-    const changed = addInstalled(doc, "spectrace");
+    const changed = addInstalled(doc, "artgraph");
     expect(changed).toBe(true);
     const out = serializeExtensionsYaml(doc);
-    expect(out).toMatch(/installed:\s*\n- agent-context\n- spectrace/);
+    expect(out).toMatch(/installed:\s*\n- agent-context\n- artgraph/);
   });
 
   it("is idempotent (second call is no-op)", () => {
     const doc = parseExtensionsYaml(SAMPLE_WITH_OTHER);
-    addInstalled(doc, "spectrace");
+    addInstalled(doc, "artgraph");
     const before = serializeExtensionsYaml(doc);
-    const changed = addInstalled(doc, "spectrace");
+    const changed = addInstalled(doc, "artgraph");
     const after = serializeExtensionsYaml(doc);
     expect(changed).toBe(false);
     expect(after).toBe(before);
@@ -95,24 +95,24 @@ describe("addInstalled", () => {
 });
 
 describe("removeInstalled", () => {
-  it("removes spectrace from the installed list", () => {
+  it("removes artgraph from the installed list", () => {
     const doc = parseExtensionsYaml(SAMPLE_WITH_OTHER);
-    addInstalled(doc, "spectrace");
-    const changed = removeInstalled(doc, "spectrace");
+    addInstalled(doc, "artgraph");
+    const changed = removeInstalled(doc, "artgraph");
     expect(changed).toBe(true);
     const out = serializeExtensionsYaml(doc);
-    expect(out).not.toMatch(/^- spectrace/m);
+    expect(out).not.toMatch(/^- artgraph/m);
   });
 
-  it("is no-op when spectrace is absent", () => {
+  it("is no-op when artgraph is absent", () => {
     const doc = parseExtensionsYaml(SAMPLE_WITH_OTHER);
-    const changed = removeInstalled(doc, "spectrace");
+    const changed = removeInstalled(doc, "artgraph");
     expect(changed).toBe(false);
   });
 });
 
 describe("addHookEntry", () => {
-  it("adds a new spectrace entry under hooks.after_tasks (creating the array)", () => {
+  it("adds a new artgraph entry under hooks.after_tasks (creating the array)", () => {
     const doc = parseExtensionsYaml(SAMPLE_WITH_OTHER);
     const changed = addHookEntry(doc, "after_tasks", specEntry());
     expect(changed).toBe(true);
@@ -142,7 +142,7 @@ describe("addHookEntry", () => {
     // Trigger sequence is a block list, not inline `[ ... ]`.
     expect(out).not.toMatch(/after_tasks:\s*\[/);
     // Each entry key appears on its own line — the canonical Spec Kit shape.
-    expect(out).toMatch(/hooks:\n {2}after_tasks:\n {2}- extension: spectrace\n/);
+    expect(out).toMatch(/hooks:\n {2}after_tasks:\n {2}- extension: artgraph\n/);
   });
 
   it("preserves other extensions' entries when adding under the same trigger", () => {
@@ -165,7 +165,7 @@ describe("addHookEntry", () => {
     expect(after).toBe(before);
   });
 
-  it("replaces an existing spectrace entry with different content", () => {
+  it("replaces an existing artgraph entry with different content", () => {
     // Use SAMPLE_EMPTY_HOOKS so there are no other priority: 10 entries in
     // the file (the WITH_OTHER fixture has agent-context with priority 10).
     const doc = parseExtensionsYaml(SAMPLE_EMPTY_HOOKS);
@@ -179,9 +179,9 @@ describe("addHookEntry", () => {
 });
 
 describe("removeHookEntry", () => {
-  it("removes only the spectrace entry, leaving other extensions' entries intact", () => {
+  it("removes only the artgraph entry, leaving other extensions' entries intact", () => {
     const doc = parseExtensionsYaml(SAMPLE_WITH_OTHER);
-    // Put both an agent-context entry and a spectrace entry under after_tasks
+    // Put both an agent-context entry and a artgraph entry under after_tasks
     addHookEntry(doc, "after_tasks", {
       extension: "agent-context",
       command: "speckit.agent-context.update",
@@ -193,40 +193,40 @@ describe("removeHookEntry", () => {
       condition: null,
     });
     addHookEntry(doc, "after_tasks", specEntry());
-    const changed = removeHookEntry(doc, "after_tasks", "spectrace");
+    const changed = removeHookEntry(doc, "after_tasks", "artgraph");
     expect(changed).toBe(true);
     const out = serializeExtensionsYaml(doc);
-    expect(out).not.toMatch(/extension: spectrace[\s\S]*command: artgraph\.scan-reconcile/);
+    expect(out).not.toMatch(/extension: artgraph[\s\S]*command: artgraph\.scan-reconcile/);
     expect(out).toMatch(/extension: agent-context[\s\S]*command: speckit\.agent-context\.update/);
   });
 
-  it("is no-op when no spectrace entry exists", () => {
+  it("is no-op when no artgraph entry exists", () => {
     const doc = parseExtensionsYaml(SAMPLE_WITH_OTHER);
-    const changed = removeHookEntry(doc, "after_tasks", "spectrace");
+    const changed = removeHookEntry(doc, "after_tasks", "artgraph");
     expect(changed).toBe(false);
   });
 });
 
-describe("removeAllSpectraceHooks", () => {
-  it("removes spectrace entries across all hook triggers", () => {
+describe("removeAllArtgraphHooks", () => {
+  it("removes artgraph entries across all hook triggers", () => {
     const doc = parseExtensionsYaml(SAMPLE_EMPTY_HOOKS);
     addHookEntry(doc, "after_tasks", specEntry({ command: "artgraph.scan-reconcile" }));
     addHookEntry(doc, "after_implement", specEntry({ command: "artgraph.check-diff" }));
     addHookEntry(doc, "before_implement", specEntry({ command: "artgraph.check-gate" }));
-    const removed = removeAllSpectraceHooks(doc);
+    const removed = removeAllArtgraphHooks(doc);
     // M-M11: exact-3 + the specific trigger names. The previous
     // `>=3` assertion would have masked a bug where the function returned
-    // unrelated trigger names (e.g. duplicates) on top of the three spectrace
+    // unrelated trigger names (e.g. duplicates) on top of the three artgraph
     // ones.
     expect(removed).toHaveLength(3);
     expect(removed.slice().sort()).toEqual(["after_implement", "after_tasks", "before_implement"]);
     const out = serializeExtensionsYaml(doc);
-    expect(out).not.toMatch(/extension: spectrace/);
+    expect(out).not.toMatch(/extension: artgraph/);
   });
 
   it("returns an empty list when nothing to remove", () => {
     const doc = parseExtensionsYaml(SAMPLE_WITH_OTHER);
-    const removed = removeAllSpectraceHooks(doc);
+    const removed = removeAllArtgraphHooks(doc);
     expect(removed).toEqual([]);
   });
 });

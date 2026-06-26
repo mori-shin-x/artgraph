@@ -51,11 +51,11 @@ describe("SpecKitProvider", () => {
       expect(provider.isInstalled(tmp)).toBe(false);
     });
 
-    it("returns false when installed list has spectrace but extension.yml missing (partial)", () => {
+    it("returns false when installed list has artgraph but extension.yml missing (partial)", () => {
       copyFixture(join(FIXTURES, "specify-empty"), tmp);
       writeFileSync(
         join(tmp, ".specify/extensions.yml"),
-        `installed:\n- agent-context\n- spectrace\nsettings:\n  auto_execute_hooks: true\nhooks: {}\n`,
+        `installed:\n- agent-context\n- artgraph\nsettings:\n  auto_execute_hooks: true\nhooks: {}\n`,
       );
       expect(provider.isInstalled(tmp)).toBe(false);
     });
@@ -69,7 +69,7 @@ describe("SpecKitProvider", () => {
       copyFixture(join(FIXTURES, "specify-already-installed"), tmp);
       // Garbage YAML that the parser rejects outright.
       writeFileSync(
-        join(tmp, ".specify/extensions/spectrace/extension.yml"),
+        join(tmp, ".specify/extensions/artgraph/extension.yml"),
         "schema_version: '1.0'\nthis is: : : not valid yaml ][[}\n",
       );
       expect(provider.isInstalled(tmp)).toBe(false);
@@ -80,11 +80,11 @@ describe("SpecKitProvider", () => {
       // Valid YAML but the frozen v1.0 contract is violated → integration is
       // effectively broken; init Tip must surface so the user can recover.
       writeFileSync(
-        join(tmp, ".specify/extensions/spectrace/extension.yml"),
+        join(tmp, ".specify/extensions/artgraph/extension.yml"),
         [
           'schema_version: "9.9"',
           "extension:",
-          "  id: spectrace",
+          "  id: artgraph",
           '  name: "x"',
           '  version: "0.0.0"',
           '  description: "x"',
@@ -115,13 +115,13 @@ describe("SpecKitProvider", () => {
       copyFixture(join(FIXTURES, "specify-empty"), tmp);
       const result = provider.install(tmp, {});
       expect(result.noop).toBe(false);
-      expect(existsSync(join(tmp, ".specify/extensions/spectrace/extension.yml"))).toBe(true);
-      expect(existsSync(join(tmp, ".specify/extensions/spectrace/README.md"))).toBe(true);
+      expect(existsSync(join(tmp, ".specify/extensions/artgraph/extension.yml"))).toBe(true);
+      expect(existsSync(join(tmp, ".specify/extensions/artgraph/README.md"))).toBe(true);
       expect(
-        existsSync(join(tmp, ".specify/extensions/spectrace/commands/artgraph.scan-reconcile.md")),
+        existsSync(join(tmp, ".specify/extensions/artgraph/commands/artgraph.scan-reconcile.md")),
       ).toBe(true);
       const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
-      expect(yml).toMatch(/installed:[\s\S]*- spectrace/);
+      expect(yml).toMatch(/installed:[\s\S]*- artgraph/);
       expect(yml).toMatch(/after_tasks:/);
       expect(yml).toMatch(/after_implement:/);
     });
@@ -130,11 +130,11 @@ describe("SpecKitProvider", () => {
       copyFixture(join(FIXTURES, "specify-empty"), tmp);
       provider.install(tmp, {});
       const yml1 = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
-      const ext1 = readFileSync(join(tmp, ".specify/extensions/spectrace/extension.yml"), "utf-8");
+      const ext1 = readFileSync(join(tmp, ".specify/extensions/artgraph/extension.yml"), "utf-8");
       const result2 = provider.install(tmp, {});
       expect(result2.noop).toBe(true);
       const yml2 = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
-      const ext2 = readFileSync(join(tmp, ".specify/extensions/spectrace/extension.yml"), "utf-8");
+      const ext2 = readFileSync(join(tmp, ".specify/extensions/artgraph/extension.yml"), "utf-8");
       expect(yml2).toBe(yml1);
       expect(ext2).toBe(ext1);
     });
@@ -142,20 +142,20 @@ describe("SpecKitProvider", () => {
     it("--force overwrites existing extension files", () => {
       copyFixture(join(FIXTURES, "specify-already-installed"), tmp);
       writeFileSync(
-        join(tmp, ".specify/extensions/spectrace/extension.yml"),
+        join(tmp, ".specify/extensions/artgraph/extension.yml"),
         'schema_version: "1.0"\n# manually edited\n',
       );
       const result = provider.install(tmp, { force: true });
       expect(result.noop).toBe(false);
       const content = readFileSync(
-        join(tmp, ".specify/extensions/spectrace/extension.yml"),
+        join(tmp, ".specify/extensions/artgraph/extension.yml"),
         "utf-8",
       );
       expect(content).not.toContain("# manually edited");
-      expect(content).toMatch(/spectrace/);
+      expect(content).toMatch(/artgraph/);
     });
 
-    it("--gate=true adds before_implement spectrace hook entry", () => {
+    it("--gate=true adds before_implement artgraph hook entry", () => {
       copyFixture(join(FIXTURES, "specify-empty"), tmp);
       provider.install(tmp, { gate: true });
       const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
@@ -163,9 +163,9 @@ describe("SpecKitProvider", () => {
       expect(yml).toMatch(/command: artgraph\.check-gate/);
     });
 
-    it("--gate=false removes only spectrace's before_implement entry, preserving others", () => {
+    it("--gate=false removes only artgraph's before_implement entry, preserving others", () => {
       copyFixture(join(FIXTURES, "specify-empty"), tmp);
-      // Seed: add another extension's before_implement entry + spectrace's via gate=true
+      // Seed: add another extension's before_implement entry + artgraph's via gate=true
       const ymlPath = join(tmp, ".specify/extensions.yml");
       writeFileSync(
         ymlPath,
@@ -175,7 +175,7 @@ describe("SpecKitProvider", () => {
       // Now run with gate=false
       provider.install(tmp, { gate: false });
       const yml = readFileSync(ymlPath, "utf-8");
-      // M-H5: structural assertion — the regex `extension: spectrace[\s\S]*
+      // M-H5: structural assertion — the regex `extension: artgraph[\s\S]*
       // command: artgraph.check-gate` crosses trigger boundaries, so even a
       // bug that wiped the entire before_implement array would pass. Parse
       // the YAML and assert the precise shape we want.
@@ -186,15 +186,15 @@ describe("SpecKitProvider", () => {
           after_implement?: Array<{ extension: string; command: string }>;
         };
       };
-      // before_implement: exactly the agent-context entry, no spectrace.
+      // before_implement: exactly the agent-context entry, no artgraph.
       expect(parsed.hooks.before_implement).toBeDefined();
       expect(parsed.hooks.before_implement).toHaveLength(1);
       expect(parsed.hooks.before_implement![0]!.extension).toBe("agent-context");
       expect(parsed.hooks.before_implement![0]!.command).toBe("speckit.agent-context.warm");
-      // The other spectrace triggers must still be present after `gate=false`
+      // The other artgraph triggers must still be present after `gate=false`
       // (the bug would silently drop them along with before_implement).
-      expect(parsed.hooks.after_tasks?.some((e) => e.extension === "spectrace")).toBe(true);
-      expect(parsed.hooks.after_implement?.some((e) => e.extension === "spectrace")).toBe(true);
+      expect(parsed.hooks.after_tasks?.some((e) => e.extension === "artgraph")).toBe(true);
+      expect(parsed.hooks.after_implement?.some((e) => e.extension === "artgraph")).toBe(true);
     });
 
     it("--gate=undefined does not touch before_implement", () => {
@@ -214,7 +214,7 @@ describe("SpecKitProvider", () => {
     // asserts the byte-for-byte restoration of the user's edits.
     it("restores hand-edited extension.yml byte-for-byte when --force install rolls back", () => {
       copyFixture(join(FIXTURES, "specify-already-installed"), tmp);
-      const extYmlPath = join(tmp, ".specify/extensions/spectrace/extension.yml");
+      const extYmlPath = join(tmp, ".specify/extensions/artgraph/extension.yml");
       const sentinel = "# USER EDITED — must survive rollback\nfoo: bar\n";
       writeFileSync(extYmlPath, sentinel);
 
@@ -262,10 +262,10 @@ describe("SpecKitProvider", () => {
       expect(() => provider.install(tmp, {})).toThrow(/simulated|EACCES/);
       spy.mockRestore();
       // All files that would have been created should be gone
-      expect(existsSync(join(tmp, ".specify/extensions/spectrace"))).toBe(false);
-      // extensions.yml should be back to the original fixture content (no spectrace)
+      expect(existsSync(join(tmp, ".specify/extensions/artgraph"))).toBe(false);
+      // extensions.yml should be back to the original fixture content (no artgraph)
       const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
-      expect(yml).not.toMatch(/- spectrace/);
+      expect(yml).not.toMatch(/- artgraph/);
     });
   });
 
@@ -275,9 +275,9 @@ describe("SpecKitProvider", () => {
       const result = provider.uninstall(tmp);
       expect(result.noop).toBe(false);
       const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
-      expect(yml).not.toMatch(/- spectrace/);
-      expect(yml).not.toMatch(/extension: spectrace/);
-      expect(existsSync(join(tmp, ".specify/extensions/spectrace"))).toBe(false);
+      expect(yml).not.toMatch(/- artgraph/);
+      expect(yml).not.toMatch(/extension: artgraph/);
+      expect(existsSync(join(tmp, ".specify/extensions/artgraph"))).toBe(false);
     });
 
     it("preserves other extensions' hook entries", () => {

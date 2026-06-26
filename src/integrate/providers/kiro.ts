@@ -1,6 +1,6 @@
 /**
  * KiroProvider — distributes the artgraph steering file
- * `.kiro/steering/spectrace.md` so that the Kiro agent learns when to call
+ * `.kiro/steering/artgraph.md` so that the Kiro agent learns when to call
  * `artgraph impact / check --diff / reconcile`.
  *
  * Kiro currently has no public Hook API, so this provider only writes a
@@ -21,9 +21,9 @@ import { loadTemplate } from "../templates.js";
 import type { InstallOptions, IntegrateResult, IntegrationProvider } from "../../types.js";
 
 /** Steering file path relative to the repo root. */
-const STEERING_REL = ".kiro/steering/spectrace.md";
+const STEERING_REL = ".kiro/steering/artgraph.md";
 /** Bundled template under templates/integrate/kiro/. */
-const TEMPLATE_REL = "kiro/spectrace.md";
+const TEMPLATE_REL = "kiro/artgraph.md";
 
 export class KiroProvider implements IntegrationProvider {
   readonly id = "kiro" as const;

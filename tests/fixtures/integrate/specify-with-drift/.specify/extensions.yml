@@ -1,11 +1,11 @@
 installed:
 - agent-context
-- spectrace
+- artgraph
 settings:
   auto_execute_hooks: true
 hooks:
   after_tasks:
-  - extension: spectrace
+  - extension: artgraph
     command: artgraph.scan-reconcile
     enabled: true
     optional: false
@@ -14,7 +14,7 @@ hooks:
     description: "Refresh artgraph baseline after tasks"
     condition: null
   after_implement:
-  - extension: spectrace
+  - extension: artgraph
     command: artgraph.check-diff
     enabled: true
     optional: false

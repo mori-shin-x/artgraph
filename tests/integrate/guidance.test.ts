@@ -26,7 +26,7 @@ describe("writeGuidanceFile", () => {
   });
 
   it("writes a new file when the target is absent", () => {
-    const dest = join(tmp, "spectrace.md");
+    const dest = join(tmp, "artgraph.md");
     const result = writeGuidanceFile({
       destPath: dest,
       content: "# hello\n",
@@ -38,7 +38,7 @@ describe("writeGuidanceFile", () => {
   });
 
   it("is a no-op when the existing file equals (post-newline-normalized) content", () => {
-    const dest = join(tmp, "spectrace.md");
+    const dest = join(tmp, "artgraph.md");
     writeFileSync(dest, "# hello\n");
     const before = readFileSync(dest, "utf-8");
     const result = writeGuidanceFile({
@@ -53,7 +53,7 @@ describe("writeGuidanceFile", () => {
   });
 
   it("is a no-op when target differs and force=false (disk unchanged)", () => {
-    const dest = join(tmp, "spectrace.md");
+    const dest = join(tmp, "artgraph.md");
     writeFileSync(dest, "# old\n");
     const result = writeGuidanceFile({
       destPath: dest,
@@ -66,7 +66,7 @@ describe("writeGuidanceFile", () => {
   });
 
   it("overwrites when target differs and force=true", () => {
-    const dest = join(tmp, "spectrace.md");
+    const dest = join(tmp, "artgraph.md");
     writeFileSync(dest, "# old\n");
     const result = writeGuidanceFile({
       destPath: dest,
@@ -79,7 +79,7 @@ describe("writeGuidanceFile", () => {
   });
 
   it("creates the parent directory when missing (default createParentDirs=true)", () => {
-    const dest = join(tmp, "nested", "deeper", "spectrace.md");
+    const dest = join(tmp, "nested", "deeper", "artgraph.md");
     const result = writeGuidanceFile({
       destPath: dest,
       content: "x",
@@ -91,7 +91,7 @@ describe("writeGuidanceFile", () => {
   });
 
   it("throws when the parent dir is missing and createParentDirs=false", () => {
-    const dest = join(tmp, "missing", "spectrace.md");
+    const dest = join(tmp, "missing", "artgraph.md");
     expect(() =>
       writeGuidanceFile({
         destPath: dest,
@@ -106,7 +106,7 @@ describe("writeGuidanceFile", () => {
   });
 
   it("writes atomically — when atomicWriteFile throws, no tmp files remain", () => {
-    const dest = join(tmp, "spectrace.md");
+    const dest = join(tmp, "artgraph.md");
     // Force atomicWriteFile to throw — disk must end up unchanged.
     const spy = vi.spyOn(atomicWriteMod, "atomicWriteFile").mockImplementation(() => {
       throw new Error("simulated EACCES");
@@ -124,7 +124,7 @@ describe("writeGuidanceFile", () => {
   });
 
   it("always ensures the file ends with exactly one trailing newline", () => {
-    const dest = join(tmp, "spectrace.md");
+    const dest = join(tmp, "artgraph.md");
     writeGuidanceFile({
       destPath: dest,
       content: "no-final-newline",
@@ -134,7 +134,7 @@ describe("writeGuidanceFile", () => {
   });
 
   it("normalizes multiple trailing newlines down to a single one", () => {
-    const dest = join(tmp, "spectrace.md");
+    const dest = join(tmp, "artgraph.md");
     writeGuidanceFile({
       destPath: dest,
       content: "x\n\n\n",
@@ -146,7 +146,7 @@ describe("writeGuidanceFile", () => {
   it("treats a content that already ends with \\n as already-equal (no rewrite)", () => {
     // Round-trip safety: caller passes content without trailing newline; the
     // file on disk has it. The second call should be a no-op.
-    const dest = join(tmp, "spectrace.md");
+    const dest = join(tmp, "artgraph.md");
     writeGuidanceFile({ destPath: dest, content: "x", force: false });
     const before = readFileSync(dest, "utf-8");
     const r2 = writeGuidanceFile({ destPath: dest, content: "x", force: false });
@@ -157,7 +157,7 @@ describe("writeGuidanceFile", () => {
 
   it("reports createdParentDirs=false when parent already existed", () => {
     mkdirSync(join(tmp, "nested"));
-    const dest = join(tmp, "nested", "spectrace.md");
+    const dest = join(tmp, "nested", "artgraph.md");
     const result = writeGuidanceFile({
       destPath: dest,
       content: "x",
