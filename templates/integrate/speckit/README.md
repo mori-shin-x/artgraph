@@ -1,4 +1,4 @@
-# artgraph (spectrace) Spec Kit Extension
+# artgraph — Spec Kit Extension
 
 This extension wires artgraph into the Spec Kit workflow:
 

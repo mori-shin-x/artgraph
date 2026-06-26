@@ -151,17 +151,17 @@ export function removeHookEntry(doc: Document, trigger: HookTrigger, extensionId
 
 /**
  * Walk every `hooks.<trigger>` array and strip out any entry belonging to
- * spectrace. Returns the list of triggers from which entries were
+ * artgraph. Returns the list of triggers from which entries were
  * removed (deduplicated, in document order). Convenience for uninstall.
  */
-export function removeAllSpectraceHooks(doc: Document): HookTrigger[] {
+export function removeAllArtgraphHooks(doc: Document): HookTrigger[] {
   const hooks = doc.get("hooks");
   if (!isMap(hooks)) return [];
   const triggers: HookTrigger[] = [];
   // Snapshot keys because we mutate the map during iteration.
   const keys = (hooks as YAMLMap).items.map((p: Pair) => scalarValue(p.key) as HookTrigger);
   for (const trig of keys) {
-    if (removeHookEntry(doc, trig, "spectrace")) {
+    if (removeHookEntry(doc, trig, "artgraph")) {
       triggers.push(trig);
     }
   }
