@@ -73,6 +73,8 @@ full workflow, and shows the exact diff against `extensions.yml` / steering:
 - **Kiro** — [`examples/kiro-integration/`](./examples/kiro-integration):
   steering file that teaches the Kiro agent when to call `impact` / `check --diff` / `reconcile`.
 
+Repository: <https://github.com/ShintaroMorimoto/artgraph>. To work on artgraph itself, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+
 ## How references are expressed
 
 | Artifact            | Reference form                                  |
