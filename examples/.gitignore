@@ -1,5 +1,5 @@
 # Artifacts produced by running the examples — keep them out of git so the
 # starting state stays reproducible.
 **/.trace.lock
-speckit-integration/.specify/extensions/spectrace/
+speckit-integration/.specify/extensions/artgraph/
 kiro-integration/.kiro/steering/
