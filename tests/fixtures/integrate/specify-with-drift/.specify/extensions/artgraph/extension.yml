@@ -3,7 +3,7 @@ schema_version: "1.0"
 # from the canonical bundled template. `init --integrate=speckit --force`
 # must regenerate it from the template.
 extension:
-  id: spectrace
+  id: artgraph
   name: "USER EDITED — not the canonical template"
   version: "0.0.0-drift"
   description: drift

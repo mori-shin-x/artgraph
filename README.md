@@ -303,8 +303,8 @@ instead of relying on a manual call.
 
 | Command                           | Purpose                                                                                                                                                             |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `artgraph integrate speckit`      | Generate `.specify/extensions/spectrace/` and register Spec Kit hooks (`after_tasks` / `after_implement`, optional `before_implement` via `--gate`)                 |
-| `artgraph integrate kiro`         | Write `.kiro/steering/spectrace.md` so the Kiro agent learns when to call `impact / check --diff / reconcile`                                                       |
+| `artgraph integrate speckit`      | Generate `.specify/extensions/artgraph/` and register Spec Kit hooks (`after_tasks` / `after_implement`, optional `before_implement` via `--gate`)                 |
+| `artgraph integrate kiro`         | Write `.kiro/steering/artgraph.md` so the Kiro agent learns when to call `impact / check --diff / reconcile`                                                       |
 | `artgraph integrate list`         | Show every supported integration with detect / installed status                                                                                                     |
 | `artgraph init --integrate=<ids>` | One-shot: run `init` _and_ integrate the named tools (`speckit`, `kiro`, `all`); pass `--integrate-gate` to add Spec Kit's `before_implement` hook in the same call |
 
@@ -312,11 +312,11 @@ instead of relying on a manual call.
 # Inside a repo that already has .specify/
 artgraph integrate speckit              # idempotent
 artgraph integrate speckit --gate       # also add before_implement gate
-artgraph integrate speckit --no-gate    # remove only spectrace's before_implement hook
-artgraph integrate speckit --uninstall  # remove the extension dir + every spectrace hook entry
+artgraph integrate speckit --no-gate    # remove only artgraph's before_implement hook
+artgraph integrate speckit --uninstall  # remove the extension dir + every artgraph hook entry
 
 # Kiro
-artgraph integrate kiro                 # writes .kiro/steering/spectrace.md
+artgraph integrate kiro                 # writes .kiro/steering/artgraph.md
 artgraph integrate kiro --force         # overwrite a hand-edited steering file
 
 # Discover what's available

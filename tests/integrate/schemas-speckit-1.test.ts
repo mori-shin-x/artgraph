@@ -20,8 +20,8 @@ function canonicalManifest(): SpecKitExtensionManifest {
   return {
     schema_version: SPECKIT_SCHEMA_VERSION,
     extension: {
-      id: "spectrace",
-      name: "artgraph (spectrace) — SDD verification",
+      id: "artgraph",
+      name: "artgraph — SDD verification",
       version: "0.1.0",
       description: "Run artgraph scan/reconcile/check at Spec Kit workflow checkpoints.",
       author: "artgraph",
@@ -66,7 +66,7 @@ function canonicalManifest(): SpecKitExtensionManifest {
 
 function canonicalHookEntry(): HookEntry {
   return {
-    extension: "spectrace",
+    extension: "artgraph",
     command: "artgraph.scan-reconcile",
     enabled: true,
     optional: false,

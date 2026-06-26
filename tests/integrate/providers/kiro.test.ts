@@ -49,22 +49,22 @@ describe("KiroProvider", () => {
       expect(provider.isInstalled(tmp)).toBe(false);
     });
 
-    it("returns true when .kiro/steering/spectrace.md exists", () => {
+    it("returns true when .kiro/steering/artgraph.md exists", () => {
       copyFixture(join(FIXTURES, "kiro-installed"), tmp);
       expect(provider.isInstalled(tmp)).toBe(true);
     });
   });
 
   describe("install", () => {
-    it("creates .kiro/steering/spectrace.md on a fresh repo", () => {
+    it("creates .kiro/steering/artgraph.md on a fresh repo", () => {
       copyFixture(join(FIXTURES, "kiro-empty"), tmp);
       const result = provider.install(tmp, {});
       expect(result.noop).toBe(false);
       expect(result.providerId).toBe("kiro");
-      expect(result.created).toContain(".kiro/steering/spectrace.md");
-      expect(existsSync(join(tmp, ".kiro/steering/spectrace.md"))).toBe(true);
-      const body = readFileSync(join(tmp, ".kiro/steering/spectrace.md"), "utf-8");
-      expect(body).toMatch(/artgraph \(spectrace\) integration for Kiro/);
+      expect(result.created).toContain(".kiro/steering/artgraph.md");
+      expect(existsSync(join(tmp, ".kiro/steering/artgraph.md"))).toBe(true);
+      const body = readFileSync(join(tmp, ".kiro/steering/artgraph.md"), "utf-8");
+      expect(body).toMatch(/artgraph — Kiro integration/);
       expect(body).toMatch(/## When to run artgraph/);
       expect(body).toMatch(/\| `artgraph impact <file>` \|/);
       // trailing newline enforced by writeGuidanceFile
@@ -76,22 +76,22 @@ describe("KiroProvider", () => {
       mkdirSync(join(tmp, ".kiro"));
       const result = provider.install(tmp, {});
       expect(result.noop).toBe(false);
-      expect(existsSync(join(tmp, ".kiro/steering/spectrace.md"))).toBe(true);
+      expect(existsSync(join(tmp, ".kiro/steering/artgraph.md"))).toBe(true);
     });
 
     it("is idempotent: second install with same opts is noop and disk unchanged", () => {
       copyFixture(join(FIXTURES, "kiro-empty"), tmp);
       provider.install(tmp, {});
-      const before = readFileSync(join(tmp, ".kiro/steering/spectrace.md"), "utf-8");
+      const before = readFileSync(join(tmp, ".kiro/steering/artgraph.md"), "utf-8");
       const result2 = provider.install(tmp, {});
       expect(result2.noop).toBe(true);
-      const after = readFileSync(join(tmp, ".kiro/steering/spectrace.md"), "utf-8");
+      const after = readFileSync(join(tmp, ".kiro/steering/artgraph.md"), "utf-8");
       expect(after).toBe(before);
     });
 
-    it("does not overwrite a hand-edited spectrace.md without --force (emits warning)", () => {
+    it("does not overwrite a hand-edited artgraph.md without --force (emits warning)", () => {
       copyFixture(join(FIXTURES, "kiro-empty"), tmp);
-      const dest = join(tmp, ".kiro/steering/spectrace.md");
+      const dest = join(tmp, ".kiro/steering/artgraph.md");
       writeFileSync(dest, "# manually edited steering\n");
       const result = provider.install(tmp, {});
       expect(result.noop).toBe(true);
@@ -100,16 +100,16 @@ describe("KiroProvider", () => {
       expect(readFileSync(dest, "utf-8")).toBe("# manually edited steering\n");
     });
 
-    it("--force overwrites a hand-edited spectrace.md", () => {
+    it("--force overwrites a hand-edited artgraph.md", () => {
       copyFixture(join(FIXTURES, "kiro-empty"), tmp);
-      const dest = join(tmp, ".kiro/steering/spectrace.md");
+      const dest = join(tmp, ".kiro/steering/artgraph.md");
       writeFileSync(dest, "# manually edited steering\n");
       const result = provider.install(tmp, { force: true });
       expect(result.noop).toBe(false);
-      expect(result.modified).toContain(".kiro/steering/spectrace.md");
+      expect(result.modified).toContain(".kiro/steering/artgraph.md");
       const body = readFileSync(dest, "utf-8");
       expect(body).not.toContain("manually edited");
-      expect(body).toMatch(/artgraph \(spectrace\) integration for Kiro/);
+      expect(body).toMatch(/artgraph — Kiro integration/);
     });
 
     it("throws when .kiro/ is not detected, leaving disk unchanged", () => {
@@ -119,12 +119,12 @@ describe("KiroProvider", () => {
   });
 
   describe("uninstall", () => {
-    it("removes .kiro/steering/spectrace.md when present", () => {
+    it("removes .kiro/steering/artgraph.md when present", () => {
       copyFixture(join(FIXTURES, "kiro-installed"), tmp);
       const result = provider.uninstall(tmp);
       expect(result.noop).toBe(false);
-      expect(result.removed).toContain(".kiro/steering/spectrace.md");
-      expect(existsSync(join(tmp, ".kiro/steering/spectrace.md"))).toBe(false);
+      expect(result.removed).toContain(".kiro/steering/artgraph.md");
+      expect(existsSync(join(tmp, ".kiro/steering/artgraph.md"))).toBe(false);
     });
 
     it("is a no-op when artgraph was not installed", () => {
@@ -142,7 +142,7 @@ describe("KiroProvider", () => {
       } as unknown as import("../../../src/types.js").InstallOptions;
       const result = provider.install(tmp, opts);
       expect(result.noop).toBe(false);
-      expect(existsSync(join(tmp, ".kiro/steering/spectrace.md"))).toBe(true);
+      expect(existsSync(join(tmp, ".kiro/steering/artgraph.md"))).toBe(true);
     });
   });
 
@@ -156,7 +156,7 @@ describe("KiroProvider", () => {
   //       breakage when the new field is absent — i.e. existing callers
   //       keep working unchanged.
   //   (b) Adopting the future hook mode must NOT delete the existing
-  //       `.kiro/steering/spectrace.md` belonging to a long-lived repo;
+  //       `.kiro/steering/artgraph.md` belonging to a long-lived repo;
   //       a future migration is responsible for that. We assert today's
   //       provider doesn't preemptively wipe steering files when an
   //       unknown `mode` opt is supplied.
@@ -192,7 +192,7 @@ describe("KiroProvider", () => {
 
     it("(b) migration guard: passing a future `mode: 'hook'` value does not delete the existing steering file", () => {
       copyFixture(join(FIXTURES, "kiro-installed"), tmp);
-      const steering = join(tmp, ".kiro/steering/spectrace.md");
+      const steering = join(tmp, ".kiro/steering/artgraph.md");
       const before = readFileSync(steering, "utf-8");
 
       // Even if a future caller experimentally passes the hook-mode opt, the

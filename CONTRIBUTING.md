@@ -15,7 +15,7 @@ cd artgraph
 pnpm install --frozen-lockfile
 ```
 
-The repository name is `artgraph` (matching the npm package). The earlier codename `spectrace` survives only as the SDD integration artifact identifier (`.specify/extensions/spectrace/` and `.kiro/steering/spectrace.md`).
+The repository name is `artgraph`, matching the npm package and the CLI binary.
 
 ## Common commands
 

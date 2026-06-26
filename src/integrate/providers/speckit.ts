@@ -1,6 +1,6 @@
 /**
  * SpecKitProvider — generates and maintains the
- * `.specify/extensions/spectrace/` Extension and corresponding entries in
+ * `.specify/extensions/artgraph/` Extension and corresponding entries in
  * `.specify/extensions.yml`.
  *
  * Contract: specs/009-sdd-integration/contracts/integration-provider.md
@@ -16,7 +16,7 @@ import {
   addHookEntry,
   addInstalled,
   parseExtensionsYaml,
-  removeAllSpectraceHooks,
+  removeAllArtgraphHooks,
   removeHookEntry,
   removeInstalled,
   serializeExtensionsYaml,
@@ -29,7 +29,7 @@ import type {
   IntegrationProvider,
 } from "../../types.js";
 
-const EXT_DIR_REL = ".specify/extensions/spectrace";
+const EXT_DIR_REL = ".specify/extensions/artgraph";
 const EXT_YML_REL = ".specify/extensions.yml";
 
 const EXT_FILES = [
@@ -51,7 +51,7 @@ const EXT_FILES = [
 
 const HOOK_ENTRIES = {
   after_tasks: {
-    extension: "spectrace",
+    extension: "artgraph",
     command: "artgraph.scan-reconcile",
     enabled: true,
     optional: false,
@@ -61,7 +61,7 @@ const HOOK_ENTRIES = {
     condition: null,
   } satisfies HookEntry,
   after_implement: {
-    extension: "spectrace",
+    extension: "artgraph",
     command: "artgraph.check-diff",
     enabled: true,
     optional: false,
@@ -71,7 +71,7 @@ const HOOK_ENTRIES = {
     condition: null,
   } satisfies HookEntry,
   before_implement: {
-    extension: "spectrace",
+    extension: "artgraph",
     command: "artgraph.check-gate",
     enabled: true,
     optional: false,
@@ -111,7 +111,7 @@ export class SpecKitProvider implements IntegrationProvider {
       const plain = Array.isArray(installed)
         ? installed
         : ((doc.toJSON() as { installed?: string[] }).installed ?? []);
-      if (!plain.includes("spectrace")) return false;
+      if (!plain.includes("artgraph")) return false;
       // M-M5 / FR-013: a half-broken `extension.yml` (truncated, malformed,
       // wrong schema_version) must not count as "installed" — otherwise the
       // init Tip would be wrongly suppressed and the user would never see the
@@ -138,7 +138,7 @@ export class SpecKitProvider implements IntegrationProvider {
     const rollback: RollbackOp[] = [];
 
     try {
-      // 1) Extension files under .specify/extensions/spectrace/
+      // 1) Extension files under .specify/extensions/artgraph/
       const extDirAbs = join(rootDir, EXT_DIR_REL);
       const extDirCreated = !existsSync(extDirAbs);
       if (extDirCreated) {
@@ -212,7 +212,7 @@ export class SpecKitProvider implements IntegrationProvider {
         : parseExtensionsYaml("installed: []\nsettings:\n  auto_execute_hooks: true\nhooks: {}\n");
 
       let ymlChanged = false;
-      if (addInstalled(doc, "spectrace")) ymlChanged = true;
+      if (addInstalled(doc, "artgraph")) ymlChanged = true;
       if (addHookEntry(doc, "after_tasks", HOOK_ENTRIES.after_tasks)) ymlChanged = true;
       if (addHookEntry(doc, "after_implement", HOOK_ENTRIES.after_implement)) ymlChanged = true;
 
@@ -221,7 +221,7 @@ export class SpecKitProvider implements IntegrationProvider {
           ymlChanged = true;
         }
       } else if (opts.gate === false) {
-        if (removeHookEntry(doc, "before_implement", "spectrace")) {
+        if (removeHookEntry(doc, "before_implement", "artgraph")) {
           ymlChanged = true;
         }
       }
@@ -304,12 +304,12 @@ export class SpecKitProvider implements IntegrationProvider {
       removed.push(EXT_DIR_REL);
     }
 
-    // 2) extensions.yml: drop installed entry + every spectrace hook entry
+    // 2) extensions.yml: drop installed entry + every artgraph hook entry
     const ymlAbs = join(rootDir, EXT_YML_REL);
     if (existsSync(ymlAbs)) {
       const doc = parseExtensionsYaml(readFileSync(ymlAbs, "utf-8"));
-      const a = removeInstalled(doc, "spectrace");
-      const trigs = removeAllSpectraceHooks(doc);
+      const a = removeInstalled(doc, "artgraph");
+      const trigs = removeAllArtgraphHooks(doc);
       if (a || trigs.length > 0) {
         atomicWrite.atomicWriteFile(ymlAbs, serializeExtensionsYaml(doc));
         modified.push(EXT_YML_REL);
