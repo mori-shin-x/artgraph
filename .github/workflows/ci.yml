@@ -36,7 +36,10 @@ jobs:
 
       - run: pnpm knip
 
-      - run: pnpm test:unit
+      # Unit suite runs with v8 coverage so the job log carries a
+      # text summary; lcov / html artefacts stay on disk for future
+      # Codecov-style hookup (tracked separately).
+      - run: pnpm test:coverage
 
       - run: pnpm test:e2e
 
