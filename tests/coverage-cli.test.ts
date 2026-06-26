@@ -11,8 +11,8 @@ const ALL_VERIFIED_FIXTURE = resolve(import.meta.dirname, "fixtures/all-verified
 // coverage
 // ---------------------------------------------------------------------------
 describe("CLI: coverage", () => {
-  it("should output coverage as JSON", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["coverage", "--format", "json"]);
+  it("should output coverage as JSON", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["coverage", "--format", "json"]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
@@ -26,8 +26,8 @@ describe("CLI: coverage", () => {
     expect(typeof result.summary.untagged).toBe("number");
   });
 
-  it("should include correct status for each REQ in JSON", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["coverage", "--format", "json"]);
+  it("should include correct status for each REQ in JSON", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["coverage", "--format", "json"]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
@@ -48,8 +48,8 @@ describe("CLI: coverage", () => {
     expect(auth003.status).toBe("untagged");
   });
 
-  it("should output summary counts matching items in JSON", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["coverage", "--format", "json"]);
+  it("should output summary counts matching items in JSON", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["coverage", "--format", "json"]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
@@ -65,16 +65,16 @@ describe("CLI: coverage", () => {
     expect(summary.untagged).toBe(untaggedCount);
   });
 
-  it("should output human-readable text by default", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["coverage"]);
+  it("should output human-readable text by default", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["coverage"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("AUTH-001");
     expect(stdout).toContain("verified");
     expect(stdout).toContain("untagged");
   });
 
-  it("should output text with --format text", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["coverage", "--format", "text"]);
+  it("should output text with --format text", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["coverage", "--format", "text"]);
     expect(exitCode).toBe(0);
     // Should contain status lines for each REQ
     expect(stdout).toContain("AUTH-001");
@@ -84,8 +84,8 @@ describe("CLI: coverage", () => {
     expect(stdout).toMatch(/total/i);
   });
 
-  it("should show correct status in text output for each REQ", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["coverage", "--format", "text"]);
+  it("should show correct status in text output for each REQ", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["coverage", "--format", "text"]);
     expect(exitCode).toBe(0);
 
     // AUTH-001 should be verified in text output
@@ -96,20 +96,20 @@ describe("CLI: coverage", () => {
     expect(stdout).toMatch(/AUTH-003:\s*untagged/);
   });
 
-  it("should always exit 0 (no gating)", { timeout: 30000 }, () => {
+  it("should always exit 0 (no gating)", { timeout: 30000 }, async () => {
     // Even with uncovered items, coverage should exit 0
-    const { exitCode } = run(["coverage"]);
+    const { exitCode } = await run(["coverage"]);
     expect(exitCode).toBe(0);
   });
 
-  it("should appear in --help output", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = run(["--help"]);
+  it("should appear in --help output", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["--help"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("coverage");
   });
 
-  it("should reject invalid --format value", { timeout: 30000 }, () => {
-    const { exitCode, stderr } = run(["coverage", "--format", "invalid"]);
+  it("should reject invalid --format value", { timeout: 30000 }, async () => {
+    const { exitCode, stderr } = await run(["coverage", "--format", "invalid"]);
     expect(exitCode).not.toBe(0);
     expect(stderr).toMatch(/invalid|allowed|choices/i);
   });
@@ -122,8 +122,8 @@ describe("CLI: coverage (empty graph)", () => {
   it(
     "should return empty items and zero summary for empty graph in JSON",
     { timeout: 30000 },
-    () => {
-      const { stdout, exitCode } = runAt(EMPTY_FIXTURE, ["coverage", "--format", "json"]);
+    async () => {
+      const { stdout, exitCode } = await runAt(EMPTY_FIXTURE, ["coverage", "--format", "json"]);
       expect(exitCode).toBe(0);
 
       const result = JSON.parse(stdout);
@@ -137,8 +137,8 @@ describe("CLI: coverage (empty graph)", () => {
     },
   );
 
-  it("should output text without errors for empty graph", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = runAt(EMPTY_FIXTURE, ["coverage", "--format", "text"]);
+  it("should output text without errors for empty graph", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await runAt(EMPTY_FIXTURE, ["coverage", "--format", "text"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("COVERAGE:");
     expect(stdout).toMatch(/total=0/);
@@ -152,8 +152,8 @@ describe("CLI: coverage (all verified)", () => {
   it(
     "should show all items as verified when every req has impl and test",
     { timeout: 30000 },
-    () => {
-      const { stdout, exitCode } = runAt(ALL_VERIFIED_FIXTURE, ["coverage", "--format", "json"]);
+    async () => {
+      const { stdout, exitCode } = await runAt(ALL_VERIFIED_FIXTURE, ["coverage", "--format", "json"]);
       expect(exitCode).toBe(0);
 
       const result = JSON.parse(stdout);
@@ -169,8 +169,8 @@ describe("CLI: coverage (all verified)", () => {
     },
   );
 
-  it("should show all verified in text output", { timeout: 30000 }, () => {
-    const { stdout, exitCode } = runAt(ALL_VERIFIED_FIXTURE, ["coverage", "--format", "text"]);
+  it("should show all verified in text output", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await runAt(ALL_VERIFIED_FIXTURE, ["coverage", "--format", "text"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("COVERAGE:");
     expect(stdout).toMatch(/VER-001:\s*verified/);
