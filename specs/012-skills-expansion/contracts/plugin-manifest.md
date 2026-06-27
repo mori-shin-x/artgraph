@@ -152,12 +152,41 @@ P2 で追加する `tests/plugin-manifest.test.ts`:
 
 ---
 
-## community marketplace への submission (将来 / 本 spec スコープ外)
+## Marketplace 配布の 3 経路 (教育的説明)
 
-(P5) `anthropics/claude-plugins-community` に submission する場合の手順:
-1. https://claude.ai/admin-settings/directory/submissions/plugins/new から application
-2. `claude plugin validate .` の通過確認
-3. 安全性 screening 通過 (Anthropic 自動)
-4. dailly sync で community marketplace.json に追加される
+野良 OSS としての artgraph がどう Claude Code Plugin として届くか、3 つの経路を整理する。本 spec で扱うのは **(1) self-marketplace** のみ。
 
-本 spec ではここまでは扱わない (artgraph repo 自身が marketplace として機能する経路のみ確立する)。
+### (1) Self-marketplace (GitHub repo 自体)
+
+- **申請不要・即配布可能**
+- `.claude-plugin/marketplace.json` を repo root に置くだけ
+- ユーザーは以下 1 行で接続:
+  ```
+  /plugin marketplace add ShintaroMorimoto/artgraph
+  /plugin install artgraph@artgraph-marketplace
+  ```
+- 数千の OSS 個人 repo がこの形で配布 (community marketplace 登録の 85% 以上が source: "url" の self-marketplace 形式)
+- **artgraph はまずこれを使う** (本 spec で配布)
+
+### (2) Community marketplace (anthropics/claude-plugins-community)
+
+- **誰でも申請可能** (野良 OSS 含む)
+- 申請窓口: https://claude.ai/admin-settings/directory/submissions/plugins/new
+- 自動 validator (`claude plugin validate .`) + 安全性 screening を通過すれば登録 (毎晩 sync)
+- 2026-06 時点で **2200+ plugin** が登録済
+- ユーザーは 1 度 `/plugin marketplace add anthropics/claude-plugins-community` するだけで 2200+ plugin にアクセス
+- **artgraph は (1) で実績ができたら (2) に submission する** (本 spec の P5 follow-up、要件 R5 でも明記)
+
+### (3) Official marketplace (anthropics/claude-plugins-official)
+
+- **招待制・申請窓口なし**
+- Anthropic が curate した小数 (LSP 11 + integration 9 + 開発ワークフロー数個 ≈ 20)
+- 野良 OSS が入る経路は基本なし
+- 唯一の特典: plugin-hints (`<claude-code-hint>` で install 提案) はここ経由のみ有効
+- **artgraph は対象外** (期待しない)
+
+### 戦略
+
+artgraph は **(1) → 安定後に (2) submit** の 2 段階。(3) は対象外。本 spec では (1) のみ実装し、(2) は P5 として後日。
+
+詳細な配布フロー: README ([T037](../tasks.md)) に install 手順 (1 経路目) と将来の (2) submit 計画を簡潔に記載する。

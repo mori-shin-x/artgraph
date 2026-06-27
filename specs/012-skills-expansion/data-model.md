@@ -26,14 +26,14 @@
 
 **本文 (markdown body)**: 100 行以下。共通 install 確認は `_shared/install-check.md` への markdown link で誘導し、各 Skill 固有の手順のみ記述。複雑な手順 (例: `artgraph-rename` の split/merge) は `references/<topic>.md` に切り出して progressive disclosure する。
 
-**バリエーション**:
+**バリエーション** (全 Skill **英語で記述** — FR-029):
 
 | Skill | 説明 |
 |-------|------|
-| `artgraph-setup` | 新規プロジェクトに artgraph + Skills + Hooks + 統合まで配備 |
+| `artgraph-setup` | 新規プロジェクトに artgraph + Skills + Hooks + 統合を一括配備。Package manager 検出ロジック (E6) を持つ |
 | `artgraph-integrate` | 既存 artgraph 環境に SDD ツール統合を後付け |
 | `artgraph-detect` | artgraph の導入状況・統合状況・skill 状況を要約 |
-| `artgraph-plan` | Plan 時に `artgraph impact --diff` を呼ぶ (既存改修) |
+| `artgraph-impact` | (`artgraph-plan` から rename) Impact 分析を 3 入力モード (diff / 明示 target / 確認質問) で実行 — FR-025 |
 | `artgraph-verify` | 実装完了時に `artgraph check --diff` を呼ぶ (既存改修) |
 | `artgraph-coverage` | 進捗確認時に `artgraph coverage` を呼ぶ (既存改修) |
 | `artgraph-rename` | ID リネーム/分割/統合を `artgraph rename` で行う (既存改修) |
@@ -63,7 +63,8 @@
 |----------|-----------------------------------|
 | `SpecKitProvider` (既存) | `.specify/extensions/artgraph/extension.yml` + `commands/artgraph.*.md` + `README.md` (5 ファイル) + `.specify/extensions.yml` への追記 |
 | `KiroProvider` (既存 + P1/P3 改修) | `.kiro/steering/artgraph.md` (frontmatter `inclusion: auto`)、`--with-hooks` 指定時 `.kiro/hooks/artgraph-verify.json` も配置 |
-| `OpenSpecProvider` (P3 新規) | `openspec/schemas/artgraph/schema.yaml` + `openspec/schemas/artgraph/templates/<phase>.md` |
+
+**`OpenSpecProvider` は本 spec 対象外** ([issue #25](https://github.com/ShintaroMorimoto/artgraph/issues/25) で別 spec として進める。理由: parser / ID 派生 / changes lifecycle 等の CLI コア改修が必要)。
 
 **バリデーション**: 各 provider の `isInstalled()` が schema 検証 (YAML parse → 必須フィールド確認) を含む。schema 不一致は `install --force` での再配備を促す。
 
@@ -150,6 +151,31 @@
 
 ---
 
+## E6. Package Manager Detector
+
+**役割**: `artgraph-setup` Skill が install / exec コマンドを構築する際の判定ロジック (FR-026)。Bun / Deno / pnpm / Yarn / npm の 5 種を区別する。
+
+**配置**: `templates/skills/_shared/package-manager.md` (共通参照ファイル、英語) — Skill 本文から markdown link で誘導。Skill 内に bash 検出スクリプトのサンプルも含める。
+
+**検出順序 (高優先 → 低優先)**:
+
+| 優先 | 検出ソース | 判定 | install / exec コマンド |
+|------|-----------|------|------------------------|
+| 1 | `package.json#packageManager` フィールド | semver-spec 文字列から抽出 | フィールド指定に従う (`pnpm@9.0.0` → pnpm) |
+| 2 | `bun.lockb` | Bun | `bun install -D artgraph` / `bunx artgraph` |
+| 3 | `deno.json` または `deno.lock` | Deno | `deno add npm:artgraph` / `deno run -A npm:artgraph/cli` |
+| 4 | `pnpm-lock.yaml` | pnpm | `pnpm add -D artgraph` / `pnpm exec artgraph` |
+| 5 | `yarn.lock` | Yarn | `yarn add -D artgraph` / `yarn artgraph` |
+| 6 | `package-lock.json` | npm | `npm install -D artgraph` / `npx artgraph` |
+| 7 (fallback) | lockfile なし | npm デフォルト | 同上 |
+
+**スコープ境界**:
+
+- 本 spec で扱う: `artgraph-setup` Skill 内の検出ロジック (最小実装)
+- **スコープ外 (フォローアップ issue)**: Stop hook テンプレ / Skill 本文サンプル / README / Plugin hook の `npx artgraph` 表記の全面 generic 化
+
+---
+
 ## エンティティ間の関係
 
 ```
@@ -187,8 +213,10 @@
 - 各 Skill SKILL.md の YAML frontmatter は schema を満たす (name, description 必須等)
 - SKILL.md は 100 行以下
 - 共通 `_shared/install-check.md` が存在しすべての Skill から markdown link で参照されている (`grep -l "_shared/install-check" templates/skills/*/SKILL.md` が全 7 件)
+- **`templates/skills/**/*.md` のすべてのファイルが英語であること** (検出: 非 ASCII 比率が threshold 以下、または明示的に日本語特有文字 (ひらがな・カタカナ・漢字 unicode block) を含まないこと) — FR-029
 - Plugin Manifest の `skills` パスが repo 内に実在する
 - Hook Template の JSON が parse 可能・既存 settings.json と merge 互換
 - Agent Context Snippet が 30 行以下、HTML マーカーペアが対称
+- Package Manager Detector が 5 fixture (npm/pnpm/yarn/bun/deno) すべてで正しい install/exec コマンド文字列を返す
 
-これらのメタテストは Phase 0 で resolve した設計判断 (R2 共通参照、R5/R6 Plugin path、R3 境界マーカー) と直接対応する。
+これらのメタテストは Phase 0 で resolve した設計判断 (R2 共通参照、R5/R6 Plugin path、R3 境界マーカー、R13 impact rename、R14 pkg mgr、R16 英語化) と直接対応する。

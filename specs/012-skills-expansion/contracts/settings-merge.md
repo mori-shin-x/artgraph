@@ -2,7 +2,7 @@
 
 **Feature**: Agent-Native Toolkit | **Date**: 2026-06-27
 
-`artgraph init --with-hooks` が `.claude/settings.json` に Stop hook を merge する規約を定義する。
+`artgraph init` (デフォルトで実行、`--no-hooks` で opt-out) が `.claude/settings.json` に Stop hook を merge する規約を定義する。`init --minimal` モードでは hook merge は実行されない。
 
 参考: [Claude Code Hooks 公式](https://code.claude.com/docs/en/hooks)
 
@@ -72,15 +72,15 @@ To add artgraph's gate, manually merge the following into hooks.Stop:
 
 ## `--force` フラグの扱い
 
-`init --with-hooks --force` は **`hooks.Stop` 衝突に対しても上書きしない**。`--force` は `.artgraph.json` の生成にのみ作用する (既存挙動)。
+`artgraph init --force` は **`hooks.Stop` 衝突に対しても上書きしない**。`--force` は `.artgraph.json` の生成にのみ作用する。
 
-settings.json merge に追加で flag を増やす案も検討したが (`--force-hooks`)、R4 の trade-off 通り「ユーザー設定の破壊リスク > 自動化の便益」と判断して採用しない。
+settings.json merge に追加で flag を増やす案も検討したが (`--force-hooks`)、R4 の trade-off 通り「ユーザー設定の破壊リスク > 自動化の便益」と判断して採用しない (ユーザーデータ保護の原則)。
 
 ---
 
 ## べき等性 (idempotency)
 
-`init --with-hooks` を 2 回連続実行した場合:
+`artgraph init` を 2 回連続実行した場合:
 - 1 回目: Case A → 新規作成
 - 2 回目: Case D → 警告 + exit 1 ✗ (idempotent ではない)
 

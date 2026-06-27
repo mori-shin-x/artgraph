@@ -1,89 +1,147 @@
 # Contract: CLI Flag Surface
 
-**Feature**: Agent-Native Toolkit | **Date**: 2026-06-27
+**Feature**: Agent-Native Toolkit | **Date**: 2026-06-27 (revised)
 
-本 feature で追加・改修される `artgraph` CLI フラグの最終形を定義する。既存フラグの後方互換 (constraint) を保つ。
+本 feature で再設計される `artgraph` CLI フラグの最終形を定義する。**未リリース前提のため後方互換は意識しない**。`init` の default 挙動を agent-native 寄りに大幅変更する。
 
 ---
 
-## `artgraph init`
+## `artgraph init` (重要な default 変更)
 
-### 既存フラグ (改変なし)
+### Default behavior (本 feature の核心)
+
+`artgraph init` (フラグなし) は **full agent-native setup** を実行する:
+
+1. `.artgraph.json` 設定生成 (既存)
+2. `scan` + `reconcile` で baseline lock 作成 (既存、`--no-scan` で opt-out)
+3. `templates/skills/**/SKILL.md` を `.claude/skills/` にコピー (= 旧 `--with-skills` 相当)
+4. 検出された全 SDD ツール (`.specify/` → Spec Kit, `.kiro/` → Kiro) に integrate を順次実行 (= 旧 `--integrate=auto` 相当)
+5. `.claude/settings.json` に Stop hook (`<pkg-mgr-exec> artgraph check --gate --diff`) を merge (= 旧 `--with-hooks` 相当)
+6. CLAUDE.md / AGENTS.md に artgraph スニペットを HTML マーカー境界で注入 (= 旧 `--with-agent-context` 相当)
+
+### Opt-out フラグ
+
+| flag | 意味 |
+|------|------|
+| `--minimal` | **すべての追加配備をスキップ**。`.artgraph.json` のみ生成 (旧 default 相当)。bare CLI 用途 |
+| `--no-scan` | 初期 scan + reconcile をスキップ (既存) |
+| `--no-skills` | Skills コピーをスキップ |
+| `--no-integrate` | SDD ツール統合をスキップ |
+| `--no-hooks` | `.claude/settings.json` merge をスキップ |
+| `--no-agent-context` | CLAUDE.md / AGENTS.md 注入をスキップ |
+
+### Opt-in フラグ (`--minimal` 後の部分配備用)
+
+| flag | 意味 |
+|------|------|
+| `--with-skills` | `--minimal` モードに Skills コピーを追加 |
+| `--with-integrate` (または `--integrate=<csv>`) | SDD 統合を追加 (csv で個別指定可) |
+| `--with-hooks` | Stop hook merge を追加 |
+| `--with-agent-context` | agent context スニペット注入を追加 |
+| `--integrate=auto` | 検出全 SDD ツール統合 (default モードで既に実行されるが、`--minimal --with-integrate` 時に明示する場合に使用) |
+
+### その他既存フラグ (変更なし)
 
 | flag | type | default | 説明 |
 |------|------|---------|------|
 | `--force` | boolean | false | 既存 `.artgraph.json` を上書き |
-| `--no-scan` | boolean | false | init 後の scan + reconcile をスキップ |
-| `--with-skills` | boolean | false | `templates/skills/*` を `.claude/skills/` にコピー (P0 で対象拡大、フラグ仕様は不変) |
-| `--integrate <tools>` | string (csv) | "" | カンマ区切りで指定された SDD ツール統合を順次実行 (例: `--integrate=speckit,kiro`) |
-| `--integrate-gate` / `--no-integrate-gate` | boolean | true | `--integrate` 経由で配備される統合に `--gate` を含めるか |
+| `--integrate-gate` / `--no-integrate-gate` | boolean | true | 統合配備で `--gate` モードを有効化するか |
 | `--format <json\|text>` | string | text | 出力形式 |
 
-### 新規フラグ
+### Examples
 
-| flag | type | default | 説明 | Phase |
-|------|------|---------|------|-------|
-| `--integrate=auto` | special value | — | `--integrate` の特殊値。検出された全 SDD ツールを順次統合 (R11)。`--integrate=auto` と `--integrate=speckit,kiro` は排他 (両指定はエラー) | **P0** (FR-003) |
-| `--with-hooks` | boolean | false | `.claude/settings.json` に Stop hook (`npx artgraph check --gate --diff`) を merge 配備 (R4 fail-on-conflict)。`templates/hooks/settings.json.template` を ソースとする | **P1** (FR-012, FR-013) |
-| `--with-agent-context` | boolean | false | CLAUDE.md / AGENTS.md に `<!-- artgraph: BEGIN ... END -->` で囲った 30 行スニペットを注入 (R3 境界マーカー)。両ファイル無ければ CLAUDE.md を新規作成 | **P1** (FR-014, FR-015) |
+```bash
+# default: agent-native full setup
+artgraph init
+
+# bare config only
+artgraph init --minimal
+
+# default minus hooks (= 既存 settings.json を触りたくない)
+artgraph init --no-hooks
+
+# bare + skills のみ
+artgraph init --minimal --with-skills
+
+# scan しない以外は default
+artgraph init --no-scan
+```
 
 ### `artgraph-setup` Skill が組み立てる典型コマンド
 
 ```bash
-# 新規プロジェクト
-npx artgraph init --with-skills --integrate=auto --with-hooks --with-agent-context
+# Skill 内で package manager を検出して構築
+# (npm の例)
+npm install -D artgraph
+npx artgraph init
 
-# 既存 .artgraph.json があるが Skills/Hooks 未配備
-npx artgraph init --force --with-skills --integrate=auto --with-hooks --with-agent-context
+# (pnpm の例)
+pnpm add -D artgraph
+pnpm exec artgraph init
+
+# (bun の例)
+bun install -D artgraph
+bunx artgraph init
+
+# (deno の例)
+deno add npm:artgraph
+deno run -A npm:artgraph/cli init
 ```
 
-### 既存挙動の保持 (後方互換 constraint)
+`init` 単独で full setup が走るため、Skill は install + `init` の 2 コマンド (実質 1 行) で完結する。
 
-- フラグなし `artgraph init` は今まで通り `.artgraph.json` のみ生成 (新規フラグは default で off)
-- 既存 4 Skill ファイル (`templates/skills/artgraph-{plan,verify,coverage,rename}.md`) が単一ファイル → ディレクトリ形式へ移行 (P0) するが、`installSkills()` は両形式を扱えるよう拡張する (P0 完了後は単一ファイル形式は不要)
+### exit code
+
+| 状況 | exit code |
+|------|-----------|
+| 正常 (full setup 成功 / `--minimal` 成功) | 0 |
+| 一般エラー (引数不正、書込失敗等) | 1 |
+| Stop hook 衝突 (既存 hook あり) | 1 (警告 + 手動マージ手順 stderr 出力、ユーザーデータ保護) |
+| いずれかの statement step が失敗 (例: integrate 配備失敗、agent-context 注入失敗) | 1 (失敗したステップ以降は skip、stderr に詳細) |
 
 ---
 
 ## `artgraph integrate`
 
-### 既存サブコマンド (改変なし)
+### 既存サブコマンド (変更なし)
 
 | invocation | 説明 |
 |------------|------|
 | `artgraph integrate list` | 利用可能 provider 一覧と detect/installed 状況を出力 |
 | `artgraph integrate <tool>` | 指定 tool 用配備物を配置 |
-| `artgraph integrate <tool> --gate` | `--gate` モード (Spec Kit の before_implement hook など、ゲート用配備物を含めて配置) |
+| `artgraph integrate <tool> --gate` | `--gate` モード (Spec Kit の before_implement hook 等、ゲート用配備物を含めて配置) |
 | `artgraph integrate <tool> --force` | 既存配備物を上書きして再配置 |
 | `artgraph integrate <tool> --uninstall` | 配備物を撤去 |
 | `artgraph integrate <tool> --format <json\|text>` | 出力形式 |
 
-### 新規 tool 値
+### 利用可能 tool 値
 
-| tool 値 | 説明 | Phase |
-|---------|------|-------|
-| `openspec` | OpenSpec community schema (`openspec/schemas/artgraph/`) を配備 | **P3** (FR-025, FR-026) |
+| tool | 状態 |
+|------|------|
+| `speckit` | 既存サポート |
+| `kiro` | 既存サポート |
+| ~~`openspec`~~ | **本 spec 対象外** ([issue #25](https://github.com/ShintaroMorimoto/artgraph/issues/25) で別 spec) |
 
-### 新規 オプション
+### Provider 別の新規 オプション
 
 | flag | provider 対象 | 説明 | Phase |
 |------|---------------|------|-------|
 | `--with-hooks` | `kiro` のみ | `.kiro/hooks/artgraph-verify.json` Smart Hook テンプレを配備 (`after_save` で `artgraph verify --diff`) | **P3** (FR-024) |
 
-### `--gate` の意味 (provider 別、参考)
+### `--gate` の意味 (provider 別)
 
 | provider | `--gate` で配備される追加物 |
 |----------|----------------------------|
 | `speckit` | `commands/artgraph.check-gate.md` + `extension.yml` の `hooks.before_implement` |
 | `kiro` | (現状特になし。steering 本文に gate 案内を含むのみ) |
-| `openspec` | `schema.yaml` の apply フェーズ verify ステップで `artgraph check --diff` を必須化 |
 
-### `artgraph integrate list` 出力 (text 形式)
+### `artgraph integrate list` 出力
 
+text 形式:
 ```text
 Available integrations:
   speckit    [detected] [not installed]
   kiro       [detected] [installed]
-  openspec   [not detected]
 ```
 
 JSON 形式:
@@ -91,28 +149,29 @@ JSON 形式:
 {
   "providers": [
     { "id": "speckit", "detected": true, "installed": false },
-    { "id": "kiro", "detected": true, "installed": true },
-    { "id": "openspec", "detected": false, "installed": false }
+    { "id": "kiro", "detected": true, "installed": true }
   ]
 }
 ```
 
-### exit code 規約
+### exit code
 
 | 状況 | exit code |
 |------|-----------|
 | 正常 (配備成功 / no-op の auto integrate) | 0 |
 | 一般エラー (引数不正、tool 名不正、書込失敗等) | 1 |
-| 既存ファイルとの衝突 (`--force` なしで `isInstalled()` true) | 1 (既存挙動) |
-| **Stop hook 衝突 (P1: `--with-hooks` での既存設定衝突)** | **1** (FR-013 fail-on-conflict)。stderr に手動マージ手順を出力 |
+| 既存ファイルとの衝突 (`--force` なしで `isInstalled()` true) | 1 (再実行は `--force` を促す) |
 
 ---
 
-## 後方互換性チェックリスト
+## 検証
 
-- [ ] 既存スクリプトで `artgraph init` (フラグなし) を呼んでいるユーザーに影響なし (新規フラグは default off)
-- [ ] 既存 `artgraph init --with-skills` の挙動が変わらない (P0 改修後も `.claude/skills/` への Skill コピーは同じ動作。ファイル名は ディレクトリ + `SKILL.md` 形式に変更だが install 結果のセット名は変わらない)
-- [ ] 既存 `artgraph integrate speckit --gate` の挙動が変わらない
-- [ ] `--integrate=speckit,kiro` の挙動が変わらない (`auto` は新規予約値)
-
-これらは `tests/init.test.ts` および `tests/integrate-cli.test.ts` 内の既存テストで自動検証されることを confirm する (新規テスト追加と並行)。
+| 検証項目 | テストファイル | Phase |
+|----------|----------------|-------|
+| `init` (フラグなし) で全 default 配備が動く | `tests/init.test.ts` | P0 |
+| `init --minimal` が bare config のみ生成 | `tests/init.test.ts` | P0 |
+| 個別 `--no-*` フラグの opt-out 動作 | `tests/init.test.ts` | P0 |
+| `--minimal --with-skills` 等の部分 opt-in | `tests/init.test.ts` | P0 |
+| `init` の Stop hook merge が `settings-merge.md` 規約に従う | `tests/hooks-merge.test.ts` | P1 |
+| `init` の agent-context 注入がべき等 | `tests/agent-context-injection.test.ts` | P1 |
+| `integrate kiro --with-hooks` で Smart Hook 配備 | `tests/integrate-cli.test.ts` | P3 |
