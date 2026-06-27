@@ -23,8 +23,10 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:perf": "vitest run --config vitest.perf.config.ts",
     "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
     "knip": "knip",
-    "prepublishOnly": "rm -rf dist && tsc && pnpm test:unit && pnpm test:e2e"
+    "check-versions": "node scripts/check-extension-version.mjs",
+    "prepublishOnly": "rm -rf dist && tsc && pnpm check-versions && pnpm test:unit && pnpm test:e2e"
   },
   "repository": {
     "type": "git",

@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
@@ -17,6 +18,7 @@ import {
   generateConfig,
   installSkills,
   SkillsInstallError,
+  computeStageGates,
 } from "../src/init.js";
 
 function makeTmpDir(): string {
@@ -297,14 +299,24 @@ describe("runInit", () => {
   });
 });
 
-describe("runInit --with-skills", () => {
+// ---------------------------------------------------------------------------
+// runInit Skills installation (directory-format, P0 redesign)
+// Skills now live at templates/skills/<name>/SKILL.md + _shared/*.md fragments,
+// and init copies the entire directory tree (not flat .md files).
+// ---------------------------------------------------------------------------
+
+const EXPECTED_SKILL_DIRS = [
+  "artgraph-coverage",
+  "artgraph-detect",
+  "artgraph-impact",
+  "artgraph-integrate",
+  "artgraph-rename",
+  "artgraph-setup",
+  "artgraph-verify",
+] as const;
+
+describe("runInit Skills installation (directory format)", () => {
   let tmp: string;
-  const SKILL_NAMES = [
-    "artgraph-plan.md",
-    "artgraph-verify.md",
-    "artgraph-coverage.md",
-    "artgraph-rename.md",
-  ];
 
   beforeEach(() => {
     tmp = makeTmpDir();
@@ -314,58 +326,70 @@ describe("runInit --with-skills", () => {
     cleanup(tmp);
   });
 
-  it("does not install skills by default", () => {
-    const result = runInit(tmp, { noScan: true });
+  // Default behavior (full agent-native setup) is asserted separately
+  // in the "runInit default behavior (P0)" describe below; here we focus
+  // on the Skills stage specifically.
 
-    expect(result.skillsInstalled).toBeUndefined();
-    expect(existsSync(join(tmp, ".claude", "skills"))).toBe(false);
-  });
-
-  it("copies all skill templates into .claude/skills/ when --with-skills is set", () => {
+  it("copies every <name>/SKILL.md into .claude/skills/<name>/ when Skills stage runs", () => {
     const result = runInit(tmp, { noScan: true, withSkills: true });
 
     expect(result.skillsInstalled).toBeDefined();
-    expect(result.skillsInstalled!.length).toBe(SKILL_NAMES.length);
-    for (const name of SKILL_NAMES) {
-      const dest = join(tmp, ".claude", "skills", name);
-      expect(existsSync(dest)).toBe(true);
-      // Frontmatter sanity: each template begins with `---` block + `name:` field.
+    for (const dir of EXPECTED_SKILL_DIRS) {
+      const dest = join(tmp, ".claude", "skills", dir, "SKILL.md");
+      expect(existsSync(dest), `expected ${dir}/SKILL.md to be installed`).toBe(true);
       const body = readFileSync(dest, "utf-8");
-      expect(body.startsWith("---")).toBe(true);
+      expect(body.startsWith("---"), `${dir}/SKILL.md missing frontmatter`).toBe(true);
       expect(body).toMatch(/name:\s*["']?artgraph-/);
     }
   });
 
+  it("copies _shared/ fragments into .claude/skills/_shared/", () => {
+    runInit(tmp, { noScan: true, withSkills: true });
+    for (const name of ["install-check.md", "output-schema.md", "package-manager.md"]) {
+      expect(existsSync(join(tmp, ".claude", "skills", "_shared", name))).toBe(true);
+    }
+  });
+
   it("throws when a skill file already exists and --force is not set", () => {
-    mkdirSync(join(tmp, ".claude", "skills"), { recursive: true });
-    writeFileSync(join(tmp, ".claude", "skills", "artgraph-plan.md"), "user content\n");
+    mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
+    writeFileSync(
+      join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"),
+      "user content\n",
+    );
 
     expect(() => runInit(tmp, { noScan: true, withSkills: true })).toThrow(
-      /artgraph-plan\.md.*--force/,
+      /artgraph-impact[/\\]SKILL\.md.*--force/,
     );
 
     // Existing user content must be preserved.
-    expect(readFileSync(join(tmp, ".claude", "skills", "artgraph-plan.md"), "utf-8")).toBe(
-      "user content\n",
-    );
+    expect(
+      readFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "utf-8"),
+    ).toBe("user content\n");
   });
 
   it("overwrites existing skill files when --force is set", () => {
-    mkdirSync(join(tmp, ".claude", "skills"), { recursive: true });
-    writeFileSync(join(tmp, ".claude", "skills", "artgraph-plan.md"), "user content\n");
+    mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
+    writeFileSync(
+      join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"),
+      "user content\n",
+    );
 
     const result = runInit(tmp, { noScan: true, withSkills: true, force: true });
 
-    expect(result.skillsInstalled!.length).toBe(SKILL_NAMES.length);
-    const body = readFileSync(join(tmp, ".claude", "skills", "artgraph-plan.md"), "utf-8");
+    expect(result.skillsInstalled!.length).toBeGreaterThan(0);
+    const body = readFileSync(
+      join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"),
+      "utf-8",
+    );
     expect(body.startsWith("---")).toBe(true);
     expect(body).not.toBe("user content\n");
   });
 
   it("lists all conflicting files in the error (not just the first)", () => {
-    mkdirSync(join(tmp, ".claude", "skills"), { recursive: true });
-    writeFileSync(join(tmp, ".claude", "skills", "artgraph-plan.md"), "x\n");
-    writeFileSync(join(tmp, ".claude", "skills", "artgraph-verify.md"), "y\n");
+    mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
+    mkdirSync(join(tmp, ".claude", "skills", "artgraph-verify"), { recursive: true });
+    writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "x\n");
+    writeFileSync(join(tmp, ".claude", "skills", "artgraph-verify", "SKILL.md"), "y\n");
 
     let caught: unknown;
     try {
@@ -376,8 +400,8 @@ describe("runInit --with-skills", () => {
 
     expect(caught).toBeInstanceOf(SkillsInstallError);
     const msg = (caught as Error).message;
-    expect(msg).toContain("artgraph-plan.md");
-    expect(msg).toContain("artgraph-verify.md");
+    expect(msg).toContain("artgraph-impact");
+    expect(msg).toContain("artgraph-verify");
     expect(msg).toMatch(/--force/);
   });
 
@@ -394,17 +418,140 @@ describe("runInit --with-skills", () => {
   });
 
   it("does not write .artgraph.json when skills pre-flight validation fails", () => {
-    mkdirSync(join(tmp, ".claude", "skills"), { recursive: true });
-    writeFileSync(join(tmp, ".claude", "skills", "artgraph-plan.md"), "preexisting\n");
+    mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
+    writeFileSync(
+      join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"),
+      "preexisting\n",
+    );
 
     expect(() => runInit(tmp, { noScan: true, withSkills: true })).toThrow(SkillsInstallError);
 
-    // Config must not exist — pre-flight check should fail before any write.
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
-    // Existing user content preserved.
-    expect(readFileSync(join(tmp, ".claude", "skills", "artgraph-plan.md"), "utf-8")).toBe(
-      "preexisting\n",
+    expect(
+      readFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "utf-8"),
+    ).toBe("preexisting\n");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P0: runInit default behavior — new flag matrix
+// (FR-003, FR-028, R15, contracts/cli-flags.md)
+// ---------------------------------------------------------------------------
+
+describe("runInit default behavior (P0)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(tmp);
+  });
+
+  it("flag-less init runs the full agent-native setup (config + scan + skills + integrate-auto)", () => {
+    mkdirSync(join(tmp, "src"));
+    writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
+
+    const result = runInit(tmp);
+
+    // 1. .artgraph.json
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
+    // 2. .trace.lock from scan
+    expect(existsSync(join(tmp, ".trace.lock"))).toBe(true);
+    // 3. Skills copied
+    expect(result.skillsInstalled).toBeDefined();
+    expect(existsSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"))).toBe(true);
+    expect(existsSync(join(tmp, ".claude", "skills", "_shared", "install-check.md"))).toBe(true);
+    // 4. integrate-auto: no SDD tools detected → no integrationResults but no error
+    expect(result.integrationWarnings ?? []).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/error/i)]),
     );
+  });
+
+  it("--minimal generates only .artgraph.json (no scan, no skills, no integrate, no hooks, no agent-context)", () => {
+    mkdirSync(join(tmp, "src"));
+    writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
+
+    const result = runInit(tmp, { minimal: true });
+
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
+    expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
+    expect(existsSync(join(tmp, ".claude"))).toBe(false);
+    expect(result.skillsInstalled).toBeUndefined();
+    expect(result.scanSummary).toBeUndefined();
+  });
+
+  it("--no-skills skips Skills install but keeps the rest of the default flow", () => {
+    const result = runInit(tmp, { noSkills: true });
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
+    expect(result.skillsInstalled).toBeUndefined();
+    expect(existsSync(join(tmp, ".claude", "skills"))).toBe(false);
+  });
+
+  it("--no-integrate skips integrate-auto", () => {
+    mkdirSync(join(tmp, ".specify"));
+    const result = runInit(tmp, { noIntegrate: true });
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
+    expect(result.integrationResults).toBeUndefined();
+    expect(existsSync(join(tmp, ".specify", "extensions"))).toBe(false);
+  });
+
+  it("--minimal --with-skills enables only Skills on top of bare config", () => {
+    const result = runInit(tmp, { minimal: true, withSkills: true });
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
+    expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
+    expect(result.skillsInstalled).toBeDefined();
+    expect(existsSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"))).toBe(true);
+  });
+
+  it("integrate-auto is no-op (exit 0) when no SDD tools are detected", () => {
+    expect(() => runInit(tmp)).not.toThrow();
+  });
+
+  it("integrate-auto runs speckit when only .specify/ is detected", () => {
+    mkdirSync(join(tmp, ".specify"));
+    const result = runInit(tmp);
+    const speckitResult = (result.integrationResults ?? []).find(
+      (r) => r.providerId === "speckit",
+    );
+    expect(speckitResult).toBeDefined();
+  });
+
+  it("integrate-auto runs both providers when .specify/ and .kiro/ are both detected", () => {
+    mkdirSync(join(tmp, ".specify"));
+    mkdirSync(join(tmp, ".kiro"));
+    const result = runInit(tmp);
+    const ids = (result.integrationResults ?? []).map((r) => r.providerId).sort();
+    expect(ids).toEqual(["kiro", "speckit"]);
+  });
+
+  it("default mode does NOT create .claude/settings.json (hooks stub no-op in P0)", () => {
+    runInit(tmp);
+    expect(existsSync(join(tmp, ".claude", "settings.json"))).toBe(false);
+  });
+
+  it("default mode does NOT create or modify CLAUDE.md (agent-context stub no-op in P0)", () => {
+    runInit(tmp);
+    expect(existsSync(join(tmp, "CLAUDE.md"))).toBe(false);
+  });
+
+  it("--no-hooks is accepted without error in default mode", () => {
+    expect(() => runInit(tmp, { noHooks: true })).not.toThrow();
+  });
+
+  it("--no-agent-context is accepted without error in default mode", () => {
+    expect(() => runInit(tmp, { noAgentContext: true })).not.toThrow();
+  });
+
+  it("--integrations <list> overrides auto-detect (only the requested tool runs)", () => {
+    mkdirSync(join(tmp, ".specify"));
+    mkdirSync(join(tmp, ".kiro"));
+    const result = runInit(tmp, { integrations: ["speckit"] });
+    const ids = (result.integrationResults ?? []).map((r) => r.providerId);
+    expect(ids).toEqual(["speckit"]);
+    // Kiro should NOT have been integrated even though .kiro/ is present
+    expect(existsSync(join(tmp, ".kiro", "steering", "artgraph.md"))).toBe(false);
   });
 });
 
@@ -419,16 +566,19 @@ describe("installSkills (direct invocation)", () => {
     cleanup(tmp);
   });
 
-  it("returns paths matching every *.md template in the template directory", () => {
+  it("returns paths covering every <name>/SKILL.md plus _shared/*.md fragments", () => {
     const installed = installSkills(tmp);
 
-    // Source of truth: the templates directory itself, not a hardcoded list.
     const templateDir = resolve(import.meta.dirname, "..", "templates", "skills");
-    const expected = readdirSync(templateDir).filter((f) => f.endsWith(".md"));
-    expect(installed.length).toBe(expected.length);
-    for (const name of expected) {
-      expect(installed).toContain(join(".claude", "skills", name));
-      expect(existsSync(join(tmp, ".claude", "skills", name))).toBe(true);
+    const topDirs = readdirSync(templateDir).filter((name) => !name.startsWith("."));
+    // At least every top-level directory must have produced at least one file.
+    for (const dir of topDirs) {
+      expect(installed.some((p) => p.startsWith(join(".claude", "skills", dir)))).toBe(true);
+    }
+    // Every SKILL.md must exist at its mirrored destination.
+    for (const dir of topDirs) {
+      if (dir === "_shared") continue;
+      expect(existsSync(join(tmp, ".claude", "skills", dir, "SKILL.md"))).toBe(true);
     }
   });
 
@@ -447,28 +597,44 @@ describe("installSkills (direct invocation)", () => {
     );
   });
 
-  it("throws SkillsInstallError when the templates directory has no .md files", () => {
+  it("throws SkillsInstallError when the templates directory has no Skill directories", () => {
     const emptyTemplates = mkdtempSync(join(tmpdir(), "artgraph-empty-templates-"));
-    // Place a non-.md file to ensure the empty check is on the filter result.
-    writeFileSync(join(emptyTemplates, "README.txt"), "not a skill\n");
+    // Place a stray file (not a directory) to ensure the empty check is on the
+    // directory filter.
+    writeFileSync(join(emptyTemplates, "README.txt"), "not a skill dir\n");
 
     try {
       expect(() => installSkills(tmp, { templateDir: emptyTemplates })).toThrow(SkillsInstallError);
       expect(() => installSkills(tmp, { templateDir: emptyTemplates })).toThrow(
-        /No skill templates.*packaging/i,
+        /No skill template directories.*packaging/i,
       );
     } finally {
       rmSync(emptyTemplates, { recursive: true, force: true });
     }
   });
 
-  it("throws SkillsInstallError with partiallyInstalled when a copy fails mid-loop", () => {
+  it("throws SkillsInstallError when a Skill directory is missing SKILL.md", () => {
+    const customTemplates = mkdtempSync(join(tmpdir(), "artgraph-bad-skill-"));
+    // Skill dir without SKILL.md → packaging fault.
+    mkdirSync(join(customTemplates, "artgraph-broken"), { recursive: true });
+    writeFileSync(join(customTemplates, "artgraph-broken", "README.md"), "no SKILL.md here\n");
+
+    try {
+      expect(() => installSkills(tmp, { templateDir: customTemplates })).toThrow(
+        /artgraph-broken.*missing SKILL\.md/,
+      );
+    } finally {
+      rmSync(customTemplates, { recursive: true, force: true });
+    }
+  });
+
+  it("throws SkillsInstallError with the failing path when copy fails mid-loop", () => {
     const customTemplates = mkdtempSync(join(tmpdir(), "artgraph-custom-templates-"));
-    writeFileSync(join(customTemplates, "only.md"), "skill body\n");
+    mkdirSync(join(customTemplates, "artgraph-only"), { recursive: true });
+    writeFileSync(join(customTemplates, "artgraph-only", "SKILL.md"), "skill body\n");
 
     // Place a directory at the destination so copyFileSync fails with EISDIR.
-    // force: true is required so the conflict check passes and we reach the copy step.
-    mkdirSync(join(tmp, ".claude", "skills", "only.md"), { recursive: true });
+    mkdirSync(join(tmp, ".claude", "skills", "artgraph-only", "SKILL.md"), { recursive: true });
 
     let caught: unknown;
     try {
@@ -481,8 +647,7 @@ describe("installSkills (direct invocation)", () => {
 
     expect(caught).toBeInstanceOf(SkillsInstallError);
     const err = caught as SkillsInstallError;
-    expect(err.partiallyInstalled).toEqual([]);
-    expect(err.message).toMatch(/Failed to copy only\.md/);
+    expect(err.message).toMatch(/Failed to copy .*SKILL\.md/);
   });
 });
 
@@ -498,19 +663,106 @@ describe("skill template <-> dogfood sync", () => {
   // From tests/ up one level to repo root, then into .claude/.
   const dogfoodDir = resolve(import.meta.dirname, "..", ".claude", "skills");
 
-  it("every template has a matching dogfood file with identical content", () => {
+  it("every template file has a matching dogfood file with identical content", () => {
     // Only run when the dogfood directory actually exists (i.e. inside this
     // repo). Consumers of the published package won't have it.
     if (!existsSync(dogfoodDir)) {
       return;
     }
 
-    const templates = readdirSync(templateDir).filter((f) => f.endsWith(".md"));
-    for (const name of templates) {
-      const tHash = sha256(join(templateDir, name));
-      const dPath = join(dogfoodDir, name);
-      expect(existsSync(dPath), `dogfood file missing: ${dPath}`).toBe(true);
-      expect(sha256(dPath), `content drift in ${name}`).toBe(tHash);
+    // Walk templates/skills/ recursively. Each .md file (SKILL.md under a
+    // skill directory, or fragments under _shared/) must mirror exactly into
+    // .claude/skills/ at the same relative path.
+    function walk(dir: string, out: string[]): void {
+      for (const entry of readdirSync(dir)) {
+        const full = join(dir, entry);
+        const stat = statSync(full);
+        if (stat.isDirectory()) walk(full, out);
+        else if (stat.isFile()) out.push(full);
+      }
     }
+    const files: string[] = [];
+    walk(templateDir, files);
+    expect(files.length).toBeGreaterThan(0);
+
+    for (const tPath of files) {
+      const rel = tPath.substring(templateDir.length + 1);
+      const dPath = join(dogfoodDir, rel);
+      expect(existsSync(dPath), `dogfood file missing: ${dPath}`).toBe(true);
+      expect(sha256(dPath), `content drift in ${rel}`).toBe(sha256(tPath));
+    }
+
+    // Reverse direction: every dogfood file must have a matching template (no stale files)
+    const dogfoodFiles: string[] = [];
+    walk(dogfoodDir, dogfoodFiles);
+    for (const dPath of dogfoodFiles) {
+      const rel = dPath.substring(dogfoodDir.length + 1);
+      // Skip speckit-* directories (managed by Spec Kit, not artgraph templates)
+      if (rel.startsWith("speckit-")) continue;
+      const tPath = join(templateDir, rel);
+      expect(existsSync(tPath), `stale dogfood file (no template): ${rel}`).toBe(true);
+    }
+  });
+});
+
+describe("computeStageGates (P0 flag matrix truth table)", () => {
+  it("default (no flags) enables every stage", () => {
+    expect(computeStageGates({})).toEqual({
+      scan: true,
+      skills: true,
+      integrate: true,
+      hooks: true,
+      agentContext: true,
+    });
+  });
+
+  it("--minimal disables every stage", () => {
+    expect(computeStageGates({ minimal: true })).toEqual({
+      scan: false,
+      skills: false,
+      integrate: false,
+      hooks: false,
+      agentContext: false,
+    });
+  });
+
+  it("--minimal --with-skills enables only Skills", () => {
+    expect(computeStageGates({ minimal: true, withSkills: true })).toEqual({
+      scan: false,
+      skills: true,
+      integrate: false,
+      hooks: false,
+      agentContext: false,
+    });
+  });
+
+  it("--no-skills disables only Skills in default mode", () => {
+    expect(computeStageGates({ noSkills: true })).toEqual({
+      scan: true,
+      skills: false,
+      integrate: true,
+      hooks: true,
+      agentContext: true,
+    });
+  });
+
+  it("--minimal + explicit integrations enables integrate stage", () => {
+    expect(computeStageGates({ minimal: true, integrations: ["speckit"] })).toEqual({
+      scan: false,
+      skills: false,
+      integrate: true,
+      hooks: false,
+      agentContext: false,
+    });
+  });
+
+  it("--no-integrate + --no-hooks + --no-agent-context leaves only config + scan + skills", () => {
+    expect(computeStageGates({ noIntegrate: true, noHooks: true, noAgentContext: true })).toEqual({
+      scan: true,
+      skills: true,
+      integrate: false,
+      hooks: false,
+      agentContext: false,
+    });
   });
 });

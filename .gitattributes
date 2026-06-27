@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Skills + templates must always be LF (dogfood sync test compares hashes)
+templates/** text eol=lf
+.claude/skills/** text eol=lf

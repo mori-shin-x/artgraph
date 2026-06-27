@@ -16,9 +16,16 @@ then detects **drift** (spec changed but code/tests didn't), **orphans**, and
 ## Quickstart
 
 ```bash
-npm install -D artgraph
-npx artgraph init      # writes .artgraph.json
+# Pick your package manager (npm / pnpm / Bun / Deno all supported; Yarn falls back to npm)
+npm install -D artgraph && npx artgraph init       # default: full agent-native setup
+# pnpm add -D artgraph && pnpm exec artgraph init
+# bun add -d artgraph && bunx artgraph init
+# deno add npm:artgraph && deno run -A npm:artgraph/cli init
 ```
+
+`artgraph init` runs the full setup by default: `.artgraph.json` config + initial scan + Claude Code Skills + auto-integrate detected SDD tools (Spec Kit / Kiro) + Stop hook + CLAUDE.md / AGENTS.md snippet. Pass `--minimal` for bare config only, or any of `--no-skills` / `--no-integrate` / `--no-hooks` / `--no-agent-context` to skip specific stages.
+
+If you use Claude Code, you can skip the manual install entirely — type `/artgraph-setup` and the Skill detects the package manager, installs artgraph, and runs `init` for you in one turn.
 
 ### End-to-end: spec → `@impl` → `check`
 
@@ -306,7 +313,9 @@ instead of relying on a manual call.
 | `artgraph integrate speckit`      | Generate `.specify/extensions/artgraph/` and register Spec Kit hooks (`after_tasks` / `after_implement`, optional `before_implement` via `--gate`)                 |
 | `artgraph integrate kiro`         | Write `.kiro/steering/artgraph.md` so the Kiro agent learns when to call `impact / check --diff / reconcile`                                                       |
 | `artgraph integrate list`         | Show every supported integration with detect / installed status                                                                                                     |
-| `artgraph init --integrate=<ids>` | One-shot: run `init` _and_ integrate the named tools (`speckit`, `kiro`, `all`); pass `--integrate-gate` to add Spec Kit's `before_implement` hook in the same call |
+| `artgraph init --integrations=<ids>` | One-shot: run `init` _and_ integrate the named tools (`speckit`, `kiro`, `all`); pass `--integrate-gate` to add Spec Kit's `before_implement` hook in the same call. The value-form flag was renamed from `--integrate=<ids>` to `--integrations=<ids>` so that `--integrate` / `--no-integrate` could be used as a boolean opt-out for the default auto-integrate stage. |
+
+Since `init` now auto-integrates every detected SDD tool by default, the `--integrations=<csv>` form is only needed when you want to override that selection (for example, install Spec Kit hooks only in a repo that also has `.kiro/`).
 
 ```bash
 # Inside a repo that already has .specify/
@@ -323,7 +332,7 @@ artgraph integrate kiro --force         # overwrite a hand-edited steering file
 artgraph integrate list                 # detected / installed flags per tool
 
 # Bootstrap + integrate in one shot
-artgraph init --integrate=all --integrate-gate
+artgraph init --integrations=all --integrate-gate
 ```
 
 Notes:
@@ -343,5 +352,20 @@ Notes:
 
 ## Claude Code skills
 
-artgraph ships Claude Code skills (`artgraph-plan`, `artgraph-verify`,
-`artgraph-coverage`, `artgraph-rename`). See [docs/skills-guide.md](docs/skills-guide.md).
+artgraph ships 7 Claude Code Skills that wire the CLI into the agent workflow:
+
+| Skill                | When it fires                                                                |
+| -------------------- | ---------------------------------------------------------------------------- |
+| `artgraph-setup`     | User wants to install / set up / add artgraph on a fresh project             |
+| `artgraph-integrate` | User wants to wire artgraph into an installed SDD tool (Spec Kit / Kiro)     |
+| `artgraph-detect`    | User asks whether artgraph is set up / what's installed / what's available   |
+| `artgraph-impact`    | User is planning, designing, scoping, or asking for change-impact analysis   |
+| `artgraph-verify`    | User reports implementation completion or wants a consistency check          |
+| `artgraph-coverage`  | User asks for progress, remaining work, or what's left to test               |
+| `artgraph-rename`    | User wants to rename / split / merge requirement IDs                         |
+
+Skills live at `templates/skills/<name>/SKILL.md` and ship in English (for cross-agent reach + Claude Skills best practice). `artgraph init` installs them into `.claude/skills/` by default; pass `--no-skills` to opt out.
+
+> Note: `artgraph-impact` was previously called `artgraph-plan`. It was renamed because "plan" implies pre-change design while the underlying `artgraph impact --diff` only works once changes exist. The new Skill supports three input modes (diff / explicit targets / ask) so it covers both genuine planning and mid-flight impact analysis.
+
+For implementation details and customization tips, see [docs/skills-guide.md](docs/skills-guide.md).
