@@ -144,19 +144,45 @@ export interface DetectionResult {
 
 export interface InitOptions {
   force?: boolean;
-  noScan?: boolean;
-  withSkills?: boolean;
   /**
-   * One-shot integrations to run as part of `init` (FR-022). Each id must
-   * resolve to a registered provider; the special string `"all"` expands to
-   * every provider whose `detect()` is true.
+   * Stage gating (P0 redesign, spec 012-skills-expansion, contracts/cli-flags.md).
+   *
+   * Default behavior (no flags) runs the full agent-native setup:
+   *   1. .artgraph.json (config)
+   *   2. scan + reconcile (unless noScan)
+   *   3. install Skills into .claude/skills/ (unless noSkills)
+   *   4. auto-integrate detected SDD tools (unless noIntegrate)
+   *   5. install Stop hook into .claude/settings.json (unless noHooks)        [P1]
+   *   6. inject CLAUDE.md / AGENTS.md snippet (unless noAgentContext)         [P1]
+   *
+   * `--minimal` short-circuits stages 2–6 to off; each can be re-enabled with
+   * the matching `with*` flag.
+   */
+  minimal?: boolean;
+  noScan?: boolean;
+  noSkills?: boolean;
+  noIntegrate?: boolean;
+  noHooks?: boolean;
+  noAgentContext?: boolean;
+  withSkills?: boolean;
+  withIntegrate?: boolean;
+  withHooks?: boolean;
+  withAgentContext?: boolean;
+  /**
+   * Explicit one-shot integrations to run as part of `init`. When set, overrides
+   * the default auto-detect behavior. Each id must resolve to a registered
+   * provider; the special string `"all"` expands to every provider whose
+   * `detect()` is true.
    *
    * Unmatched / undetected ids produce a warning and are skipped — the init
    * itself still completes with exit 0.
    */
   integrations?: IntegrationProviderId[] | "all";
   /**
-   * Forwarded `--gate` / `--no-gate` for the speckit provider (FR-024).
+   * Forwarded `--integrate-gate` / `--no-integrate-gate` for the speckit
+   * provider. The CLI defaults this to `true` when neither flag is passed
+   * (contracts/cli-flags.md §integrate-gate, spec.md §FR-003) so a fresh
+   * Spec Kit repo gets the `before_implement` gate hook by default.
    * Other providers ignore this flag.
    */
   integrateGate?: boolean;

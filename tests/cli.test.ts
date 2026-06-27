@@ -581,36 +581,57 @@ describe("CLI: init", () => {
     expect(stdout).not.toContain("Nodes:");
   });
 
-  it("should install skills with --with-skills (text output)", { timeout: 30000 }, async () => {
-    const { existsSync } = require("node:fs");
-    const { join } = require("node:path");
-    const { exitCode, stdout } = await runInit(["--no-scan", "--with-skills"]);
-    expect(exitCode).toBe(0);
-    expect(stdout).toContain("Installed");
-    expect(stdout).toContain("Claude Code skills");
-    expect(stdout).toContain(".claude/skills/artgraph-plan.md");
-    expect(existsSync(join(initTmp, ".claude", "skills", "artgraph-plan.md"))).toBe(true);
-    expect(existsSync(join(initTmp, ".claude", "skills", "artgraph-verify.md"))).toBe(true);
-    expect(existsSync(join(initTmp, ".claude", "skills", "artgraph-coverage.md"))).toBe(true);
-    expect(existsSync(join(initTmp, ".claude", "skills", "artgraph-rename.md"))).toBe(true);
-  });
-
-  it("should report skillsInstalled in JSON output with --with-skills", { timeout: 30000 }, async () => {
-    const { exitCode, stdout } = await runInit(["--no-scan", "--with-skills", "--format", "json"]);
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout);
-    expect(Array.isArray(result.skillsInstalled)).toBe(true);
-    expect(result.skillsInstalled.length).toBe(4);
-    expect(result.skillsInstalled).toContain(".claude/skills/artgraph-plan.md");
-  });
-
-  it("should not install skills by default", { timeout: 30000 }, async () => {
+  it("default init installs skills as part of the full agent-native setup (text output)", { timeout: 30000 }, async () => {
     const { existsSync } = require("node:fs");
     const { join } = require("node:path");
     const { exitCode, stdout } = await runInit(["--no-scan"]);
     expect(exitCode).toBe(0);
+    expect(stdout).toContain("Installed");
+    expect(stdout).toContain("Claude Code skills");
+    // New directory-format Skill paths.
+    expect(stdout).toContain(".claude/skills/artgraph-impact/SKILL.md");
+    for (const dir of [
+      "artgraph-coverage",
+      "artgraph-detect",
+      "artgraph-impact",
+      "artgraph-integrate",
+      "artgraph-rename",
+      "artgraph-setup",
+      "artgraph-verify",
+    ]) {
+      expect(existsSync(join(initTmp, ".claude", "skills", dir, "SKILL.md"))).toBe(true);
+    }
+  });
+
+  it("default init reports skillsInstalled in JSON output", { timeout: 30000 }, async () => {
+    const { exitCode, stdout } = await runInit(["--no-scan", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    // H6: JSON shape changed from string[] to { skills, fragments }.
+    expect(typeof result.skillsInstalled).toBe("object");
+    expect(Array.isArray(result.skillsInstalled.skills)).toBe(true);
+    expect(result.skillsInstalled.skills.length).toBe(7);
+    expect(result.skillsInstalled.fragments.length).toBeGreaterThanOrEqual(3);
+    expect(result.skillsInstalled.skills).toContain(".claude/skills/artgraph-impact/SKILL.md");
+  });
+
+  it("--minimal suppresses skills install", { timeout: 30000 }, async () => {
+    const { existsSync } = require("node:fs");
+    const { join } = require("node:path");
+    const { exitCode, stdout } = await runInit(["--minimal"]);
+    expect(exitCode).toBe(0);
     expect(stdout).not.toContain("Installed");
     expect(existsSync(join(initTmp, ".claude", "skills"))).toBe(false);
+  });
+
+  it("--no-skills suppresses skills install while keeping the rest of the default flow", { timeout: 30000 }, async () => {
+    const { existsSync } = require("node:fs");
+    const { join } = require("node:path");
+    const { exitCode, stdout } = await runInit(["--no-scan", "--no-skills"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).not.toContain("Installed");
+    expect(existsSync(join(initTmp, ".claude", "skills"))).toBe(false);
+    expect(existsSync(join(initTmp, ".artgraph.json"))).toBe(true);
   });
 
   it(
@@ -619,12 +640,15 @@ describe("CLI: init", () => {
     async () => {
       const { mkdirSync, writeFileSync, existsSync } = require("node:fs");
       const { join } = require("node:path");
-      mkdirSync(join(initTmp, ".claude", "skills"), { recursive: true });
-      writeFileSync(join(initTmp, ".claude", "skills", "artgraph-plan.md"), "user\n");
+      mkdirSync(join(initTmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
+      writeFileSync(
+        join(initTmp, ".claude", "skills", "artgraph-impact", "SKILL.md"),
+        "user\n",
+      );
 
-      const { exitCode, stderr } = await runInit(["--no-scan", "--with-skills"]);
+      const { exitCode, stderr } = await runInit(["--no-scan"]);
       expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/artgraph-plan\.md.*--force/);
+      expect(stderr).toMatch(/artgraph-impact[/\\]SKILL\.md.*--force/);
       // Pre-flight validation must reject before any write.
       expect(existsSync(join(initTmp, ".artgraph.json"))).toBe(false);
     },
