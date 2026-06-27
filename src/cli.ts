@@ -73,31 +73,41 @@ function resolveTestResults(
 
 program
   .command("init")
-  .description("Initialize artgraph for this project")
+  .description(
+    "Initialize artgraph for this project (default: full agent-native setup — config + scan + Skills + auto-integrate + hooks + agent context). Use --minimal for bare config only.",
+  )
   .option("--force", "Overwrite existing .artgraph.json")
-  .option("--no-scan", "Generate config only, skip scan and reconcile")
+  .option("--minimal", "Bare config only — opt out of every extra setup stage")
+  // Stage opt-outs (in default mode)
+  .option("--no-scan", "Skip initial scan + reconcile")
+  .option("--no-skills", "Skip Claude Code Skills install")
+  .option("--no-integrate", "Skip SDD-tool auto-integration")
+  .option("--no-hooks", "Skip Stop hook installation (P1)")
+  .option("--no-agent-context", "Skip CLAUDE.md / AGENTS.md snippet injection (P1)")
+  // Stage opt-ins (used with --minimal)
+  .option("--with-skills", "Install Claude Code Skills into .claude/skills/")
+  .option("--with-integrate", "Auto-integrate detected SDD tools (Spec Kit / Kiro)")
+  .option("--with-hooks", "Install Stop hook (P1)")
+  .option("--with-agent-context", "Inject CLAUDE.md / AGENTS.md snippet (P1)")
+  // Explicit integrate list (overrides auto-detect)
   .option(
-    "--with-skills",
-    "Install Claude Code skills (plan, verify, coverage, rename) into .claude/skills/",
+    "--integrations <tools>",
+    "Comma-separated SDD tools to integrate (overrides auto-detect; e.g. speckit,kiro or all)",
   )
-  .option(
-    "--integrate <tools>",
-    "Comma-separated SDD tools to integrate one-shot (speckit, kiro, all)",
-  )
-  .option("--integrate-gate", "Pass --gate to speckit during one-shot integration")
-  .option("--no-integrate-gate", "Pass --no-gate to speckit during one-shot integration")
+  .option("--integrate-gate", "Pass --gate to speckit during integration")
+  .option("--no-integrate-gate", "Pass --no-gate to speckit during integration")
   .option("--format <format>", "Output format: json | text", "text")
   .action((opts) => {
     const rootDir = process.cwd();
 
-    // Parse --integrate: "all" stays as the literal sentinel; otherwise it's
-    // a comma-separated provider id list. Empty/undefined disables one-shot
-    // integration entirely.
-    const integrations = parseInitIntegrations(opts.integrate);
+    // Parse --integrations: "all" stays as the literal sentinel; otherwise
+    // it's a comma-separated provider id list. Empty/undefined leaves
+    // integrations unspecified so runInit's auto-detect kicks in.
+    const integrations = parseInitIntegrations(opts.integrations);
 
     // commander stores --integrate-gate / --no-integrate-gate in
     // `opts.integrateGate`. Preserve `undefined` so the speckit provider
-    // distinguishes "no opinion" from "explicitly off" (FR-003 mirrors).
+    // distinguishes "no opinion" from "explicitly off".
     const integrateGate: boolean | undefined = Object.prototype.hasOwnProperty.call(
       opts,
       "integrateGate",
@@ -108,8 +118,18 @@ program
     try {
       const result = runInit(rootDir, {
         force: opts.force,
-        noScan: !opts.scan,
-        withSkills: opts.withSkills,
+        minimal: opts.minimal,
+        // commander's --no-X negation sets opts.X = false when the flag is
+        // passed, true otherwise. Convert to the noX form runInit expects.
+        noScan: opts.scan === false,
+        noSkills: opts.skills === false,
+        noIntegrate: opts.integrate === false,
+        noHooks: opts.hooks === false,
+        noAgentContext: opts.agentContext === false,
+        withSkills: opts.withSkills === true,
+        withIntegrate: opts.withIntegrate === true,
+        withHooks: opts.withHooks === true,
+        withAgentContext: opts.withAgentContext === true,
         integrations,
         integrateGate,
       });
