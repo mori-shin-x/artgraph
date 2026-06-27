@@ -65,8 +65,8 @@ Single project (per [plan.md](./plan.md) Project Structure):
 
 > **NOTE: Write these tests FIRST, ensure they FAIL before implementation in Phase 3**
 
-- [ ] T005 [P] [US3] Write `tests/skills-templates.test.ts` — メタテストで全 SKILL.md を walk: (a) frontmatter に `name` `description` 必須、(b) `name === directory name`、(c) description ≤ 1024 chars、(d) body ≤ 100 行、(e) 4 既存 Skill が `_shared/install-check.md` への markdown link を含む、(f) `allowed-tools` 配列要素が `<Name>(...)` 形式、(g) 全 Skill description が unique (FR-008, FR-009, FR-010, FR-011)
-- [ ] T006 [P] [US1] Extend `tests/init.test.ts` — `--integrate=auto` フラグ追加: (a) SDD ツール検出ゼロで no-op (exit 0)、(b) Spec Kit のみ検出で speckit integrate 実行、(c) Spec Kit + Kiro 両方で両方 integrate、(d) `--integrate=auto` と `--integrate=speckit,kiro` の同時指定はエラー (FR-003, R11)
+- [ ] T005 [P] [US3] Write `tests/skills-templates.test.ts` — メタテストで全 SKILL.md を walk: (a) frontmatter に `name` `description` 必須、(b) `name === directory name`、(c) description ≤ 1024 chars、(d) body ≤ 100 行、(e) 4 既存 Skill が `_shared/install-check.md` への markdown link を含む、(f) `allowed-tools` 配列要素が `<Name>(...)` 形式、(g) 全 Skill description が unique (FR-008, FR-009, FR-010, FR-011, FR-028 — Skill template format invariants)
+- [ ] T006 [P] [US1] Extend `tests/init.test.ts` — `--integrate=auto` フラグ追加: (a) SDD ツール検出ゼロで no-op (exit 0)、(b) Spec Kit のみ検出で speckit integrate 実行、(c) Spec Kit + Kiro 両方で両方 integrate、(d) `--integrate=auto` と `--integrate=speckit,kiro` の同時指定はエラー (FR-003, FR-028 — --integrate auto coverage, R11)
 - [ ] T007 [P] [US3] Write `tests/integrate-cli.test.ts` の `integrate list` カバレッジ拡張 — 出力に既存 provider (speckit, kiro) + 将来追加分 (openspec は Phase 6 で追加) が含まれること、`detected` / `installed` フィールドが正しいこと (FR-006)
 
 ### Implementation for Phase 3
@@ -78,22 +78,22 @@ Single project (per [plan.md](./plan.md) Project Structure):
 
 #### 既存 4 Skill のディレクトリ化 + リライト (US3)
 
-- [ ] T010 [P] [US3] Migrate `templates/skills/artgraph-plan.md` → `templates/skills/artgraph-plan/SKILL.md`. 100 行以下に短縮。冒頭の install 確認ブロックを `[install-check](../_shared/install-check.md) を参照` に置換。frontmatter の `description` を [contracts/skill-frontmatter.md](./contracts/skill-frontmatter.md) の `artgraph-plan` 行 (English, third person + push) に更新。`allowed-tools: ["Bash(npx artgraph *)", "Bash(artgraph *)"]` を追加 (FR-008, FR-009, FR-010, FR-011)
-- [ ] T011 [P] [US3] Migrate `templates/skills/artgraph-verify.md` → `templates/skills/artgraph-verify/SKILL.md` (T010 と同じ規約)
-- [ ] T012 [P] [US3] Migrate `templates/skills/artgraph-coverage.md` → `templates/skills/artgraph-coverage/SKILL.md` (T010 と同じ規約)
-- [ ] T013 [P] [US3] Migrate `templates/skills/artgraph-rename.md` → `templates/skills/artgraph-rename/SKILL.md` + `references/lifecycle-flows.md` (split/merge の詳細手順を分離して SKILL.md を 100 行以下に保つ progressive disclosure)
+- [ ] T010 [P] [US3] Migrate `templates/skills/artgraph-plan.md` → `templates/skills/artgraph-plan/SKILL.md`. 100 行以下に短縮。冒頭の install 確認ブロックを `[install-check](../_shared/install-check.md) を参照` に置換。frontmatter の `description` を [contracts/skill-frontmatter.md](./contracts/skill-frontmatter.md) の `artgraph-plan` 行 (English, third person + push) に更新。`allowed-tools: ["Bash(npx artgraph *)", "Bash(artgraph *)"]` を追加 (FR-008, FR-009, FR-010, FR-011, R10)
+- [ ] T011 [P] [US3] Migrate `templates/skills/artgraph-verify.md` → `templates/skills/artgraph-verify/SKILL.md` (T010 と同じ規約: FR-008, FR-009, FR-010, FR-011, R10)
+- [ ] T012 [P] [US3] Migrate `templates/skills/artgraph-coverage.md` → `templates/skills/artgraph-coverage/SKILL.md` (T010 と同じ規約: FR-008, FR-009, FR-010, FR-011, R10)
+- [ ] T013 [P] [US3] Migrate `templates/skills/artgraph-rename.md` → `templates/skills/artgraph-rename/SKILL.md` + `references/lifecycle-flows.md` (split/merge の詳細手順を分離して SKILL.md を 100 行以下に保つ progressive disclosure。FR-008, FR-009, FR-010, FR-011, R10)
 - [ ] T014 [US3] Delete legacy flat files `templates/skills/artgraph-{plan,verify,coverage,rename}.md` (T010–T013 完了後)。同時に `installSkills()` のレガシー path 対応コード (T002 で残した互換層) を削除し、ディレクトリ形式のみサポートに簡素化
 
 #### 新規 Skill 追加 (US1, US2)
 
-- [ ] T015 [P] [US1] Create `templates/skills/artgraph-setup/SKILL.md` — description は [contracts/skill-frontmatter.md](./contracts/skill-frontmatter.md) の `artgraph-setup` 行。本文は: (a) install 確認 (`_shared/install-check.md` 参照)、(b) ユーザー同意取得、(c) `npm install -D artgraph` 実行、(d) `npx artgraph init --with-skills --integrate=auto --with-hooks --with-agent-context` 実行 (※ `--with-hooks` `--with-agent-context` は Phase 4 で実装されるため、現時点では `--with-skills --integrate=auto` まで)、(e) `artgraph check` で成功確認 (FR-001, FR-002, FR-004)。`allowed-tools: ["Bash(npm install*)", "Bash(npx artgraph *)", "Bash(artgraph *)"]`
-- [ ] T016 [P] [US2] Create `templates/skills/artgraph-integrate/SKILL.md` — description は contracts 通り。本文: (a) install 確認、(b) `artgraph integrate list` 実行で利用可能 provider 一覧、(c) 検出済 provider への integrate を提案 (per-tool で `--gate` 採否を確認)、(d) `artgraph integrate <tool>` 実行 (FR-005, FR-006)。`allowed-tools: ["Bash(npx artgraph *)", "Bash(artgraph *)"]`
-- [ ] T017 [P] [US2] Create `templates/skills/artgraph-detect/SKILL.md` — description は contracts 通り。本文: (a) `command -v artgraph` で CLI 確認、(b) 未導入なら `artgraph-setup` 提案、(c) 導入済なら `.artgraph.json` / `.specify/extensions/artgraph/` / `.kiro/steering/artgraph.md` / `openspec/schemas/artgraph/` / `.claude/skills/artgraph-*` の存在を確認して要約 (FR-007)。`allowed-tools: ["Bash(npx artgraph *)", "Bash(artgraph *)", "Bash(ls *)", "Bash(test *)"]`
+- [ ] T015 [P] [US1] Create `templates/skills/artgraph-setup/SKILL.md` — description は [contracts/skill-frontmatter.md](./contracts/skill-frontmatter.md) の `artgraph-setup` 行。本文は: (a) install 確認 (`_shared/install-check.md` 参照)、(b) ユーザー同意取得、(c) `npm install -D artgraph` 実行、(d) `npx artgraph init --with-skills --integrate=auto --with-hooks --with-agent-context` 実行 (※ `--with-hooks` `--with-agent-context` は Phase 4 で実装されるため、現時点では `--with-skills --integrate=auto` まで)、(e) `artgraph check` で成功確認、(f) **`npm install` がネットワーク不通等で失敗した場合は stderr を user に報告して終了 — リトライ判断はユーザーに委ねる** (EC9 対応) (FR-001, FR-002, FR-004, R10)。`allowed-tools: ["Bash(npm install*)", "Bash(npx artgraph *)", "Bash(artgraph *)"]`
+- [ ] T016 [P] [US2] Create `templates/skills/artgraph-integrate/SKILL.md` — description は contracts 通り。本文: (a) install 確認、(b) `artgraph integrate list` 実行で利用可能 provider 一覧、(c) 検出済 provider への integrate を提案 (per-tool で `--gate` 採否を確認)、(d) `artgraph integrate <tool>` 実行 (FR-005, FR-006, R10)。`allowed-tools: ["Bash(npx artgraph *)", "Bash(artgraph *)"]`
+- [ ] T017 [P] [US2] Create `templates/skills/artgraph-detect/SKILL.md` — description は contracts 通り。本文: (a) `command -v artgraph` で CLI 確認、(b) 未導入なら `artgraph-setup` 提案、(c) 導入済なら `.artgraph.json` / `.specify/extensions/artgraph/` / `.kiro/steering/artgraph.md` / `openspec/schemas/artgraph/` / `.claude/skills/artgraph-*` の存在を確認して要約 (FR-007, R10)。`allowed-tools: ["Bash(npx artgraph *)", "Bash(artgraph *)", "Bash(ls *)", "Bash(test *)"]`
 
 #### ドキュメント (US1, US2, US3)
 
-- [ ] T018 [US3] Update `docs/skills-guide.md` — 既存 4 Skill のセクションは内容変わらず参照パスを `.claude/skills/<name>/SKILL.md` 形式に更新。冒頭の「セットアップ」節を `artgraph-setup` 経由のフローに置換。「Skills 一覧」を 7 つに拡張 (artgraph-{setup, integrate, detect, plan, verify, coverage, rename})。各 Skill description 文面を [contracts/skill-frontmatter.md](./contracts/skill-frontmatter.md) と同期 (FR-008 — DRY な docs)
-- [ ] T019 [US1] Update root `README.md` — "Claude Code skills" 節を新 Skill 含めて更新。Quickstart の冒頭に「Claude Code エージェントで artgraph をセットアップする」案内を追加 (`/artgraph-setup` で 1 コマンド完結)
+- [ ] T018 [P] [US3] Update `docs/skills-guide.md` — 既存 4 Skill のセクションは内容変わらず参照パスを `.claude/skills/<name>/SKILL.md` 形式に更新。冒頭の「セットアップ」節を `artgraph-setup` 経由のフローに置換。「Skills 一覧」を 7 つに拡張 (artgraph-{setup, integrate, detect, plan, verify, coverage, rename})。各 Skill description 文面を [contracts/skill-frontmatter.md](./contracts/skill-frontmatter.md) と同期 (FR-008 — DRY な docs)
+- [ ] T019 [P] [US1] Update root `README.md` — "Claude Code skills" 節を新 Skill 含めて更新。Quickstart の冒頭に「Claude Code エージェントで artgraph をセットアップする」案内を追加 (`/artgraph-setup` で 1 コマンド完結)
 
 **Checkpoint Phase 3**: P0 完了。`pnpm test` + `pnpm test:e2e` 通過。[quickstart.md](./quickstart.md) US1 / US2 / US3 を手動で走らせて成功。PR-A を出して issue #98 を close。
 
@@ -109,8 +109,8 @@ Single project (per [plan.md](./plan.md) Project Structure):
 
 ### Tests for Phase 4 (TDD) ⚠️
 
-- [ ] T020 [P] [US4] Write `tests/hooks-merge.test.ts` — 4 cases per [contracts/settings-merge.md](./contracts/settings-merge.md): (A) settings.json なし、(B) `{}`、(C) 他 hook あり Stop なし、(D) Stop hook 衝突 (exit 1)。`--force` を渡しても Case D で上書きしないことを assert (FR-012, FR-013)
-- [ ] T021 [P] [US4] Write `tests/agent-context-injection.test.ts` — (a) CLAUDE.md なしで作成、(b) 既存 CLAUDE.md に追記、(c) マーカー既存で更新、(d) 2 回実行で idempotent (diff なし)、(e) AGENTS.md にも同等動作、(f) スニペットが 30 行以下 (FR-014, FR-015)
+- [ ] T020 [P] [US4] Write `tests/hooks-merge.test.ts` — 4 cases per [contracts/settings-merge.md](./contracts/settings-merge.md): (A) settings.json なし、(B) `{}`、(C) 他 hook あり Stop なし、(D) Stop hook 衝突 (exit 1)。`--force` を渡しても Case D で上書きしないことを assert (FR-012, FR-013, FR-028 — --with-hooks, R4)
+- [ ] T021 [P] [US4] Write `tests/agent-context-injection.test.ts` — (a) CLAUDE.md なしで作成、(b) 既存 CLAUDE.md に追記、(c) マーカー既存で更新、(d) 2 回実行で idempotent (diff なし)、(e) AGENTS.md にも同等動作、(f) スニペットが 30 行以下 (FR-014, FR-015, FR-028 — --with-agent-context, R3)
 
 ### Implementation for Phase 4
 
@@ -118,13 +118,13 @@ Single project (per [plan.md](./plan.md) Project Structure):
 
 - [ ] T022 [P] [US4] Create `templates/hooks/settings.json.template` — 内容は [data-model.md](./data-model.md) E3 + [contracts/settings-merge.md](./contracts/settings-merge.md) の入力ソース節通り (Stop hook で `npx artgraph check --gate --diff` を登録)
 - [ ] T023 [P] [US4] Create `templates/hooks/pre-commit.sh.template` — husky/lefthook 利用者向けの参考スクリプト (本体は `npx artgraph check --gate --diff` を実行)。任意配布で、現フェーズでは `--with-hooks` から自動配置しない (将来の `--with-precommit` 用テンプレ予約)
-- [ ] T024 [P] [US4] Create `templates/agent-context/claude-md-snippet.md` — 30 行以下。`<!-- artgraph: BEGIN agent context -->` / `<!-- artgraph: END agent context -->` で囲った内容。Skills の使い方、`@impl` 文法、`artgraph impact` / `check` の呼びどころ、Skills 配置場所の 4 点を簡潔に (FR-014, [data-model.md](./data-model.md) E5)
+- [ ] T024 [P] [US4] Create `templates/agent-context/claude-md-snippet.md` — 30 行以下。`<!-- artgraph: BEGIN agent context -->` / `<!-- artgraph: END agent context -->` で囲った内容。Skills の使い方、`@impl` 文法、`artgraph impact` / `check` の呼びどころ、Skills 配置場所の 4 点を簡潔に (FR-014, R3, [data-model.md](./data-model.md) E5)
 - [ ] T025 [P] [US4] Create `templates/agent-context/agents-md-snippet.md` — 同上スニペット (OpenSpec / Kiro / 他エージェント共通プロトコル AGENTS.md 用)
 
 #### `installHooks()` 実装 (US4)
 
-- [ ] T026 [US4] Implement `installHooks(targetDir)` in `src/init.ts` per [contracts/settings-merge.md](./contracts/settings-merge.md) implementation guide. Case A/B/C は merge して exit 0、Case D は警告 + exit 1。 `--force` 不問 (settings.json merge は常に fail-on-conflict)
-- [ ] T027 [US4] Implement `installAgentContext(targetDir)` in `src/init.ts` — CLAUDE.md / AGENTS.md のターゲットファイル走査、HTML マーカー検出、idempotent 注入。両ファイル無ければ CLAUDE.md を新規作成 (FR-015)
+- [ ] T026 [US4] Implement `installHooks(targetDir)` in `src/init.ts` per [contracts/settings-merge.md](./contracts/settings-merge.md) implementation guide. Case A/B/C は merge して exit 0、Case D は警告 + exit 1。 `--force` 不問 (settings.json merge は常に fail-on-conflict、R4)
+- [ ] T027 [US4] Implement `installAgentContext(targetDir)` in `src/init.ts` — CLAUDE.md / AGENTS.md のターゲットファイル走査、HTML マーカー検出、idempotent 注入。両ファイル無ければ CLAUDE.md を新規作成 (FR-015, R3)
 
 #### CLI フラグ wire-up (US4)
 
@@ -150,15 +150,15 @@ Single project (per [plan.md](./plan.md) Project Structure):
 
 ### Tests for Phase 5 (TDD) ⚠️
 
-- [ ] T032 [P] [US6] Write `tests/plugin-manifest.test.ts` per [contracts/plugin-manifest.md](./contracts/plugin-manifest.md) CI 検証節: (1) plugin.json が valid JSON、(2) `name === "artgraph"`、(3) `plugin.json.version === package.json.version`、(4) `plugin.json.skills` が物理的に存在、(5) `plugin.json.hooks` が物理的に存在、(6) marketplace.json が valid JSON、(7) `marketplace.json.plugins[0].name === "artgraph"`、(8) `hooks/hooks.json` の Stop hook command が `npx artgraph` で始まる、(9) plugin.json と marketplace.json の version 一致 (FR-018)
+- [ ] T032 [P] [US6] Write `tests/plugin-manifest.test.ts` per [contracts/plugin-manifest.md](./contracts/plugin-manifest.md) CI 検証節: (1) plugin.json が valid JSON、(2) `name === "artgraph"`、(3) `plugin.json.version === package.json.version`、(4) `plugin.json.skills` が物理的に存在、(5) `plugin.json.hooks` が物理的に存在、(6) marketplace.json が valid JSON、(7) `marketplace.json.plugins[0].name === "artgraph"`、(8) `hooks/hooks.json` の Stop hook command が `npx artgraph` で始まる、(9) plugin.json と marketplace.json の version 一致、(10) **Plugin install + `init --with-skills` の共存テスト**: project-local `.claude/skills/<name>/SKILL.md` と user-global `~/.claude/plugins/cache/.../skills/<name>/SKILL.md` が同時存在する場合、Claude Code の優先順位 (project local > user global) に従って Skill が解決されることを確認する fixture (EC6 対応) (FR-018)
 
 ### Implementation for Phase 5
 
-- [ ] T033 [P] [US6] Create `.claude-plugin/plugin.json` per [contracts/plugin-manifest.md](./contracts/plugin-manifest.md). `version` は現 `package.json#version` と同期。`skills: "./templates/skills/"` (FR-017, FR-018, R6)
-- [ ] T034 [P] [US6] Create `.claude-plugin/marketplace.json` per contracts. `name: "artgraph-marketplace"`、`plugins[0].source: "./"`
-- [ ] T035 [P] [US6] Create `hooks/hooks.json` per contracts. Stop hook で `npx artgraph check --gate --diff` を実行 (FR-019)
-- [ ] T036 [US6] Add `claude plugin validate .` step to `.github/workflows/ci.yml` (existing CI workflow に追加。`claude` CLI を CI に install するステップも必要 — npm `@anthropic/claude-cli` または同等パッケージから)。Plugin manifest 変更時のみ走らせる path filter を設定 (FR-020)
-- [ ] T037 [US6] Update root `README.md` — "Installation" 節に Plugin 経由 install 手順を追加 (`/plugin marketplace add ShintaroMorimoto/artgraph` → `/plugin install artgraph@artgraph-marketplace`)。npm 経由とどちらも選べることを明記
+- [ ] T033 [P] [US6] Create `.claude-plugin/plugin.json` per [contracts/plugin-manifest.md](./contracts/plugin-manifest.md). `version` は現 `package.json#version` と同期。`skills: "./templates/skills/"` (FR-017, FR-018, R5, R6)
+- [ ] T034 [P] [US6] Create `.claude-plugin/marketplace.json` per contracts. `name: "artgraph-marketplace"`、`plugins[0].source: "./"` (R5)
+- [ ] T035 [P] [US6] Create `hooks/hooks.json` per contracts. Stop hook で `npx artgraph check --gate --diff` を実行 (FR-019, R12)
+- [ ] T036 [P] [US6] Add `claude plugin validate .` step to `.github/workflows/ci.yml` (existing CI workflow に追加。`claude` CLI を CI に install するステップも必要 — npm `@anthropic/claude-cli` または同等パッケージから)。Plugin manifest 変更時のみ走らせる path filter を設定 (FR-020)
+- [ ] T037 [P] [US6] Update root `README.md` — "Installation" 節に Plugin 経由 install 手順を追加 (`/plugin marketplace add ShintaroMorimoto/artgraph` → `/plugin install artgraph@artgraph-marketplace`)。npm 経由とどちらも選べることを明記
 
 **Checkpoint Phase 5**: P2 完了。`pnpm test` 通過 + 別 repo で smoke test (Plugin install → skill が `~/.claude/plugins/cache/.../skills/` に存在)。PR-C を出してマージ。
 
@@ -176,15 +176,15 @@ Single project (per [plan.md](./plan.md) Project Structure):
 
 - [ ] T038 [P] [US7] Write `tests/speckit-extension-command.test.ts` per [contracts/speckit-extension-command.md](./contracts/speckit-extension-command.md) テスト表: (a) `artgraph.scan-reconcile.md` 本文に `ARTGRAPH:` prefix 例、(b) `npx artgraph scan` + `npx artgraph reconcile` 呼び出し、(c) emit 指示 ("emit a single line")、(d) `templates/integrate/speckit/README.md` に troubleshooting セクション、(e) `extension.yml#requires.speckit_version` が `>=0.11.0` 以上 (FR-021, FR-022, FR-023)
 - [ ] T039 [P] [US8] Extend `tests/integrate-cli.test.ts` with `integrate kiro --with-hooks` case: 実行後に `.kiro/hooks/artgraph-verify.json` が配備されること、再実行で `--force` なしは no-op、`--force` で再配備 (FR-024)
-- [ ] T040 [P] [US8] Extend `tests/integrate-cli.test.ts` with `integrate openspec` case: `openspec/` が存在する fixture 上で実行、`openspec/schemas/artgraph/schema.yaml` + `templates/<phase>.md` が配備されることを assert。`openspec/` が無い fixture で no-op (FR-025, FR-026)
+- [ ] T040 [P] [US8] Extend `tests/integrate-cli.test.ts` with `integrate openspec` case: `openspec/` が存在する fixture 上で実行、`openspec/schemas/artgraph/schema.yaml` + `templates/<phase>.md` が配備されることを assert。`openspec/` が無い fixture で no-op。**`--force` 再配備** (既存 schema を上書き) と **`--force` なし再実行** (no-op で配備済を保つ) の両ケースを assert (EC7 補強) (FR-025, FR-026, FR-028 — integrate openspec)
 
 ### Implementation for Phase 6
 
 #### Spec Kit hook 出力消費型化 (US7)
 
-- [ ] T041 [US7] Edit `templates/integrate/speckit/commands/artgraph.scan-reconcile.md` per [contracts/speckit-extension-command.md](./contracts/speckit-extension-command.md) の改修後構造。`ARTGRAPH: {"reconciled": N, "drift": M}` 形式の 1 行 JSON サマリ emit を明示的に指示 (FR-021)
-- [ ] T042 [US7] Edit `templates/integrate/speckit/README.md` — "Troubleshooting" セクション追加: Spec Kit Issue #2730 への言及、`/artgraph.scan-reconcile` 手動実行のフォールバック手順 (FR-022)
-- [ ] T043 [US7] Verify `templates/integrate/speckit/extension.yml` の `requires.speckit_version: ">=0.11.0"` — 既存値の確認 (PR #1702 / #1886 / #2713 が含まれるバージョン以降)。必要があれば update (FR-023)
+- [ ] T041 [P] [US7] Edit `templates/integrate/speckit/commands/artgraph.scan-reconcile.md` per [contracts/speckit-extension-command.md](./contracts/speckit-extension-command.md) の改修後構造。`ARTGRAPH: {"reconciled": N, "drift": M}` 形式の 1 行 JSON サマリ emit を明示的に指示 (FR-021, R7)
+- [ ] T042 [P] [US7] Edit `templates/integrate/speckit/README.md` — "Troubleshooting" セクション追加: Spec Kit Issue #2730 への言及、`/artgraph.scan-reconcile` 手動実行のフォールバック手順 (FR-022, R7)
+- [ ] T043 [P] [US7] Verify `templates/integrate/speckit/extension.yml` の `requires.speckit_version: ">=0.11.0"` — 既存値の確認 (PR #1702 / #1886 / #2713 が含まれるバージョン以降)。必要があれば update (FR-023)
 
 #### Kiro Smart Hook (US8)
 
@@ -194,7 +194,7 @@ Single project (per [plan.md](./plan.md) Project Structure):
 
 #### OpenSpec 統合 (US8)
 
-- [ ] T047 [P] [US8] Create `templates/integrate/openspec/schemas/artgraph/schema.yaml` — OpenSpec community schema 形式 (Fission-AI/OpenSpec の `docs/customization.md` 規約)。`apply` フェーズの verify ステップで `npx artgraph check --diff` を必須化 (FR-026)
+- [ ] T047 [P] [US8] Create `templates/integrate/openspec/schemas/artgraph/schema.yaml` — OpenSpec community schema 形式 (Fission-AI/OpenSpec の `docs/customization.md` 規約)。`apply` フェーズの verify ステップで `npx artgraph check --diff` を必須化 (FR-026, R9)
 - [ ] T048 [P] [US8] Create `templates/integrate/openspec/schemas/artgraph/templates/apply-verify.md` — `/opsx:apply` 時に AI agent が読む verify step 説明 markdown
 - [ ] T049 [P] [US8] Create `templates/integrate/openspec/README.md` — install / uninstall / schema 利用方法の説明
 - [ ] T050 [US8] Implement `src/integrate/providers/openspec.ts` — `detect()` (`openspec/` ディレクトリの存在チェック)、`install()` (`templates/integrate/openspec/schemas/artgraph/*` を `openspec/schemas/artgraph/` にコピー)、`isInstalled()`、`uninstall()`。既存 `SpecKitProvider` / `KiroProvider` のパターンを継承 (FR-025)
@@ -216,7 +216,7 @@ Single project (per [plan.md](./plan.md) Project Structure):
 - [ ] T057 Manual walk through of [quickstart.md](./quickstart.md) US1–US8 in a clean `/tmp` repo per US section
 - [ ] T058 [P] Run `pnpm knip` and confirm no unused exports / files
 - [ ] T059 [P] Update `CHANGELOG.md` — 各 PR phase ごとにエントリ追加 (`Added: artgraph-setup, artgraph-integrate, artgraph-detect Skills` / `Added: --with-hooks --with-agent-context init flags` / `Added: Plugin distribution via .claude-plugin/` / `Added: OpenSpec integration, Kiro Smart Hook, Spec Kit #2730 fix`)
-- [ ] T060 Re-evaluate Constitution Check post-implementation (plan.md の Constitution Check section が現実装と整合することを確認、Complexity Tracking が空のままであることを確認)
+- [ ] T060 Re-evaluate Constitution Check post-implementation (plan.md の Constitution Check section が現実装と整合することを確認、Complexity Tracking が空のままであることを確認、FR-027 「No Skill MAY auto-commit lock files, auto-claim `@impl` tags, or write to the artifact graph without explicit `artgraph reconcile` / `rename` invocation」の遵守を実装で確認) (FR-027)
 
 ---
 
@@ -254,6 +254,7 @@ Single project (per [plan.md](./plan.md) Project Structure):
 - T005, T006, T007 (テスト) が並列実行可
 - T010, T011, T012, T013 (既存 4 Skill のリライト) が並列実行可
 - T015, T016, T017 (新規 3 Skill 作成) が並列実行可
+- T018, T019 (docs/skills-guide.md と README.md 更新、異なるファイル) が並列実行可
 
 **Phase 4**:
 - T020, T021 (テスト) が並列実行可
@@ -262,9 +263,11 @@ Single project (per [plan.md](./plan.md) Project Structure):
 
 **Phase 5**:
 - T033, T034, T035 (Plugin マニフェスト 3 ファイル) が並列実行可
+- T036, T037 (CI 設定追加 と README 更新、異なるファイル) が並列実行可 (ただし T036 は T033–T035 完了に依存)
 
 **Phase 6**:
 - T038, T039, T040 (テスト) が並列実行可
+- T041, T042, T043 (Spec Kit 配下の異なるファイルを編集) が並列実行可
 - T044, T047, T048, T049 (Kiro hook + OpenSpec テンプレ) が並列実行可
 
 **Phase 7**:

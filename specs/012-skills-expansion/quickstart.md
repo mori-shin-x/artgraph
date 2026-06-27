@@ -392,7 +392,7 @@ pnpm test                  # tests/plugin-manifest.test.ts pass
 
 ```bash
 mkdir -p /tmp/aw-us7 && cd /tmp/aw-us7
-specify init --here --ai claude  # Spec Kit v0.11.9+ で実行
+specify init --here --ai claude  # Spec Kit ≥ v0.11.0 (実測時は最新 v0.11.9 を使用)
 echo '{"name":"aw-us7","type":"module"}' > package.json
 npm install -D /path/to/skills-expansion
 npx artgraph init --with-skills --integrate=speckit
