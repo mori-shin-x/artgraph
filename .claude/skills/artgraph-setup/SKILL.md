@@ -3,8 +3,8 @@ name: "artgraph-setup"
 description: "Installs artgraph in the current project, detects the package manager (npm / pnpm / Bun / Deno; Yarn falls back to npm with a warning), and wires up Skills, hooks, agent-context snippet, and any detected SDD-tool integration in one turn. Use when the user asks to install / set up / add artgraph. Make sure to use this skill whenever the user mentions artgraph for the first time and `artgraph` CLI is not yet available."
 allowed-tools:
   - "Bash(npm install*)"
+  - "Bash(npm i*)"
   - "Bash(pnpm add*)"
-  - "Bash(bun install*)"
   - "Bash(bun add*)"
   - "Bash(deno add*)"
   - "Bash(npx artgraph *)"
@@ -21,66 +21,54 @@ disable-model-invocation: false
 
 ## Purpose
 
-This Skill installs artgraph using the project's detected package manager and runs `artgraph init` to lay down the full agent-native setup — Skills, hooks, agent-context snippet, and SDD-tool integration — in a single turn.
+Installs artgraph using the project's detected package manager and runs `artgraph init` to lay down the full agent-native setup — Skills, hooks, agent-context snippet, and SDD-tool integration — in a single turn.
 
 ## Steps
 
+Every Bash tool call is a **fresh shell** — variables do not persist across calls. Each step below is one self-contained Bash invocation; carry the detected PM across steps as plain text in your reasoning, not as a shell variable.
+
 ### 1. Confirm CLI is not yet installed
 
-See [install-check](../_shared/install-check.md). For this Skill, the probe is expected to FAIL — if it succeeds (CLI already on PATH or installed locally), tell the user "artgraph is already installed" and stop. The user probably wanted the `artgraph-detect` Skill instead.
+See [install-check](../_shared/install-check.md). For this Skill the probe is expected to FAIL — if it succeeds (CLI already on PATH or installed locally), tell the user "artgraph is already installed" and stop. They probably wanted the `artgraph-detect` Skill instead.
 
 ### 2. Detect the package manager
 
-See [package-manager detection](../_shared/package-manager.md). Run the `detect_package_manager` bash function and capture the result:
+Run this whole block as one Bash call. Lockfile-only detection covers the common cases; for finer rules (Corepack `packageManager` field, etc.) see [package-manager](../_shared/package-manager.md), and if that disagrees with the lockfile result, ask the user.
 
 ```bash
-PM=$(detect_package_manager) || { echo "Could not detect package manager"; exit 1; }
-echo "Detected: $PM"
+if [ -f bun.lockb ] || [ -f bun.lock ]; then echo "Detected: bun"
+elif [ -f pnpm-lock.yaml ]; then echo "Detected: pnpm"
+elif [ -f yarn.lock ]; then echo "WARN: yarn.lock found; falling back to npm (Yarn not in supported PM matrix yet)" >&2; echo "Detected: npm"
+elif [ -f deno.lock ] && [ ! -f package.json ]; then echo "Detected: deno"
+elif [ -f package-lock.json ] || [ -f package.json ]; then echo "Detected: npm"
+elif [ -f deno.json ] || [ -f deno.jsonc ]; then echo "Detected: deno"
+else echo "ERROR: cannot detect package manager; ask the user which to use (npm / pnpm / bun / deno)" >&2; exit 1
+fi
 ```
 
-If detection emits a WARNING to stderr (e.g. Yarn fallback), pass it on to the user verbatim.
+Pass any `WARN:` / `ERROR:` line to the user verbatim. On error, ask which PM (npm / pnpm / bun / deno) and use that answer for the rest of the steps. Remember the chosen PM for steps 3-6.
 
 ### 3. Get explicit user consent
 
-Show the user:
-- The detected PM
-- The install command (`<PM> install -D artgraph` per the mapping in [package-manager.md](../_shared/package-manager.md))
-- The follow-up `<PM-exec> artgraph init` command (which runs the full default setup — Skills + integrate-auto + Stop hook + agent context)
+Look up the detected PM in this table and show the user the three commands that will run. Wait for confirmation before proceeding; if the user declines, exit and tell them they can run the commands manually.
 
-Wait for confirmation before proceeding. If the user declines, exit and tell them they can run the commands manually.
+| PM | install | init | check |
+| --- | --- | --- | --- |
+| npm | `npm install -D artgraph` | `npx artgraph init` | `npx artgraph check` |
+| pnpm | `pnpm add -D artgraph` | `pnpm exec artgraph init` | `pnpm exec artgraph check` |
+| bun | `bun add -d artgraph` | `bunx artgraph init` | `bunx artgraph check` |
+| deno | `deno add npm:artgraph` | `deno run -A npm:artgraph/cli init` | `deno run -A npm:artgraph/cli check` |
+
+`init` runs the full default flow (config + scan + Skills + integrate-auto for detected SDD tools + Stop hook + agent context).
 
 ### 4. Install the CLI
 
-Run the install command for the detected PM:
-
-```bash
-case "$PM" in
-  npm)   npm install -D artgraph ;;
-  pnpm)  pnpm add -D artgraph ;;
-  bun)   bun install -D artgraph ;;
-  deno)  deno add npm:artgraph ;;
-esac
-```
-
-If install fails (network error, registry timeout, etc.), report the stderr to the user and stop. Do not retry without consent.
+Pick the row in the table above for the detected PM and run the **install** command as one Bash call. If install fails (network, registry timeout, lockfile conflict, etc.), report the stderr to the user and stop. Do not retry without consent.
 
 ### 5. Run init
 
-```bash
-case "$PM" in
-  npm)   npx artgraph init ;;
-  pnpm)  pnpm exec artgraph init ;;
-  bun)   bunx artgraph init ;;
-  deno)  deno run -A npm:artgraph/cli init ;;
-esac
-```
-
-`init` runs the full default flow (config + scan + Skills + integrate-auto for detected SDD tools + Stop hook + agent context). If a step fails, init exits 1 with stderr explaining which; surface that to the user without retry.
+Run the **init** command from the same row as one Bash call. On non-zero exit, surface the stderr to the user without retry — `init` reports which sub-step failed (config / scan / Skills / integrate / hook / agent context).
 
 ### 6. Verify
 
-```bash
-<PM-exec> artgraph check
-```
-
-A clean exit confirms the install succeeded and the project's traceability graph reconciled without drift. Report the result to the user.
+Run the **check** command from the same row as one Bash call. A clean exit confirms the install succeeded and the project's traceability graph reconciled without drift. Report the result to the user.

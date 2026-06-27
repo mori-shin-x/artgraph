@@ -1,9 +1,12 @@
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
+  rmdirSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join, relative, resolve } from "node:path";
@@ -57,6 +60,16 @@ export interface InitResult {
    * init itself but are surfaced in the CLI output.
    */
   integrationWarnings?: string[];
+  /**
+   * Number of integration providers that threw an exception during
+   * `runRequestedIntegrations`. This is distinct from `integrationWarnings`
+   * (which also covers "not detected, skipping" no-ops); only hard provider
+   * failures are counted here. The CLI uses this to translate provider
+   * failures into a non-zero exit code, per
+   * `specs/012-skills-expansion/contracts/cli-flags.md` ("statement step
+   * failure" must exit 1).
+   */
+  integrationFailureCount?: number;
 }
 
 export function detectProject(rootDir: string): DetectionResult {
@@ -108,6 +121,9 @@ interface SkillTemplate {
 
 function walkDir(root: string, current: string, out: string[]): void {
   for (const entry of readdirSync(current)) {
+    // Skip hidden entries (e.g. .DS_Store, .git) so junk files dropped into
+    // templates/skills/ never end up copied into the user's repo.
+    if (entry.startsWith(".")) continue;
     const full = join(current, entry);
     const stat = statSync(full);
     if (stat.isDirectory()) {
@@ -161,10 +177,36 @@ function findConflicts(destDir: string, templates: SkillTemplate[]): string[] {
   const conflicts: string[] = [];
   for (const t of templates) {
     for (const rel of t.files) {
-      if (existsSync(join(destDir, rel))) conflicts.push(rel);
+      const dst = join(destDir, rel);
+      let s: ReturnType<typeof lstatSync> | undefined;
+      try {
+        s = lstatSync(dst);
+      } catch {
+        // ENOENT (or any stat failure): treat as no conflict and let the
+        // copy step surface the real error if there is one.
+        continue;
+      }
+      if (s.isSymbolicLink()) {
+        // Refuse to follow symlinks even with --force: copyFileSync would
+        // overwrite the symlink target (potentially a sensitive file
+        // outside the skills tree). Always flag as a hard conflict.
+        conflicts.push(`${rel} (symlink — refusing to overwrite)`);
+      } else {
+        conflicts.push(rel);
+      }
     }
   }
   return conflicts;
+}
+
+/**
+ * Returns true if any symlink-flagged conflict is present in the list
+ * produced by `findConflicts`. Symlink conflicts are non-overridable: even
+ * `--force` must refuse them to avoid clobbering files outside the skills
+ * tree via a malicious or accidental symlink.
+ */
+function hasSymlinkConflict(conflicts: string[]): boolean {
+  return conflicts.some((c) => c.includes("(symlink"));
 }
 
 // Throws if installation cannot proceed cleanly. Mirrors installSkills's
@@ -176,13 +218,20 @@ export function validateSkillsInstall(rootDir: string, options: SkillsInstallOpt
   const templateDir = options.templateDir ?? SKILLS_TEMPLATE_DIR;
   const templates = readSkillTemplates(templateDir);
 
-  if (!options.force) {
-    const conflicts = findConflicts(destDir, templates);
-    if (conflicts.length > 0) {
-      throw new SkillsInstallError(
-        `Skill file(s) already exist in ${SKILLS_DEST_SUBDIR}: ${conflicts.join(", ")}. Use --force to overwrite.`,
-      );
-    }
+  const conflicts = findConflicts(destDir, templates);
+  // Symlinks are NEVER overwritten, even with --force. copyFileSync would
+  // follow them and clobber whatever they point at, which is a security
+  // hazard outside the skills tree.
+  if (hasSymlinkConflict(conflicts)) {
+    const symlinks = conflicts.filter((c) => c.includes("(symlink"));
+    throw new SkillsInstallError(
+      `Refusing to overwrite symlink(s) in ${SKILLS_DEST_SUBDIR}: ${symlinks.join(", ")}. Remove the symlink(s) and rerun.`,
+    );
+  }
+  if (!options.force && conflicts.length > 0) {
+    throw new SkillsInstallError(
+      `Skill file(s) already exist in ${SKILLS_DEST_SUBDIR}: ${conflicts.join(", ")}. Use --force to overwrite.`,
+    );
   }
 }
 
@@ -192,33 +241,69 @@ export function installSkills(rootDir: string, options: SkillsInstallOptions = {
   const templateDir = options.templateDir ?? SKILLS_TEMPLATE_DIR;
   const templates = readSkillTemplates(templateDir);
 
-  if (!options.force) {
-    const conflicts = findConflicts(destDir, templates);
-    if (conflicts.length > 0) {
-      throw new SkillsInstallError(
-        `Skill file(s) already exist in ${SKILLS_DEST_SUBDIR}: ${conflicts.join(", ")}. Use --force to overwrite.`,
-      );
-    }
+  const conflicts = findConflicts(destDir, templates);
+  // Symlinks: refuse always (see validateSkillsInstall).
+  if (hasSymlinkConflict(conflicts)) {
+    const symlinks = conflicts.filter((c) => c.includes("(symlink"));
+    throw new SkillsInstallError(
+      `Refusing to overwrite symlink(s) in ${SKILLS_DEST_SUBDIR}: ${symlinks.join(", ")}. Remove the symlink(s) and rerun.`,
+    );
+  }
+  if (!options.force && conflicts.length > 0) {
+    throw new SkillsInstallError(
+      `Skill file(s) already exist in ${SKILLS_DEST_SUBDIR}: ${conflicts.join(", ")}. Use --force to overwrite.`,
+    );
   }
 
-  mkdirSync(destDir, { recursive: true });
+  // Track every absolute path we wrote and every directory we created so
+  // that a mid-loop failure can roll back to the pre-install state. Without
+  // this, a partial copy leaves orphan files in `.claude/skills/` that the
+  // user then has to clean up by hand before retrying.
+  const writtenAbs: string[] = [];
+  const dirsCreated: string[] = [];
+
+  const ensureDir = (path: string): void => {
+    if (existsSync(path)) return;
+    mkdirSync(path, { recursive: true });
+    dirsCreated.push(path);
+  };
+
+  ensureDir(destDir);
   const installed: string[] = [];
-  for (const t of templates) {
-    for (const rel of t.files) {
-      const src = join(templateDir, rel);
-      const dst = join(destDir, rel);
-      try {
-        mkdirSync(join(dst, ".."), { recursive: true });
+  let currentRel = "";
+  try {
+    for (const t of templates) {
+      for (const rel of t.files) {
+        currentRel = rel;
+        const src = join(templateDir, rel);
+        const dst = join(destDir, rel);
+        ensureDir(join(dst, ".."));
         copyFileSync(src, dst);
+        writtenAbs.push(dst);
         installed.push(join(SKILLS_DEST_SUBDIR, rel));
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        throw new SkillsInstallError(
-          `Failed to copy ${rel} into ${SKILLS_DEST_SUBDIR}: ${msg}`,
-          installed,
-        );
       }
     }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // Roll back in reverse order: files first, then empty directories.
+    for (const f of [...writtenAbs].reverse()) {
+      try {
+        unlinkSync(f);
+      } catch {
+        // best-effort cleanup
+      }
+    }
+    for (const d of [...dirsCreated].reverse()) {
+      try {
+        rmdirSync(d);
+      } catch {
+        // best-effort: leave non-empty dirs (likely held user content)
+      }
+    }
+    throw new SkillsInstallError(
+      `Failed to copy ${currentRel} into ${SKILLS_DEST_SUBDIR}: ${msg}`,
+      installed,
+    );
   }
   return installed;
 }
@@ -232,7 +317,7 @@ export function installSkills(rootDir: string, options: SkillsInstallOptions = {
  * `--no-*` flags opt out of individual stages in the default mode.
  * Explicit `integrations` (non-empty) also acts as an opt-in under `--minimal`.
  */
-function computeStageGates(opts: InitOptions): {
+export function computeStageGates(opts: InitOptions): {
   scan: boolean;
   skills: boolean;
   integrate: boolean;
@@ -330,7 +415,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
 
   const integration = stages.integrate
     ? runRequestedIntegrations(abs, detection, options)
-    : {};
+    : { failureCount: 0 };
 
   if (stages.hooks) {
     installHooks(abs, { force: options.force });
@@ -349,6 +434,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     skillsInstalled,
     integrationResults: integration.results,
     integrationWarnings: integration.warnings,
+    integrationFailureCount: integration.failureCount > 0 ? integration.failureCount : undefined,
   };
 }
 
@@ -368,7 +454,7 @@ function runRequestedIntegrations(
   rootDir: string,
   detection: DetectionResult,
   options: InitOptions,
-): { results?: IntegrateResult[]; warnings?: string[] } {
+): { results?: IntegrateResult[]; warnings?: string[]; failureCount: number } {
   // Resolve the requested ids. Empty array also triggers auto-mode.
   const statuses = detection.integrations ?? [];
   let requested: IntegrationProviderId[];
@@ -378,10 +464,14 @@ function runRequestedIntegrations(
     // Auto-detect (default behavior). "all" sentinel also lands here.
     requested = statuses.filter((s) => s.detected).map((s) => s.providerId);
   }
-  if (requested.length === 0) return {};
+  if (requested.length === 0) return { failureCount: 0 };
 
   const results: IntegrateResult[] = [];
   const warnings: string[] = [];
+  // Count only hard exceptions thrown by providers — NOT "not detected"
+  // warnings, which are an expected no-op. The CLI converts a non-zero
+  // failure count into a non-zero exit code per contracts/cli-flags.md.
+  let failureCount = 0;
 
   for (const id of requested) {
     const status = statuses.find((s) => s.providerId === id);
@@ -406,14 +496,18 @@ function runRequestedIntegrations(
       });
       results.push(r);
     } catch (e) {
-      // Surface as a warning instead of failing the init.
+      // Record as a warning (for human-readable output) AND increment the
+      // failure counter so the CLI can exit non-zero. Without this, a
+      // crashing provider was indistinguishable from a successful run.
       const msg = e instanceof Error ? e.message : String(e);
       warnings.push(`WARNING: ${id} integration failed: ${msg}`);
+      failureCount += 1;
     }
   }
 
   return {
     results: results.length > 0 ? results : undefined,
     warnings: warnings.length > 0 ? warnings : undefined,
+    failureCount,
   };
 }

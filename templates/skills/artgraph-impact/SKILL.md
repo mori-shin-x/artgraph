@@ -1,10 +1,11 @@
 ---
 name: "artgraph-impact"
-description: "Runs `artgraph impact` to inject change-impact context for planning, designing, or scoping work. Supports three input modes: (a) when git has changes, uses `--diff`; (b) when the user mentions REQ-IDs or file paths, calls `artgraph impact <targets>`; (c) when neither, asks the user which requirement or file to analyze. Use when the user is about to plan, design, scope, or analyze the impact of any change. Make sure to use this skill whenever the user enters planning mode, asks for impact analysis, or mentions designing changes."
+description: "Runs `artgraph impact` to inject change-impact context for planning, designing, or scoping work. Supports three input modes: (a) when git has changes, uses `--diff`; (b) when the user mentions REQ-IDs or file paths, calls `artgraph impact` with those targets; (c) when neither, asks the user which requirement or file to analyze. Use when the user is about to plan, design, scope, or analyze the impact of any change. Make sure to use this skill whenever the user enters planning mode, asks for impact analysis, or mentions designing changes."
 allowed-tools:
   - "Bash(npx artgraph *)"
   - "Bash(artgraph *)"
   - "Bash(git diff*)"
+  - "Bash(git status*)"
 user-invocable: true
 disable-model-invocation: false
 ---
@@ -20,7 +21,7 @@ Pick one based on what the user supplied:
 | Mode | Trigger | Command |
 | --- | --- | --- |
 | (a) Diff | `git status` shows staged or unstaged changes | `artgraph impact --diff --format json` |
-| (b) Explicit targets | User mentioned a REQ-ID (e.g. `FR-001`) or file path | `artgraph impact <id-or-path>... --format json` |
+| (b) Explicit targets | User mentioned a REQ-ID (e.g. `FR-001`) or file path | `artgraph impact FR-001 src/auth.ts --format json` |
 | (c) Ask | Neither — no diff and no targets given | Ask the user: "Which requirement ID or file should I analyze the impact of?" then re-enter with mode (b) |
 
 ## Steps
@@ -47,7 +48,10 @@ git status --porcelain
 - Else if the user's message contains a REQ-ID (e.g. `FR-001`) or a file path, use mode (b):
 
   ```bash
-  artgraph impact <id-or-path>... --format json
+  # Replace the arguments with the REQ-IDs or file paths the user named.
+  # Example:
+  #   artgraph impact FR-001 src/auth.ts --format json
+  artgraph impact FR-001 --format json
   ```
 
 - Else use mode (c): ask the user which requirement ID or file to analyze, then re-enter with mode (b).

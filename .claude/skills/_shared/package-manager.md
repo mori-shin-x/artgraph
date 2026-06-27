@@ -21,13 +21,14 @@ The `artgraph-setup` Skill uses the rules below to pick the right install / exec
 | --- | --- | --- |
 | npm | `npm install -D artgraph` | `npx artgraph <cmd>` |
 | pnpm | `pnpm add -D artgraph` | `pnpm exec artgraph <cmd>` |
-| bun | `bun install -D artgraph` | `bunx artgraph <cmd>` |
+| bun | `bun add -d artgraph` | `bunx artgraph <cmd>` |
 | deno | `deno add npm:artgraph` | `deno run -A npm:artgraph/cli <cmd>` |
 
 ## Bash detection snippet
 
 ```bash
 detect_package_manager() {
+  local pm_field
   # 1. Corepack-style "packageManager" field in package.json
   if [ -f package.json ]; then
     pm_field=$(grep -oE '"packageManager"[[:space:]]*:[[:space:]]*"[^"]+"' package.json \
@@ -45,7 +46,6 @@ detect_package_manager() {
   if [ ! -f package.json ] && { [ -f deno.lock ] || [ -f deno.json ] || [ -f deno.jsonc ]; }; then
     echo "deno"; return 0
   fi
-  if [ -f deno.lock ]; then echo "deno"; return 0; fi
   if [ -f pnpm-lock.yaml ]; then echo "pnpm"; return 0; fi
   if [ -f yarn.lock ]; then
     echo "WARNING: yarn.lock found but Yarn is not in the supported PM matrix yet; falling back to npm" >&2
@@ -67,7 +67,7 @@ detect_package_manager() {
 
 - **npm**: assume npm >= 8 (bundled with Node 18+). `npx` resolves the local `node_modules/.bin/artgraph` first, so no global install is needed.
 - **pnpm**: `pnpm exec` runs the locally installed binary; avoid `pnpm dlx` because it ignores the workspace lockfile and may pull a different artgraph version.
-- **bun**: `bun install -D` writes `bun.lockb` (binary) or `bun.lock` (text, Bun >= 1.1.30). `bunx` is the canonical exec wrapper; do not substitute `npx` because it bypasses Bun's resolver.
+- **bun**: `bun add -d` writes `bun.lockb` (binary) or `bun.lock` (text, Bun >= 1.1.30). `bunx` is the canonical exec wrapper; do not substitute `npx` because it bypasses Bun's resolver.
 - **deno**: `deno add npm:artgraph` requires Deno >= 1.45 (npm specifier support). Always pass `-A` on the `deno run` invocation — artgraph needs FS + env access to read the repo and write generated files. If the project pins permissions in `deno.json`, prefer scoped flags (`--allow-read --allow-write --allow-env`) over `-A`.
 
 ## Failure handling

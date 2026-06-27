@@ -8,6 +8,8 @@
 
 ## `artgraph init` (重要な default 変更)
 
+> **Note**: `--no-integrate` is the opt-out flag (independent attribute). The explicit-list form uses `--integrations <tools>` (renamed from `--integrate`) to avoid a Commander attribute collision.
+
 ### Default behavior (本 feature の核心)
 
 `artgraph init` (フラグなし) は **full agent-native setup** を実行する:
@@ -15,7 +17,7 @@
 1. `.artgraph.json` 設定生成 (既存)
 2. `scan` + `reconcile` で baseline lock 作成 (既存、`--no-scan` で opt-out)
 3. `templates/skills/**/SKILL.md` を `.claude/skills/` にコピー (= 旧 `--with-skills` 相当)
-4. 検出された全 SDD ツール (`.specify/` → Spec Kit, `.kiro/` → Kiro) に integrate を順次実行 (= 旧 `--integrate=auto` 相当)
+4. 検出された全 SDD ツール (`.specify/` → Spec Kit, `.kiro/` → Kiro) に integrate を順次実行 (= 旧 `--integrate=auto` 相当、新フラグでは `--integrations=all`)
 5. `.claude/settings.json` に Stop hook (`<pkg-mgr-exec> artgraph check --gate --diff`) を merge (= 旧 `--with-hooks` 相当)
 6. CLAUDE.md / AGENTS.md に artgraph スニペットを HTML マーカー境界で注入 (= 旧 `--with-agent-context` 相当)
 
@@ -35,10 +37,10 @@
 | flag | 意味 |
 |------|------|
 | `--with-skills` | `--minimal` モードに Skills コピーを追加 |
-| `--with-integrate` (または `--integrate=<csv>`) | SDD 統合を追加 (csv で個別指定可) |
+| `--with-integrate` (または `--integrations <csv>`) | SDD 統合を追加 (csv で個別指定可) |
 | `--with-hooks` | Stop hook merge を追加 |
 | `--with-agent-context` | agent context スニペット注入を追加 |
-| `--integrate=auto` | 検出全 SDD ツール統合 (default モードで既に実行されるが、`--minimal --with-integrate` 時に明示する場合に使用) |
+| `--integrations=all` | 検出全 SDD ツール統合 (sentinel `all`; default モードで既に実行されるが、`--minimal --with-integrate` 時に明示する場合に使用) |
 
 ### その他既存フラグ (変更なし)
 

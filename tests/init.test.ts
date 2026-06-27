@@ -18,6 +18,7 @@ import {
   generateConfig,
   installSkills,
   SkillsInstallError,
+  computeStageGates,
 } from "../src/init.js";
 
 function makeTmpDir(): string {
@@ -463,7 +464,9 @@ describe("runInit default behavior (P0)", () => {
     expect(existsSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"))).toBe(true);
     expect(existsSync(join(tmp, ".claude", "skills", "_shared", "install-check.md"))).toBe(true);
     // 4. integrate-auto: no SDD tools detected → no integrationResults but no error
-    expect(result.integrationWarnings ?? []).not.toContain(/error/i);
+    expect(result.integrationWarnings ?? []).not.toEqual(
+      expect.arrayContaining([expect.stringMatching(/error/i)]),
+    );
   });
 
   it("--minimal generates only .artgraph.json (no scan, no skills, no integrate, no hooks, no agent-context)", () => {
@@ -521,6 +524,34 @@ describe("runInit default behavior (P0)", () => {
     const result = runInit(tmp);
     const ids = (result.integrationResults ?? []).map((r) => r.providerId).sort();
     expect(ids).toEqual(["kiro", "speckit"]);
+  });
+
+  it("default mode does NOT create .claude/settings.json (hooks stub no-op in P0)", () => {
+    runInit(tmp);
+    expect(existsSync(join(tmp, ".claude", "settings.json"))).toBe(false);
+  });
+
+  it("default mode does NOT create or modify CLAUDE.md (agent-context stub no-op in P0)", () => {
+    runInit(tmp);
+    expect(existsSync(join(tmp, "CLAUDE.md"))).toBe(false);
+  });
+
+  it("--no-hooks is accepted without error in default mode", () => {
+    expect(() => runInit(tmp, { noHooks: true })).not.toThrow();
+  });
+
+  it("--no-agent-context is accepted without error in default mode", () => {
+    expect(() => runInit(tmp, { noAgentContext: true })).not.toThrow();
+  });
+
+  it("--integrations <list> overrides auto-detect (only the requested tool runs)", () => {
+    mkdirSync(join(tmp, ".specify"));
+    mkdirSync(join(tmp, ".kiro"));
+    const result = runInit(tmp, { integrations: ["speckit"] });
+    const ids = (result.integrationResults ?? []).map((r) => r.providerId);
+    expect(ids).toEqual(["speckit"]);
+    // Kiro should NOT have been integrated even though .kiro/ is present
+    expect(existsSync(join(tmp, ".kiro", "steering", "artgraph.md"))).toBe(false);
   });
 });
 
@@ -660,5 +691,78 @@ describe("skill template <-> dogfood sync", () => {
       expect(existsSync(dPath), `dogfood file missing: ${dPath}`).toBe(true);
       expect(sha256(dPath), `content drift in ${rel}`).toBe(sha256(tPath));
     }
+
+    // Reverse direction: every dogfood file must have a matching template (no stale files)
+    const dogfoodFiles: string[] = [];
+    walk(dogfoodDir, dogfoodFiles);
+    for (const dPath of dogfoodFiles) {
+      const rel = dPath.substring(dogfoodDir.length + 1);
+      // Skip speckit-* directories (managed by Spec Kit, not artgraph templates)
+      if (rel.startsWith("speckit-")) continue;
+      const tPath = join(templateDir, rel);
+      expect(existsSync(tPath), `stale dogfood file (no template): ${rel}`).toBe(true);
+    }
+  });
+});
+
+describe("computeStageGates (P0 flag matrix truth table)", () => {
+  it("default (no flags) enables every stage", () => {
+    expect(computeStageGates({})).toEqual({
+      scan: true,
+      skills: true,
+      integrate: true,
+      hooks: true,
+      agentContext: true,
+    });
+  });
+
+  it("--minimal disables every stage", () => {
+    expect(computeStageGates({ minimal: true })).toEqual({
+      scan: false,
+      skills: false,
+      integrate: false,
+      hooks: false,
+      agentContext: false,
+    });
+  });
+
+  it("--minimal --with-skills enables only Skills", () => {
+    expect(computeStageGates({ minimal: true, withSkills: true })).toEqual({
+      scan: false,
+      skills: true,
+      integrate: false,
+      hooks: false,
+      agentContext: false,
+    });
+  });
+
+  it("--no-skills disables only Skills in default mode", () => {
+    expect(computeStageGates({ noSkills: true })).toEqual({
+      scan: true,
+      skills: false,
+      integrate: true,
+      hooks: true,
+      agentContext: true,
+    });
+  });
+
+  it("--minimal + explicit integrations enables integrate stage", () => {
+    expect(computeStageGates({ minimal: true, integrations: ["speckit"] })).toEqual({
+      scan: false,
+      skills: false,
+      integrate: true,
+      hooks: false,
+      agentContext: false,
+    });
+  });
+
+  it("--no-integrate + --no-hooks + --no-agent-context leaves only config + scan + skills", () => {
+    expect(computeStageGates({ noIntegrate: true, noHooks: true, noAgentContext: true })).toEqual({
+      scan: true,
+      skills: true,
+      integrate: false,
+      hooks: false,
+      agentContext: false,
+    });
   });
 });

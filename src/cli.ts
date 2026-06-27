@@ -74,21 +74,21 @@ function resolveTestResults(
 program
   .command("init")
   .description(
-    "Initialize artgraph for this project (default: full agent-native setup — config + scan + Skills + auto-integrate + hooks + agent context). Use --minimal for bare config only.",
+    "Initialize artgraph for this project (default: config + scan + Skills + auto-integrate detected SDD tools; Stop hook and agent-context snippet land in PR-B). Use --minimal for bare config only.",
   )
   .option("--force", "Overwrite existing .artgraph.json")
   .option("--minimal", "Bare config only — opt out of every extra setup stage")
   // Stage opt-outs (in default mode)
   .option("--no-scan", "Skip initial scan + reconcile")
-  .option("--no-skills", "Skip Claude Code Skills install")
-  .option("--no-integrate", "Skip SDD-tool auto-integration")
-  .option("--no-hooks", "Skip Stop hook installation (P1)")
-  .option("--no-agent-context", "Skip CLAUDE.md / AGENTS.md snippet injection (P1)")
+  .option("--no-skills", "Skip Claude Code Skills install (default mode only — already off under --minimal)")
+  .option("--no-integrate", "Skip SDD-tool auto-integration (default mode only)")
+  .option("--no-hooks", "Skip Stop hook installation (default mode only; P1 deliverable)")
+  .option("--no-agent-context", "Skip CLAUDE.md / AGENTS.md snippet injection (default mode only; P1 deliverable)")
   // Stage opt-ins (used with --minimal)
-  .option("--with-skills", "Install Claude Code Skills into .claude/skills/")
-  .option("--with-integrate", "Auto-integrate detected SDD tools (Spec Kit / Kiro)")
-  .option("--with-hooks", "Install Stop hook (P1)")
-  .option("--with-agent-context", "Inject CLAUDE.md / AGENTS.md snippet (P1)")
+  .option("--with-skills", "Install Claude Code Skills into .claude/skills/ (use with --minimal)")
+  .option("--with-integrate", "Auto-integrate detected SDD tools (use with --minimal)")
+  .option("--with-hooks", "Install Stop hook (use with --minimal; P1 deliverable, no effect yet)")
+  .option("--with-agent-context", "Inject CLAUDE.md / AGENTS.md snippet (use with --minimal; P1 deliverable, no effect yet)")
   // Explicit integrate list (overrides auto-detect)
   .option(
     "--integrations <tools>",
@@ -100,20 +100,56 @@ program
   .action((opts) => {
     const rootDir = process.cwd();
 
+    // M24: detect mutually-exclusive --no-X + --with-X combinations before
+    // doing any work. commander otherwise silently lets --with-X "win"
+    // (last flag), which has bitten users in PR #103 review.
+    const conflicts: string[] = [];
+    if (opts.skills === false && opts.withSkills === true) conflicts.push("--no-skills / --with-skills");
+    if (opts.integrate === false && opts.withIntegrate === true) conflicts.push("--no-integrate / --with-integrate");
+    if (opts.hooks === false && opts.withHooks === true) conflicts.push("--no-hooks / --with-hooks");
+    if (opts.agentContext === false && opts.withAgentContext === true) conflicts.push("--no-agent-context / --with-agent-context");
+    if (conflicts.length > 0) {
+      console.error(`Error: mutually exclusive flag combinations: ${conflicts.join("; ")}`);
+      process.exit(1);
+    }
+
+    // C1: --with-hooks / --with-agent-context are accepted (so the flag
+    // surface is stable for PR-B) but currently no-op. Warn so the user
+    // doesn't think they got hooks/snippet without checking output.
+    if (opts.withHooks === true) {
+      console.error("WARNING: --with-hooks is a P1 deliverable; the flag has no effect in this release.");
+    }
+    if (opts.withAgentContext === true) {
+      console.error("WARNING: --with-agent-context is a P1 deliverable; the flag has no effect in this release.");
+    }
+
     // Parse --integrations: "all" stays as the literal sentinel; otherwise
     // it's a comma-separated provider id list. Empty/undefined leaves
     // integrations unspecified so runInit's auto-detect kicks in.
     const integrations = parseInitIntegrations(opts.integrations);
 
-    // commander stores --integrate-gate / --no-integrate-gate in
-    // `opts.integrateGate`. Preserve `undefined` so the speckit provider
-    // distinguishes "no opinion" from "explicitly off".
-    const integrateGate: boolean | undefined = Object.prototype.hasOwnProperty.call(
+    // M12: surface valid provider ids when the user fat-fingers an
+    // --integrations value. runInit's own warning also fires later, but
+    // showing the valid set here gives the user the hint *before* init runs.
+    const VALID_PROVIDER_IDS = new Set(["speckit", "kiro"]);
+    if (Array.isArray(integrations)) {
+      const invalid = integrations.filter((id) => !VALID_PROVIDER_IDS.has(id as string));
+      if (invalid.length > 0) {
+        const valid = [...VALID_PROVIDER_IDS].join(", ");
+        console.error(`WARNING: unknown integration provider(s): ${invalid.join(", ")} (valid: ${valid})`);
+      }
+    }
+
+    // H2: commander stores --integrate-gate / --no-integrate-gate in
+    // `opts.integrateGate`. When neither was supplied, the contract
+    // (contracts/cli-flags.md:48, spec.md:258) says default to gate-on for
+    // speckit. Returning `undefined` here left speckit gateless by default.
+    const integrateGate: boolean = Object.prototype.hasOwnProperty.call(
       opts,
       "integrateGate",
     )
       ? (opts.integrateGate as boolean)
-      : undefined;
+      : true; // contract default
 
     try {
       const result = runInit(rootDir, {
@@ -143,7 +179,18 @@ program
             scanSummary: result.scanSummary ?? null,
             warnings: result.warnings,
             lockPath: result.lockPath ?? null,
-            skillsInstalled: result.skillsInstalled ?? null,
+            // H6: split SKILL.md installs from shared fragments / references
+            // so the JSON consumer can count Skills accurately.
+            skillsInstalled: result.skillsInstalled
+              ? {
+                  skills: result.skillsInstalled.filter(
+                    (p) => p.endsWith("/SKILL.md") || p.endsWith("\\SKILL.md"),
+                  ),
+                  fragments: result.skillsInstalled.filter(
+                    (p) => !p.endsWith("/SKILL.md") && !p.endsWith("\\SKILL.md"),
+                  ),
+                }
+              : null,
             integrationResults: result.integrationResults ?? null,
             integrationWarnings: result.integrationWarnings ?? null,
           }),
@@ -168,8 +215,19 @@ program
           console.log(`\nTo scan later, run: artgraph scan && artgraph reconcile`);
         }
         if (result.skillsInstalled && result.skillsInstalled.length > 0) {
-          console.log(`\nInstalled ${result.skillsInstalled.length} Claude Code skills:`);
-          for (const path of result.skillsInstalled) console.log(`  ${path}`);
+          // H6: SKILL.md files are the user-discoverable Skills; the rest
+          // are shared fragments and references that travel with them.
+          // Reporting the combined count as "skills" was misleading.
+          const skills = result.skillsInstalled.filter(
+            (p) => p.endsWith("/SKILL.md") || p.endsWith("\\SKILL.md"),
+          );
+          const fragments = result.skillsInstalled.filter((p) => !skills.includes(p));
+          console.log(`\nInstalled ${skills.length} Claude Code skills:`);
+          for (const path of skills) console.log(`  ${path}`);
+          if (fragments.length > 0) {
+            console.log(`\nInstalled ${fragments.length} shared fragments / references:`);
+            for (const path of fragments) console.log(`  ${path}`);
+          }
         }
 
         // ---- one-shot integration output (FR-022/023): per-tool sections ----
@@ -201,6 +259,13 @@ program
           printIntegrationTips(rootDir);
         }
       }
+
+      // H1: any integration that failed should surface as a non-zero exit
+      // so CI / wrapper scripts catch it. We still emit the per-tool
+      // sections above so the user has the full picture before exit.
+      if (result.integrationFailureCount && result.integrationFailureCount > 0) {
+        process.exitCode = 1;
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`Error: ${msg}`);
@@ -222,10 +287,15 @@ function parseInitIntegrations(
   const trimmed = raw.trim();
   if (trimmed === "") return undefined;
   if (trimmed === "all") return "all";
-  return trimmed
+  // M11: ",,," / "," / etc. previously returned `[]` while "" returned
+  // undefined. The two are semantically equivalent ("no provider chosen")
+  // so collapse to undefined for consistent Tip suppression downstream.
+  const ids = trimmed
     .split(",")
     .map((s) => s.trim())
-    .filter((s) => s.length > 0) as IntegrationProviderId[];
+    .filter((s) => s.length > 0);
+  if (ids.length === 0) return undefined;
+  return ids as IntegrationProviderId[];
 }
 
 /**

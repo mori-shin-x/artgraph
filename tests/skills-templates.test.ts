@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 
 // Metatest: walks templates/skills/**/SKILL.md and verifies invariants
@@ -8,16 +8,27 @@ import { parse as parseYaml } from "yaml";
 // Catches drift between the spec contract (012-skills-expansion /
 // FR-008..FR-011 / FR-029) and the actual SKILL.md files.
 
-const EXPECTED_SKILL_DIRS = [
-  "artgraph-coverage",
-  "artgraph-detect",
-  "artgraph-impact",
-  "artgraph-integrate",
-  "artgraph-rename",
-  "artgraph-setup",
-  "artgraph-verify",
-] as const;
+const TEMPLATES_SKILLS_DIR = resolve(
+  import.meta.dirname,
+  "..",
+  "templates",
+  "skills",
+);
 
+// Discover Skill directories dynamically so that newly added Skills are
+// automatically validated by this metatest (M6 hardening).
+function discoverSkillDirs(): string[] {
+  return readdirSync(TEMPLATES_SKILLS_DIR)
+    .filter((name) => {
+      if (name === "_shared" || name.startsWith(".")) return false;
+      return statSync(join(TEMPLATES_SKILLS_DIR, name)).isDirectory();
+    })
+    .sort();
+}
+
+const EXPECTED_SKILL_DIRS = discoverSkillDirs();
+
+// Contract subset: only these designated Skills must link to install-check.
 const SKILLS_LINKING_INSTALL_CHECK = [
   "artgraph-impact",
   "artgraph-verify",
@@ -25,15 +36,15 @@ const SKILLS_LINKING_INSTALL_CHECK = [
   "artgraph-rename",
 ] as const;
 
-// CJK unicode ranges: Hiragana, Katakana, CJK Unified Ideographs.
-const CJK_REGEX = /[぀-ゟ゠-ヿ一-鿿]/;
-
-const TEMPLATES_SKILLS_DIR = resolve(
-  import.meta.dirname,
-  "..",
-  "templates",
-  "skills",
-);
+// CJK unicode ranges covered (use \u escapes so the test file itself stays
+// ASCII-only and survives copy/paste across editors):
+//   U+3000-U+303F  CJK Symbols and Punctuation (full-width space, kuten, tooten, kagi-kakko)
+//   U+3040-U+309F  Hiragana
+//   U+30A0-U+30FF  Katakana
+//   U+4E00-U+9FFF  CJK Unified Ideographs
+//   U+FF00-U+FFEF  Halfwidth and Fullwidth Forms (full-width latin, half-width katakana)
+const CJK_REGEX =
+  /[\u3000-\u30ff\u4e00-\u9fff\uff00-\uffef]/;
 
 type SkillFile = {
   raw: string;
@@ -57,7 +68,10 @@ function readSkill(dirName: string): SkillFile {
   }
   const frontmatter = (parseYaml(fmMatch[1]) ?? {}) as Record<string, unknown>;
   const body = fmMatch[2];
-  const lines = body.split("\n");
+  // Trim leading newlines so the blank line that conventionally follows the
+  // closing `---` does not count toward the 100-line cap (M19 fix: without
+  // this, the effective cap is 99 because split produces a leading "").
+  const lines = body.trimStart().split("\n");
 
   return { raw, frontmatter, body, lines, filePath };
 }
@@ -151,6 +165,51 @@ describe("templates/skills metatest", () => {
       });
     },
   );
+
+  it("at least 7 Skill directories are present (regression guard)", () => {
+    // Pairs with the dynamic discoverSkillDirs() — if someone accidentally
+    // moves a Skill out of templates/skills/, the count drops and this trips.
+    expect(EXPECTED_SKILL_DIRS.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it("every _shared/*.md fragment is referenced by at least one Skill", () => {
+    const sharedFiles = readdirSync(join(TEMPLATES_SKILLS_DIR, "_shared")).filter(
+      (n) => n.endsWith(".md"),
+    );
+    expect(sharedFiles.length).toBeGreaterThan(0);
+
+    const allSkillBodies = EXPECTED_SKILL_DIRS.map((dir) => {
+      const path = join(TEMPLATES_SKILLS_DIR, dir, "SKILL.md");
+      return readFileSync(path, "utf8");
+    });
+
+    for (const shared of sharedFiles) {
+      const linkPattern = new RegExp(`_shared/${shared.replace(".", "\\.")}`);
+      const referencingSkills = allSkillBodies.filter((body) =>
+        linkPattern.test(body),
+      );
+      expect(
+        referencingSkills.length,
+        `_shared/${shared} is orphaned (no Skill references it)`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("references/*.md files inside Skill dirs are CJK-free", () => {
+    for (const dir of EXPECTED_SKILL_DIRS) {
+      const refsDir = join(TEMPLATES_SKILLS_DIR, dir, "references");
+      if (!existsSync(refsDir)) continue;
+      const files = readdirSync(refsDir).filter((n) => n.endsWith(".md"));
+      for (const f of files) {
+        const body = readFileSync(join(refsDir, f), "utf8");
+        const m = body.match(CJK_REGEX);
+        expect(
+          m,
+          `${dir}/references/${f} contains CJK character ${JSON.stringify(m?.[0])}`,
+        ).toBeNull();
+      }
+    }
+  });
 
   it("all descriptions across Skills are unique", () => {
     const descriptions: string[] = [];

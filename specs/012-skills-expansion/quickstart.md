@@ -51,7 +51,7 @@ Claude Code 起動 (`claude code`)、次のメッセージを送信:
 2. **package manager 検出: npm** (`package-lock.json` あり)
 3. ユーザー同意 (Y) で `npm install -D artgraph` が走る
 4. 続けて `npx artgraph init` が走る (default で full setup)
-5. SDD ツール検出ゼロ報告 (`init` の default `--integrate=auto` が no-op で正常終了)
+5. SDD ツール検出ゼロ報告 (`init` の default `--integrations=all` が no-op で正常終了)
 6. 完了報告: `.artgraph.json`, `.claude/skills/artgraph-*`, `.claude/settings.json`, `CLAUDE.md` が生成
 7. **`artgraph check` を実行して exit 0** がエージェントから報告される
 
@@ -348,7 +348,7 @@ git init && echo '{"name":"aw-us5","type":"module"}' > package.json
 mkdir -p .kiro/steering .kiro/specs/feature-x
 echo '# Feature X requirements' > .kiro/specs/feature-x/requirements.md
 npm install -D /path/to/skills-expansion
-npx artgraph init --integrate=kiro
+npx artgraph init --integrations=kiro
 ```
 
 ### Verification (static)
@@ -411,12 +411,12 @@ ls -la ~/.claude/plugins/cache/*/hooks/hooks.json
 ```bash
 cd /path/to/skills-expansion
 # Skill description を 1 行編集
-sed -i 's/Use when planning/Use when planning or scoping/' templates/skills/artgraph-plan/SKILL.md
+sed -i 's/Use when planning/Use when planning or scoping/' templates/skills/artgraph-impact/SKILL.md
 git commit -am 'tweak description'
 
 # Plugin 経由で update
 # (Claude Code: /plugin update artgraph)
-grep "Use when planning or scoping" ~/.claude/plugins/cache/*/skills/artgraph-plan/SKILL.md
+grep "Use when planning or scoping" ~/.claude/plugins/cache/*/skills/artgraph-impact/SKILL.md
 # 反映あり
 
 # npm 経由でも反映
@@ -424,7 +424,7 @@ cd /tmp/aw-us6-target
 npm install -D /path/to/skills-expansion
 rm -rf .claude/skills
 npx artgraph init --with-skills
-grep "Use when planning or scoping" .claude/skills/artgraph-plan/SKILL.md
+grep "Use when planning or scoping" .claude/skills/artgraph-impact/SKILL.md
 # 反映あり
 ```
 
@@ -449,7 +449,7 @@ mkdir -p /tmp/aw-us7 && cd /tmp/aw-us7
 specify init --here --ai claude  # Spec Kit ≥ v0.11.0 (実測時は最新 v0.11.9 を使用)
 echo '{"name":"aw-us7","type":"module"}' > package.json
 npm install -D /path/to/skills-expansion
-npx artgraph init --with-skills --integrate=speckit
+npx artgraph init --with-skills --integrations=speckit
 ```
 
 ### Test (Claude Code)
@@ -535,9 +535,9 @@ claude plugin validate .            # plugin manifest validator pass
 ### 配布物の同期検証
 
 ```bash
-# templates/skills/artgraph-plan/SKILL.md を 1 行変更
-echo "<!-- test sync -->" >> templates/skills/artgraph-plan/SKILL.md
-git diff templates/skills/artgraph-plan/SKILL.md
+# templates/skills/artgraph-impact/SKILL.md を 1 行変更
+echo "<!-- test sync -->" >> templates/skills/artgraph-impact/SKILL.md
+git diff templates/skills/artgraph-impact/SKILL.md
 
 # Plugin 経由 / npm 経由両方で同じ変更が反映されることを E2E で確認
 # (SC-004 と重複、CI 自動化対象)

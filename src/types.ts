@@ -179,7 +179,10 @@ export interface InitOptions {
    */
   integrations?: IntegrationProviderId[] | "all";
   /**
-   * Forwarded `--gate` / `--no-gate` for the speckit provider.
+   * Forwarded `--integrate-gate` / `--no-integrate-gate` for the speckit
+   * provider. The CLI defaults this to `true` when neither flag is passed
+   * (contracts/cli-flags.md §integrate-gate, spec.md §FR-003) so a fresh
+   * Spec Kit repo gets the `before_implement` gate hook by default.
    * Other providers ignore this flag.
    */
   integrateGate?: boolean;

@@ -607,11 +607,12 @@ describe("CLI: init", () => {
     const { exitCode, stdout } = await runInit(["--no-scan", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
-    expect(Array.isArray(result.skillsInstalled)).toBe(true);
-    // 7 SKILL.md + 3 _shared/*.md + 1 rename references file = 11 entries (current
-    // baseline; loosened to >= 10 to absorb future additions).
-    expect(result.skillsInstalled.length).toBeGreaterThanOrEqual(10);
-    expect(result.skillsInstalled).toContain(".claude/skills/artgraph-impact/SKILL.md");
+    // H6: JSON shape changed from string[] to { skills, fragments }.
+    expect(typeof result.skillsInstalled).toBe("object");
+    expect(Array.isArray(result.skillsInstalled.skills)).toBe(true);
+    expect(result.skillsInstalled.skills.length).toBe(7);
+    expect(result.skillsInstalled.fragments.length).toBeGreaterThanOrEqual(3);
+    expect(result.skillsInstalled.skills).toContain(".claude/skills/artgraph-impact/SKILL.md");
   });
 
   it("--minimal suppresses skills install", { timeout: 30000 }, async () => {

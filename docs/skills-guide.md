@@ -31,11 +31,11 @@ pnpm exec artgraph init
 
 # Bun
 bun add -d artgraph
-bun x artgraph init
+bunx artgraph init
 
 # Deno
 deno add npm:artgraph
-deno run -A npm:artgraph init
+deno run -A npm:artgraph/cli init
 ```
 
 ## `init` のデフォルト挙動
