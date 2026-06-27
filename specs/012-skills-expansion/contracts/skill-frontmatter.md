@@ -40,7 +40,7 @@ disable-model-invocation: false             # optional, default false
 
 | Skill | description |
 |-------|-------------|
-| `artgraph-setup` | `Installs artgraph in the current project, detects the package manager (npm / pnpm / Yarn / Bun / Deno), and wires up Skills, hooks, agent-context snippet, and any detected SDD-tool integration in one turn. Use when the user asks to install / set up / add artgraph. Make sure to use this skill whenever the user mentions artgraph for the first time and \`artgraph\` CLI is not yet available.` |
+| `artgraph-setup` | `Installs artgraph in the current project, detects the package manager (npm / pnpm / Bun / Deno; Yarn falls back to npm with a warning), and wires up Skills, hooks, agent-context snippet, and any detected SDD-tool integration in one turn. Use when the user asks to install / set up / add artgraph. Make sure to use this skill whenever the user mentions artgraph for the first time and \`artgraph\` CLI is not yet available.` |
 | `artgraph-integrate` | `Wires artgraph into an installed SDD tool (Spec Kit / Kiro). Use when the user asks to integrate, hook up, or connect artgraph with an existing SDD tool. Make sure to use this skill whenever the user mentions integrating artgraph with a Spec Kit or Kiro project that already has \`artgraph\` installed.` |
 | `artgraph-detect` | `Reports the current artgraph installation, integration, and Skill availability in the project. Use when the user asks whether artgraph is set up, what's installed, or what's available. Make sure to use this skill whenever the user is uncertain about the project's artgraph state.` |
 | `artgraph-impact` | `Runs \`artgraph impact\` to inject change-impact context for planning, designing, or scoping work. Supports three input modes: (a) when git has changes, uses \`--diff\`; (b) when the user mentions REQ-IDs or file paths, calls \`artgraph impact <targets>\`; (c) when neither, asks the user which requirement or file to analyze. Use when the user is about to plan, design, scope, or analyze the impact of any change. Make sure to use this skill whenever the user enters planning mode, asks for impact analysis, or mentions designing changes.` |
@@ -83,7 +83,7 @@ See [_shared/install-check.md](../_shared/install-check.md) for the standard pre
 |------|------|
 | `templates/skills/_shared/install-check.md` | artgraph CLI の存在確認手順 (R2 採用)。各 SKILL.md が markdown link で参照 |
 | `templates/skills/_shared/output-schema.md` | `artgraph impact` / `check` / `coverage` の JSON 出力スキーマ参照 (任意で参照) |
-| `templates/skills/_shared/package-manager.md` | npm / pnpm / Yarn / Bun / Deno の検出ロジックと install/exec コマンド構築 (`artgraph-setup` Skill のみ参照) — R14 / FR-026 |
+| `templates/skills/_shared/package-manager.md` | npm / pnpm / Bun / Deno の検出ロジックと install/exec コマンド構築 (`artgraph-setup` Skill のみ参照、Yarn は npm fallback) — R14 / FR-026 |
 
 ---
 

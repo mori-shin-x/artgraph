@@ -153,7 +153,7 @@
 
 ## E6. Package Manager Detector
 
-**役割**: `artgraph-setup` Skill が install / exec コマンドを構築する際の判定ロジック (FR-026)。Bun / Deno / pnpm / Yarn / npm の 5 種を区別する。
+**役割**: `artgraph-setup` Skill が install / exec コマンドを構築する際の判定ロジック (FR-026)。Bun / Deno / pnpm / npm の 4 種を区別する (Yarn は本 spec のサポート対象外、検出時は npm fallback + 警告)。
 
 **配置**: `templates/skills/_shared/package-manager.md` (共通参照ファイル、英語) — Skill 本文から markdown link で誘導。Skill 内に bash 検出スクリプトのサンプルも含める。
 
@@ -161,12 +161,12 @@
 
 | 優先 | 検出ソース | 判定 | install / exec コマンド |
 |------|-----------|------|------------------------|
-| 1 | `package.json#packageManager` フィールド | semver-spec 文字列から抽出 | フィールド指定に従う (`pnpm@9.0.0` → pnpm) |
+| 1 | `package.json#packageManager` フィールド | semver-spec 文字列から抽出 | フィールド指定に従う (`pnpm@9.0.0` → pnpm)。Yarn 指定時は npm フォールバック |
 | 2 | `bun.lockb` | Bun | `bun install -D artgraph` / `bunx artgraph` |
 | 3 | `deno.json` または `deno.lock` | Deno | `deno add npm:artgraph` / `deno run -A npm:artgraph/cli` |
 | 4 | `pnpm-lock.yaml` | pnpm | `pnpm add -D artgraph` / `pnpm exec artgraph` |
-| 5 | `yarn.lock` | Yarn | `yarn add -D artgraph` / `yarn artgraph` |
-| 6 | `package-lock.json` | npm | `npm install -D artgraph` / `npx artgraph` |
+| 5 | `package-lock.json` | npm | `npm install -D artgraph` / `npx artgraph` |
+| 6 | `yarn.lock` | **npm フォールバック + 警告** (Yarn は本 spec のサポート対象外) | `npm install -D artgraph` / `npx artgraph` + 「Yarn 検出されましたが本 spec はサポート対象外のため npm で実行します」と user に通知 |
 | 7 (fallback) | lockfile なし | npm デフォルト | 同上 |
 
 **スコープ境界**:
@@ -217,6 +217,6 @@
 - Plugin Manifest の `skills` パスが repo 内に実在する
 - Hook Template の JSON が parse 可能・既存 settings.json と merge 互換
 - Agent Context Snippet が 30 行以下、HTML マーカーペアが対称
-- Package Manager Detector が 5 fixture (npm/pnpm/yarn/bun/deno) すべてで正しい install/exec コマンド文字列を返す
+- Package Manager Detector が 4 fixture (npm/pnpm/bun/deno) すべてで正しい install/exec コマンド文字列を返す。追加 fixture `yarn` で npm フォールバック + 警告を返すことも確認
 
 これらのメタテストは Phase 0 で resolve した設計判断 (R2 共通参照、R5/R6 Plugin path、R3 境界マーカー、R13 impact rename、R14 pkg mgr、R16 英語化) と直接対応する。

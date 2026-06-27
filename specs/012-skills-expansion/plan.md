@@ -102,7 +102,7 @@ templates/
 │   ├── _shared/
 │   │   ├── install-check.md            # P0: 共通 install 確認手順 (英語、新規)
 │   │   ├── output-schema.md            # P0: JSON 出力スキーマ参照 (英語、新規)
-│   │   └── package-manager.md          # P0: npm/pnpm/yarn/bun/deno 検出と install/exec コマンド構築 (英語、新規)
+│   │   └── package-manager.md          # P0: npm/pnpm/bun/deno 検出と install/exec コマンド構築 (英語、新規。Yarn は除外)
 │   ├── artgraph-setup/                 # P0: 新規 Skill ディレクトリ (英語)
 │   │   └── SKILL.md
 │   ├── artgraph-integrate/             # P0: 新規 (英語)

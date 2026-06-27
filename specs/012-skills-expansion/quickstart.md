@@ -76,9 +76,13 @@ bun install   # bun.lockb を生成
 
 Claude Code で同じ依頼 → エージェントが **Bun を検出**して `bun install -D artgraph` + `bunx artgraph init` を実行することを目視確認。
 
-### Setup C, D, E (pnpm / Yarn / Deno)
+### Setup C, D (pnpm / Deno)
 
-同様に `pnpm install` / `yarn install` / `deno init` でそれぞれの lockfile を作成し、エージェントが各 package manager 対応コマンドを構築することを確認。
+同様に `pnpm install` / `deno init` でそれぞれの lockfile を作成し、エージェントが各 package manager 対応コマンドを構築することを確認。
+
+### Setup E (Yarn — 除外動作の確認)
+
+`yarn install` で `yarn.lock` を作成し、エージェントが「Yarn 検出、本 spec では npm fallback します」と警告して npm 経由でセットアップを進めることを確認。
 
 ### Success criteria
 
