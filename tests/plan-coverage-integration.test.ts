@@ -29,8 +29,15 @@
 //   (m) unresolvedFilePath from Stage A surfaces in top-level diagnostics[]
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import {
+  cpSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
+import { join, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import { runCli } from "../src/cli.js";
 import { runPlanCoverage } from "../src/plan-coverage/index.js";
@@ -492,25 +499,35 @@ describe("plan-coverage E2E — (k) JSON output shape per contract", () => {
       expect(typeof json.summary[k]).toBe("number");
     }
 
-    // implicitImpacts shape — each entry has sourceFile + reqs[{reqId, kind}].
+    // spec 016 contract §2: each entry has sourceFile + impactReqs +
+    // originReqs (both ReqEntry[]). file-unit entries omit sourceSymbol.
     expect(Array.isArray(json.implicitImpacts)).toBe(true);
     for (const g of json.implicitImpacts) {
       expect(typeof g.sourceFile).toBe("string");
-      expect(Array.isArray(g.reqs)).toBe(true);
-      for (const r of g.reqs) {
+      expect(Array.isArray(g.impactReqs)).toBe(true);
+      expect(Array.isArray(g.originReqs)).toBe(true);
+      for (const r of g.impactReqs) {
         expect(typeof r.reqId).toBe("string");
         expect(r.kind).toBe("req");
       }
     }
 
-    // implicitImpactsByReq is the inversion: same REQ set, REQ → sourceFile[].
+    // implicitImpactsByReq is the inversion of impactReqs only.
     const bySrcSet = new Set<string>();
-    for (const g of json.implicitImpacts) for (const r of g.reqs) bySrcSet.add(r.reqId);
+    for (const g of json.implicitImpacts) for (const r of g.impactReqs) bySrcSet.add(r.reqId);
     const byReqSet = new Set(
       (json.implicitImpactsByReq as Array<{ reqId: string }>).map((r) => r.reqId),
     );
     expect(byReqSet).toEqual(bySrcSet);
     expect(json.summary.implicit).toBe(json.implicitImpactsByReq.length);
+    // contract §3: sourceLocations[] is mandatory, sourceFiles[] is gone.
+    for (const r of json.implicitImpactsByReq) {
+      expect(Array.isArray(r.sourceLocations)).toBe(true);
+      expect("sourceFiles" in r).toBe(false);
+      for (const loc of r.sourceLocations) {
+        expect(typeof loc.file).toBe("string");
+      }
+    }
   });
 });
 
@@ -791,4 +808,159 @@ describe("plan-coverage E2E — large tasks.md (perf scale)", () => {
     },
     10000,
   );
+});
+
+// ---------------------------------------------------------------------------
+// spec 016 Phase 3 (T024, T025) — symbol-mode E2E using the static fixture.
+//
+// The on-disk fixture (`tests/fixtures/symbol-mode/`) is the authoritative
+// quickstart Scenario A target: three exports in src/auth.ts, each `@impl`
+// REQ-001 / REQ-005 / REQ-009 inside the function body, plus src/session.ts
+// `createSession @impl REQ-002`. `.artgraph.json` sets `mode: symbol` and
+// `docGraph.autoContains: false` so doc→REQ contains edges don't pull in
+// sibling REQs (R-006 — single-symbol BFS reach is exactly one REQ).
+//
+// T024 (SC-001): symbol-unit vs file-unit implicit count comparison on the
+//                fixture's tasks.md (which exercises both entries in one
+//                tasks.md, T001 = symbol unit, T002 = file unit).
+// T025 (SC-006): copy the fixture into a tmpdir, append `(depends_on: REQ-007)`
+//                to REQ-001, scan + run, and verify the drift candidate
+//                surfaces as `impactReqs \ originReqs`.
+// ---------------------------------------------------------------------------
+
+const STATIC_SYMBOL_FIXTURE = resolvePath(
+  import.meta.dirname,
+  "fixtures/symbol-mode",
+);
+
+describe("plan-coverage symbol-mode E2E — static fixture (T024 / SC-001)", () => {
+  it("symbol-unit entry yields exactly 1 impact REQ; file-unit entry yields 3 — ≥50% reduction (SC-001)", () => {
+    const fixtureRoot = STATIC_SYMBOL_FIXTURE;
+    const result = runPlanCoverage({
+      repoRoot: fixtureRoot,
+      specDir: resolvePath(fixtureRoot, "specs/001-symbol-demo"),
+      tasksPath: resolvePath(fixtureRoot, "specs/001-symbol-demo/tasks.md"),
+      planPath: resolvePath(fixtureRoot, "specs/001-symbol-demo/plan.md"),
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+
+    // Tasks.md declares two entries:
+    //   T001 → Files: src/auth.ts:validateToken (symbol unit, REQ-001)
+    //   T002 → Files: src/auth.ts                (file unit, REQ-001/005/009)
+    // The two surface as two distinct ImpactGroups under the same sourceFile.
+    expect(result.json.implicitImpacts.length).toBeGreaterThanOrEqual(2);
+
+    const symbolGroup = result.json.implicitImpacts.find(
+      (g) => g.sourceSymbol === "validateToken",
+    );
+    const fileGroup = result.json.implicitImpacts.find(
+      (g) => g.sourceFile === "src/auth.ts" && g.sourceSymbol === undefined,
+    );
+    expect(symbolGroup).toBeDefined();
+    expect(fileGroup).toBeDefined();
+
+    const symbolReqs = symbolGroup!.impactReqs.map((r) => r.reqId);
+    const fileReqs = fileGroup!.impactReqs.map((r) => r.reqId);
+    expect(symbolReqs).toEqual(["REQ-001"]);
+    expect(fileReqs.sort()).toEqual(["REQ-001", "REQ-005", "REQ-009"]);
+
+    // SC-001 acceptance: file → 3 REQs, symbol → 1 REQ ⇒ 2/3 ≈ 66% reduction.
+    // (Cast guards against future tightening of the spec threshold.)
+    const reduction = (fileReqs.length - symbolReqs.length) / fileReqs.length;
+    expect(reduction).toBeGreaterThanOrEqual(0.5);
+  });
+
+  it("symbol-unit ImpactGroup carries `sourceSymbol` and matching `originReqs`; file-unit omits the key and has originReqs:[]", () => {
+    const fixtureRoot = STATIC_SYMBOL_FIXTURE;
+    const result = runPlanCoverage({
+      repoRoot: fixtureRoot,
+      specDir: resolvePath(fixtureRoot, "specs/001-symbol-demo"),
+      tasksPath: resolvePath(fixtureRoot, "specs/001-symbol-demo/tasks.md"),
+      planPath: resolvePath(fixtureRoot, "specs/001-symbol-demo/plan.md"),
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+
+    const symbolGroup = result.json.implicitImpacts.find(
+      (g) => g.sourceSymbol === "validateToken",
+    )!;
+    expect(symbolGroup.originReqs.map((r) => r.reqId)).toEqual(["REQ-001"]);
+
+    const fileGroup = result.json.implicitImpacts.find(
+      (g) => g.sourceFile === "src/auth.ts" && g.sourceSymbol === undefined,
+    )!;
+    expect("sourceSymbol" in fileGroup).toBe(false);
+    // File-top has no `@impl` tag in the fixture; originReqs MUST be [].
+    expect(fileGroup.originReqs).toEqual([]);
+  });
+});
+
+describe("plan-coverage symbol-mode E2E — depends_on drift (T025 / SC-006)", () => {
+  // Copy the static fixture into a tmpdir, mutate the REQ catalogue to
+  // append `(depends_on: REQ-007)` + define REQ-007, and confirm the
+  // forward BFS reaches REQ-007 while the symbol's `@impl` claim does not
+  // — so `impactReqs \ originReqs = [REQ-007]` falls out as a drift hint.
+  let tmpRoot: string;
+  afterEach(() => {
+    if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("appending REQ-001 depends_on REQ-007 surfaces REQ-007 in impactReqs but not originReqs", () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-pc-drift-"));
+    cpSync(STATIC_SYMBOL_FIXTURE, tmpRoot, { recursive: true });
+    // Force tasks.md to a single symbol-unit entry so the assertion below
+    // is unambiguous (the default fixture also includes a file-unit task
+    // that would add three more groups).
+    const tasksPath = join(tmpRoot, "specs/001-symbol-demo/tasks.md");
+    writeFileSync(
+      tasksPath,
+      [
+        "# Tasks: Symbol Demo (drift variant)",
+        "",
+        "### T001: depends_on drift",
+        "",
+        "Files: src/auth.ts:validateToken",
+        "",
+      ].join("\n"),
+    );
+    // Append the depends_on annotation + introduce REQ-007 as a sibling.
+    const reqsPath = join(tmpRoot, "specs/auth-design/requirements.md");
+    const reqsContent = readFileSync(reqsPath, "utf-8");
+    const patched = reqsContent
+      .replace(
+        "- REQ-001: validateToken must reject empty bearer tokens.",
+        "- REQ-001: validateToken must reject empty bearer tokens. (depends_on: REQ-007)",
+      )
+      .replace(
+        "- REQ-009: revokeToken must mark a token as revoked.",
+        "- REQ-009: revokeToken must mark a token as revoked.\n- REQ-007: token revocation hook lifecycle.",
+      );
+    writeFileSync(reqsPath, patched);
+
+    const result = runPlanCoverage({
+      repoRoot: tmpRoot,
+      specDir: join(tmpRoot, "specs/001-symbol-demo"),
+      tasksPath,
+      planPath: join(tmpRoot, "specs/001-symbol-demo/plan.md"),
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    expect(g.sourceSymbol).toBe("validateToken");
+    const impactIds = g.impactReqs.map((r) => r.reqId).sort();
+    const originIds = g.originReqs.map((r) => r.reqId).sort();
+    expect(impactIds).toEqual(["REQ-001", "REQ-007"]);
+    expect(originIds).toEqual(["REQ-001"]);
+    const drift = impactIds.filter((id) => !originIds.includes(id));
+    expect(drift).toEqual(["REQ-007"]);
+  });
 });

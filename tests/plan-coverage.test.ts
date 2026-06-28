@@ -1,20 +1,24 @@
-// spec 014 — Phase 4 (US1) tests for `runPlanCoverage`.
+// spec 016 — Phase 3 (US1) tests for `runPlanCoverage`.
 // Contracts:
-//   - specs/014-reinvent-impact-cli/contracts/plan-coverage-json.md
-//   - specs/014-reinvent-impact-cli/contracts/cli-flags.md
-//   - specs/014-reinvent-impact-cli/contracts/mention-semantics.md
+//   - specs/016-impact-plan-symbol-level/contracts/plan-coverage-json.md
+//   - specs/016-impact-plan-symbol-level/contracts/sdd-files-parser.md
+//   - specs/014-reinvent-impact-cli/contracts/mention-semantics.md (unchanged)
 //
 // Covers:
-//   - by-sourceFile axis (`implicitImpacts`) and by-FR axis
-//     (`implicitImpactsByReq`) both present, internally consistent
-//   - mention subtraction (tasks/plan/spec text union)
+//   - by-(sourceFile, sourceSymbol?) axis (`implicitImpacts`) and by-REQ
+//     axis (`implicitImpactsByReq` with `sourceLocations`) both present
+//   - two-axis populate (`impactReqs` + `originReqs`) per ImpactGroup
+//   - mention subtraction on `impactReqs` only (originReqs stays raw)
 //   - --ignore one-shot suppression
 //   - --gate exit codes
 //   - --require-files-section diagnostics
-//   - text-format dual view ("By source file:" / "By requirement:")
+//   - text-format two-axis view ("Impact reqs:" / "Origin reqs:" /
+//     conditional "Drift candidates:" section)
+//   - symbol-mode features (symbol-unit dedup, file-unit sourceSymbol
+//     omission, unresolvedSymbol diagnostic flattening, drift detection)
 //
-// All tests materialise an isolated Spec Kit-style fixture so the graph
-// covers REQ↔file mapping in a controlled way.
+// File-unit tests use an AUTH-* fixture; symbol-unit tests stand up a
+// separate symbol-mode fixture so the two pipelines stay isolated.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -163,7 +167,7 @@ describe("runPlanCoverage — by-sourceFile + by-FR dual axis", () => {
     // and AUTH-003. None are mentioned in tasks/plan/spec text → all implicit.
     const reqIds = new Set<string>();
     for (const group of result.json.implicitImpacts) {
-      for (const req of group.reqs) reqIds.add(req.reqId);
+      for (const req of group.impactReqs) reqIds.add(req.reqId);
     }
     expect(reqIds.has("AUTH-001")).toBe(true);
     expect(reqIds.has("AUTH-002")).toBe(true);
@@ -179,7 +183,7 @@ describe("runPlanCoverage — by-sourceFile + by-FR dual axis", () => {
     expect(byReqIds).toEqual([...byReqIds].sort());
   });
 
-  it("invariant: each implicitImpactsByReq[i].sourceFiles covers all by-sourceFile groups containing that reqId", () => {
+  it("invariant: each implicitImpactsByReq[i].sourceLocations covers all by-sourceFile groups containing that reqId", () => {
     fx = setupFixture({
       tasksBody: [
         "# Tasks",
@@ -202,27 +206,33 @@ describe("runPlanCoverage — by-sourceFile + by-FR dual axis", () => {
     });
 
     // AUTH-001 should show up under at least both login.ts and session.ts
-    // (both files @impl AUTH-001). Verify the by-FR axis reflects that.
+    // (both files @impl AUTH-001). Verify the by-REQ axis reflects that
+    // via the new `sourceLocations: Array<{file, symbol?}>` shape.
     const auth1Group = result.json.implicitImpactsByReq.find(
       (g) => g.reqId === "AUTH-001",
     );
     expect(auth1Group).toBeDefined();
-    expect(auth1Group?.sourceFiles).toEqual(
+    const auth1Files = auth1Group!.sourceLocations.map((l) => l.file);
+    expect(auth1Files).toEqual(
       expect.arrayContaining(["src/auth/login.ts", "src/auth/session.ts"]),
     );
 
+    // File-unit entries must NOT carry a `symbol` field on sourceLocations
+    // (FR-020 / contracts/plan-coverage-json.md §3.1).
+    for (const loc of auth1Group!.sourceLocations) {
+      expect("symbol" in loc).toBe(false);
+    }
+
     // Cross-check: the union of every implicitImpacts[].sourceFile that
-    // contains AUTH-001 in its reqs must equal auth1Group.sourceFiles.
+    // contains AUTH-001 in its impactReqs must equal auth1Files.
     const cross = new Set<string>();
     for (const group of result.json.implicitImpacts) {
-      if (group.reqs.some((r) => r.reqId === "AUTH-001")) cross.add(group.sourceFile);
+      if (group.impactReqs.some((r) => r.reqId === "AUTH-001")) cross.add(group.sourceFile);
     }
-    expect(new Set(auth1Group!.sourceFiles)).toEqual(cross);
+    expect(new Set(auth1Files)).toEqual(cross);
 
-    // implicitImpactsByReq sourceFiles must be sorted.
-    expect(auth1Group!.sourceFiles).toEqual(
-      [...auth1Group!.sourceFiles].sort(),
-    );
+    // sourceLocations must be sorted (file ascending — INV-S4).
+    expect(auth1Files).toEqual([...auth1Files].sort());
   });
 });
 
@@ -258,7 +268,7 @@ describe("runPlanCoverage — mention subtraction", () => {
 
     const implicitIds = new Set<string>();
     for (const g of result.json.implicitImpacts) {
-      for (const r of g.reqs) implicitIds.add(r.reqId);
+      for (const r of g.impactReqs) implicitIds.add(r.reqId);
     }
     // AUTH-002 was mentioned (any-mention, label-agnostic) → not implicit.
     expect(implicitIds.has("AUTH-002")).toBe(false);
@@ -292,7 +302,7 @@ describe("runPlanCoverage — mention subtraction", () => {
 
     const implicitIds = new Set<string>();
     for (const g of result.json.implicitImpacts) {
-      for (const r of g.reqs) implicitIds.add(r.reqId);
+      for (const r of g.impactReqs) implicitIds.add(r.reqId);
     }
     // AUTH-001 must still be implicit even though `AUTH-0010` appeared.
     expect(implicitIds.has("AUTH-001")).toBe(true);
@@ -319,7 +329,7 @@ describe("runPlanCoverage — --ignore one-shot suppression", () => {
     });
     const implicitIds = new Set<string>();
     for (const g of result.json.implicitImpacts) {
-      for (const r of g.reqs) implicitIds.add(r.reqId);
+      for (const r of g.impactReqs) implicitIds.add(r.reqId);
     }
     expect(implicitIds.has("AUTH-002")).toBe(false);
     expect(implicitIds.has("AUTH-003")).toBe(false);
@@ -701,8 +711,497 @@ describe("runPlanCoverage — sort stability", () => {
     const sourceFiles = result.json.implicitImpacts.map((g) => g.sourceFile);
     expect(sourceFiles).toEqual([...sourceFiles].sort());
     for (const group of result.json.implicitImpacts) {
-      const reqIds = group.reqs.map((r) => r.reqId);
+      const reqIds = group.impactReqs.map((r) => r.reqId);
       expect(reqIds).toEqual([...reqIds].sort());
+      // originReqs is independently sorted; INV-S5.
+      const originIds = group.originReqs.map((r) => r.reqId);
+      expect(originIds).toEqual([...originIds].sort());
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spec 016 Phase 3 — symbol-mode coverage. Standalone tmpdir fixture so the
+// AUTH-* file-mode setup above stays untouched. Symbol mode uses REQ-XXX IDs
+// and disables docGraph.autoContains so a symbol's BFS reaches only its own
+// `@impl` claim (no doc-sibling pollution — quickstart Scenario A).
+// ---------------------------------------------------------------------------
+
+interface SymbolFixture {
+  root: string;
+  specDir: string;
+  tasksPath: string;
+  planPath: string;
+}
+
+function setupSymbolFixture(opts?: {
+  tasksBody?: string;
+  /** Override the spec dir's own spec.md (default has zero REQ literals). */
+  specBody?: string;
+  /** Append extra requirement definitions to the external REQ catalogue. */
+  extraReqLines?: string[];
+  /**
+   * Optional `(depends_on: REQ-XYZ)` annotations to attach to a given REQ
+   * definition line — used by the SC-006 drift scenario.
+   */
+  reqDependsOn?: Record<string, string[]>;
+}): SymbolFixture {
+  const root = mkdtempSync(join(tmpdir(), "artgraph-pc-symbol-"));
+  const specDir = join(root, "specs/001-symbol-demo");
+  mkdirSync(specDir, { recursive: true });
+
+  // Analysis target spec.md — intentionally mention-free so the detector
+  // doesn't eclipse implicit impacts when a REQ-ID happens to be literal.
+  writeFileSync(
+    join(specDir, "spec.md"),
+    opts?.specBody ??
+      [
+        "# Symbol Demo Spec",
+        "",
+        "Intentionally REQ-ID-free body so plan-coverage's mention detector",
+        "treats every REQ reached from `Files:` paths as implicit.",
+        "",
+      ].join("\n"),
+  );
+
+  // External REQ catalogue. autoContains is off (see .artgraph.json below)
+  // so the doc node does NOT pull these REQs together via BFS — each is a
+  // standalone node, reached only via its own `implements` edge.
+  const reqLines = [
+    "- REQ-001: validateToken must reject empty bearer tokens.",
+    "- REQ-002: createSession must establish a fresh session for a user id.",
+    "- REQ-005: issueToken must mint a fresh bearer token tied to a user id.",
+    "- REQ-009: revokeToken must mark a token as revoked.",
+    ...(opts?.extraReqLines ?? []),
+  ];
+  if (opts?.reqDependsOn) {
+    for (let i = 0; i < reqLines.length; i++) {
+      for (const [reqId, deps] of Object.entries(opts.reqDependsOn)) {
+        if (!reqLines[i].startsWith(`- ${reqId}:`)) continue;
+        // Append `(depends_on: REQ-X, REQ-Y)` so the markdown parser
+        // builds depends_on edges (parsers/markdown.ts ANNOTATION_RE).
+        reqLines[i] = `${reqLines[i]} (depends_on: ${deps.join(", ")})`;
+      }
+    }
+  }
+  const externalSpec = join(root, "specs/auth-design");
+  mkdirSync(externalSpec, { recursive: true });
+  writeFileSync(
+    join(externalSpec, "requirements.md"),
+    ["# Auth Requirements", "", "## Requirements", "", ...reqLines, ""].join("\n"),
+  );
+
+  // src/auth.ts: three exports, each `@impl` REQ-001/005/009 inside the
+  // function body so the symbol-mode TS parser attributes the edge to the
+  // symbol (not the file).
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(
+    join(root, "src/auth.ts"),
+    [
+      "export function validateToken(token: string): boolean {",
+      "  // @impl REQ-001",
+      "  return token.length > 0;",
+      "}",
+      "export function issueToken(userId: string): string {",
+      "  // @impl REQ-005",
+      "  return `token:${userId}`;",
+      "}",
+      "export function revokeToken(token: string): void {",
+      "  // @impl REQ-009",
+      "  void token;",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  // Companion file for cross-file symbol (US1 AS#3).
+  writeFileSync(
+    join(root, "src/session.ts"),
+    [
+      "export function createSession(userId: string): string {",
+      "  // @impl REQ-002",
+      "  return `session:${userId}`;",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  writeFileSync(
+    join(root, ".artgraph.json"),
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.test.ts"],
+      lockFile: ".trace.lock",
+      mode: "symbol",
+      docGraph: { autoContains: false },
+    }),
+  );
+
+  const tasksBody = opts?.tasksBody ?? [
+    "# Tasks",
+    "",
+    "### T001",
+    "",
+    "Files: src/auth.ts:validateToken",
+    "",
+  ].join("\n");
+  const tasksPath = join(specDir, "tasks.md");
+  writeFileSync(tasksPath, tasksBody);
+
+  const planPath = join(specDir, "plan.md");
+  writeFileSync(planPath, "# Plan\n\nNo REQ references.\n");
+  return { root, specDir, tasksPath, planPath };
+}
+
+describe("runPlanCoverage — symbol-mode US1 (Phase 3)", () => {
+  let fx: SymbolFixture;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("symbol-unit entry produces a single ImpactGroup with sourceSymbol + two-axis populate (contract §8 case 1)", () => {
+    fx = setupSymbolFixture();
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    expect(g.sourceFile).toBe("src/auth.ts");
+    expect(g.sourceSymbol).toBe("validateToken");
+    expect(g.impactReqs.map((r) => r.reqId)).toEqual(["REQ-001"]);
+    expect(g.originReqs.map((r) => r.reqId)).toEqual(["REQ-001"]);
+    expect(result.json.implicitImpactsByReq).toHaveLength(1);
+    expect(result.json.implicitImpactsByReq[0]).toEqual({
+      reqId: "REQ-001",
+      sourceLocations: [{ file: "src/auth.ts", symbol: "validateToken" }],
+    });
+  });
+
+  it("file-unit entry omits sourceSymbol key and reports originReqs:[] when file-top has no @impl (contract §8 case 2/3)", () => {
+    fx = setupSymbolFixture({
+      tasksBody: ["# Tasks", "", "### T001", "", "Files: src/auth.ts", ""].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    expect(g.sourceFile).toBe("src/auth.ts");
+    // JSON key must be omitted, not present-as-undefined.
+    expect("sourceSymbol" in g).toBe(false);
+    expect(g.impactReqs.map((r) => r.reqId).sort()).toEqual([
+      "REQ-001",
+      "REQ-005",
+      "REQ-009",
+    ]);
+    // file-top @impl is absent in the fixture → originReqs MUST be [].
+    expect(g.originReqs).toEqual([]);
+    // by-REQ sourceLocations: file-only entry must omit `symbol` key.
+    for (const r of result.json.implicitImpactsByReq) {
+      for (const loc of r.sourceLocations) {
+        expect("symbol" in loc).toBe(false);
+        expect(loc.file).toBe("src/auth.ts");
+      }
+    }
+  });
+
+  it("1 file × 2 symbols → 2 distinct ImpactGroups with independent origin claims (contract §8 case 4)", () => {
+    fx = setupSymbolFixture({
+      tasksBody: [
+        "# Tasks",
+        "",
+        "### T001",
+        "",
+        "Files: src/auth.ts:validateToken, src/auth.ts:issueToken",
+        "",
+      ].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.json.implicitImpacts).toHaveLength(2);
+    const symbols = result.json.implicitImpacts.map((g) => g.sourceSymbol);
+    expect(symbols.sort()).toEqual(["issueToken", "validateToken"]);
+    const validateGroup = result.json.implicitImpacts.find(
+      (g) => g.sourceSymbol === "validateToken",
+    )!;
+    const issueGroup = result.json.implicitImpacts.find(
+      (g) => g.sourceSymbol === "issueToken",
+    )!;
+    expect(validateGroup.originReqs.map((r) => r.reqId)).toEqual(["REQ-001"]);
+    expect(issueGroup.originReqs.map((r) => r.reqId)).toEqual(["REQ-005"]);
+    expect(validateGroup.impactReqs.map((r) => r.reqId)).toEqual(["REQ-001"]);
+    expect(issueGroup.impactReqs.map((r) => r.reqId)).toEqual(["REQ-005"]);
+  });
+
+  it("US1 AS#3: cross-file symbol entries produce 2 ImpactGroups in parallel", () => {
+    fx = setupSymbolFixture({
+      tasksBody: [
+        "# Tasks",
+        "",
+        "### T001",
+        "",
+        "Files: src/auth.ts:validateToken, src/session.ts:createSession",
+        "",
+      ].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.json.implicitImpacts).toHaveLength(2);
+    const files = result.json.implicitImpacts.map((g) => g.sourceFile);
+    expect(files.sort()).toEqual(["src/auth.ts", "src/session.ts"]);
+    for (const g of result.json.implicitImpacts) {
+      expect(g.sourceSymbol).toBeDefined();
+      // Each entry's origin == its impact == single REQ for the symbol.
+      expect(g.impactReqs).toEqual(g.originReqs);
+      expect(g.impactReqs).toHaveLength(1);
+    }
+  });
+
+  it("unresolvedSymbol entry: diagnostic emitted and entry excluded from implicitImpacts (contract §8 case 5)", () => {
+    fx = setupSymbolFixture({
+      tasksBody: [
+        "# Tasks",
+        "",
+        "### T001",
+        "",
+        "Files: src/auth.ts:doesNotExist",
+        "",
+      ].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    // entry was rejected → no implicitImpacts; diagnostic surfaces instead.
+    expect(result.json.implicitImpacts).toEqual([]);
+    const unresolved = result.json.diagnostics.filter(
+      (d) => d.kind === "unresolvedSymbol",
+    );
+    expect(unresolved).toHaveLength(1);
+    expect(unresolved[0]).toEqual({
+      kind: "unresolvedSymbol",
+      sourceFile: "src/auth.ts",
+      symbol: "doesNotExist",
+      line: 5,
+    });
+  });
+
+  it("file + symbol mixed entries produce two groups; file-unit omits sourceSymbol (contract §8 case 6)", () => {
+    fx = setupSymbolFixture({
+      tasksBody: [
+        "# Tasks",
+        "",
+        "### T001",
+        "",
+        "Files: src/auth.ts, src/session.ts:createSession",
+        "",
+      ].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.json.implicitImpacts).toHaveLength(2);
+    const authGroup = result.json.implicitImpacts.find(
+      (g) => g.sourceFile === "src/auth.ts",
+    )!;
+    const sessionGroup = result.json.implicitImpacts.find(
+      (g) => g.sourceFile === "src/session.ts",
+    )!;
+    expect("sourceSymbol" in authGroup).toBe(false);
+    expect(sessionGroup.sourceSymbol).toBe("createSession");
+  });
+
+  it("--gate trips on unresolvedSymbol-only run (contract §8 case 7)", () => {
+    fx = setupSymbolFixture({
+      tasksBody: [
+        "# Tasks",
+        "",
+        "### T001",
+        "",
+        "Files: src/auth.ts:doesNotExist",
+        "",
+      ].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: true,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.json.implicitImpacts).toEqual([]);
+    expect(result.json.diagnostics.length).toBeGreaterThan(0);
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("sourceLocations sort: file ascending; same-file `undefined` symbol precedes a string symbol (INV-S4, contract §8 case 8)", () => {
+    fx = setupSymbolFixture({
+      tasksBody: [
+        "# Tasks",
+        "",
+        "### T001",
+        "",
+        // Order intentionally jumbled to verify the sort, not preservation.
+        "Files: src/session.ts:createSession, src/auth.ts:validateToken, src/auth.ts",
+        "",
+      ].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    // REQ-001 is reached by BOTH `src/auth.ts` (file unit) and
+    // `src/auth.ts:validateToken`; sort must put undefined first.
+    const req1 = result.json.implicitImpactsByReq.find((r) => r.reqId === "REQ-001")!;
+    expect(req1.sourceLocations.length).toBeGreaterThanOrEqual(2);
+    expect(req1.sourceLocations[0]).toEqual({ file: "src/auth.ts" });
+    expect(req1.sourceLocations[1]).toEqual({
+      file: "src/auth.ts",
+      symbol: "validateToken",
+    });
+  });
+
+  it("SC-006 drift: depends_on REQ-007 makes REQ-007 reachable from validateToken, surfaces in impactReqs but NOT originReqs (contract §8 case 9)", () => {
+    fx = setupSymbolFixture({
+      extraReqLines: ["- REQ-007: token revocation hook."],
+      reqDependsOn: { "REQ-001": ["REQ-007"] },
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath, // default Files: src/auth.ts:validateToken
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    const impactIds = g.impactReqs.map((r) => r.reqId).sort();
+    const originIds = g.originReqs.map((r) => r.reqId).sort();
+    expect(impactIds).toEqual(["REQ-001", "REQ-007"]);
+    expect(originIds).toEqual(["REQ-001"]);
+    // JSON consumer computes the drift candidate themselves.
+    const drift = impactIds.filter((id) => !originIds.includes(id));
+    expect(drift).toEqual(["REQ-007"]);
+  });
+
+  it("--ignore applies to BOTH impactReqs and originReqs (FR-022)", () => {
+    fx = setupSymbolFixture({
+      tasksBody: [
+        "# Tasks",
+        "",
+        "### T001",
+        "",
+        "Files: src/auth.ts:validateToken",
+        "",
+      ].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: ["REQ-001"],
+      requireFilesSection: false,
+    });
+    // The only group's only REQ is ignored → group falls out entirely.
+    expect(result.json.implicitImpacts).toEqual([]);
+    expect(result.json.implicitImpactsByReq).toEqual([]);
+    expect(result.json.ignored).toEqual(["REQ-001"]);
+  });
+
+  it("text formatter renders symbol entry with `#` separator + Impact/Origin sections; omits empty Drift section", () => {
+    fx = setupSymbolFixture();
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "text",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.text).toContain("src/auth.ts#validateToken");
+    expect(result.text).toContain("Impact reqs:");
+    expect(result.text).toContain("Origin reqs (@impl claims):");
+    // Drift section omitted when impact == origin.
+    expect(result.text).not.toContain("Drift candidates");
+  });
+
+  it("text formatter renders Drift candidates section when impactReqs \\ originReqs is non-empty", () => {
+    fx = setupSymbolFixture({
+      extraReqLines: ["- REQ-007: token revocation hook."],
+      reqDependsOn: { "REQ-001": ["REQ-007"] },
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "text",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.text).toContain("Drift candidates");
+    expect(result.text).toContain("REQ-007");
   });
 });

@@ -1,8 +1,26 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
 import { buildGraph } from "../src/graph/builder.js";
-import { impact, resolveFileStartIds, findOrphans, findUncovered } from "../src/graph/traverse.js";
-import type { ArtgraphConfig, LockFile } from "../src/types.js";
+import {
+  impact,
+  resolveStartIds,
+  resolveOriginReqs,
+  findOrphans,
+  findUncovered,
+} from "../src/graph/traverse.js";
+import type { ArtgraphConfig, ArtifactGraph, GraphNode, LockFile } from "../src/types.js";
+
+// spec 016 — `resolveFileStartIds` was removed in favor of `resolveStartIds`.
+// Provide a local compat shim so spec 014 test bodies still compile/import
+// (they exercise file-unit semantics). Phase 3+4 will rewrite the
+// downstream assertions; for Phase 2 only the new resolveStartIds /
+// resolveOriginReqs describes below are expected to pass.
+function resolveFileStartIds(graph: ArtifactGraph, inputs: string[]): string[] {
+  return resolveStartIds(
+    graph,
+    inputs.map((path) => ({ path, line: 0 })),
+  ).startIds;
+}
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
 
@@ -294,5 +312,195 @@ describe("task-source edge semantics (meta-review remediation)", () => {
     const result = impact(graph as any, ["FR-001"], {});
     expect(Array.isArray(result.affectedTasks)).toBe(true);
     expect(result.summary && typeof result.summary.tasks).toBe("number");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spec 016 — resolveStartIds (replaces resolveFileStartIds)
+// ---------------------------------------------------------------------------
+
+function buildSymbolGraph(): ArtifactGraph {
+  // Hand-rolled three-export fixture mirroring tests/fixtures/symbol-mode/.
+  // We avoid running the scanner here so the test is hermetic and runs in
+  // milliseconds; the symbol-mode E2E fixture is exercised separately in
+  // Phase 3 (plan-coverage-integration).
+  const nodes = new Map<string, GraphNode>();
+  const reqIds = ["REQ-001", "REQ-005", "REQ-009"];
+  for (const id of reqIds) {
+    nodes.set(id, {
+      id,
+      kind: "req",
+      filePath: "specs/001-symbol-demo/spec.md",
+      contentHash: "h",
+    });
+  }
+  nodes.set("file:src/auth.ts", {
+    id: "file:src/auth.ts",
+    kind: "file",
+    filePath: "src/auth.ts",
+    contentHash: "h",
+  });
+  for (const sym of ["validateToken", "issueToken", "revokeToken"]) {
+    const id = `symbol:src/auth.ts#${sym}`;
+    nodes.set(id, {
+      id,
+      kind: "symbol",
+      filePath: "src/auth.ts",
+      contentHash: "h",
+      label: sym,
+    });
+  }
+  return {
+    nodes,
+    edges: [
+      {
+        source: "symbol:src/auth.ts#validateToken",
+        target: "REQ-001",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
+      {
+        source: "symbol:src/auth.ts#issueToken",
+        target: "REQ-005",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
+      {
+        source: "symbol:src/auth.ts#revokeToken",
+        target: "REQ-009",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
+    ],
+  };
+}
+
+describe("resolveStartIds (spec 016)", () => {
+  it("file-unit entry resolves to file node + same-file symbol nodes", () => {
+    const graph = buildSymbolGraph();
+    const { startIds, unresolvedSymbols } = resolveStartIds(graph, [
+      { path: "src/auth.ts", line: 1 },
+    ]);
+    expect(startIds).toContain("file:src/auth.ts");
+    expect(startIds).toContain("symbol:src/auth.ts#validateToken");
+    expect(startIds).toContain("symbol:src/auth.ts#issueToken");
+    expect(startIds).toContain("symbol:src/auth.ts#revokeToken");
+    expect(unresolvedSymbols).toEqual([]);
+  });
+
+  it("symbol-unit entry resolves to the symbol node WITHOUT the parent file (R-006)", () => {
+    const graph = buildSymbolGraph();
+    const { startIds, unresolvedSymbols } = resolveStartIds(graph, [
+      { path: "src/auth.ts", symbol: "validateToken", line: 1 },
+    ]);
+    expect(startIds).toEqual(["symbol:src/auth.ts#validateToken"]);
+    // Crucially: file node is NOT included — that's what blocks the BFS
+    // from sweeping sibling symbols via the file parent.
+    expect(startIds).not.toContain("file:src/auth.ts");
+    expect(startIds).not.toContain("symbol:src/auth.ts#issueToken");
+    expect(unresolvedSymbols).toEqual([]);
+  });
+
+  it("file + symbol mixed entries preserve input order in startIds", () => {
+    const graph = buildSymbolGraph();
+    const { startIds } = resolveStartIds(graph, [
+      { path: "src/auth.ts", symbol: "validateToken", line: 1 },
+      { path: "src/auth.ts", line: 2 },
+    ]);
+    // First entry produces the symbol id first; the second entry then drags
+    // in the file node (and same-file symbols), preserving the input order.
+    expect(startIds[0]).toBe("symbol:src/auth.ts#validateToken");
+    expect(startIds).toContain("file:src/auth.ts");
+  });
+
+  it("unresolved symbols accumulate in `unresolvedSymbols[]` in input order", () => {
+    const graph = buildSymbolGraph();
+    const { startIds, unresolvedSymbols } = resolveStartIds(graph, [
+      { path: "src/auth.ts", symbol: "doesNotExist", line: 1 },
+      { path: "src/auth.ts", symbol: "alsoMissing", line: 2 },
+      { path: "src/auth.ts", symbol: "validateToken", line: 3 },
+    ]);
+    expect(startIds).toEqual(["symbol:src/auth.ts#validateToken"]);
+    expect(unresolvedSymbols).toEqual([
+      { path: "src/auth.ts", symbol: "doesNotExist", line: 1 },
+      { path: "src/auth.ts", symbol: "alsoMissing", line: 2 },
+    ]);
+  });
+
+  it("startIds are deduplicated (INV-S2): same entry twice yields one id", () => {
+    const graph = buildSymbolGraph();
+    const { startIds } = resolveStartIds(graph, [
+      { path: "src/auth.ts", symbol: "validateToken", line: 1 },
+      { path: "src/auth.ts", symbol: "validateToken", line: 2 },
+    ]);
+    expect(startIds).toEqual(["symbol:src/auth.ts#validateToken"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spec 016 — resolveOriginReqs (R-015, INV-S5/INV-S6)
+// ---------------------------------------------------------------------------
+
+describe("resolveOriginReqs (spec 016)", () => {
+  it("returns the REQ ids claimed by each startId via `implements`", () => {
+    const graph = buildSymbolGraph();
+    const reqs = resolveOriginReqs(graph, [
+      "symbol:src/auth.ts#validateToken",
+    ]);
+    expect(reqs).toEqual(["REQ-001"]);
+  });
+
+  it("returns dedup'd, reqId-asc-sorted union across multiple startIds", () => {
+    const graph = buildSymbolGraph();
+    const reqs = resolveOriginReqs(graph, [
+      "symbol:src/auth.ts#revokeToken",
+      "symbol:src/auth.ts#issueToken",
+      "symbol:src/auth.ts#validateToken",
+    ]);
+    expect(reqs).toEqual(["REQ-001", "REQ-005", "REQ-009"]);
+  });
+
+  it("returns [] when no startId has any `@impl` claim", () => {
+    const graph = buildSymbolGraph();
+    // file node intentionally lacks any outbound `implements` edge.
+    const reqs = resolveOriginReqs(graph, ["file:src/auth.ts"]);
+    expect(reqs).toEqual([]);
+  });
+
+  it("returns [] when startIds is empty", () => {
+    const graph = buildSymbolGraph();
+    expect(resolveOriginReqs(graph, [])).toEqual([]);
+  });
+
+  it("dedups REQs even when two startIds claim the same REQ", () => {
+    // Construct an extra `implements` edge so two symbols both claim REQ-001,
+    // then verify the result has only one REQ-001 entry.
+    const graph = buildSymbolGraph();
+    graph.edges.push({
+      source: "symbol:src/auth.ts#issueToken",
+      target: "REQ-001",
+      kind: "implements",
+      provenances: ["code-tag"],
+    });
+    const reqs = resolveOriginReqs(graph, [
+      "symbol:src/auth.ts#validateToken",
+      "symbol:src/auth.ts#issueToken",
+    ]);
+    expect(reqs).toEqual(["REQ-001", "REQ-005"]);
+  });
+
+  it("ignores non-implements edges", () => {
+    const graph = buildSymbolGraph();
+    graph.edges.push({
+      source: "symbol:src/auth.ts#validateToken",
+      target: "REQ-009",
+      kind: "depends_on",
+      provenances: ["convention"],
+    });
+    const reqs = resolveOriginReqs(graph, [
+      "symbol:src/auth.ts#validateToken",
+    ]);
+    // REQ-009 must NOT appear — `depends_on` is not the `implements` axis.
+    expect(reqs).toEqual(["REQ-001"]);
   });
 });
