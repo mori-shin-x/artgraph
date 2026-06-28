@@ -296,6 +296,59 @@ describe("templates/skills metatest", () => {
     ).toEqual([]);
   });
 
+  // US4 (spec 016): symbol-level + dual-axis guidance must appear in the two
+  // updated Skills, in docs/skills-guide.md, and in README.md (FR-026..FR-029).
+  // The Skill body-line cap (≤ 100 lines, FR-030) is enforced by the generic
+  // "body is <= 100 lines" test above; the keyword presence checks below pin
+  // US4 Acceptance Scenarios 1, 2, 3, 4.
+  describe("spec 016 US4 — symbol-level guidance keywords", () => {
+    it("artgraph-impact SKILL.md mentions symbol-level input + originReqs + example", () => {
+      // AS#1: grep "symbol-level" / "originReqs" / "src/auth.ts:validateToken"
+      const skill = readSkill("artgraph-impact");
+      expect(skill.body).toMatch(/symbol-level/);
+      expect(skill.body).toMatch(/originReqs/);
+      expect(skill.body).toMatch(/src\/auth\.ts:validateToken/);
+    });
+
+    it("artgraph-plan-coverage SKILL.md mentions impactReqs + originReqs + drift", () => {
+      // AS#2: dual-axis output interpretation + drift detection
+      const skill = readSkill("artgraph-plan-coverage");
+      expect(skill.body).toMatch(/impactReqs/);
+      expect(skill.body).toMatch(/originReqs/);
+      expect(skill.body).toMatch(/drift/i);
+      expect(skill.body).toMatch(/unresolvedSymbol/);
+    });
+
+    it("docs/skills-guide.md documents symbol mode, scan --mode symbol, and dual-axis", () => {
+      // AS#3: "scan --mode symbol を実行しないと無効" + "impactReqs / originReqs の二軸"
+      const docPath = resolve(
+        import.meta.dirname,
+        "..",
+        "docs",
+        "skills-guide.md",
+      );
+      expect(existsSync(docPath), `Expected ${docPath} to exist`).toBe(true);
+      const content = readFileSync(docPath, "utf8");
+      expect(content).toMatch(/symbol mode/i);
+      expect(content).toMatch(/scan --mode symbol/);
+      expect(content).toMatch(/impactReqs/);
+      expect(content).toMatch(/originReqs/);
+      // FR-028 (a) trade-off, (c) .artgraph.json mode example
+      expect(content).toMatch(/"mode":\s*"symbol"/);
+    });
+
+    it("README.md Skills table carries an input-mode column / annotation", () => {
+      // AS#4: each Skill's supported mode (file / symbol / both) is readable
+      const readmePath = resolve(import.meta.dirname, "..", "README.md");
+      expect(existsSync(readmePath), `Expected ${readmePath} to exist`).toBe(
+        true,
+      );
+      const content = readFileSync(readmePath, "utf8");
+      expect(content).toMatch(/Input mode/);
+      expect(content).toMatch(/file \+ symbol/);
+    });
+  });
+
   describe("_shared files", () => {
     const SHARED_FILES = [
       "install-check.md",

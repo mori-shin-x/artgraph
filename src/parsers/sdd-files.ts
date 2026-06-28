@@ -1,34 +1,62 @@
-// Two-stage file-path extractor for `tasks.md` / `plan.md` (spec 014).
+// Two-stage file-path / symbol extractor for `tasks.md` / `plan.md` (spec 016).
 //
-// Stage A — `Files:` section: structured, trusted (human-authored). Accept the
-// path even when not yet on disk (the author may be declaring a brand-new file
-// that the upcoming task will create), and surface unresolved entries as
-// `unresolvedFilePath` diagnostics so a typo doesn't go unnoticed.
+// Stage A — `Files:` section: structured, trusted (human-authored). Each entry
+// is parsed as either a `path:symbol` symbol-unit declaration or a path-only
+// file-unit declaration (FR-001/FR-002, spec 016 R-003). The author may
+// declare a brand-new file that the upcoming task will create; we surface
+// unresolved entries as `unresolvedFilePath` / `unresolvedSymbol` diagnostics
+// so typos / scan-mode mismatches don't silently fall through.
 //
 // Stage B — regex fallback: free-text scan, untrusted. Only accept candidates
 // that exist in the graph or on the filesystem so README boilerplate like
 // `node_modules/foo.js` or `<img src="logo.png">` doesn't seed a phantom
-// impact start point.
+// impact start point. Stage B never assigns a `symbol` (FR-006).
 //
 // The contract is documented in
-// `specs/014-reinvent-impact-cli/contracts/sdd-files-parser.md`.
+// `specs/016-impact-plan-symbol-level/contracts/sdd-files-parser.md`.
 // Edge cases there are mirrored 1:1 in tests/sdd-files-parser.test.ts.
 
 import { existsSync } from "node:fs";
 import { relative, resolve as resolvePath, sep } from "node:path";
 import type { ArtifactGraph } from "../types.js";
 
-export type Diagnostic = {
-  /**
-   * Stage A surfaced a path it could not resolve against either the graph or
-   * the working tree. The path is still kept in `files` (Stage A trusts the
-   * author's explicit declaration); the diagnostic exists so a typo is visible.
-   */
-  kind: "unresolvedFilePath";
+/**
+ * spec 016 (FR-001 / R-001 / R-002) — Stage A `Files:` entry. `symbol === undefined`
+ * encodes a file-unit declaration (`Files: src/a.ts`); a defined `symbol`
+ * encodes a symbol-unit declaration (`Files: src/a.ts:fn1`). `line` is the
+ * 1-based source line of the Stage A entry (header or bullet).
+ */
+export interface SymbolEntry {
   path: string;
-  /** 1-based line number of the offending header or bullet. */
+  symbol?: string;
   line: number;
-};
+}
+
+export type Diagnostic =
+  | {
+      /**
+       * Stage A surfaced a path it could not resolve against either the graph
+       * or the working tree. The entry is still kept in `entries` (Stage A
+       * trusts the author's explicit declaration); the diagnostic exists so a
+       * typo is visible.
+       */
+      kind: "unresolvedFilePath";
+      path: string;
+      /** 1-based line number of the offending header or bullet. */
+      line: number;
+    }
+  | {
+      /**
+       * spec 016 (FR-004, R-009, INV-S1) — Stage A `path:symbol` syntax where
+       * the path is registered (graph node or fs file) but the symbol is not
+       * registered in the graph (no `symbol:<path>#<symbol>` node). Per-entry
+       * exclusive with `unresolvedFilePath` (path miss takes precedence).
+       */
+      kind: "unresolvedSymbol";
+      sourceFile: string;
+      symbol: string;
+      line: number;
+    };
 
 /**
  * spec 014 (US1 / FR-018) — Task block surface info for `plan-coverage
@@ -49,8 +77,17 @@ export interface TaskBlock {
 }
 
 export type ExtractResult = {
-  /** dedup + sort 済み — both stages return a stable, lexicographic order. */
-  files: string[];
+  /**
+   * spec 016 (FR-007, R-001) — canonical Stage A / Stage B entries. Each
+   * entry is `{ path, symbol?, line }`. Input order is preserved within a
+   * stage; `(path, symbol ?? null)` is dedup'd. Stage B (regex fallback)
+   * never assigns a symbol. When neither stage matches `entries === []` and
+   * `stage === "empty"`.
+   *
+   * `files: string[]` is intentionally absent. Callers that need a file-only
+   * view derive it from `entries.map(e => e.path)` and dedup themselves.
+   */
+  entries: SymbolEntry[];
   stage: "files-section" | "regex-fallback" | "empty";
   diagnostics: Diagnostic[];
   /**
@@ -80,6 +117,12 @@ const BULLET_RE = /^\s*[-*]\s+(.+?)\s*$/;
 // with `$` so a path that legitimately contains `(...)` mid-string is left
 // alone (no real path does, but the safety is free).
 const TRAILING_ANNOTATION_RE = /\s*\([^)]*\)\s*$/;
+// spec 016 (R-003): `path:symbol` syntax. group 1 = path (extension required,
+// no `:`/whitespace); group 2 = symbol (no whitespace / commas / parens; the
+// `:` between groups is the first `:` in the entry and consumed once — any
+// further `:` falls into the symbol body per FR-005). The extension
+// requirement keeps tokens like `REQ-003` from being mis-detected as paths.
+const PATH_SYMBOL_RE = /^([^:\s]+\.[\w]+):([^\s,()]+)$/;
 // Stage B path-shaped token. The boundary lookarounds keep us from biting
 // into a longer continuous path-char run on either side (so we don't, e.g.,
 // pull `b.ts` out of `src/b.ts`). The `\.\w+` tail rules out extensionless
@@ -102,7 +145,7 @@ function isAbsolutePath(path: string): boolean {
  * `foo/../bar` segments against `repoRoot` and re-emits the result as a
  * POSIX-separated, repo-relative path. Returns `null` when the resulting
  * path escapes the repo (so the caller can flag it as `unresolvedFilePath`
- * without admitting it to `files[]`). A trailing `/` (directory marker) is
+ * without admitting it to `entries[]`). A trailing `/` (directory marker) is
  * preserved per contract — `path.relative` strips it.
  */
 function normalizeStagePath(path: string, repoRoot: string): string | null {
@@ -129,13 +172,18 @@ function stripTrailingAnnotation(s: string): string {
 }
 
 interface StageAExtraction {
-  files: string[];
+  entries: SymbolEntry[];
   diagnostics: Diagnostic[];
 }
 
 function runStageA(lines: string[], options: ExtractOptions): StageAExtraction {
-  const accepted: string[] = [];
+  const accepted: SymbolEntry[] = [];
   const diagnostics: Diagnostic[] = [];
+  // (path, symbol ?? null) dedup key to honor spec 016 R-001: same entry
+  // declared multiple times yields a single SymbolEntry.
+  const seenKeys = new Set<string>();
+  const dedupKey = (path: string, symbol: string | undefined): string =>
+    `${path} ${symbol ?? ""}`;
 
   let i = 0;
   while (i < lines.length) {
@@ -170,7 +218,7 @@ function runStageA(lines: string[], options: ExtractOptions): StageAExtraction {
 
     // candidates carry their source line (1-based) so a diagnostic emitted
     // later can pinpoint the offending entry instead of just the section.
-    const candidates: Array<{ path: string; line: number }> = [];
+    const candidates: Array<{ raw: string; line: number }> = [];
 
     // Inline form: comma-separated tail on the header line itself.
     const inlineTail = header[1].trim();
@@ -178,7 +226,7 @@ function runStageA(lines: string[], options: ExtractOptions): StageAExtraction {
       const stripped = stripTrailingInlinePunct(inlineTail);
       for (const piece of stripped.split(",")) {
         const v = stripTrailingAnnotation(piece.trim());
-        if (v !== "") candidates.push({ path: v, line: i + 1 });
+        if (v !== "") candidates.push({ raw: v, line: i + 1 });
       }
     }
 
@@ -188,31 +236,60 @@ function runStageA(lines: string[], options: ExtractOptions): StageAExtraction {
       const m = BULLET_RE.exec(lines[j]);
       if (!m) continue;
       const v = stripTrailingAnnotation(m[1].trim());
-      if (v !== "") candidates.push({ path: v, line: j + 1 });
+      if (v !== "") candidates.push({ raw: v, line: j + 1 });
     }
 
-    for (const { path, line } of candidates) {
-      if (isAbsolutePath(path)) {
-        // Absolute paths are dropped from `files[]` but surfaced as a
-        // diagnostic so the author can correct them.
-        diagnostics.push({ kind: "unresolvedFilePath", path, line });
+    for (const { raw, line } of candidates) {
+      // spec 016 (R-003, FR-001/002/005): split `path:symbol` after the
+      // annotation strip but before any further validation. The regex
+      // demands an extension on the path, so non-path tokens (`REQ-003`)
+      // don't match and fall through to the path-only branch as `raw`.
+      const symMatch = PATH_SYMBOL_RE.exec(raw);
+      const rawPath = symMatch ? symMatch[1] : raw;
+      const symbol = symMatch ? symMatch[2] : undefined;
+
+      if (isAbsolutePath(rawPath)) {
+        // Absolute paths are dropped from `entries[]` but surfaced as a
+        // diagnostic so the author can correct them. Symbol miss is not
+        // reported (path miss takes precedence, INV-S1).
+        diagnostics.push({ kind: "unresolvedFilePath", path: rawPath, line });
         continue;
       }
       // Normalize `./foo` / `foo/../bar` so the downstream graph lookup
       // (which keys on canonical repo-relative paths like `src/foo.ts`)
       // doesn't miss. Paths that escape the repo are rejected.
-      const normalized = normalizeStagePath(path, options.repoRoot);
+      const normalized = normalizeStagePath(rawPath, options.repoRoot);
       if (normalized === null) {
-        diagnostics.push({ kind: "unresolvedFilePath", path, line });
+        diagnostics.push({ kind: "unresolvedFilePath", path: rawPath, line });
         continue;
       }
-      accepted.push(normalized);
-      // Soft validation: if the path is neither registered in the graph nor
-      // present on disk, surface a typo warning. The path is still accepted.
+
+      const key = dedupKey(normalized, symbol);
+      if (seenKeys.has(key)) continue;
+      seenKeys.add(key);
+      accepted.push({ path: normalized, symbol, line });
+
+      // Soft validation. Path-side first: if the path is neither registered
+      // in the graph nor present on disk, surface a typo warning and skip
+      // the symbol check (INV-S1: per-entry exclusive).
       const inGraph = options.graph.nodes.has(`file:${normalized}`);
       const onFs = existsSync(resolvePath(options.repoRoot, normalized));
       if (!inGraph && !onFs) {
         diagnostics.push({ kind: "unresolvedFilePath", path: normalized, line });
+        continue;
+      }
+      // Path OK: when a symbol is present, verify it resolves to a
+      // graph-registered `symbol:<path>#<name>` node (spec 016 FR-004).
+      if (symbol !== undefined) {
+        const symId = `symbol:${normalized}#${symbol}`;
+        if (!options.graph.nodes.has(symId)) {
+          diagnostics.push({
+            kind: "unresolvedSymbol",
+            sourceFile: normalized,
+            symbol,
+            line,
+          });
+        }
       }
     }
 
@@ -220,27 +297,34 @@ function runStageA(lines: string[], options: ExtractOptions): StageAExtraction {
     i = scopeEnd;
   }
 
-  return { files: accepted, diagnostics };
+  return { entries: accepted, diagnostics };
 }
 
-function runStageB(text: string, options: ExtractOptions): string[] {
+function runStageB(text: string, options: ExtractOptions): SymbolEntry[] {
   // Stage B is strict: only candidates that we can verify (graph node OR
   // on disk relative to repoRoot) are accepted. This is what filters out
   // URLs (`https://...` → the regex picks up `//example.com/foo.md` which
   // doesn't exist) and HTML attribute values (`<img src="logo.png">` → no
-  // such file in repo).
-  const candidates = new Set<string>();
+  // such file in repo). symbol detection is intentionally disabled here
+  // (FR-006): free-text scans are too noisy to interpret `:name` tails
+  // reliably (URLs, ports, etc.).
+  const seen = new Set<string>();
+  const accepted: SymbolEntry[] = [];
   for (const match of text.matchAll(STAGE_B_PATTERN)) {
-    candidates.add(match[0]);
-  }
-
-  const accepted: string[] = [];
-  for (const candidate of candidates) {
+    const candidate = match[0];
+    if (seen.has(candidate)) continue;
     const inGraph = options.graph.nodes.has(`file:${candidate}`);
     // `path.resolve` returns `candidate` unchanged when it's already absolute,
     // so this works uniformly for both relative and absolute candidates.
     const onFs = existsSync(resolvePath(options.repoRoot, candidate));
-    if (inGraph || onFs) accepted.push(candidate);
+    if (!inGraph && !onFs) continue;
+    seen.add(candidate);
+    // 1-based line number of the first occurrence of `candidate` so callers
+    // can point users at the right span. `text.indexOf` is enough — we only
+    // care about the first hit.
+    const idx = match.index ?? text.indexOf(candidate);
+    const line = idx === -1 ? 1 : text.slice(0, idx).split("\n").length;
+    accepted.push({ path: candidate, line });
   }
   return accepted;
 }
@@ -291,22 +375,22 @@ export function extractFiles(text: string, options: ExtractOptions): ExtractResu
   const stageA = runStageA(lines, options);
   const taskBlocks = extractTaskBlocks(lines);
 
-  if (stageA.files.length > 0) {
+  if (stageA.entries.length > 0) {
     return {
-      files: Array.from(new Set(stageA.files)).sort(),
+      entries: stageA.entries,
       stage: "files-section",
       diagnostics: stageA.diagnostics,
       taskBlocks,
     };
   }
 
-  // Stage A produced no usable files — fall through to the regex scan.
+  // Stage A produced no usable entries — fall through to the regex scan.
   // Stage A's diagnostics (e.g. for skipped absolute paths) are preserved
   // so the caller still sees the typo warning even when no fallback hits.
-  const stageBFiles = runStageB(text, options);
-  if (stageBFiles.length > 0) {
+  const stageBEntries = runStageB(text, options);
+  if (stageBEntries.length > 0) {
     return {
-      files: Array.from(new Set(stageBFiles)).sort(),
+      entries: stageBEntries,
       stage: "regex-fallback",
       diagnostics: stageA.diagnostics,
       taskBlocks,
@@ -314,7 +398,7 @@ export function extractFiles(text: string, options: ExtractOptions): ExtractResu
   }
 
   return {
-    files: [],
+    entries: [],
     stage: "empty",
     diagnostics: stageA.diagnostics,
     taskBlocks,

@@ -81,9 +81,23 @@ export type CoverageStatus = "untagged" | "impl-only" | "verified";
 export interface ImpactResult {
   affectedFiles: string[];
   affectedDocs: string[];
-  affectedReqs: string[];
+  /**
+   * spec 016 (INV-S7): renamed from `affectedReqs` to `impactReqs` for
+   * symmetry with the new `originReqs` axis. Same semantics as spec 014's
+   * `affectedReqs` (forward BFS reach restricted to req nodes).
+   */
+  impactReqs: string[];
   affectedTasks: string[];
   drifted: DriftEntry[];
+  /**
+   * spec 016 (INV-S6, R-015): union of REQ ids reached by following each
+   * startId's `implements` edge 1 hop in reverse — the set of REQs whose
+   * `@impl` claim points at the startId. Dedup'd + reqId-asc sorted. `[]`
+   * when no startId has an `@impl` claim. Populated by the CLI / plan-
+   * coverage layer via `resolveOriginReqs`; `impact()` itself does not
+   * change (R-006).
+   */
+  originReqs: string[];
   summary?: ImpactSummary;
 }
 

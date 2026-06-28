@@ -142,9 +142,11 @@ describe("toRelativePath", () => {
 describe("formatAdditionalContext", () => {
   it("should format reqs and docs", () => {
     const result: ImpactResult = {
-      affectedReqs: ["FR-001"],
+      impactReqs: ["FR-001"],
       affectedDocs: ["doc:api-design"],
       affectedFiles: [],
+      affectedTasks: [],
+      originReqs: [],
       drifted: [],
     };
     expect(formatAdditionalContext(result)).toBe(
@@ -154,9 +156,11 @@ describe("formatAdditionalContext", () => {
 
   it("should format multiple reqs with no docs", () => {
     const result: ImpactResult = {
-      affectedReqs: ["FR-001", "SC-001"],
+      impactReqs: ["FR-001", "SC-001"],
       affectedDocs: [],
       affectedFiles: [],
+      affectedTasks: [],
+      originReqs: [],
       drifted: [],
     };
     expect(formatAdditionalContext(result)).toBe("artgraph impact: FR-001 (req), SC-001 (req)");
@@ -164,9 +168,11 @@ describe("formatAdditionalContext", () => {
 
   it("should return (none) when no reqs and no docs", () => {
     const result: ImpactResult = {
-      affectedReqs: [],
+      impactReqs: [],
       affectedDocs: [],
       affectedFiles: [],
+      affectedTasks: [],
+      originReqs: [],
       drifted: [],
     };
     expect(formatAdditionalContext(result)).toBe("artgraph impact: (none)");
