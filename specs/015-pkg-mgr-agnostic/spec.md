@@ -92,7 +92,7 @@ bun/deno ユーザーが README や `docs/skills-guide.md` を読んだとき、
 **Acceptance Scenarios**:
 
 1. **Given** CI matrix に bun job、 **When** 最小 fixture で `bunx artgraph init` → `check`、 **Then** 両方 exit 0。
-2. **Given** CI matrix に deno job、 **When** `deno run -A npm:artgraph/cli init` → `check`、 **Then** exit 0。**もし `ts-morph` 非互換で失敗する場合**は、Deno を「既知の未サポート」として明示し (docs の対応表から deno を一旦外すか注記)、CI job を許容失敗 (continue-on-error) かスキップにする判断を research で確定する。
+2. **Given** CI matrix に deno job、 **When** `deno run -A ./dist/cli.js init` → `scan` → `check`、 **Then** exit 0。**research R2 で実測済**: Deno 2.x の Node 互換で `ts-morph` は動作するため Deno は正式サポート (best-effort 降格は不要)。未公開のため CI では `npm:artgraph/cli` ではなくビルド成果物 `./dist/cli.js` を直接実行する (research R4)。
 3. **Given** matrix の npm / pnpm job、 **When** 同 smoke test、 **Then** 退行なく exit 0。
 
 ---
@@ -105,7 +105,7 @@ bun/deno ユーザーが README や `docs/skills-guide.md` を読んだとき、
 - **検出不能 vs pnpm default の区別**: 「`package.json` あり・シグナル無し」は **pnpm** を記録する (FR-002 step 3)。「`package.json` も lockfile も deno も無い」場合のみ真の検出不能とし、`init` を壊さず `packageManager` を記録せず警告のみ。記録欠如時の後続機能 (#109/#110) のフォールバックも **pnpm exec** に統一する (artgraph のデフォルト PM は pnpm。未リリースのため npm 環境への配慮は不要)。
 - **既存 `.artgraph.json` に `packageManager` がある状態で再 init**: `--force` 無しは既存 init 同様エラー。`--force` 時は再検出して上書き。
 - **Yarn**: 対象外。検出時は **pnpm fallback + warning** (デフォルト PM へ寄せる)。本 spec で Yarn サポートは追加しない。
-- **Deno の `ts-morph`**: Deno の Node 互換で `ts-morph` が動かない可能性。動かない場合は「Deno は当面 best-effort / 未サポート」と明示し、対応表・smoke test を現実に合わせる (誇大表記を避ける)。
+- **Deno の `ts-morph`**: research R2 で Deno 2.x にて `scan` (ts-morph 経由) が動作確認済。Deno は正式サポート。`deno run -A npm:artgraph/cli` の解決には `exports` の `"./cli"` 追加が必須 (research R3)。
 - **`bunx` vs `npx` の resolver**: Skill / docs では bun ユーザーに `bunx` を案内する (npx は Bun の resolver を迂回するため非推奨)。これは `_shared/package-manager.md` の既存方針を踏襲。
 
 ## Requirements *(mandatory)*
@@ -138,8 +138,8 @@ bun/deno ユーザーが README や `docs/skills-guide.md` を読んだとき、
 **Bun / Deno smoke test + CI (US4)**
 
 - **FR-015**: Bun での CLI smoke test を追加する: 最小 fixture で `bunx artgraph init` → `bunx artgraph check` が exit 0。`fs.promises` / `process.argv` / `ts-morph` の Bun 動作を確認する。
-- **FR-016**: Deno での CLI smoke test を追加する: `deno run -A npm:artgraph/cli init` → `... check`。`ts-morph` の Deno 互換性を検証し、動かない場合は「Deno 未サポート / best-effort」として対応表・CI を現実に合わせる (誇大表記禁止)。
-- **FR-017**: CI に package manager matrix (npm / pnpm / bun / deno) を追加する。deno が `ts-morph` 非互換の場合は continue-on-error / skip の方針を research で確定する。
+- **FR-016**: Deno での CLI smoke test を追加する。`ts-morph` の Deno 互換性は **research R2 で動作確認済** (Deno 2.x)。未公開のため CI では `deno run -A ./dist/cli.js init/scan/check` を実行する (research R4)。加えて `package.json` の `exports` に `"./cli": "./dist/cli.js"` を追加し、公開後に `deno run -A npm:artgraph/cli` が解決できるようにする (research R3 で必須と確定)。
+- **FR-017**: CI に package manager matrix (npm / pnpm / bun / deno) を追加する。4 PM すべて exit 0 を期待 (research で実測済のため continue-on-error は不要)。
 
 **テスト**
 
@@ -168,7 +168,7 @@ bun/deno ユーザーが README や `docs/skills-guide.md` を読んだとき、
 - **SC-003**: `buildExecCommand` の 4 PM 出力が `_shared/package-manager.md` の Command mapping 表と **完全一致**する。
 - **SC-004**: `templates/skills/*/SKILL.md` の本文 (frontmatter 除く) に裸の `npx artgraph <subcommand>` 形のコマンド例が **0 件** (`grep` で空)。全 Skill の `allowed-tools` に `Bash(artgraph *)` が含まれる。
 - **SC-005**: `README.md` / `docs/skills-guide.md` の artgraph 実行例が PM 非依存表現に更新され、npm 専用に見える生コマンド例が残っていない (peer review + grep で確認)。
-- **SC-006**: CI matrix で npm / pnpm / bun の `init` → `check` smoke test が exit 0。deno は exit 0、または `ts-morph` 非互換が確定した場合は「未サポート」明示 + CI 上で意図的に skip/continue-on-error。
+- **SC-006**: CI matrix で npm / pnpm / bun / deno の `init` → `scan` → `check` smoke test がすべて exit 0 (research で 4 PM 実測済)。
 - **SC-007**: `_shared/package-manager.md` の bash 検出順と `src/package-manager.ts` の TS 検出順が一致している (両者を突き合わせるテスト or レビューで確認)。
 
 ## Assumptions
@@ -180,6 +180,6 @@ bun/deno ユーザーが README や `docs/skills-guide.md` を読んだとき、
 - **template engine**: 単純 `{{VAR}}` 置換で十分 (handlebars 等は不要)。ただし本 spec では templating 化される配布物 (hooks/agent-context) は対象外なので、置換エンジンの実装自体は #109/#110 側。本 spec は exec 文字列を組み立てる `buildExecCommand` までを提供する。
 - **`packageManager` field 優先**: lockfile より `package.json#packageManager` を優先 (spec 012 / corepack convention 踏襲)。
 - **デフォルト PM は pnpm (フォールバックも全て pnpm)**: artgraph のデフォルト PM を **pnpm** に統一する。未リリースで後方互換を考慮しないため、以下を**すべて pnpm に寄せる**: (a) シグナル無し時のデフォルト、(b) Yarn 検出時の fallback、(c) 真の検出不能時の後続フォールバック。spec 012 の bash スニペットおよび既出荷の `artgraph-setup` Skill は npm をデフォルト/fallback にしていたが、本 spec で破壊的に pnpm へ変更する (SSOT のため bash も追従)。**明示シグナルの尊重は別**: `package-lock.json` や `packageManager: npm@x` のように「ユーザーが実際に npm を使っている」明示シグナルがある場合は正しく npm を返す (これは default ではなく検出結果)。
-- **Deno 互換性は未確定リスク**: `ts-morph` が Deno の Node 互換で動くかは smoke test で初めて確定する。動かない場合は誇大表記を避け「未サポート / best-effort」を明示する。動く場合のみ正式サポートとして対応表に残す。
+- **Deno 互換性は確定 (正式サポート)**: research R2 で Deno 2.9.0 にて `ts-morph` 経由の `scan` を含め動作確認済。Bun 1.3.11 も R1 で全コマンド動作確認済。`deno run -A npm:artgraph/cli` の解決には `exports` の `"./cli": "./dist/cli.js"` 追加が必須 (R3)。artgraph は未公開 (R4) のため CI の Deno 実行はビルド成果物 `./dist/cli.js` を直接使う。
 - **検出ロジックの SSOT**: `_shared/package-manager.md` (bash) と `src/package-manager.ts` (TS) の 2 実装が並存するのは妥協ではなく必然: bash は `artgraph-setup` Skill が **artgraph 未インストール時に bootstrap で実行する**ため CLI 実装を呼べない。両者の検出順を一致させ、片方変更時はもう片方も追従する運用とする (将来、生成系の単一ソースから両者を導出する案は余地として残すが本質はこの bootstrap 制約)。
 - **PR 構成**: 本 spec は単一 PR で出す (基盤 + Skills + docs + smoke test)。基盤は #109/#110/#111 より先にマージされる必要がある。

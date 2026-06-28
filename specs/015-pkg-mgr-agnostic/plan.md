@@ -131,8 +131,9 @@ tests/
 - **exec マッピング**: npm→`npx artgraph <sub>` / pnpm→`pnpm exec artgraph <sub>` / bun→`bunx artgraph <sub>` / deno→`deno run -A npm:artgraph/cli <sub>`。`contracts/package-manager.md` を SSOT とし、`_shared/package-manager.md` の Command mapping 表と完全一致させる。
 - **config 検証**: `loadConfig` は `raw.packageManager` が 4 値 union 以外なら無視 (or エラー) する。既存の validate パターン (`validatePlanCoverage` 等) を踏襲。`generateConfig` は detection を持たないため、記録は `runInit` 側で `config.packageManager` をセットする (generateConfig は純粋な include/specDirs 生成に留める)。
 - **Skill allowed-tools 方針**: 全 Skill に `Bash(artgraph *)` (bare bin) + 4 PM の exec 形を pre-approve。bare `artgraph` だけでは `pnpm exec artgraph ...` 等の runner-prefixed コマンドにマッチしないため、4 PM exec を明示列挙する。
-- **Deno の `npm:artgraph/cli` 解決**: 現 `package.json` の `exports` は `./package.json` のみ。`deno run -A npm:artgraph/cli` が dist/cli.js に解決できるか research で確認し、必要なら `"./cli": "./dist/cli.js"` を `exports` に追加する (bin 経由で解決できる可能性もあるため実測する)。
-- **Deno の ts-morph 互換性**: 最大リスク。research + smoke で「動く / 動かない」を確定。動かない場合は誇大表記を避け、対応表で Deno を「best-effort / 未サポート」と明示し CI job を skip/continue-on-error にする。
+- **Deno の `npm:artgraph/cli` 解決** (research R3 で確定): 現 `exports` (`./package.json` のみ) では `artgraph/cli` が `ERR_PACKAGE_PATH_NOT_EXPORTED` で解決不可。`"./cli": "./dist/cli.js"` を追加すれば解決する (Node resolve 代理検証済)。→ `exports` 追加は**必須**。
+- **Deno の ts-morph 互換性** (research R2 で確定): Deno 2.9.0 で `scan` (ts-morph 経由) が動作。**懸念は杞憂で Deno は正式サポート**。best-effort 降格・CI skip は不要。
+- **artgraph 未公開** (research R4): CI の Deno 実行は `npm:artgraph/cli` ではなくビルド成果物 `./dist/cli.js` を直接使う。`npm:` 経路は exports 追加 + Node resolve 代理で担保し公開後に本 E2E。
 
 ## Phasing
 
@@ -140,7 +141,7 @@ tests/
 
 | Phase | 内容 | 対象 FR |
 |---|---|---|
-| 0. research | Deno の ts-morph 互換 + `npm:artgraph/cli` export 解決 + Bun Node-compat を実測し research.md に記録。失敗時の CI 方針を確定 | FR-016, FR-017 の前提 |
+| 0. research | ✅ **完了** ([research.md](./research.md)): Bun/Deno 実測。Deno は ts-morph 動作で正式サポート。`exports` に `./cli` 追加が必須。未公開のため CI Deno は `./dist/cli.js` 直接実行 | FR-016, FR-017 の前提 |
 | 1. 基盤 (検出 + ヘルパ) | `src/package-manager.ts` 新規 + `tests/package-manager-detection.test.ts`。`contracts/package-manager.md` の真理値表を正解に | FR-001〜005, SC-001/003 |
 | 2. config 配線 | `src/types.ts` (packageManager 追加) + `src/config.ts` (validate/passthrough) + `src/init.ts` (記録) + `tests/init.test.ts` 改修 | FR-006〜008, SC-002 |
 | 3. bash SSOT 追従 | `_shared/package-manager.md` の step 3 デフォルト + Yarn fallback を npm→pnpm | FR-012, SC-007 |
