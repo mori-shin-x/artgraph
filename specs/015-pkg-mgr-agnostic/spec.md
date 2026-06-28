@@ -87,7 +87,7 @@ bun/deno ユーザーが README や `docs/skills-guide.md` を読んだとき、
 
 **Why this priority**: 「PM 非依存」を謳う以上、実ランタイムでの動作保証が無いと表記だけの非依存になる。issue #102 のスコープ質問1 で「#102 に含める」と合意済。Deno は独自 TS パーサを持つため `ts-morph` 互換性が最大のリスクで、smoke test で早期に顕在化させる価値が高い。
 
-**Independent Test**: CI で `bunx artgraph init` → `bunx artgraph check` が exit 0、`deno run -A npm:artgraph/cli init` → `... check` が exit 0 (または既知の制約を明示) になることを確認。
+**Independent Test**: CI で各 PM の runner で `init` → `scan` → `check` が exit 0 になることを確認 (`npx` / `pnpm exec` / `bunx` / deno)。**deno は未公開のため `deno run -A ./dist/cli.js`** を使う (`npm:artgraph/cli` 形は `buildExecCommand` の出力および公開後の E2E 用、research R4)。
 
 **Acceptance Scenarios**:
 
@@ -115,8 +115,8 @@ bun/deno ユーザーが README や `docs/skills-guide.md` を読んだとき、
 **PM 検出基盤 (US1)**
 
 - **FR-001**: `src/package-manager.ts` (新規) に PM 検出関数 `detectPackageManager(rootDir): "npm" | "pnpm" | "bun" | "deno"` を実装する。ロジックは `templates/skills/_shared/package-manager.md` の bash スニペットを **逐語的に TypeScript へ移植**する (検出順・分岐を完全一致させる)。
-- **FR-002**: 検出順序は次を厳守する: (1) `package.json#packageManager` field (`npm`/`pnpm`/`bun` を採用、`yarn` は **pnpm fallback** + warn)、(2) lockfile sniff (first match: `bun.lockb`|`bun.lock` → bun / `package.json` 無し時の `deno.lock`|`deno.json(c)` → deno / `pnpm-lock.yaml` → pnpm / `yarn.lock` → **pnpm fallback** + warn / `package-lock.json` → npm)、(3) `package.json` あり (lockfile / field のシグナル無し) → **pnpm default** (artgraph 推奨のデフォルト PM)、(4) `package.json` 無し + `deno.json(c)` → deno、(5) いずれも無し → 検出不能。**注**: spec 012 の bash スニペット (`_shared/package-manager.md`) は step 3 デフォルトおよび Yarn fallback をいずれも npm にしていたが、本 spec で **すべて pnpm に寄せる** (未リリースのため後方互換は考慮しない)。FR-012 / SC-007 (SSOT) を満たすため bash 側もこれに追従させる。`package-lock.json` を検出した場合 (= ユーザーが実際に npm を使っている明示シグナル) のみ npm を返す。
-- **FR-003**: 戻り値の型は `"npm" | "pnpm" | "bun" | "deno"`。Yarn は決して返さず **pnpm** にフォールバックし、stderr に warning を出す。検出不能時は専用の sentinel (例: `null` / `undefined`) を返し呼び出し側で扱う。
+- **FR-002**: 検出順序は次を厳守する: (1) `package.json#packageManager` field (`npm`/`pnpm`/`bun` を採用、`yarn` は **pnpm fallback** + warn)、(2) lockfile / config sniff (first match: `bun.lockb`|`bun.lock` → bun / `package.json` 無し時の `deno.lock`|`deno.json(c)` のいずれか → deno / `pnpm-lock.yaml` → pnpm / `yarn.lock` → **pnpm fallback** + warn / `package-lock.json` → npm)、(3) `package.json` あり (シグナル無し) → **pnpm default** (artgraph 推奨のデフォルト PM)、(4) いずれも無し → 検出不能。**deno は (2) の 1 分岐のみで判定**し (`deno.lock` と `deno.json(c)` を統合)、`package.json` がある場合は Node プロジェクトとして deno 判定しない。**注**: spec 012 の bash スニペット (`_shared/package-manager.md`) は step 3 デフォルトおよび Yarn fallback をいずれも npm にしていたが、本 spec で **すべて pnpm に寄せる** (未リリースのため後方互換は考慮しない)。FR-012 / SC-007 (SSOT) を満たすため bash 側もこれに追従させる。`package-lock.json` を検出した場合 (= ユーザーが実際に npm を使っている明示シグナル) のみ npm を返す。
+- **FR-003**: 戻り値の型は `"npm" | "pnpm" | "bun" | "deno" | null`。Yarn は決して返さず **pnpm** にフォールバックし、stderr に warning を出す。検出不能時は `null` を返し呼び出し側で扱う (plan / contracts §4 と一致)。
 - **FR-004**: exec コマンド組み立てヘルパ `buildExecCommand(pm, subcommand): string` を提供する。マッピング: npm→`npx artgraph <sub>` / pnpm→`pnpm exec artgraph <sub>` / bun→`bunx artgraph <sub>` / deno→`deno run -A npm:artgraph/cli <sub>`。`_shared/package-manager.md` の Command mapping 表と一致させる。
 - **FR-005**: install コマンド組み立てヘルパ `buildInstallCommand(pm): string` も提供する (npm→`npm install -D artgraph` 等)。本 spec では未使用だが #109/#110 が consume できるよう基盤として用意する。
 - **FR-006**: `ArtgraphConfig` (`src/types.ts`) に `packageManager?: "npm" | "pnpm" | "bun" | "deno"` を追加する。optional。
@@ -163,7 +163,7 @@ bun/deno ユーザーが README や `docs/skills-guide.md` を読んだとき、
 
 ### Measurable Outcomes
 
-- **SC-001**: `detectPackageManager` が FR-002 の全分岐 (corepack field / bun / deno / pnpm-lockfile / npm-lockfile / yarn→pnpm fallback / pnpm-default (signal 無し) / detect-fail の 8 系統以上) について fixture テストで **100%** 期待通りの PM を返す。とくに「`package.json` あり・シグナル無し → pnpm」「`yarn.lock` → pnpm + warn」を明示的に覆う。`package-lock.json` の明示シグナルだけは npm を返すことも確認する。
+- **SC-001**: `detectPackageManager` が FR-002 の全分岐 (corepack field / bun / deno (2b) / pnpm-lockfile / npm-lockfile / yarn→pnpm fallback / pnpm-default (signal 無し) / detect-fail の 8 系統) について fixture テストで **100%** 期待通りの PM を返す。とくに「`package.json` あり・シグナル無し → pnpm」「`yarn.lock` → pnpm + warn」を明示的に覆う。`package-lock.json` の明示シグナルだけは npm を返すことも確認する。
 - **SC-002**: `runInit` 実行後、対応する lockfile / field を持つ fixture で `.artgraph.json` に正しい `packageManager` が記録される (npm/pnpm/bun/deno の 4 ケース **100%**)。検出不能 fixture では `init` が exit 0 で完走し `packageManager` が省略される。
 - **SC-003**: `buildExecCommand` の 4 PM 出力が `_shared/package-manager.md` の Command mapping 表と **完全一致**する。
 - **SC-004**: `templates/skills/*/SKILL.md` の本文 (frontmatter 除く) に裸の `npx artgraph <subcommand>` 形のコマンド例が **0 件** (`grep` で空)。全 Skill の `allowed-tools` に `Bash(artgraph *)` が含まれる。

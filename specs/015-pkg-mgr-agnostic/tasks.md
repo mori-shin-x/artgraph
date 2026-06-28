@@ -53,7 +53,7 @@ Node >= 22 (`node -v`)、pnpm available、`bun --version` (1.x)、`deno --versio
 
 Files: tests/package-manager-detection.test.ts
 
-[contracts/package-manager.md](./contracts/package-manager.md) §1 の真理値表 8 系統を tmp-dir fixture 化 (1a pnpm field / 2a bun.lockb / 2b deno (no pkg.json) / 2c pnpm-lock / 2d yarn→pnpm+warn / 2e package-lock→npm / 3 pkg.json のみ→pnpm / 5 空→null+warn)。§2 `buildExecCommand` の 4 PM 出力、§3 `buildInstallCommand` の 4 PM 出力も検証。yarn fallback / 検出不能時の warning が stderr に出ることも確認。**この時点では実装が無いので red**。
+[contracts/package-manager.md](./contracts/package-manager.md) §1 の真理値表 8 系統を tmp-dir fixture 化 (1a pnpm field / 2a bun.lockb / 2b deno (no pkg.json) / 2c pnpm-lock / 2d yarn→pnpm+warn / 2e package-lock→npm / 3 pkg.json のみ→pnpm / 4 空→null+warn)。§2 `buildExecCommand` の 4 PM 出力、§3 `buildInstallCommand` の 4 PM 出力も検証。yarn fallback / 検出不能時の warning が stderr に出ることも確認。**この時点では実装が無いので red**。
 
 ### T003 [US1] Implement src/package-manager.ts [FR-001, FR-002, FR-003, FR-004, FR-005, SC-001, SC-003, SC-007, FR-022]
 
@@ -89,7 +89,7 @@ Files: src/init.ts
 
 Files: tests/init.test.ts
 
-4 PM fixture で `.artgraph.json` に正しい `packageManager` が記録されること、検出不能 fixture で init が exit 0 で完走し `packageManager` が省略されることを検証。
+4 PM fixture で `.artgraph.json` に正しい `packageManager` が記録されること、検出不能 fixture で init が exit 0 で完走し `packageManager` が省略されることを検証。`--force` 再 init で検出値が再検出・上書きされること (edge case, contracts §4) も明示アサーションする。
 
 **Checkpoint**: 基盤 + 記録完成。#109/#110/#111 が consume 可能。
 

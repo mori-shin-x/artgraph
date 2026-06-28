@@ -22,11 +22,11 @@
 | 2d | `yarn.lock` が存在 | `pnpm` | ✅ "yarn.lock found but Yarn is not supported; falling back to pnpm" |
 | 2e | `package-lock.json` が存在 | `npm` | — |
 | 3 | 上記いずれも該当せず `package.json` が存在 | `pnpm` (default) | — |
-| 4 | `package.json` 無し かつ `deno.json` / `deno.jsonc` が存在 | `deno` | — |
-| 5 | いずれも該当しない | `null` (検出不能) | ✅ "Cannot detect package manager" |
+| 4 | いずれも該当しない | `null` (検出不能) | ✅ "Cannot detect package manager" |
 
 **注**:
-- 評価順は 1a–1d (field) → 2a–2e (lockfile) → 3 (pkg.json default) → 4 (deno only) → 5 (fail) を厳守。
+- 評価順は 1a–1d (field) → 2a–2e (lockfile) → 3 (pkg.json default) → 4 (fail) を厳守。
+- **deno の検出は row 2b の 1 箇所のみ** (`package.json` 無し かつ deno マーカーのいずれか)。`deno.lock` (lockfile) と `deno.json(c)` (config) を 1 つの分岐に統合する (元の bash スニペットの combined check と一致)。`package.json` があれば Node プロジェクトとして扱い deno 判定はしない。
 - `packageManager` field のパースは `^([a-z]+)@` 形 (corepack 規約)。値が壊れている / 4 PM 以外の未知値なら field 分岐をスキップして lockfile sniff へフォールスルー。
 - 1d / 2d の Yarn fallback 先は **pnpm** (spec 012 の bash は npm だったが本 spec で変更)。
 
@@ -41,7 +41,7 @@
 | `yarn.lock` のみ | `pnpm` + warn (2d) |
 | `package-lock.json` のみ | `npm` (2e) |
 | `package.json` のみ (lockfile/field 無し) | `pnpm` (3) |
-| 空 dir (package.json も lockfile も deno も無し) | `null` + warn (5) |
+| 空 dir (package.json も lockfile も deno も無し) | `null` + warn (4) |
 
 ## 2. exec コマンドマッピング (`buildExecCommand(pm, subcommand)`)
 
