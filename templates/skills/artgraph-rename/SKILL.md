@@ -3,6 +3,9 @@ name: "artgraph-rename"
 description: "Performs a safe rename / split / merge of requirement IDs across spec, code, tests, and lock. Use when the user asks to rename a REQ ID, split one ID into multiple, or merge multiple IDs into one. Make sure to use this skill whenever requirement IDs are being restructured."
 allowed-tools:
   - "Bash(npx artgraph *)"
+  - "Bash(pnpm exec artgraph*)"
+  - "Bash(bunx artgraph*)"
+  - "Bash(deno run*)"
   - "Bash(artgraph *)"
   - "Bash(git status*)"
 user-invocable: true

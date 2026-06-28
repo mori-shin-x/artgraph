@@ -3,6 +3,7 @@ import { resolve, relative, isAbsolute } from "node:path";
 import {
   DEFAULT_CONFIG,
   type ArtgraphConfig,
+  type PackageManager,
   type PlanCoverageConfig,
   type ReqPatternConfig,
   type TaskConventionPreset,
@@ -335,6 +336,17 @@ function validateTaskRegexField(
 // only `requireFilesSection: boolean` is recognised; unknown fields are
 // silently dropped (no warning) so the schema can grow without breaking
 // existing configs that pre-load a future field.
+// `packageManager` is recorded by `init` for downstream exec-command building.
+// Be lenient on read: accept only the 4 known values, silently drop anything
+// else (unknown string / wrong type) so a hand-edited config never crashes the
+// CLI. Mirrors the lenient posture of the other optional fields.
+function validatePackageManager(value: unknown): PackageManager | undefined {
+  if (value === "npm" || value === "pnpm" || value === "bun" || value === "deno") {
+    return value;
+  }
+  return undefined;
+}
+
 function validatePlanCoverage(value: unknown): PlanCoverageConfig | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -405,6 +417,7 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
     specDirs: raw.specDirs ?? DEFAULT_CONFIG.specDirs,
     testPatterns: raw.testPatterns ?? DEFAULT_CONFIG.testPatterns,
     lockFile,
+    packageManager: validatePackageManager(raw.packageManager),
     reqPatterns: raw.reqPatterns,
     docGraph: raw.docGraph,
     mode: raw.mode === "symbol" ? "symbol" : "file",

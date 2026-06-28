@@ -29,6 +29,10 @@ If you use Claude Code, you can skip the manual install entirely — type `/artg
 
 ### End-to-end: spec → `@impl` → `check`
 
+> The examples below call `artgraph` directly — substitute your package runner if
+> the binary isn't on your `PATH`: `npx artgraph` (npm) / `pnpm exec artgraph` /
+> `bunx artgraph` / `deno run -A npm:artgraph/cli`.
+
 ```bash
 # 1. Write a requirement
 mkdir -p specs && cat > specs/auth.md <<'EOF'
@@ -50,9 +54,9 @@ describe("auth", () => {
 EOF
 
 # 4. Snapshot the baseline, then change the spec to see drift surface
-npx artgraph reconcile
+artgraph reconcile
 sed -i 's/email and password\./email, password, and TOTP./' specs/auth.md
-npx artgraph check
+artgraph check
 ```
 
 ```
@@ -63,7 +67,7 @@ COVERAGE:
   REQ-001: verified
 ```
 
-Add `--gate` (`npx artgraph check --gate`) to a CI step or pre-commit hook to
+Add `--gate` (`artgraph check --gate`) to a CI step or pre-commit hook to
 exit non-zero whenever drift, orphans, or uncovered requirements are present.
 
 A runnable copy of this flow lives in [`examples/basic/`](./examples/basic).

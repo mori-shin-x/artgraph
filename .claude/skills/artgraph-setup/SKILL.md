@@ -1,6 +1,6 @@
 ---
 name: "artgraph-setup"
-description: "Installs artgraph in the current project, detects the package manager (npm / pnpm / Bun / Deno; Yarn falls back to npm with a warning), and wires up Skills, hooks, agent-context snippet, and any detected SDD-tool integration in one turn. Use when the user asks to install / set up / add artgraph. Make sure to use this skill whenever the user mentions artgraph for the first time and `artgraph` CLI is not yet available."
+description: "Installs artgraph in the current project, detects the package manager (npm / pnpm / Bun / Deno; default and Yarn fallback are pnpm), and wires up Skills, hooks, agent-context snippet, and any detected SDD-tool integration in one turn. Use when the user asks to install / set up / add artgraph. Make sure to use this skill whenever the user mentions artgraph for the first time and `artgraph` CLI is not yet available."
 allowed-tools:
   - "Bash(npm install*)"
   - "Bash(npm i*)"
@@ -37,11 +37,11 @@ Run this whole block as one Bash call. Lockfile-only detection covers the common
 
 ```bash
 if [ -f bun.lockb ] || [ -f bun.lock ]; then echo "Detected: bun"
+elif { [ -f deno.lock ] || [ -f deno.json ] || [ -f deno.jsonc ]; } && [ ! -f package.json ]; then echo "Detected: deno"
 elif [ -f pnpm-lock.yaml ]; then echo "Detected: pnpm"
-elif [ -f yarn.lock ]; then echo "WARN: yarn.lock found; falling back to npm (Yarn not in supported PM matrix yet)" >&2; echo "Detected: npm"
-elif [ -f deno.lock ] && [ ! -f package.json ]; then echo "Detected: deno"
-elif [ -f package-lock.json ] || [ -f package.json ]; then echo "Detected: npm"
-elif [ -f deno.json ] || [ -f deno.jsonc ]; then echo "Detected: deno"
+elif [ -f yarn.lock ]; then echo "WARN: yarn.lock found; falling back to pnpm (Yarn not supported)" >&2; echo "Detected: pnpm"
+elif [ -f package-lock.json ]; then echo "Detected: npm"
+elif [ -f package.json ]; then echo "Detected: pnpm"
 else echo "ERROR: cannot detect package manager; ask the user which to use (npm / pnpm / bun / deno)" >&2; exit 1
 fi
 ```

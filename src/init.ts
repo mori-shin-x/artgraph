@@ -23,6 +23,7 @@ import {
 import { scan, reconcile } from "./scan.js";
 import type { BuildWarning } from "./graph/builder.js";
 import { getProviderStatuses, runIntegrate } from "./integrate/index.js";
+import { detectPackageManager } from "./package-manager.js";
 
 const SKILLS_TEMPLATE_DIR = resolve(import.meta.dirname, "../templates/skills");
 const SKILLS_DEST_SUBDIR = join(".claude", "skills");
@@ -386,6 +387,16 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
 
   const detection = detectProject(abs);
   const config = generateConfig(detection);
+
+  // Record the detected package manager so downstream tooling (hooks /
+  // agent-context / plugin templating in #109/#110/#111) can build exec
+  // commands without re-sniffing lockfiles. `detectPackageManager` warns to
+  // stderr and returns null when nothing is detectable; in that case we leave
+  // `packageManager` unset and let init continue (FR-008).
+  const detectedPm = detectPackageManager(abs);
+  if (detectedPm) {
+    config.packageManager = detectedPm;
+  }
 
   let scanSummary: ScanSummary | undefined;
   let warnings: BuildWarning[] = [];

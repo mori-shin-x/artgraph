@@ -51,3 +51,38 @@ jobs:
       # CI baseline for SC-004 wall-clock is established.
       - run: pnpm test:perf
         continue-on-error: true
+
+  # Package-manager smoke matrix (spec 015, FR-015/016/017, SC-006): prove the
+  # CLI runs init -> scan -> check under every supported PM runner, including
+  # ts-morph under the Bun and Deno runtimes. Deno runs the built ./dist/cli.js
+  # directly because artgraph is not published yet (research R4).
+  pm-smoke:
+    name: pm-smoke (${{ matrix.pm }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pm: [npm, pnpm, bun, deno]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - if: matrix.pm == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      - if: matrix.pm == 'deno'
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: bash scripts/pm-smoke.sh ${{ matrix.pm }}

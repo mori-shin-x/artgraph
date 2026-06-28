@@ -3,6 +3,9 @@ name: "artgraph-integrate"
 description: "Wires artgraph into an installed SDD tool (Spec Kit / Kiro). Use when the user asks to integrate, hook up, or connect artgraph with an existing SDD tool. Make sure to use this skill whenever the user mentions integrating artgraph with a Spec Kit or Kiro project that already has `artgraph` installed."
 allowed-tools:
   - "Bash(npx artgraph *)"
+  - "Bash(pnpm exec artgraph*)"
+  - "Bash(bunx artgraph*)"
+  - "Bash(deno run*)"
   - "Bash(artgraph *)"
 user-invocable: true
 disable-model-invocation: false

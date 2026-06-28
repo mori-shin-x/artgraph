@@ -790,3 +790,65 @@ describe("computeStageGates (P0 flag matrix truth table)", () => {
     });
   });
 });
+
+describe("runInit — packageManager recording (spec 015, FR-007/008, SC-002)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(tmp);
+  });
+
+  const readPm = (): unknown =>
+    JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8")).packageManager;
+
+  it("records pnpm for a package.json-only project (default PM)", () => {
+    writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "x" }));
+    runInit(tmp, { minimal: true });
+    expect(readPm()).toBe("pnpm");
+  });
+
+  it("records bun when bun.lockb is present", () => {
+    writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "x" }));
+    writeFileSync(join(tmp, "bun.lockb"), "");
+    runInit(tmp, { minimal: true });
+    expect(readPm()).toBe("bun");
+  });
+
+  it("records npm for an explicit package-lock.json signal", () => {
+    writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "x" }));
+    writeFileSync(join(tmp, "package-lock.json"), "{}");
+    runInit(tmp, { minimal: true });
+    expect(readPm()).toBe("npm");
+  });
+
+  it("records deno when only a deno.json is present (no package.json)", () => {
+    writeFileSync(join(tmp, "deno.json"), "{}");
+    runInit(tmp, { minimal: true });
+    expect(readPm()).toBe("deno");
+  });
+
+  it("omits packageManager and still exits cleanly when undetectable", () => {
+    // Empty dir: no package.json / lockfile / deno marker → detection returns null.
+    const result = runInit(tmp, { minimal: true });
+    expect(result.configPath).toBeTruthy();
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
+    expect(readPm()).toBeUndefined();
+  });
+
+  it("re-detects and overwrites packageManager on --force re-init", () => {
+    writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "x" }));
+    writeFileSync(join(tmp, "package-lock.json"), "{}");
+    runInit(tmp, { minimal: true });
+    expect(readPm()).toBe("npm");
+
+    // Switch the signal to pnpm and re-init with --force.
+    rmSync(join(tmp, "package-lock.json"));
+    writeFileSync(join(tmp, "pnpm-lock.yaml"), "");
+    runInit(tmp, { minimal: true, force: true });
+    expect(readPm()).toBe("pnpm");
+  });
+});

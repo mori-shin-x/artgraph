@@ -3,6 +3,9 @@ name: "artgraph-verify"
 description: "Runs `artgraph check --diff` to self-check spec/code/test consistency. Use when implementation is complete or before code review. Make sure to use this skill whenever the user reports implementation completion or asks for a consistency check."
 allowed-tools:
   - "Bash(npx artgraph *)"
+  - "Bash(pnpm exec artgraph*)"
+  - "Bash(bunx artgraph*)"
+  - "Bash(deno run*)"
   - "Bash(artgraph *)"
   - "Bash(git diff*)"
 user-invocable: true
