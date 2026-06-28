@@ -469,6 +469,66 @@ describe("loadConfig", () => {
     });
   });
 
+  // spec 014 — `.artgraph.json` planCoverage section. Defaults to undefined so
+  // existing configs are not broken; nested fields default to lenient (false).
+  describe("planCoverage (spec 014, FR-018)", () => {
+    it("defaults to undefined when not specified", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({}));
+      const config = loadConfig(TMP_DIR);
+      expect(config.planCoverage).toBeUndefined();
+    });
+
+    it("loads requireFilesSection: true", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({ planCoverage: { requireFilesSection: true } }),
+      );
+      const config = loadConfig(TMP_DIR);
+      expect(config.planCoverage?.requireFilesSection).toBe(true);
+    });
+
+    it("loads requireFilesSection: false", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({ planCoverage: { requireFilesSection: false } }),
+      );
+      const config = loadConfig(TMP_DIR);
+      expect(config.planCoverage?.requireFilesSection).toBe(false);
+    });
+
+    it("rejects planCoverage as a non-object (e.g. array)", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ planCoverage: [1, 2, 3] }));
+      expect(() => loadConfig(TMP_DIR)).toThrow("must be an object");
+    });
+
+    it("rejects requireFilesSection if not a boolean", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({ planCoverage: { requireFilesSection: "yes" } }),
+      );
+      expect(() => loadConfig(TMP_DIR)).toThrow("must be a boolean");
+    });
+
+    it("does not interfere with other top-level fields", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          planCoverage: { requireFilesSection: true },
+          reqPatterns: { listItem: "^(JIRA-\\d+)[:\\s]" },
+        }),
+      );
+      const config = loadConfig(TMP_DIR);
+      expect(config.planCoverage?.requireFilesSection).toBe(true);
+      expect(config.reqPatterns?.listItem).toBe("^(JIRA-\\d+)[:\\s]");
+    });
+  });
+
   describe("lockFile path traversal prevention", () => {
     it("should reject lockFile with path traversal", () => {
       mkdirSync(TMP_DIR, { recursive: true });

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
 import { Command, CommanderError, Option } from "commander";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
-import { impact, resolveStartIds } from "./graph/traverse.js";
+import { impact, resolveFileStartIds } from "./graph/traverse.js";
+import { extractFiles } from "./parsers/sdd-files.js";
 import { formatGraphText, formatGraphJSON } from "./graph/format.js";
 import type { NodeKind } from "./types.js";
 import type { BuildWarning } from "./graph/builder.js";
@@ -23,6 +24,8 @@ import {
 } from "./hook-pretool.js";
 import type { ArtgraphConfig, TestResultMap } from "./types.js";
 import { runInit } from "./init.js";
+import { runPlanCoverage } from "./plan-coverage/index.js";
+import { resolveSpecDir } from "./plan-coverage/spec-resolver.js";
 import { loadTestResults } from "./test-results.js";
 import { executeRename, executeSplit, executeMerge } from "./rename-executor.js";
 import type { RenameResult } from "./rename-executor.js";
@@ -388,33 +391,154 @@ program
     }
   });
 
+// spec 014 (FR-001 / FR-003): REQ-ID inputs are no longer accepted here.
+// The four supported start sources are listed in this error so the user is
+// pushed onto the right tool for their actual intent. Kept as a const at
+// module scope so the wording stays in sync with the contract file and the
+// CLI tests can assert against a single canonical string.
+const IMPACT_REQ_ID_REJECTION = [
+  "error: REQ-ID inputs are not accepted by `artgraph impact`.",
+  "use one of the following start sources:",
+  "  artgraph impact <file>...          # explicit file paths",
+  "  artgraph impact --from-tasks <p>   # extract files from tasks.md",
+  "  artgraph impact --from-plan <p>    # extract files from plan.md",
+  "  artgraph impact --diff             # use git diff",
+].join("\n");
+
+// `doc:` prefix is also rejected (FR-001 / FR-002). Surface the same 4
+// start sources so the user has a complete menu — the underlying mental
+// model is identical: `impact` is now file-only.
+const IMPACT_DOC_PREFIX_REJECTION = [
+  "error: `doc:` prefix inputs are not accepted by `artgraph impact`.",
+  "use one of the following start sources:",
+  "  artgraph impact <file>...          # explicit file paths",
+  "  artgraph impact --from-tasks <p>   # extract files from tasks.md",
+  "  artgraph impact --from-plan <p>    # extract files from plan.md",
+  "  artgraph impact --diff             # use git diff",
+].join("\n");
+
+// spec 014 (UX-1): Broaden REQ-ID input detection so the navigational error
+// fires for every REQ-ID shape the artgraph ecosystem documents (README §
+// "valid REQ-ID grammar"). Without this widening, Kiro `Requirement-3` and
+// scoped `auth/FR-2` inputs slip past the early reject and hit the generic
+// "No matching nodes found" path with no migration hint.
+//
+// Matches:
+//   - REQ-001 / FR-032 / AUTH-001  (all-uppercase prefix + numeric tail)
+//   - Requirement-3                (Pascal-case Kiro-style prefix)
+//   - auth/FR-2 / auth-2fa/REQ-1   (scoped: <scope>/<base>)
+//   - REQ-1.2 / Requirement-1.1    (dotted numeric tail for hierarchical IDs)
+//
+// We deliberately *under*-match: only inputs that look like a REQ-ID get
+// routed to the 4-path navigational error; everything else (file path,
+// non-conforming string) continues to the file-resolution path so the
+// existing "No matching nodes found" message still fires.
+const REQ_ID_INPUT_RE = /^(?:[A-Za-z][\w-]*\/)?[A-Z][A-Za-z]*-\d+(?:\.\d+)*$/;
+
 program
   .command("impact")
-  .description("Show impact from changed files or REQ-IDs")
-  .argument("[targets...]", "File paths or REQ-IDs")
+  .description("Show forward impact from file paths (spec 014: file-only)")
+  .argument("[targets...]", "File paths only — REQ-IDs and `doc:` prefix are rejected")
+  .option("--from-tasks <path>", "Extract files from a tasks.md and use them as the start set")
+  .option("--from-plan <path>", "Extract files from a plan.md and use them as the start set")
   .option("--diff", "Use git diff to detect changed files")
   .option("--depth <depth>", "Limit BFS traversal depth")
   .option("--format <format>", "Output format: json | text", "text")
   .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((targets: string[], opts) => {
     const rootDir = process.cwd();
+
+    // ----- Input validation: reject REQ-ID / doc: prefix BEFORE we touch
+    // the filesystem so the user gets the 4-path navigational error even on
+    // a repo without `.artgraph.json`. FR-001 / FR-003.
+    for (const t of targets) {
+      if (REQ_ID_INPUT_RE.test(t)) {
+        console.error(IMPACT_REQ_ID_REJECTION);
+        process.exit(1);
+      }
+      if (t.startsWith("doc:")) {
+        console.error(IMPACT_DOC_PREFIX_REJECTION);
+        process.exit(1);
+      }
+    }
+
+    // ----- Mutually exclusive start sources. Each of `targets[]`,
+    // `--from-tasks`, `--from-plan`, `--diff` counts as a single channel;
+    // contracts/cli-flags.md requires exactly one to be present.
+    const sourcesPicked = [
+      targets.length > 0 ? "targets" : null,
+      opts.fromTasks ? "--from-tasks" : null,
+      opts.fromPlan ? "--from-plan" : null,
+      opts.diff ? "--diff" : null,
+    ].filter((s): s is string => s !== null);
+
+    if (sourcesPicked.length > 1) {
+      console.error(
+        `error: start sources are mutually exclusive (specify only one): ${sourcesPicked.join(", ")}`,
+      );
+      process.exit(1);
+    }
+    if (sourcesPicked.length === 0) {
+      console.error(
+        "error: no start source specified. pass file paths, --from-tasks, --from-plan, or --diff.",
+      );
+      process.exit(1);
+    }
+
     const config = applyMode(loadConfig(rootDir), opts.mode);
     const { graph } = scan(rootDir, config);
     const lock = readLock(rootDir, config.lockFile);
 
-    const inputTargets = opts.diff ? getGitDiffFiles(rootDir) : targets;
-    if (inputTargets.length === 0) {
-      if (opts.diff) {
-        console.log("No changes detected in git diff.");
-      } else {
-        console.error("No targets specified. Use file paths, REQ-IDs, or --diff.");
+    // ----- Resolve the start file list. `--from-tasks` / `--from-plan`
+    // delegate to the spec 014 shared parser (`src/parsers/sdd-files.ts`),
+    // `--diff` re-uses the existing git helper, and bare positional inputs
+    // are taken as file paths verbatim.
+    let inputFiles: string[];
+    if (opts.fromTasks || opts.fromPlan) {
+      const sourcePath = (opts.fromTasks ?? opts.fromPlan) as string;
+      const sourceLabel = opts.fromTasks ? "--from-tasks" : "--from-plan";
+      if (!existsSync(sourcePath)) {
+        console.error(`error: ${sourceLabel} path not found: ${sourcePath}`);
+        process.exit(1);
       }
-      process.exit(opts.diff ? 0 : 1);
+      const text = readFileSync(sourcePath, "utf-8");
+      const extracted = extractFiles(text, { graph, repoRoot: rootDir });
+      // SPEC-2: surface every `unresolvedFilePath` diagnostic as a warning so
+      // typos in a `Files:` section (e.g. `src/auht.ts`) don't silently fall
+      // through to an empty start set. Mirrors plan-coverage's diagnostic
+      // flattening so the two CLIs stay consistent.
+      for (const d of extracted.diagnostics) {
+        if (d.kind === "unresolvedFilePath") {
+          // Defensive type guard: Agent B's Diagnostic.line is `number`, but
+          // we read it via `in` + typeof so the surrounding code keeps
+          // compiling even if a future variant lacks the field.
+          const loc =
+            "line" in d && typeof d.line === "number" ? ` (line ${d.line})` : "";
+          console.error(
+            `WARNING: unresolved file path "${d.path}"${loc} in ${sourcePath}`,
+          );
+        }
+      }
+      if (extracted.stage === "empty" || extracted.files.length === 0) {
+        console.error(
+          `error: no files extracted from ${sourcePath}. add a \`Files: <path>\` section or reference existing file paths in the body.`,
+        );
+        process.exit(1);
+      }
+      inputFiles = extracted.files;
+    } else if (opts.diff) {
+      inputFiles = getGitDiffFiles(rootDir);
+      if (inputFiles.length === 0) {
+        console.log("No changes detected in git diff.");
+        process.exit(0);
+      }
+    } else {
+      inputFiles = targets;
     }
 
-    const startIds = resolveStartIds(graph, inputTargets);
+    const startIds = resolveFileStartIds(graph, inputFiles);
     if (startIds.length === 0) {
-      console.error(`No matching nodes found for: ${inputTargets.join(", ")}`);
+      console.error(`No matching nodes found for: ${inputFiles.join(", ")}`);
       process.exit(1);
     }
 
@@ -437,6 +561,118 @@ program
       console.log(JSON.stringify(result));
     } else {
       printImpactText(result);
+    }
+  });
+
+// spec 014 (FR-013 — FR-020): plan-coverage subcommand. Reads tasks.md /
+// plan.md (and the current spec.md) to detect REQs that are *affected*
+// (via the file → impact() blast) but *never mentioned* in the source
+// trio — i.e. the SDD author silently dragged in side effects.
+//
+// All defaults follow contracts/cli-flags.md §plan-coverage:
+//   --format text (default), --gate off, --ignore "", --require-files-section
+//   off unless `.artgraph.json`'s `planCoverage.requireFilesSection` is true.
+program
+  .command("plan-coverage")
+  .description(
+    "Detect implicit REQ impacts: REQs reached by tasks.md/plan.md `Files:` that are never mentioned in the spec trio.",
+  )
+  .option("--spec <dir>", "Spec directory (auto-detected via SPECIFY_FEATURE_DIRECTORY or .specify/feature.json)")
+  .option("--tasks <path>", "Override the tasks.md path (default: <spec-dir>/tasks.md)")
+  .option("--plan <path>", "Override the plan.md path (default: <spec-dir>/plan.md if present)")
+  .addOption(
+    new Option("--format <format>", "Output format")
+      .choices(["json", "text"])
+      .default("text"),
+  )
+  .option("--gate", "Exit 1 when implicit impacts or diagnostics are non-empty (CI use)")
+  .option("--ignore <csv>", "Comma-separated REQ-IDs to drop from implicit list (one-shot)", "")
+  .option(
+    "--require-files-section",
+    "Emit a missingFilesSection diagnostic for every task block without a Files: header",
+  )
+  .action((opts) => {
+    const rootDir = process.cwd();
+
+    // Resolve spec dir per the contract precedence.
+    const resolved = resolveSpecDir({
+      explicitFlag: opts.spec,
+      env: process.env,
+      repoRoot: rootDir,
+    });
+    if ("error" in resolved) {
+      console.error(resolved.error);
+      process.exit(1);
+    }
+    const specDir = resolved.dir;
+
+    // Resolve tasks.md / plan.md against the spec dir unless overridden.
+    const tasksPath: string = opts.tasks
+      ? (opts.tasks as string)
+      : resolve(specDir, "tasks.md");
+    if (!existsSync(tasksPath)) {
+      console.error(`error: tasks.md not found: ${tasksPath}`);
+      process.exit(1);
+    }
+    // CORR-1 / SPEC-3: when the user passes `--plan` explicitly, a missing
+    // path is a hard error (mirrors `--tasks` above). When omitted, the
+    // default `<spec-dir>/plan.md` is *optional*: silent fallback is fine
+    // because plan.md is not required by the contract.
+    let planPath: string | undefined;
+    if (opts.plan) {
+      const explicitPlan = opts.plan as string;
+      if (!existsSync(explicitPlan)) {
+        console.error(`error: --plan path not found: ${explicitPlan}`);
+        process.exit(1);
+      }
+      planPath = explicitPlan;
+    } else {
+      const defaultPlan = resolve(specDir, "plan.md");
+      planPath = existsSync(defaultPlan) ? defaultPlan : undefined;
+    }
+
+    // Parse --ignore CSV. Empty entries are dropped silently so
+    // `--ignore ""` or trailing commas don't generate spurious IDs.
+    const ignore = ((opts.ignore as string) ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
+    // `--require-files-section` flag overrides config; absence means we
+    // fall back to the planCoverage section's requireFilesSection (default
+    // false).
+    const config = loadConfig(rootDir);
+    const requireFilesSection: boolean =
+      opts.requireFilesSection === true
+        ? true
+        : config.planCoverage?.requireFilesSection ?? false;
+
+    const format: "json" | "text" = opts.format === "json" ? "json" : "text";
+
+    try {
+      const result = runPlanCoverage({
+        repoRoot: rootDir,
+        specDir,
+        tasksPath,
+        planPath,
+        format,
+        gate: opts.gate === true,
+        ignore,
+        requireFilesSection,
+      });
+
+      if (format === "json") {
+        console.log(JSON.stringify(result.json));
+      } else {
+        process.stdout.write(result.text);
+      }
+      if (result.exitCode !== 0) {
+        process.exit(result.exitCode);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`Error: ${msg}`);
+      process.exit(1);
     }
   });
 
@@ -463,7 +699,7 @@ program
         console.log("No changes detected in git diff.");
         process.exit(0);
       }
-      const startIds = resolveStartIds(graph, diffFiles);
+      const startIds = resolveFileStartIds(graph, diffFiles);
       if (startIds.length === 0) {
         console.log("Changed files are not tracked in the graph.");
         process.exit(0);
@@ -621,7 +857,7 @@ program
         return;
       }
 
-      const startIds = resolveStartIds(graph, relativePaths);
+      const startIds = resolveFileStartIds(graph, relativePaths);
       if (startIds.length === 0) {
         process.stdout.write(JSON.stringify(buildHookOutput("artgraph impact: (none)")));
         const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;

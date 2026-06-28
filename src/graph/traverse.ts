@@ -1,3 +1,4 @@
+import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import type { ArtifactGraph, ImpactResult, DriftEntry } from "../types.js";
 import type { LockFile } from "../types.js";
 
@@ -141,15 +142,37 @@ export function findUncovered(graph: ArtifactGraph): string[] {
   return uncovered;
 }
 
-export function resolveStartIds(graph: ArtifactGraph, inputs: string[]): string[] {
+/**
+ * Resolve a list of file-path inputs into graph start-node ids for impact() /
+ * check() / hook-pretool. **File path only**: spec 014 (FR-001 / FR-002)
+ * removed the previous REQ-ID and `doc:` prefix branches so `artgraph impact`
+ * has a single mental model (file → forward impact). For any input string the
+ * resolver tries, in order:
+ *
+ *  1. `file:<input>` exact match — picks up the canonical file node.
+ *  2. Symbol nodes that live in `<input>` — kept alongside the file node so
+ *     symbol-mode graphs surface the inner symbols too.
+ *  3. Any other node whose `filePath === <input>` — this is what lets a
+ *     `specs/auth.md` path drag in the doc + REQ nodes parsed out of it
+ *     (the file path semantically points at the whole markdown contents).
+ *
+ * REQ-ID inputs (`AUTH-001`) and `doc:` prefix inputs (`doc:auth-design`) are
+ * rejected at the CLI layer — see the impact subcommand in `src/cli.ts`.
+ *
+ * Renamed from `resolveStartIds` in spec 014. The old name is intentionally
+ * not re-exported as an alias: any caller still using the broader semantics
+ * needs to be reviewed against the file-only contract.
+ */
+export function resolveFileStartIds(graph: ArtifactGraph, inputs: string[]): string[] {
   const ids: string[] = [];
 
-  for (const input of inputs) {
-    if (graph.nodes.has(input)) {
-      ids.push(input);
-      continue;
-    }
-
+  for (const rawInput of inputs) {
+    // Defensive normalization: `./src/foo.ts` / `src/sub/../foo.ts` get
+    // collapsed to `src/foo.ts` so the `file:<path>` lookup finds the node
+    // the graph builder registered under the canonical repo-relative path.
+    // The Stage A parser (spec 014) already normalizes, but callers that
+    // hand-roll inputs still need the safety net.
+    const input = normalizeForLookup(rawInput);
     const fileId = `file:${input}`;
     if (graph.nodes.has(fileId)) {
       ids.push(fileId);
@@ -161,14 +184,8 @@ export function resolveStartIds(graph: ArtifactGraph, inputs: string[]): string[
       continue;
     }
 
-    // T048: doc: prefix resolution
-    const docId = `doc:${input}`;
-    if (graph.nodes.has(docId)) {
-      ids.push(docId);
-      // Do NOT continue — fall through to filePath match so that
-      // req/file nodes sharing the same filePath are also collected.
-    }
-
+    // filePath match — catches doc / req nodes parsed out of a spec file
+    // when the user passes the spec path itself (e.g. `specs/auth.md`).
     for (const [id, node] of graph.nodes) {
       if (node.filePath === input && !ids.includes(id)) {
         ids.push(id);
@@ -177,4 +194,19 @@ export function resolveStartIds(graph: ArtifactGraph, inputs: string[]): string[
   }
 
   return ids;
+}
+
+function normalizeForLookup(input: string): string {
+  // Skip absolute paths — they can't be safely re-mapped to a repo-relative
+  // form without knowing the repo root, and graph nodes are always keyed
+  // by repo-relative paths. Caller already filtered abs paths in Stage A.
+  if (isAbsolute(input)) return input;
+  // Resolve against a synthetic root so `..` segments collapse without
+  // dragging in real filesystem state. Inputs that escape "above" the root
+  // are passed through unchanged so the existing miss behaviour applies.
+  const root = "/__artgraph__";
+  const abs = resolvePath(root, input);
+  const rel = relative(root, abs);
+  if (rel.length === 0 || rel === ".." || rel.startsWith(`..${sep}`)) return input;
+  return rel.split(sep).join("/");
 }
