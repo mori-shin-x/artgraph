@@ -48,6 +48,16 @@ describe("plan-coverage self-dogfood — spec 014 has zero implicit impacts (T02
       requireFilesSection: false,
     });
 
+    // PRECONDITION: this assertion is only meaningful if the dogfood actually
+    // reached some REQs. A vacuous pass (totalAffected === 0) would silently
+    // hide a regression in Files: extraction or graph resolution. Pin a non-
+    // trivial lower bound so future regressions surface as a precondition
+    // failure with a clear message — and require that the mention path was
+    // actually exercised (i.e. mentioned > 0), so we know `detectMentions`
+    // ran against a non-empty affected set.
+    expect(result.json.summary.totalAffected).toBeGreaterThan(0);
+    expect(result.json.summary.mentioned).toBeGreaterThan(0);
+
     // If new implicits appear, surface them in the assertion message so the
     // PR author can either (a) add a bare/qualified mention to the spec
     // trio, or (b) decide the file's impact tag is wrong and adjust it.
@@ -76,5 +86,41 @@ describe("plan-coverage self-dogfood — spec 014 has zero implicit impacts (T02
       requireFilesSection: false,
     });
     expect(result.exitCode).toBe(0);
+  });
+
+  it("(T027 audit-trail) tasks.md has Files: section for every task block — requireFilesSection clean", () => {
+    // T027 claims "本 tasks.md は全 FR を mention 済みかつ Files: セクション完備".
+    // The other dogfood tests above run with requireFilesSection: false, which
+    // means a regression that drops a `Files:` line on some task block would
+    // pass silently. This variant flips strict-mode ON so the audit-trail
+    // claim is actually verified.
+    const result = runPlanCoverage({
+      repoRoot: REPO_ROOT,
+      specDir: SPEC_DIR,
+      tasksPath: join(SPEC_DIR, "tasks.md"),
+      planPath: join(SPEC_DIR, "plan.md"),
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: true,
+    });
+
+    const missing = result.json.diagnostics.filter(
+      (d) => d.kind === "missingFilesSection",
+    );
+    if (missing.length > 0) {
+      console.error(
+        "[dogfood/strict] tasks.md task blocks missing `Files:` section:\n  " +
+          missing
+            .map(
+              (m) =>
+                `${(m as { taskId: string; line: number }).taskId} (line ${
+                  (m as { line: number }).line
+                })`,
+            )
+            .join("\n  "),
+      );
+    }
+    expect(missing).toEqual([]);
   });
 });

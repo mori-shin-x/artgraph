@@ -1,6 +1,6 @@
 ---
 name: "artgraph-impact"
-description: "Runs `artgraph impact` to surface which requirements, docs, and files a proposed file edit touches. Use when the user explicitly names file paths or wants the impact of files staged in `git diff` / declared in `tasks.md` / `plan.md`."
+description: "Runs `artgraph impact` to surface which requirements, docs, and files a proposed file edit touches (forward: files → REQs). Use when the user explicitly names file paths or wants the impact of files staged in `git diff` / declared in `tasks.md` / `plan.md`."
 allowed-tools:
   - "Bash(npx artgraph *)"
   - "Bash(artgraph *)"

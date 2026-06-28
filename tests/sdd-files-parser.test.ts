@@ -230,7 +230,7 @@ describe("extractFiles — Stage A (Files: section)", () => {
     // Only the relative path is kept.
     expect(result.files).toEqual(["src/auth.ts"]);
     expect(result.diagnostics).toEqual([
-      { kind: "unresolvedFilePath", path: "/home/user/repo/src/auth.ts" },
+      { kind: "unresolvedFilePath", path: "/home/user/repo/src/auth.ts", line: 1 },
     ]);
   });
 
@@ -244,7 +244,7 @@ describe("extractFiles — Stage A (Files: section)", () => {
     // not-yet-existing files. The file is accepted AND a diagnostic is added.
     expect(result.files).toEqual(["src/brand-new.ts"]);
     expect(result.diagnostics).toEqual([
-      { kind: "unresolvedFilePath", path: "src/brand-new.ts" },
+      { kind: "unresolvedFilePath", path: "src/brand-new.ts", line: 1 },
     ]);
   });
 
@@ -267,13 +267,38 @@ describe("extractFiles — Stage A (Files: section)", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("`./` and `../` prefixed paths are accepted (relative, normalized as-written)", () => {
+  it("`./` and `../` prefixed paths are accepted (relative, normalized to canonical form)", () => {
     touch(root, "src/auth.ts");
     const graph = makeGraph([]);
     const text = "Files: ./src/auth.ts\n";
     const result = extractFiles(text, { graph, repoRoot: root });
     expect(result.stage).toBe("files-section");
-    expect(result.files).toEqual(["./src/auth.ts"]);
+    // Stage A normalizes `./` away so the path matches graph keys like
+    // `file:src/auth.ts` downstream (spec 014 CORR-5).
+    expect(result.files).toEqual(["src/auth.ts"]);
+  });
+
+  it("normalizes intermediate `..` segments (e.g. `src/sub/../foo.ts`)", () => {
+    touch(root, "src/foo.ts");
+    const graph = makeGraph([]);
+    const text = "Files: src/sub/../foo.ts\n";
+    const result = extractFiles(text, { graph, repoRoot: root });
+    expect(result.stage).toBe("files-section");
+    expect(result.files).toEqual(["src/foo.ts"]);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("rejects paths that escape the repo root (`../outside/...`)", () => {
+    const graph = makeGraph([]);
+    const text = "Files: ../outside/foo.ts\n";
+    const result = extractFiles(text, { graph, repoRoot: root });
+    // The escaping path must NOT be admitted to `files[]` — it would point
+    // outside the repo where the graph cannot reach it.
+    expect(result.files).toEqual([]);
+    // But it surfaces as a diagnostic so a typo isn't silent.
+    expect(result.diagnostics).toEqual([
+      { kind: "unresolvedFilePath", path: "../outside/foo.ts", line: 1 },
+    ]);
   });
 
   it("trailing slash directory paths are kept verbatim (preserve `/`)", () => {
@@ -285,10 +310,87 @@ describe("extractFiles — Stage A (Files: section)", () => {
     // Neither is in the graph nor on disk → both get the typo warning.
     expect(result.diagnostics).toEqual(
       expect.arrayContaining([
-        { kind: "unresolvedFilePath", path: "src/auth/" },
-        { kind: "unresolvedFilePath", path: "tests/" },
+        { kind: "unresolvedFilePath", path: "src/auth/", line: 1 },
+        { kind: "unresolvedFilePath", path: "tests/", line: 1 },
       ]),
     );
+  });
+
+  it("unresolvedFilePath diagnostic line numbers reflect bullet position (not just header)", () => {
+    const graph = makeGraph([]);
+    const text = [
+      "Files:",                        // line 1
+      "- src/exists-not-1.ts",         // line 2
+      "- src/exists-not-2.ts",         // line 3
+    ].join("\n");
+    const result = extractFiles(text, { graph, repoRoot: root });
+    expect(result.stage).toBe("files-section");
+    const diag = result.diagnostics.filter((d) => d.kind === "unresolvedFilePath");
+    // Each bullet's diagnostic should carry its own 1-based line.
+    expect(diag).toEqual(
+      expect.arrayContaining([
+        { kind: "unresolvedFilePath", path: "src/exists-not-1.ts", line: 2 },
+        { kind: "unresolvedFilePath", path: "src/exists-not-2.ts", line: 3 },
+      ]),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task heading parsing (numeric-only IDs)
+// ---------------------------------------------------------------------------
+
+describe("extractFiles — taskBlocks numeric-only IDs (CORR-3)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = makeTmpRoot();
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("captures numeric-only headings like `### 1.1 Some task`", () => {
+    const graph = makeGraph(["src/foo.ts"]);
+    const text = [
+      "### 1.1 Some task",                 // line 1
+      "Files: src/foo.ts",                 // line 2
+      "",                                  // line 3
+      "### 2 Another task",                // line 4
+      "Files: src/foo.ts",                 // line 5
+    ].join("\n");
+
+    const result = extractFiles(text, { graph, repoRoot: root });
+    expect(result.taskBlocks).toEqual([
+      { taskId: "1.1", line: 1, hasFilesSection: true },
+      { taskId: "2", line: 4, hasFilesSection: true },
+    ]);
+  });
+
+  it("captures dotted multi-level IDs like `2.3.4`", () => {
+    const graph = makeGraph([]);
+    const text = [
+      "### 2.3.4 Deep numeric",
+      "",
+      "Prose only.",
+    ].join("\n");
+    const result = extractFiles(text, { graph, repoRoot: root });
+    expect(result.taskBlocks).toEqual([
+      { taskId: "2.3.4", line: 1, hasFilesSection: false },
+    ]);
+  });
+
+  it("still captures T-prefixed spec-kit IDs (T001) alongside numeric", () => {
+    const graph = makeGraph([]);
+    const text = [
+      "### T001: spec-kit style",
+      "",
+      "### 1.1 numeric style",
+    ].join("\n");
+    const result = extractFiles(text, { graph, repoRoot: root });
+    expect(result.taskBlocks).toEqual([
+      { taskId: "T001", line: 1, hasFilesSection: false },
+      { taskId: "1.1", line: 3, hasFilesSection: false },
+    ]);
   });
 });
 

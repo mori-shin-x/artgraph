@@ -43,6 +43,12 @@ Files:
 
 デフォルトは lenient (`Files:` が無くても regex フォールバックで path 抽出を試みる)。
 
+**Note**: `--require-files-section` のデフォルトは OFF。`Files:` セクションが
+無いタスクが多い tasks.md でも diagnostics は出ず、Stage B の regex fallback で
+1 つでも実在 file を拾えば `--gate` を通る silent green が起こり得る。CI で
+網羅性ガードとして使う場合は `--require-files-section` を **強く推奨**
+(`.artgraph.json` の `{"planCoverage":{"requireFilesSection":true}}` で永続化可)。
+
 ---
 
 ## 暗黙波及 REQ の調査結果記録 (推奨)

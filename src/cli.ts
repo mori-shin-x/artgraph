@@ -417,7 +417,23 @@ const IMPACT_DOC_PREFIX_REJECTION = [
   "  artgraph impact --diff             # use git diff",
 ].join("\n");
 
-const REQ_ID_INPUT_RE = /^[A-Z]+-\d+$/;
+// spec 014 (UX-1): Broaden REQ-ID input detection so the navigational error
+// fires for every REQ-ID shape the artgraph ecosystem documents (README §
+// "valid REQ-ID grammar"). Without this widening, Kiro `Requirement-3` and
+// scoped `auth/FR-2` inputs slip past the early reject and hit the generic
+// "No matching nodes found" path with no migration hint.
+//
+// Matches:
+//   - REQ-001 / FR-032 / AUTH-001  (all-uppercase prefix + numeric tail)
+//   - Requirement-3                (Pascal-case Kiro-style prefix)
+//   - auth/FR-2 / auth-2fa/REQ-1   (scoped: <scope>/<base>)
+//   - REQ-1.2 / Requirement-1.1    (dotted numeric tail for hierarchical IDs)
+//
+// We deliberately *under*-match: only inputs that look like a REQ-ID get
+// routed to the 4-path navigational error; everything else (file path,
+// non-conforming string) continues to the file-resolution path so the
+// existing "No matching nodes found" message still fires.
+const REQ_ID_INPUT_RE = /^(?:[A-Za-z][\w-]*\/)?[A-Z][A-Za-z]*-\d+(?:\.\d+)*$/;
 
 program
   .command("impact")
@@ -487,6 +503,22 @@ program
       }
       const text = readFileSync(sourcePath, "utf-8");
       const extracted = extractFiles(text, { graph, repoRoot: rootDir });
+      // SPEC-2: surface every `unresolvedFilePath` diagnostic as a warning so
+      // typos in a `Files:` section (e.g. `src/auht.ts`) don't silently fall
+      // through to an empty start set. Mirrors plan-coverage's diagnostic
+      // flattening so the two CLIs stay consistent.
+      for (const d of extracted.diagnostics) {
+        if (d.kind === "unresolvedFilePath") {
+          // Defensive type guard: Agent B's Diagnostic.line is `number`, but
+          // we read it via `in` + typeof so the surrounding code keeps
+          // compiling even if a future variant lacks the field.
+          const loc =
+            "line" in d && typeof d.line === "number" ? ` (line ${d.line})` : "";
+          console.error(
+            `WARNING: unresolved file path "${d.path}"${loc} in ${sourcePath}`,
+          );
+        }
+      }
       if (extracted.stage === "empty" || extracted.files.length === 0) {
         console.error(
           `error: no files extracted from ${sourcePath}. add a \`Files: <path>\` section or reference existing file paths in the body.`,
@@ -582,12 +614,22 @@ program
       console.error(`error: tasks.md not found: ${tasksPath}`);
       process.exit(1);
     }
-    const planPathCandidate: string = opts.plan
-      ? (opts.plan as string)
-      : resolve(specDir, "plan.md");
-    const planPath: string | undefined = existsSync(planPathCandidate)
-      ? planPathCandidate
-      : undefined;
+    // CORR-1 / SPEC-3: when the user passes `--plan` explicitly, a missing
+    // path is a hard error (mirrors `--tasks` above). When omitted, the
+    // default `<spec-dir>/plan.md` is *optional*: silent fallback is fine
+    // because plan.md is not required by the contract.
+    let planPath: string | undefined;
+    if (opts.plan) {
+      const explicitPlan = opts.plan as string;
+      if (!existsSync(explicitPlan)) {
+        console.error(`error: --plan path not found: ${explicitPlan}`);
+        process.exit(1);
+      }
+      planPath = explicitPlan;
+    } else {
+      const defaultPlan = resolve(specDir, "plan.md");
+      planPath = existsSync(defaultPlan) ? defaultPlan : undefined;
+    }
 
     // Parse --ignore CSV. Empty entries are dropped silently so
     // `--ignore ""` or trailing commas don't generate spurious IDs.

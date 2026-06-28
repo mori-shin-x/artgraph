@@ -254,15 +254,16 @@ for the formalisation.
 
 ## Commands
 
-| Command              | Purpose                                                      |
-| -------------------- | ------------------------------------------------------------ |
-| `artgraph scan`      | Build the artifact graph and report counts                   |
-| `artgraph check`     | Report drift / orphans / uncovered (`--gate` to fail a hook) |
-| `artgraph coverage`  | Per-requirement coverage status                              |
-| `artgraph impact`    | Impact analysis (`--diff` scopes to the git diff)            |
-| `artgraph reconcile` | Rebuild `.trace.lock` from the current graph                 |
-| `artgraph graph`     | Emit the graph (dot / json)                                  |
-| `artgraph rename`    | Rename / split / merge requirement IDs (see below)           |
+| Command                  | Purpose                                                                                             |
+| ------------------------ | --------------------------------------------------------------------------------------------------- |
+| `artgraph scan`          | Build the artifact graph and report counts                                                          |
+| `artgraph check`         | Report drift / orphans / uncovered (`--gate` to fail a hook)                                        |
+| `artgraph coverage`      | Per-requirement coverage status                                                                     |
+| `artgraph impact`        | File-only forward impact (file paths / `--from-tasks` / `--from-plan` / `--diff`)                   |
+| `artgraph plan-coverage` | Detect implicit REQ impacts: REQs touched by tasks.md `Files:` but not mentioned in tasks/plan/spec |
+| `artgraph reconcile`     | Rebuild `.trace.lock` from the current graph                                                        |
+| `artgraph graph`         | Emit the graph (dot / json)                                                                         |
+| `artgraph rename`        | Rename / split / merge requirement IDs (see below)                                                  |
 
 ## `artgraph rename` — ID lifecycle
 

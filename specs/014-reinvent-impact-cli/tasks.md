@@ -309,7 +309,6 @@ These REQs ARE the work of this spec. The bare `FR-XXX` / `SC-XXX` mentions
 above remain authoritative for human readers; the qualified forms below
 exist purely to satisfy the deterministic detector.
 
-- Considered: 014-reinvent-impact-cli/FR-001 — implemented via T007
 - Considered: 014-reinvent-impact-cli/FR-002 — implemented via T006
 - Considered: 014-reinvent-impact-cli/FR-003 — implemented via T007
 - Considered: 014-reinvent-impact-cli/FR-004 — implemented via T007
@@ -358,7 +357,6 @@ Modifying `src/cli.ts` necessarily forwards-touches the test-results impl
 edges. No behavioural change to spec 006 is intended in this PR — the
 mentions below are bookkeeping only.
 
-- Considered: 006-test-results/FR-001 — pre-existing test-results infrastructure, no behaviour change
 - Considered: 006-test-results/FR-002 — pre-existing test-results infrastructure, no behaviour change
 - Considered: 006-test-results/FR-003 — pre-existing test-results infrastructure, no behaviour change
 - Considered: 006-test-results/FR-004 — pre-existing test-results infrastructure, no behaviour change

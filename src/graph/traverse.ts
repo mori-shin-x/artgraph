@@ -1,3 +1,4 @@
+import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import type { ArtifactGraph, ImpactResult, DriftEntry } from "../types.js";
 import type { LockFile } from "../types.js";
 
@@ -165,7 +166,13 @@ export function findUncovered(graph: ArtifactGraph): string[] {
 export function resolveFileStartIds(graph: ArtifactGraph, inputs: string[]): string[] {
   const ids: string[] = [];
 
-  for (const input of inputs) {
+  for (const rawInput of inputs) {
+    // Defensive normalization: `./src/foo.ts` / `src/sub/../foo.ts` get
+    // collapsed to `src/foo.ts` so the `file:<path>` lookup finds the node
+    // the graph builder registered under the canonical repo-relative path.
+    // The Stage A parser (spec 014) already normalizes, but callers that
+    // hand-roll inputs still need the safety net.
+    const input = normalizeForLookup(rawInput);
     const fileId = `file:${input}`;
     if (graph.nodes.has(fileId)) {
       ids.push(fileId);
@@ -187,4 +194,19 @@ export function resolveFileStartIds(graph: ArtifactGraph, inputs: string[]): str
   }
 
   return ids;
+}
+
+function normalizeForLookup(input: string): string {
+  // Skip absolute paths — they can't be safely re-mapped to a repo-relative
+  // form without knowing the repo root, and graph nodes are always keyed
+  // by repo-relative paths. Caller already filtered abs paths in Stage A.
+  if (isAbsolute(input)) return input;
+  // Resolve against a synthetic root so `..` segments collapse without
+  // dragging in real filesystem state. Inputs that escape "above" the root
+  // are passed through unchanged so the existing miss behaviour applies.
+  const root = "/__artgraph__";
+  const abs = resolvePath(root, input);
+  const rel = relative(root, abs);
+  if (rel.length === 0 || rel === ".." || rel.startsWith(`..${sep}`)) return input;
+  return rel.split(sep).join("/");
 }

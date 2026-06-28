@@ -1,6 +1,6 @@
 ---
 name: "artgraph-plan-coverage"
-description: "Detects implicit impacts: files declared in `tasks.md` may affect existing REQs that are not mentioned in `tasks.md` / `plan.md` / `spec.md`. Use after `/speckit-tasks` or before `/speckit-implement`."
+description: "Detects implicit impacts: REQs reached by tasks.md `Files:` but not mentioned in `tasks.md` / `plan.md` / `spec.md` (reverse audit). Use after editing tasks.md / plan.md (e.g. after `/speckit-tasks`, or after updating `.kiro/specs/<name>/tasks.md`), before implementation."
 allowed-tools:
   - "Bash(npx artgraph plan-coverage *)"
   - "Bash(artgraph plan-coverage *)"
@@ -48,7 +48,7 @@ The result has two views of the same implicit-impact data plus a summary:
 | `diagnostics` | `[{ kind, ... }]` | e.g. `missingFilesSection`, `unresolvedFilePath`, `emptyExtraction` |
 | `ignored` | `string[]` | the `--ignore` REQ-IDs, echoed back for transparency |
 
-If `implicitImpacts` is empty, report "No implicit impacts." and stop.
+If `implicitImpacts` is empty, report "No implicit impacts." and stop. If `diagnostics` contains `emptyExtraction`, warn explicitly: "No implicit impacts because nothing was extracted — add a `Files:` section." (silent green guard).
 
 ### 4. Resolve each implicit REQ — pick one of three paths
 

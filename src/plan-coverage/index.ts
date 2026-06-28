@@ -71,7 +71,7 @@ export interface ImplicitImpactByReq {
 
 export type PlanCoverageDiagnostic =
   | { kind: "missingFilesSection"; taskId: string; line: number }
-  | { kind: "unresolvedFilePath"; sourceFile: string; line?: number }
+  | { kind: "unresolvedFilePath"; sourceFile: string; line: number }
   | { kind: "emptyExtraction" };
 
 export interface PlanCoverageSummary {
@@ -146,9 +146,14 @@ function buildByReqGroups(groups: ImpactGroup[]): ImplicitImpactByReq[] {
   }));
 }
 
+interface FormatTextOptions {
+  requireFilesSection: boolean;
+}
+
 function formatText(
   result: PlanCoverageResult,
   ignore: string[],
+  formatOptions: FormatTextOptions,
 ): string {
   const lines: string[] = [];
   const totalImplicit = result.implicitImpactsByReq.length;
@@ -180,7 +185,7 @@ function formatText(
           lines.push(`  [missingFilesSection] ${d.taskId} (line ${d.line})`);
           break;
         case "unresolvedFilePath":
-          lines.push(`  [unresolvedFilePath] ${d.sourceFile}`);
+          lines.push(`  [unresolvedFilePath] ${d.sourceFile} (line ${d.line})`);
           break;
         case "emptyExtraction":
           lines.push(`  [emptyExtraction]`);
@@ -192,6 +197,28 @@ function formatText(
   if (ignore.length > 0) {
     lines.push("");
     lines.push(`Ignored (one-shot): ${ignore.join(", ")}`);
+  }
+
+  // Hints (spec 014 UX-4): silent-green report needs a nudge so the user
+  // understands why the report came back empty / whether `--require-files-
+  // section` is in effect.
+  const hints: string[] = [];
+  if (!formatOptions.requireFilesSection) {
+    hints.push(
+      "Hint: --require-files-section is OFF; tasks without a `Files:` section are not flagged. " +
+        "Enable in .artgraph.json (planCoverage.requireFilesSection: true) or pass " +
+        "--require-files-section to catch missing Files: sections.",
+    );
+  }
+  if (result.diagnostics.some((d) => d.kind === "emptyExtraction")) {
+    hints.push(
+      "Hint: no files extracted from tasks.md. Add a `Files: <path>` section or check that " +
+        "referenced paths exist.",
+    );
+  }
+  if (hints.length > 0) {
+    lines.push("");
+    for (const h of hints) lines.push(h);
   }
 
   lines.push("");
@@ -239,7 +266,7 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
     return {
       json: empty,
       exitCode: gate ? 1 : 0,
-      text: formatText(empty, ignore),
+      text: formatText(empty, ignore, { requireFilesSection }),
     };
   }
 
@@ -269,13 +296,13 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
   // top-level contract).
   for (const d of tasksExtract.diagnostics) {
     if (d.kind === "unresolvedFilePath") {
-      diagnostics.push({ kind: "unresolvedFilePath", sourceFile: d.path });
+      diagnostics.push({ kind: "unresolvedFilePath", sourceFile: d.path, line: d.line });
     }
   }
   if (planExtract) {
     for (const d of planExtract.diagnostics) {
       if (d.kind === "unresolvedFilePath") {
-        diagnostics.push({ kind: "unresolvedFilePath", sourceFile: d.path });
+        diagnostics.push({ kind: "unresolvedFilePath", sourceFile: d.path, line: d.line });
       }
     }
   }
@@ -310,7 +337,7 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
     return {
       json: result,
       exitCode: gate && diagnostics.length > 0 ? 1 : 0,
-      text: formatText(result, ignore),
+      text: formatText(result, ignore, { requireFilesSection }),
     };
   }
 
@@ -386,6 +413,6 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
   const tripGate = gate && (implicitImpacts.length > 0 || diagnostics.length > 0);
   const exitCode: 0 | 1 = tripGate ? 1 : 0;
 
-  const text = format === "text" ? formatText(json, ignore) : "";
+  const text = format === "text" ? formatText(json, ignore, { requireFilesSection }) : "";
   return { json, exitCode, text };
 }

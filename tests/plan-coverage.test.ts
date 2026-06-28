@@ -567,6 +567,110 @@ describe("runPlanCoverage — text format dual view", () => {
   });
 });
 
+describe("runPlanCoverage — unresolvedFilePath diagnostics carry line numbers (CORR-2 / SPEC-1)", () => {
+  let fx: FixtureRoot;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("propagates 1-based `line` from the parser onto unresolvedFilePath", () => {
+    fx = setupFixture({
+      tasksBody: [
+        "# Tasks",                                  // line 1
+        "",                                         // line 2
+        "### T001: typo task",                      // line 3
+        "",                                         // line 4
+        "Files: src/typo-does-not-exist.ts",        // line 5
+        "",
+      ].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    const unresolved = result.json.diagnostics.filter(
+      (d) => d.kind === "unresolvedFilePath",
+    );
+    expect(unresolved.length).toBeGreaterThan(0);
+    // The header carrying the typo lives at line 5 of tasks.md (1-based).
+    expect(
+      unresolved.find(
+        (d) =>
+          d.kind === "unresolvedFilePath" &&
+          d.sourceFile === "src/typo-does-not-exist.ts",
+      ),
+    ).toEqual({
+      kind: "unresolvedFilePath",
+      sourceFile: "src/typo-does-not-exist.ts",
+      line: 5,
+    });
+  });
+});
+
+describe("runPlanCoverage — text format hints (UX-4 / MIG-4)", () => {
+  let fx: FixtureRoot;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("text output shows --require-files-section OFF hint when the flag is false", () => {
+    fx = setupFixture();
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "text",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    // The hint nudges the user toward enabling the flag so silent-green
+    // reports don't hide missing `Files:` sections.
+    expect(result.text).toContain("OFF");
+    expect(result.text).toContain("Enable");
+    expect(result.text).toContain("--require-files-section");
+  });
+
+  it("text output suppresses the OFF hint when --require-files-section is true", () => {
+    fx = setupFixture();
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "text",
+      gate: false,
+      ignore: [],
+      requireFilesSection: true,
+    });
+    expect(result.text).not.toContain("--require-files-section is OFF");
+  });
+
+  it("text output shows emptyExtraction hint when no files were extracted", () => {
+    fx = setupFixture({
+      tasksBody: ["# Tasks", "", "Prose with no file paths at all.", ""].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "text",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.text).toContain("no files extracted");
+  });
+});
+
 describe("runPlanCoverage — sort stability", () => {
   let fx: FixtureRoot;
   afterEach(() => {

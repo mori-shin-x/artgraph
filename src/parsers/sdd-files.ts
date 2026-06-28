@@ -15,7 +15,7 @@
 // Edge cases there are mirrored 1:1 in tests/sdd-files-parser.test.ts.
 
 import { existsSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { relative, resolve as resolvePath, sep } from "node:path";
 import type { ArtifactGraph } from "../types.js";
 
 export type Diagnostic = {
@@ -26,6 +26,8 @@ export type Diagnostic = {
    */
   kind: "unresolvedFilePath";
   path: string;
+  /** 1-based line number of the offending header or bullet. */
+  line: number;
 };
 
 /**
@@ -95,6 +97,24 @@ function isAbsolutePath(path: string): boolean {
   return path.startsWith("/");
 }
 
+/**
+ * Stage A path normalization. Resolves `./`, `../`, and intermediate
+ * `foo/../bar` segments against `repoRoot` and re-emits the result as a
+ * POSIX-separated, repo-relative path. Returns `null` when the resulting
+ * path escapes the repo (so the caller can flag it as `unresolvedFilePath`
+ * without admitting it to `files[]`). A trailing `/` (directory marker) is
+ * preserved per contract — `path.relative` strips it.
+ */
+function normalizeStagePath(path: string, repoRoot: string): string | null {
+  const trailingSlash = path.endsWith("/") || path.endsWith(`${sep}`);
+  const abs = resolvePath(repoRoot, path);
+  const rel = relative(repoRoot, abs);
+  if (rel.length === 0) return trailingSlash ? "./" : ".";
+  if (rel === ".." || rel.startsWith(`..${sep}`)) return null;
+  const posix = rel.split(sep).join("/");
+  return trailingSlash ? `${posix}/` : posix;
+}
+
 function stripTrailingInlinePunct(s: string): string {
   // Strip a single trailing `.` or `;` from the *inline tail* before splitting
   // on `,`. This is meant to absorb sentence-end punctuation like
@@ -148,7 +168,9 @@ function runStageA(lines: string[], options: ExtractOptions): StageAExtraction {
       }
     }
 
-    const candidates: string[] = [];
+    // candidates carry their source line (1-based) so a diagnostic emitted
+    // later can pinpoint the offending entry instead of just the section.
+    const candidates: Array<{ path: string; line: number }> = [];
 
     // Inline form: comma-separated tail on the header line itself.
     const inlineTail = header[1].trim();
@@ -156,7 +178,7 @@ function runStageA(lines: string[], options: ExtractOptions): StageAExtraction {
       const stripped = stripTrailingInlinePunct(inlineTail);
       for (const piece of stripped.split(",")) {
         const v = stripTrailingAnnotation(piece.trim());
-        if (v !== "") candidates.push(v);
+        if (v !== "") candidates.push({ path: v, line: i + 1 });
       }
     }
 
@@ -166,23 +188,31 @@ function runStageA(lines: string[], options: ExtractOptions): StageAExtraction {
       const m = BULLET_RE.exec(lines[j]);
       if (!m) continue;
       const v = stripTrailingAnnotation(m[1].trim());
-      if (v !== "") candidates.push(v);
+      if (v !== "") candidates.push({ path: v, line: j + 1 });
     }
 
-    for (const path of candidates) {
+    for (const { path, line } of candidates) {
       if (isAbsolutePath(path)) {
         // Absolute paths are dropped from `files[]` but surfaced as a
         // diagnostic so the author can correct them.
-        diagnostics.push({ kind: "unresolvedFilePath", path });
+        diagnostics.push({ kind: "unresolvedFilePath", path, line });
         continue;
       }
-      accepted.push(path);
+      // Normalize `./foo` / `foo/../bar` so the downstream graph lookup
+      // (which keys on canonical repo-relative paths like `src/foo.ts`)
+      // doesn't miss. Paths that escape the repo are rejected.
+      const normalized = normalizeStagePath(path, options.repoRoot);
+      if (normalized === null) {
+        diagnostics.push({ kind: "unresolvedFilePath", path, line });
+        continue;
+      }
+      accepted.push(normalized);
       // Soft validation: if the path is neither registered in the graph nor
       // present on disk, surface a typo warning. The path is still accepted.
-      const inGraph = options.graph.nodes.has(`file:${path}`);
-      const onFs = existsSync(resolvePath(options.repoRoot, path));
+      const inGraph = options.graph.nodes.has(`file:${normalized}`);
+      const onFs = existsSync(resolvePath(options.repoRoot, normalized));
       if (!inGraph && !onFs) {
-        diagnostics.push({ kind: "unresolvedFilePath", path });
+        diagnostics.push({ kind: "unresolvedFilePath", path: normalized, line });
       }
     }
 
@@ -215,11 +245,11 @@ function runStageB(text: string, options: ExtractOptions): string[] {
   return accepted;
 }
 
-// spec 014 — heuristic to detect `### T013: ...` style task headings. We
-// intentionally accept `T` followed by 1+ digits so both spec-kit (T001) and
-// numeric-only IDs work. Heading depth (`#`, `##`, `###`, ...) is not
+// spec 014 — heuristic to detect `### T013: ...` style task headings. The
+// `T` prefix is optional so both spec-kit (T001) and numeric-only / dotted
+// IDs (1, 1.1, 2.3.4) work. Heading depth (`#`, `##`, `###`, ...) is not
 // constrained — tasks.md authors place T-IDs at varied levels.
-const TASK_HEADING_RE = /^#+\s+(T\d+)\b/;
+const TASK_HEADING_RE = /^#+\s+(T?\d+(?:\.\d+)*)\b/;
 
 function extractTaskBlocks(lines: string[]): TaskBlock[] {
   // Build the list of `(line, taskId)` headings first, then for each

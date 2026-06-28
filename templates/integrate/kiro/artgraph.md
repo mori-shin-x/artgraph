@@ -10,12 +10,13 @@ This steering file tells the Kiro agent how to use artgraph to keep code, specs,
 
 ## Commands
 
-| Command                  | Use                                                   |
-| ------------------------ | ----------------------------------------------------- |
-| `artgraph impact <file>` | List affected REQs/docs/files for a given path        |
-| `artgraph check --diff`  | Validate the current git diff against the trace graph |
-| `artgraph reconcile`     | Update `.trace.lock` to current graph (use with care) |
-| `artgraph coverage`      | Inspect per-requirement coverage status               |
+| Command                                              | Use                                                                                |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `artgraph impact <file>`                             | List affected REQs/docs/files for a given path                                     |
+| `artgraph check --diff`                              | Validate the current git diff against the trace graph                              |
+| `artgraph reconcile`                                 | Update `.trace.lock` to current graph (use with care)                              |
+| `artgraph coverage`                                  | Inspect per-requirement coverage status                                            |
+| `artgraph plan-coverage --spec .kiro/specs/<name>/`  | Detect implicit REQ impacts in this spec's tasks.md (`--gate` for CI).             |
 
 ---
 
@@ -50,6 +51,12 @@ Files:
 ```
 
 または CLI に `--require-files-section` を渡してください。デフォルトは lenient。
+
+**Note**: `--require-files-section` のデフォルトは OFF。`Files:` セクションが
+無いタスクが多い tasks.md でも diagnostics は出ず、Stage B の regex fallback で
+1 つでも実在 file を拾えば `--gate` を通る silent green が起こり得る。CI で
+網羅性ガードとして使う場合は `--require-files-section` を **強く推奨**
+(`.artgraph.json` の `{"planCoverage":{"requireFilesSection":true}}` で永続化可)。
 
 ---
 

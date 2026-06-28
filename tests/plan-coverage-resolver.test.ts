@@ -193,3 +193,92 @@ describe("resolveSpecDir — error path (Kiro / no Spec Kit)", () => {
     if ("dir" in result) expect(result.dir).toBe(explicit);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 9 (TEST-5) — extra precedence / fallthrough guards
+// ---------------------------------------------------------------------------
+//
+// The base describe blocks above cover the happy path for each tier and
+// the three-way precedence; these tests pin down the two-tier collisions
+// and a couple of malformed-input fallthroughs that aren't otherwise
+// exercised. Each block is independent (own tmpdir, own beforeEach).
+
+describe("resolveSpecDir — env vs feature.json precedence", () => {
+  let root: string;
+  beforeEach(() => {
+    root = makeTmpRoot();
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("env SPECIFY_FEATURE_DIRECTORY wins when both env and feature.json are present", () => {
+    // Both sources resolve; per the documented precedence in
+    // src/plan-coverage/spec-resolver.ts (Tier 2 > Tier 3), env wins.
+    const envDir = join(root, ".specify/specs/from-env");
+    const fileDir = join(root, ".specify/specs/from-file");
+    for (const d of [envDir, fileDir]) mkdirSync(d, { recursive: true });
+    mkdirSync(join(root, ".specify"), { recursive: true });
+    writeFileSync(
+      join(root, ".specify/feature.json"),
+      JSON.stringify({ feature_directory: fileDir }),
+    );
+
+    const result = resolveSpecDir({
+      env: { SPECIFY_FEATURE_DIRECTORY: envDir },
+      repoRoot: root,
+    });
+    expect("dir" in result).toBe(true);
+    if ("dir" in result) expect(result.dir).toBe(envDir);
+  });
+});
+
+describe("resolveSpecDir — feature.json malformed input fallthroughs", () => {
+  let root: string;
+  beforeEach(() => {
+    root = makeTmpRoot();
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("returns error when feature_directory is an empty string", () => {
+    // tryReadFeatureJson() treats `value === ""` as unset to match the
+    // "empty env var" rule. Confirm the file-tier fallthrough produces a
+    // Kiro-aware error rather than an empty-path `{ dir: "" }`.
+    mkdirSync(join(root, ".specify"), { recursive: true });
+    writeFileSync(
+      join(root, ".specify/feature.json"),
+      JSON.stringify({ feature_directory: "" }),
+    );
+    const result = resolveSpecDir({ env: {}, repoRoot: root });
+    expect("error" in result).toBe(true);
+    if ("error" in result) expect(result.error).toMatch(/--spec/);
+  });
+
+  it("returns error when feature_directory is non-string (number)", () => {
+    // The `typeof value !== "string"` guard in tryReadFeatureJson must
+    // reject non-string values rather than coercing them. Guards against
+    // a future `{feature_directory: 1}` shape silently passing through.
+    mkdirSync(join(root, ".specify"), { recursive: true });
+    writeFileSync(
+      join(root, ".specify/feature.json"),
+      JSON.stringify({ feature_directory: 42 }),
+    );
+    const result = resolveSpecDir({ env: {}, repoRoot: root });
+    expect("error" in result).toBe(true);
+  });
+
+  it("returns error when feature.json is a top-level array (non-object)", () => {
+    // `typeof parsed !== "object"` is satisfied by arrays in JS (typeof [] === "object"),
+    // so the second guard `"feature_directory" in parsed` is what catches this.
+    // Pin the behaviour so the parser doesn't crash on shape drift.
+    mkdirSync(join(root, ".specify"), { recursive: true });
+    writeFileSync(
+      join(root, ".specify/feature.json"),
+      JSON.stringify([{ feature_directory: "irrelevant" }]),
+    );
+    const result = resolveSpecDir({ env: {}, repoRoot: root });
+    expect("error" in result).toBe(true);
+  });
+});

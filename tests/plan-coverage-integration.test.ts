@@ -581,3 +581,214 @@ describe("plan-coverage E2E — (m) unresolvedFilePath diagnostic flattening", (
     ).toBe("src/auth/no-such-file.ts");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 9 (TEST-5 / CORR-1) — explicit-flag failure modes
+// ---------------------------------------------------------------------------
+//
+// These guard the failure paths that the happy-path scenarios (a–m) above
+// don't exercise. Each block is independent and uses the same setupFixture
+// helper so the graph shape stays consistent across the file.
+
+describe("plan-coverage E2E — --plan with non-existent path (CORR-1)", () => {
+  let fx: Fixture;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("exits 1 with a clear error when --plan points at a missing file", async () => {
+    // Sanity: tasks.md is fine (default fixture), only --plan is bogus.
+    // Otherwise we'd be testing the tasks.md branch instead.
+    fx = setupFixture();
+    const bogusPlan = join(fx.root, "does-not-exist-plan.md");
+    const { exitCode, stderr } = await runCli(
+      [
+        "plan-coverage",
+        "--spec",
+        fx.specDirAbsolute,
+        "--plan",
+        bogusPlan,
+        "--format",
+        "json",
+      ],
+      { cwd: fx.root },
+    );
+    expect(exitCode).toBe(1);
+    // Contract (src/cli.ts CORR-1 block): "error: --plan path not found: ..."
+    expect(stderr).toMatch(/--plan path not found/);
+    expect(stderr).toContain(bogusPlan);
+  });
+});
+
+describe("plan-coverage E2E — --tasks with non-existent path", () => {
+  let fx: Fixture;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("exits 1 with a clear error when --tasks points at a missing file", async () => {
+    fx = setupFixture();
+    const bogusTasks = join(fx.root, "does-not-exist-tasks.md");
+    const { exitCode, stderr } = await runCli(
+      [
+        "plan-coverage",
+        "--spec",
+        fx.specDirAbsolute,
+        "--tasks",
+        bogusTasks,
+        "--format",
+        "json",
+      ],
+      { cwd: fx.root },
+    );
+    expect(exitCode).toBe(1);
+    // src/cli.ts emits "error: tasks.md not found: <path>".
+    expect(stderr).toMatch(/tasks\.md not found/);
+    expect(stderr).toContain(bogusTasks);
+  });
+});
+
+describe("plan-coverage E2E — --ignore tolerates unknown REQ-IDs", () => {
+  let fx: Fixture;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("silently accepts a REQ-ID that is not in the affected set", async () => {
+    // The one-shot --ignore list is best-effort suppression: IDs that
+    // wouldn't have been flagged anyway shouldn't fail the command.
+    // Per src/plan-coverage/index.ts:399, summary.ignored only counts IDs
+    // that *were* in the affected set; bogus IDs still appear in
+    // `ignored[]` for transparency but contribute 0 to summary.ignored.
+    fx = setupFixture();
+    const { exitCode, stdout } = await runCli(
+      [
+        "plan-coverage",
+        "--spec",
+        fx.specDirAbsolute,
+        "--ignore",
+        "NOSUCH-999",
+        "--format",
+        "json",
+      ],
+      { cwd: fx.root },
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.ignored).toContain("NOSUCH-999");
+    expect(result.summary.ignored).toBe(0);
+    // The real implicit set (INT-001 etc.) is untouched by the bogus ID.
+    expect(result.implicitImpactsByReq.length).toBeGreaterThan(0);
+  });
+});
+
+describe("plan-coverage E2E — BOM + CRLF tasks.md", () => {
+  let fx: Fixture;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("extracts Files: from a tasks.md with UTF-8 BOM and CRLF line endings", async () => {
+    // Real-world tasks.md files frequently arrive from Windows editors or
+    // tools that emit BOM-prefixed UTF-8. The Stage A header trim path
+    // ought to handle both cleanly; this is a regression guard.
+    const bom = "﻿";
+    fx = setupFixture({
+      tasksBody:
+        bom +
+        ["# Tasks", "", "### T001: bom+crlf", "", "Files: src/auth/login.ts", ""].join("\r\n"),
+    });
+    const { exitCode, stdout } = await runCli(
+      ["plan-coverage", "--spec", fx.specDirAbsolute, "--format", "json"],
+      { cwd: fx.root },
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    // login.ts @impl INT-001 → INT-001 must surface as implicit (no
+    // mention of INT-001 in the spec trio of this fixture).
+    const reqIds = (
+      result.implicitImpactsByReq as Array<{ reqId: string }>
+    ).map((r) => r.reqId);
+    expect(reqIds).toContain("INT-001");
+  });
+});
+
+describe("plan-coverage E2E — feature.json pointing at missing dir", () => {
+  let fx: Fixture;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("does not error inside resolveSpecDir when feature.json points at a non-existent dir, but downstream tasks.md lookup fails clearly", async () => {
+    // resolveSpecDir trusts the path it's handed — existence checks happen
+    // in the CLI handler (tasks.md / plan.md). A stale feature.json
+    // pointing at a deleted spec dir should therefore surface as a
+    // tasks.md-not-found error with the bogus dir path embedded.
+    fx = setupFixture({ omitFeatureJson: true });
+    // Overwrite the stale .specify/feature.json that omitFeatureJson omitted.
+    mkdirSync(join(fx.root, ".specify"), { recursive: true });
+    writeFileSync(
+      join(fx.root, ".specify/feature.json"),
+      JSON.stringify({ feature_directory: ".specify/specs/no-such-dir" }),
+    );
+    const { exitCode, stderr } = await withEnv(
+      "SPECIFY_FEATURE_DIRECTORY",
+      undefined,
+      () =>
+        runCli(["plan-coverage", "--format", "json"], { cwd: fx.root }),
+    );
+    expect(exitCode).toBe(1);
+    // The tasks.md path inside the bogus spec dir should appear in the error.
+    expect(stderr).toMatch(/tasks\.md not found/);
+    expect(stderr).toMatch(/no-such-dir/);
+  });
+});
+
+describe("plan-coverage E2E — large tasks.md (perf scale)", () => {
+  let fx: Fixture;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it(
+    "handles a tasks.md with 1000 task blocks within a reasonable time budget",
+    () => {
+      // Build a 1000-block tasks.md that points every block at login.ts so
+      // the impact graph stays small (one source file → INT-001) while the
+      // parser is forced to walk 1000 heading scopes. Programmatic invocation
+      // via runPlanCoverage is enough — we don't need the runCli env mock.
+      const blocks: string[] = ["# Tasks", ""];
+      for (let i = 1; i <= 1000; i++) {
+        const id = `T${String(i).padStart(4, "0")}`;
+        blocks.push(`### ${id}: bulk task`);
+        blocks.push("");
+        blocks.push("Files: src/auth/login.ts");
+        blocks.push("");
+      }
+      fx = setupFixture({ tasksBody: blocks.join("\n") });
+
+      const start = Date.now();
+      const result = runPlanCoverage({
+        repoRoot: fx.root,
+        specDir: fx.specDirAbsolute,
+        tasksPath: fx.tasksPath,
+        planPath: fx.planPath,
+        format: "json",
+        gate: false,
+        ignore: [],
+        requireFilesSection: false,
+      });
+      const elapsed = Date.now() - start;
+
+      // INT-001 implements login.ts, no mention in spec trio → at least
+      // one implicit impact must surface.
+      expect(result.json.summary.totalAffected).toBeGreaterThan(0);
+      // Loose perf budget. Node + ts-morph scan dominates; the 1000-block
+      // parse should add tens of ms, not seconds. Tuned generously so the
+      // assertion catches accidental O(n^2) regressions without flaking
+      // under CI load.
+      expect(elapsed).toBeLessThan(5000);
+    },
+    10000,
+  );
+});

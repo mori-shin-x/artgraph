@@ -29,6 +29,31 @@ describe("CLI: impact — file-only target validation (T004 / FR-001, FR-003)", 
     expect(stderr).toMatch(/<file>|file path/i);
   });
 
+  // UX-1: REQ_ID_INPUT_RE used to be `/^[A-Z]+-\d+$/` which only matches
+  // `REQ-001` / `FR-032`. README documents three more shapes as valid REQ-IDs
+  // (Pascal-case `Requirement-3`, scoped `auth/FR-2`, dotted `REQ-1.2`).
+  // Without the widened regex these slipped past the early reject and the
+  // user got the generic "No matching nodes found" error instead of the
+  // 4-path migration hint.
+  it.each([
+    ["REQ-001", "all-uppercase REQ-ID"],
+    ["AUTH-1", "uppercase prefix + small numeric tail"],
+    ["FR-32", "FR-style REQ-ID"],
+    ["Requirement-3", "Pascal-case Kiro-style prefix"],
+    ["auth/FR-2", "scoped prefix"],
+    ["AUTH-1.2", "dotted numeric tail"],
+  ])(
+    "rejects %s as a REQ-ID input (UX-1: broadened regex — %s)",
+    async (input, _label) => {
+      const { exitCode, stderr } = await runAt(FIXTURE_DIR, ["impact", input]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("REQ-ID");
+      expect(stderr).toContain("--from-tasks");
+      expect(stderr).toContain("--from-plan");
+      expect(stderr).toContain("--diff");
+    },
+  );
+
   it("rejects `doc:` prefix positional input (FR-001 / FR-002)", async () => {
     const { exitCode, stderr } = await runAt(FIXTURE_DIR, ["impact", "doc:auth-design"]);
     expect(exitCode).toBe(1);
@@ -51,11 +76,27 @@ describe("CLI: impact — file-only target validation (T004 / FR-001, FR-003)", 
     expect(result.affectedReqs).toContain("AUTH-001");
   });
 
-  it("rejects mutually exclusive start sources (positional + --from-tasks)", async () => {
-    const tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-impact-mex-"));
-    try {
-      const tasksPath = join(tmpRoot, "tasks.md");
+  // TEST-4: previously only positional + --from-tasks was tested. The full
+  // forbidden pairs (C(4,2)=6) must all hard-error so a future regression on
+  // any single channel is caught here. `--diff` doesn't need a real file on
+  // disk; the other two channels do (--from-tasks / --from-plan call
+  // existsSync before opening), so we materialize a tasks.md / plan.md.
+  describe("rejects mutually exclusive start sources (TEST-4: all forbidden pairs)", () => {
+    let tmpRoot: string;
+    let tasksPath: string;
+    let planPath: string;
+    beforeEach(() => {
+      tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-impact-mex-"));
+      tasksPath = join(tmpRoot, "tasks.md");
+      planPath = join(tmpRoot, "plan.md");
       writeFileSync(tasksPath, "Files: src/auth/login.ts\n");
+      writeFileSync(planPath, "Files: src/auth/login.ts\n");
+    });
+    afterEach(() => {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    });
+
+    it("positional + --from-tasks", async () => {
       const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
         "impact",
         "src/auth/login.ts",
@@ -64,9 +105,62 @@ describe("CLI: impact — file-only target validation (T004 / FR-001, FR-003)", 
       ]);
       expect(exitCode).toBe(1);
       expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
-    } finally {
-      rmSync(tmpRoot, { recursive: true, force: true });
-    }
+    });
+
+    it("positional + --from-plan", async () => {
+      const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
+        "impact",
+        "src/auth/login.ts",
+        "--from-plan",
+        planPath,
+      ]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
+    });
+
+    it("positional + --diff", async () => {
+      const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
+        "impact",
+        "src/auth/login.ts",
+        "--diff",
+      ]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
+    });
+
+    it("--from-tasks + --from-plan", async () => {
+      const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
+        "impact",
+        "--from-tasks",
+        tasksPath,
+        "--from-plan",
+        planPath,
+      ]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
+    });
+
+    it("--from-tasks + --diff", async () => {
+      const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
+        "impact",
+        "--from-tasks",
+        tasksPath,
+        "--diff",
+      ]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
+    });
+
+    it("--from-plan + --diff", async () => {
+      const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
+        "impact",
+        "--from-plan",
+        planPath,
+        "--diff",
+      ]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
+    });
   });
 
   it("rejects when no start source is given (no targets, no --from-*, no --diff)", async () => {
@@ -141,6 +235,50 @@ describe("CLI: impact --from-tasks (T005 / FR-004)", () => {
     expect(result.affectedReqs).toContain("AUTH-001");
     // The seed file itself stays in affectedFiles.
     expect(result.affectedFiles).toContain("src/auth/login.ts");
+  });
+
+  // TEST-3: regression guard against over-propagation at depth=1.
+  //
+  // Background: bidirectional BFS (src/graph/traverse.ts:5-11) intentionally
+  // walks `req → doc → sibling reqs`, so AUTH-003 *is* reachable from
+  // login.ts at the default unlimited depth — that's documented behavior.
+  // The interesting "is the immediate impact correct?" check is at depth=1:
+  // only direct @impl edges out of the seed file should appear. If the BFS
+  // accidentally widens (e.g. starts treating file→file imports as zero-cost,
+  // or follows doc-contains in the same hop) AUTH-003 will leak in here.
+  it("Stage A: depth=1 narrows impact to direct @impl targets only (TEST-3)", async () => {
+    const tasksPath = join(root, "tasks.md");
+    writeFileSync(
+      tasksPath,
+      [
+        "# Tasks",
+        "",
+        "### T001: tweak login (depth-bounded)",
+        "",
+        "Files: src/auth/login.ts",
+        "",
+      ].join("\n"),
+    );
+
+    const { stdout, exitCode } = await runAt(root, [
+      "impact",
+      "--from-tasks",
+      tasksPath,
+      "--depth",
+      "1",
+      "--format",
+      "json",
+    ]);
+
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    // login.ts @impl AUTH-001 — direct, depth=1 reaches this.
+    expect(result.affectedReqs).toContain("AUTH-001");
+    // AUTH-003 lives in tests/fixtures/specs/auth.md but is annotated on
+    // *no* file that login.ts directly affects. Reaching AUTH-003 here
+    // would mean the BFS leaked through the doc contains edge in a single
+    // hop — that's the over-propagation we're guarding against.
+    expect(result.affectedReqs).not.toContain("AUTH-003");
   });
 
   it("Stage B: regex fallback discovers file paths in free text", async () => {
@@ -227,5 +365,118 @@ describe("CLI: impact --from-plan (T005 / FR-006)", () => {
     expect(result.affectedFiles).toEqual(
       expect.arrayContaining(["src/auth/login.ts", "src/auth/session.ts"]),
     );
+  });
+
+  // TEST-3 (mirrored from --from-tasks): depth=1 over-propagation guard.
+  // See the matching test under "CLI: impact --from-tasks" for the rationale.
+  it("depth=1 narrows --from-plan impact to direct @impl targets only (TEST-3)", async () => {
+    const planPath = join(root, "plan.md");
+    writeFileSync(
+      planPath,
+      [
+        "# Plan",
+        "",
+        "Files: src/auth/login.ts, src/auth/session.ts",
+        "",
+      ].join("\n"),
+    );
+
+    const { stdout, exitCode } = await runAt(root, [
+      "impact",
+      "--from-plan",
+      planPath,
+      "--depth",
+      "1",
+      "--format",
+      "json",
+    ]);
+
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.affectedReqs).toContain("AUTH-001");
+    expect(result.affectedReqs).toContain("AUTH-002");
+    // AUTH-003 must not leak in through the doc contains edge at depth=1.
+    expect(result.affectedReqs).not.toContain("AUTH-003");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SPEC-2 — diagnostics surfaced as warnings from --from-tasks / --from-plan
+// ---------------------------------------------------------------------------
+//
+// Previously the impact CLI dropped extractFiles().diagnostics entirely, so a
+// tasks.md with `Files: src/auht.ts` (typo) silently fell through to the
+// "no files extracted" path or — worse — a valid-looking but wrong file.
+// Now every unresolvedFilePath diagnostic surfaces as a WARNING on stderr so
+// the user sees the typo before relying on the (possibly empty / incorrect)
+// impact result.
+
+describe("CLI: impact --from-tasks emits diagnostics as warnings (SPEC-2)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = setupSpecKitProject();
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("warns about typo'd Files: paths but still runs when other files extract", async () => {
+    const tasksPath = join(root, "tasks.md");
+    writeFileSync(
+      tasksPath,
+      [
+        "# Tasks",
+        "",
+        "### T001: with a typo'd path",
+        "",
+        "Files: src/auth/login.ts, src/auht/login.ts",
+        "",
+      ].join("\n"),
+    );
+
+    const { stdout, stderr, exitCode } = await runAt(root, [
+      "impact",
+      "--from-tasks",
+      tasksPath,
+      "--format",
+      "json",
+    ]);
+
+    // Warning must be visible on stderr.
+    expect(stderr).toContain("WARNING");
+    expect(stderr).toContain("src/auht/login.ts");
+
+    // Run still succeeds because the well-formed path (src/auth/login.ts)
+    // resolves into the start set.
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.affectedReqs).toContain("AUTH-001");
+  });
+
+  it("includes the source line number when Diagnostic.line is set", async () => {
+    const tasksPath = join(root, "tasks.md");
+    writeFileSync(
+      tasksPath,
+      [
+        "# Tasks",
+        "",
+        "### T001: with a typo",
+        "",
+        "Files: src/auth/login.ts, src/auht.ts",
+        "",
+      ].join("\n"),
+    );
+
+    const { stderr } = await runAt(root, [
+      "impact",
+      "--from-tasks",
+      tasksPath,
+      "--format",
+      "json",
+    ]);
+
+    // The `Files: ...` header is on line 5 (1-based) of the tasks.md above.
+    expect(stderr).toMatch(/line \d+/);
+    expect(stderr).toContain("src/auht.ts");
   });
 });

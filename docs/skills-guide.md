@@ -113,7 +113,7 @@ artgraph impact --diff --depth 3
 
 ### artgraph-plan-coverage
 
-- トリガー: `/speckit-tasks` の直後 (tasks.md が更新された後の自然な検証ポイント)、または `/speckit-implement` の直前 (実装着手前の最終チェック)。「tasks の波及確認」「暗黙波及」「漏れチェック」等のキーワードでも発火
+- トリガー: `/speckit-tasks` の直後 (tasks.md が更新された後の自然な検証ポイント)、または `/speckit-implement` の直前 (実装着手前の最終チェック)。「tasks の波及確認」「暗黙波及」「漏れチェック」等のキーワードでも発火 (SKILL.md description は EN — picker は description 全文から semantic match する)
 - 動作: `tasks.md` の `Files:` セクション起点で内部 `impact()` を呼び、得た `affectedReqs` から `tasks.md` / `plan.md` / `spec.md` のテキスト全体に出現する REQ-ID mention を引いた差分 = **暗黙波及 (implicit impacts)** を報告する。新規 REQ を実装するとき、既存仕様への波及を見落とさないためのガード
 - 役割分担: `artgraph-impact` (file 起点 forward 波及) と `artgraph-check` (実装 vs spec drift) では捉えられない「人間が tasks.md を書いたとき、既存仕様への暗黙波及を見落としていないか」を埋める唯一の Skill
 - 入力経路 (spec dir 解決):
