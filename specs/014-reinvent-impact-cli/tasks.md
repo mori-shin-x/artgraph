@@ -1,0 +1,284 @@
+---
+description: "Task list for 014-reinvent-impact-cli — impact CLI file-only 化 + plan-coverage 新設"
+---
+
+# Tasks: impact CLI 再設計 + plan-coverage 新設
+
+**Input**: Design documents from `/specs/014-reinvent-impact-cli/`
+
+**Prerequisites**: [spec.md](./spec.md), [plan.md](./plan.md), [contracts/](./contracts/)
+
+**Tests**: TDD per established project convention (spec 012 と同じ規律 — write test first, ensure it fails, then implement).
+
+**Organization**: Phases map to plan.md の internal phases (0–6). 単一 PR でロックステップ merge する(spec.md Assumptions の通り — US2 / US3 / US1 を分離するとリリース中間状態で Skill と CLI が整合しない時間が発生)。
+
+**Self-dogfooding**: 本 tasks.md は自分自身で `Files:` セクション + REQ-ID mention 規約を採用している。spec 完了後に `artgraph plan-coverage --spec specs/014-reinvent-impact-cli/` を本 tasks.md に対して走らせ、暗黙波及がゼロであることを T026 で検証する。
+
+## Format
+
+各タスクは `### T<NNN> [P?] [Story] 概要 [FR-IDs]` の heading + 直後に `Files:` 行 + 任意で実装メモ。
+
+- **[P]**: 同 phase 内で並列実行可能(touch する file が独立)
+- **[Story]**: マップする user story(US1〜US6)
+- **[FR-IDs]**: 対応する Functional Requirement(plan-coverage の mention 検出対象)
+
+## Path Conventions
+
+Single project(plan.md Project Structure):
+- Source: `src/`
+- Tests: `tests/`
+- Templates: `templates/`
+- Docs: `docs/`
+- Worktree root: `/home/morimoto-s1/reinvent-impact-cli/`
+
+---
+
+## Phase 1: Setup
+
+### T001 [Setup] Verify dev environment
+
+Files: (no source changes)  
+Requires: (prerequisite check only)
+
+Node >= 22 active (`node -v`)、pnpm available、working tree clean、on branch `feat/reinvent-impact-cli`、`.specify/feature.json#feature_directory` が `specs/014-reinvent-impact-cli` を指している(必要なら update)。
+
+---
+
+## Phase 2: Foundational — Shared file-extraction parser
+
+**⚠️ CRITICAL**: Phase 3 (US2 impact 改修) と Phase 4 (US1 plan-coverage) の両方が依存する共通基盤。先に完成させる。
+
+### T002 [P] [US1, US2] Write tests/sdd-files-parser.test.ts [FR-005]
+
+Files: tests/sdd-files-parser.test.ts
+
+[contracts/sdd-files-parser.md](./contracts/sdd-files-parser.md) のエッジケース表を fixture 化。Stage A(`Files:` セクション・inline / bullet / 混在)、Stage B(regex フォールバック・validation)、ゼロ件抽出時のエラー、`unresolvedFilePath` diagnostic、絶対 path スキップ、URL / HTML タグ誤検出回避、dedup を網羅。
+
+### T003 [US1, US2] Implement src/parsers/sdd-files.ts [FR-005]
+
+Files: src/parsers/sdd-files.ts
+
+[contracts/sdd-files-parser.md](./contracts/sdd-files-parser.md) を実装。`extractFiles(text, { graph, repoRoot }): ExtractResult` をエクスポート。Stage A 優先 → 抽出ゼロ時のみ Stage B、両方ゼロなら呼び出し側がエラーを出せるよう `stage: "empty"` を返す。T002 が green になることを確認。
+
+**Checkpoint**: Phase 3 と Phase 4 が並列着手可能。
+
+---
+
+## Phase 3: P1 — US2 impact CLI file-only 化
+
+**Goal**: `artgraph impact` を file-only に絞り、`--from-tasks` / `--from-plan` を追加、REQ-ID 入力時の専用エラーを実装。
+
+### T004 [P] [US2] Write tests/impact-cli.test.ts updates [FR-001, FR-003]
+
+Files: tests/impact-cli.test.ts
+
+(a) `artgraph impact REQ-001` が exit 1 + 4 経路案内エラー、(b) `artgraph impact doc:specs/foo.md` も同様、(c) `artgraph impact src/auth.ts` は既存通り動作、(d) `[targets...]` / `--from-tasks` / `--diff` の mutually exclusive 違反でエラー、(e) 全フラグ不在で「no targets」エラー。
+
+### T005 [P] [US2] Write integration test for --from-tasks / --from-plan [FR-004, FR-006]
+
+Files: tests/impact-cli.test.ts (同 file、T004 と sequential)
+
+Spec Kit 風 fixture(spec dir + tasks.md with `Files:` セクション)で `artgraph impact --from-tasks <fixture>/tasks.md --format json` が期待 file 群から impact を計算する。Stage A 採用パスと Stage B fallback パス両方の E2E。
+
+### T006 [US2] Rename resolveStartIds → resolveFileStartIds [FR-002, FR-008]
+
+Files: src/graph/traverse.ts
+
+REQ-ID 解決パス(`graph.nodes.has(input)` のうち REQ ノードへの直接マッチ)と `doc:` prefix 解決パスを削除。file path 解決のみに絞る。call sites(`src/cli.ts` の impact / check / 他)を更新。`impact()` 関数本体(`src/graph/traverse.ts:11`)には**触らない**(FR-008 — plan-coverage 側でも同じシグネチャで再利用するため)。
+
+### T007 [US2] Update src/cli.ts impact subcommand [FR-001, FR-003, FR-004, FR-006, FR-007]
+
+Files: src/cli.ts
+
+[contracts/cli-flags.md](./contracts/cli-flags.md) `artgraph impact` 節を実装: (a) `[targets...]` の REQ-ID 風入力(`/^[A-Z]+-\d+$/`)を専用エラーで弾く、(b) `--from-tasks <path>` / `--from-plan <path>` フラグ追加、(c) 4 起点経路の mutually exclusive 検証、(d) `--diff` / `--depth` / `--format` / `--mode` は据え置き。エラー文面は contract 通り(4 経路案内含む)。
+
+### T008 [US2] Verify T004 / T005 green
+
+Files: tests/impact-cli.test.ts
+
+`pnpm test tests/impact-cli.test.ts` が all green。`pnpm test` 全体で他テストへの regression がないことも確認。
+
+---
+
+## Phase 4: P1 — US1 plan-coverage CLI 新設
+
+**Goal**: 新 CLI `artgraph plan-coverage` を [contracts/](./contracts/) 通りに実装。
+
+### T009 [P] [US1] Write tests/mention-detector.test.ts [FR-020]
+
+Files: tests/mention-detector.test.ts
+
+[contracts/mention-semantics.md](./contracts/mention-semantics.md) Test 戦略 8 項目を fixture 化。境界マッチの正例(8 件)+ 反例(7 件)+ 複数 source 結合 + ラベル無依存 + 大文字小文字 + 同 REQ 複数マッチ + ハイフン拡張命名。
+
+### T010 [P] [US1] Implement src/plan-coverage/mention.ts [FR-020]
+
+Files: src/plan-coverage/mention.ts
+
+[contracts/mention-semantics.md](./contracts/mention-semantics.md) のアルゴリズム実装。`detectMentions(affectedReqIds, sources): { mentioned, implicit }` を export。境界マッチは `(?<![A-Za-z0-9_])<ID>(?![A-Za-z0-9_])`。
+
+### T011 [P] [US1] Implement src/plan-coverage/spec-resolver.ts [FR-014]
+
+Files: src/plan-coverage/spec-resolver.ts, tests/plan-coverage-resolver.test.ts
+
+`resolveSpecDir({ explicitFlag, env, fs }): string | Error` を export。順序: (1) `--spec` 明示、(2) `SPECIFY_FEATURE_DIRECTORY` env、(3) `.specify/feature.json#feature_directory`、(4) 失敗時は Kiro `--spec` 案内メッセージ付きエラー。テストは各分岐 + Kiro env での失敗 + 不正 JSON 耐性。
+
+### T012 [P] [US1] Add planCoverage section to src/config.ts [FR-018]
+
+Files: src/config.ts, tests/config.test.ts
+
+`.artgraph.json` schema に `planCoverage: { requireFilesSection?: boolean }`(デフォルト `false`)を追加。後方互換は不要(未リリース)。
+
+### T013 [US1] Write tests/plan-coverage.test.ts [FR-013〜FR-020]
+
+Files: tests/plan-coverage.test.ts
+
+`plan-coverage` 主処理の単体・統合テスト: (a) impact() 呼び出しと affectedReqs 取得、(b) mention 引算で implicitImpacts 算出、(c) `--ignore` フィルタ、(d) `--gate` exit code、(e) `--require-files-section` 診断、(f) `diagnostics[]` 出力、(g) JSON output が [contracts/plan-coverage-json.md](./contracts/plan-coverage-json.md) と一致。
+
+### T014 [US1] Implement src/plan-coverage/index.ts [FR-013, FR-015, FR-016, FR-017, FR-019]
+
+Files: src/plan-coverage/index.ts
+
+主処理: (a) `spec-resolver` で spec dir 確定、(b) tasks.md / plan.md を読んで `extractFiles` で file 群取得、(c) その file 群を startIds に `impact(graph, fileStartIds, lock)` 呼び出し、(d) `affectedReqs` を `detectMentions` で振り分け、(e) `--ignore` で除外、(f) `--require-files-section` ON 時に task block の Files: 有無検査(Stage A の by-product として `sdd-files.ts` から task block の境界情報を返してもらう拡張が必要 — `extractFiles` の戻り値拡張で対応)、(g) JSON / text 整形して stdout。
+
+### T015 [US1] Add plan-coverage subcommand to src/cli.ts [FR-013]
+
+Files: src/cli.ts
+
+Commander に `plan-coverage` を追加。全フラグ([contracts/cli-flags.md](./contracts/cli-flags.md))を declare、`src/plan-coverage/index.ts` の主処理を呼ぶ。exit code テーブル通りに分岐。
+
+### T016 [US1] Verify T013 green
+
+Files: tests/plan-coverage.test.ts
+
+`pnpm test tests/plan-coverage.test.ts` all green。
+
+---
+
+## Phase 5: P1 — US3 `artgraph-impact` Skill 正直化
+
+**Goal**: spec 012 で配備した SKILL.md から誇大表現を削除し、`--from-tasks` 経路を追記。
+
+### T017 [P] [US3] Update templates/skills/artgraph-impact/SKILL.md [FR-009, FR-010, FR-011, FR-012]
+
+Files: templates/skills/artgraph-impact/SKILL.md
+
+frontmatter `description` から `planning` / `designing` / `scoping` の語を削除し、「file 起点 forward 波及分析」だけを約束する文面に。Mode (b) の REQ-ID 抽出指示を削除し file path / `--from-tasks` 経路のみに。Mode (c) の質問文を `"Which tasks.md / plan.md path, or which file(s) should I analyze?"` に。本文末尾に `artgraph impact --from-tasks specs/<latest>/tasks.md` の使用例を追記。
+
+### T018 [P] [US3] Extend tests/skills-templates.test.ts [FR-009]
+
+Files: tests/skills-templates.test.ts
+
+`artgraph-impact/SKILL.md` の description で `planning` / `designing` / `scoping` (case-insensitive) が **0 件** であることを assert(SC-005)。
+
+---
+
+## Phase 6: P2 — US4 `artgraph-plan-coverage` Skill 新設
+
+**Goal**: 新 Skill を配布物に追加。
+
+### T019 [P] [US4] Create templates/skills/artgraph-plan-coverage/SKILL.md [FR-021, FR-022, FR-023]
+
+Files: templates/skills/artgraph-plan-coverage/SKILL.md
+
+英語で 100 行以下、`_shared/install-check.md` 参照。description は `"Detects implicit impacts: files declared in tasks.md may affect existing REQs that are not mentioned in tasks.md / spec.md. Run after /speckit-tasks or before /speckit-implement."` 基調。`allowed-tools: ["Bash(npx artgraph plan-coverage *)", "Bash(artgraph plan-coverage *)"]`。本文は input mode(`--spec` 自動 / 明示)、出力解釈、検知後 3 経路(mention 追加 / `--ignore` / 将来 strict)の指示を含む。
+
+### T020 [P] [US4] Extend tests/skills-templates.test.ts for new Skill [FR-022]
+
+Files: tests/skills-templates.test.ts
+
+`artgraph-plan-coverage/SKILL.md` も既存メタ規約(100 行 / `_shared` 参照 / `allowed-tools` 形式 / 英語)に従うことを assert(SC-006)。
+
+### T021 [US4] Verify init deploys the new Skill [FR-024]
+
+Files: tests/init.test.ts
+
+`artgraph init`(default full setup)実行後、`.claude/skills/artgraph-plan-coverage/SKILL.md` が配備されることを E2E test で確認(SC-007)。
+
+---
+
+## Phase 7: P2 — US5 SDD 統合テンプレ強化
+
+**Goal**: Spec Kit / Kiro 統合テンプレに `Files:` 規約と REQ-ID mention 規約の **推奨** を追記。enforcement は spec 015 候補 ([#105](https://github.com/ShintaroMorimoto/artgraph/issues/105)) で扱う。
+
+### T022 [P] [US5] Update templates/integrate/speckit/README.md [FR-025, FR-027]
+
+Files: templates/integrate/speckit/README.md
+
+`tasks.md / plan.md` の各タスクに `Files: <path>, <path>` セクションを書く推奨と、`plan-coverage` で出た暗黙波及 REQ を tasks.md / plan.md / spec.md のいずれかで mention する推奨(ラベル形式自由)を追記。`/speckit-tasks` 出力に対する `artgraph plan-coverage` 実行を after_tasks ワークフローの推奨手順として記述。enforcement (Stop hook / before_implement gating) は本 spec 対象外、[issue #105](https://github.com/ShintaroMorimoto/artgraph/issues/105) を脚注で参照する(FR-027)。
+
+### T023 [P] [US5] Update templates/integrate/kiro/artgraph.md [FR-026]
+
+Files: templates/integrate/kiro/artgraph.md
+
+T022 と同等のガイダンスを Kiro 向けに記述。Kiro 利用時の `artgraph plan-coverage --spec .kiro/specs/<name>/` 必須(canonical current spec 指標が存在しない)も明記。
+
+---
+
+## Phase 8: P3 — US6 ドキュメント更新
+
+**Goal**: ユーザー向けドキュメントを新設計に同期。
+
+### T024 [P] [US6] Update docs/skills-guide.md [FR-028, FR-029]
+
+Files: docs/skills-guide.md
+
+`artgraph-impact` 節を file-only / `--from-tasks` 説明に改訂。`artgraph-plan-coverage` 節を新規追加(検知後 3 経路の説明含む)。Skills 一覧表を 8 種に。
+
+### T025 [P] [US6] Update README.md Skills table [FR-030]
+
+Files: README.md
+
+Skills 表を 7 → 8 種に更新(`artgraph-plan-coverage` 追加)。
+
+---
+
+## Phase 9: E2E + Self-Dogfooding
+
+**Goal**: 全 SC を fixture と self-application で確認。
+
+### T026 [E2E] Write tests/plan-coverage-integration.test.ts [SC-001〜SC-010]
+
+Files: tests/plan-coverage-integration.test.ts
+
+Spec Kit 風 fixture spec dir で E2E: (a) auto-detect via `SPECIFY_FEATURE_DIRECTORY`、(b) auto-detect via `.specify/feature.json`、(c) `--spec` 明示、(d) Kiro 風 dir で auto-detect 失敗エラー、(e) `--gate` × `--ignore` 全組合せの exit code、(f) `--require-files-section` ON / OFF の diagnostics 差分。
+
+### T027 [E2E] Self-dogfood: run plan-coverage on this spec
+
+Files: (verification only — specs/014-reinvent-impact-cli/)
+
+`artgraph plan-coverage --spec specs/014-reinvent-impact-cli/` を実行し、暗黙波及 REQ がゼロであることを確認(本 tasks.md は全 FR を mention 済みかつ Files: セクション完備のため)。出力結果を PR description にスクリーンショット付きで添付。
+
+### T028 [E2E] Verify all SC-XXX + Constitution + test coverage [FR-031, FR-032]
+
+Files: (verification only)
+
+[spec.md](./spec.md) Success Criteria SC-001〜SC-010 を 1 件ずつ手動 / 自動で確認。`docs/skills-guide.md` と `README.md` の 8 種掲載は peer review (SC-010)。Constitution Check 5 原則がすべて維持されていることを再確認(FR-031 — `plan-coverage` の読み取り専用性、graph / lock 書込なし、決定的境界マッチ)。新機能全項目が vitest で carry されていることを確認(FR-032 — `pnpm test` 全件 green)。
+
+---
+
+## Dependency summary
+
+```
+T001 (setup)
+  ↓
+T002, T003 (sdd-files parser)
+  ↓
+  ├─ T004, T005 → T006, T007 → T008  (Phase 3: impact CLI)
+  └─ T009, T010, T011, T012 → T013 → T014, T015 → T016  (Phase 4: plan-coverage)
+        ↓
+        T017, T018  (Phase 5: impact Skill)
+        T019, T020, T021  (Phase 6: plan-coverage Skill)
+        T022, T023  (Phase 7: SDD templates)
+        T024, T025  (Phase 8: docs)
+        ↓
+        T026, T027, T028  (Phase 9: E2E)
+```
+
+並列実行可能(`[P]` マーク):
+- T002 と T003: T002 を先に書いて red → T003 で green の TDD 順序のため逐次
+- T004 と T005 は同 file (`tests/impact-cli.test.ts`) なので逐次
+- T009 / T010 / T011 / T012 は file 独立で並列
+- T017 / T018, T019 / T020, T022 / T023, T024 / T025 は各ペア並列
+- Phase 5–8 は Phase 4 (plan-coverage CLI) 完成後すべて並列
+
+LOC 見積(plan.md より): 600–900 LOC(うちテスト半分)。
