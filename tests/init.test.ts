@@ -310,6 +310,7 @@ const EXPECTED_SKILL_DIRS = [
   "artgraph-detect",
   "artgraph-impact",
   "artgraph-integrate",
+  "artgraph-plan-coverage",
   "artgraph-rename",
   "artgraph-setup",
   "artgraph-verify",
@@ -466,6 +467,29 @@ describe("runInit default behavior (P0)", () => {
     // 4. integrate-auto: no SDD tools detected → no integrationResults but no error
     expect(result.integrationWarnings ?? []).not.toEqual(
       expect.arrayContaining([expect.stringMatching(/error/i)]),
+    );
+  });
+
+  // SC-007 (spec 014): default `artgraph init` (full agent-native setup) must
+  // deploy the new artgraph-plan-coverage Skill so /speckit-tasks → plan-coverage
+  // workflow works out of the box.
+  it("deploys artgraph-plan-coverage Skill in default mode (spec 014 SC-007)", () => {
+    const result = runInit(tmp);
+    const installedPath = join(
+      tmp,
+      ".claude",
+      "skills",
+      "artgraph-plan-coverage",
+      "SKILL.md",
+    );
+    expect(existsSync(installedPath)).toBe(true);
+    const body = readFileSync(installedPath, "utf-8");
+    expect(body.startsWith("---")).toBe(true);
+    expect(body).toMatch(/name:\s*["']?artgraph-plan-coverage/);
+    expect(result.skillsInstalled).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(join(".claude", "skills", "artgraph-plan-coverage", "SKILL.md")),
+      ]),
     );
   });
 
