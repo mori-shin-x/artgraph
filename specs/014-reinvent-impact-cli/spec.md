@@ -32,6 +32,7 @@
 4. **Given** `--ignore REQ-003,REQ-007` を付けた `--gate` 実行、 **When** 残りの暗黙波及がゼロ、 **Then** exit 0(one-shot 抑止、永続化しない)。
 5. **Given** 暗黙波及検知済の状態でユーザーが tasks.md に `Considered: REQ-003 — no actual impact, verified by reading src/auth.ts:120-140` の 1 行を追加、 **When** 次の実行、 **Then** `REQ-003` が `implicitImpacts` から消える(any-mention 判定なのでラベルや keyword は問わない)。
 6. **Given** `SPECIFY_FEATURE_DIRECTORY` 環境変数も `.specify/feature.json` も無い repo、 **When** `--spec` / `--tasks` 省略で実行、 **Then** "use --spec to point at .specify/specs/<name>/ or .kiro/specs/<name>/" エラーで exit 1。
+7. **Given** `implicitImpacts` で `src/auth.ts` と `src/session.ts` の 2 sourceFile から同じ REQ-003 に波及、 **When** `implicitImpactsByReq` を確認、 **Then** `{ reqId: "REQ-003", sourceFiles: ["src/auth.ts", "src/session.ts"] }` の 1 エントリで表現される(by-FR 軸の reorganize ビュー)。
 
 ---
 
@@ -153,7 +154,7 @@ Spec Kit / Kiro 統合テンプレが「tasks.md の各タスクに `Files:` セ
 - **FR-013**: 新 CLI サブコマンド `artgraph plan-coverage` を追加。オプション: `--spec <dir>` / `--tasks <path>` / `--plan <path>` / `--format json|text` / `--gate` / `--ignore <REQ-IDs>` / `--require-files-section`。
 - **FR-014**: `--spec` / `--tasks` 省略時の自動探索は次の順序: (1) `SPECIFY_FEATURE_DIRECTORY` 環境変数, (2) `.specify/feature.json#feature_directory` (Spec Kit canonical: `github/spec-kit:scripts/bash/common.sh:get_feature_paths()` 準拠), (3) どちらも無ければ "use --spec to point at .specify/specs/<name>/ or .kiro/specs/<name>/" エラー。Kiro には canonical な current spec 指標が存在しないため Kiro 利用時は `--spec` 必須。
 - **FR-015**: 処理は次の通り: (a) `--tasks` / `--plan` (省略時は spec dir 内の `tasks.md` / `plan.md`) から file 群を抽出 (FR-005 と同じ二段戦略)、(b) その file 群を `startIds` として `impact(graph, fileStartIds, lock)` を実行し `affectedReqs` を得る、(c) `tasks.md` + `plan.md` + `spec.md` のテキスト全体に対し各 `affectedReqs` ID の境界マッチ (`\b<ID>\b`) で言及検査、(d) **言及されていない affected REQ** = `implicitImpacts` として report、(e) `--ignore` で渡された ID は事後フィルタで除外。
-- **FR-016**: JSON 出力スキーマは `{ implicitImpacts: [{ sourceFile, reqs: [{ reqId, kind }] }], summary: { totalAffected, mentioned, implicit, ignored }, diagnostics: [{ kind, ... }], ignored: [reqId] }`。`diagnostics[].kind` は `"missingFilesSection"` (FR-018) 等。
+- **FR-016**: JSON 出力スキーマは次のキーを持つ: `implicitImpacts` (by-sourceFile 軸 `[{ sourceFile, reqs: [{ reqId, kind }] }]`)、`implicitImpactsByReq` (by-FR 軸 `[{ reqId, sourceFiles: [string] }]`、同じ implicit データを REQ 起点で reorganize した view)、`summary: { totalAffected, mentioned, implicit, ignored }`、`diagnostics: [{ kind, ... }]`、`ignored: [reqId]`。`diagnostics[].kind` は `"missingFilesSection"` (FR-018) 等。`implicitImpactsByReq` 追加の動機: 既存 file を修正する task で「FR-003 はどの file 経由で来ているか」を直接知りたいユースケースを覆う(spec.md と並ぶ FR 軸の自然なビュー)。
 - **FR-017**: デフォルトは exit 0 + report (informational)。`--gate` 付きで `implicitImpacts` が非空または diagnostics が非空のとき exit 1。
 - **FR-018**: `--require-files-section` フラグ ON、または `.artgraph.json` に `{ "planCoverage": { "requireFilesSection": true } }` がある場合、tasks.md の各 task block に `Files:` セクションが無いものを `diagnostics` 配列に `{ kind: "missingFilesSection", taskId, line }` 形で報告する。デフォルト OFF。
 - **FR-019**: `--ignore REQ-003,REQ-007` は当該実行限定の one-shot 抑止。設定ファイルへの永続化はしない。永続的な抑止が必要な場合はユーザーが tasks.md / plan.md / spec.md 内に REQ-ID を mention する(言及判定が拾うので自然に外れる)。
@@ -185,7 +186,7 @@ Spec Kit / Kiro 統合テンプレが「tasks.md の各タスクに `Files:` セ
 
 ### Key Entities
 
-- **Implicit Impact**: `plan-coverage` の中心出力 entity。`{ sourceFile, reqs: [{ reqId, kind }] }` 形で、tasks.md の Files: 起点に impact() が拾った `affectedReqs` のうち tasks.md / plan.md / spec.md で一切 mention されていないものを表す。
+- **Implicit Impact**: `plan-coverage` の中心出力 entity。tasks.md の Files: 起点に impact() が拾った `affectedReqs` のうち tasks.md / plan.md / spec.md で一切 mention されていないものを表す。**2 つの軸で同じデータを出力**する: (a) by-sourceFile 軸 `implicitImpacts: [{ sourceFile, reqs: [{ reqId, kind }] }]` — 「この file を触ると何が波及するか」、(b) by-FR 軸 `implicitImpactsByReq: [{ reqId, sourceFiles: [string] }]` — 「この FR はどの file 経由で来ているか」。後者は前者の inversion view で、データ重複は意図的(人間が見やすい軸を選べるように)。
 - **File Extraction Strategy**: `--from-tasks` / `--from-plan` および `plan-coverage` で共有される 2 段パース戦略(`Files:` セクション優先 → regex フォールバック)。`src/parsers/sdd-files.ts`(新規)に集約する。
 - **REQ Mention Detector**: tasks.md / plan.md / spec.md のテキスト union に対し各 REQ-ID の境界マッチを行う検出器。ラベル無依存(`Considered:` / `Affected:` / `[REQ-003]` を区別しない)。`src/plan-coverage/mention.ts`(新規)に集約する。
 - **Plan Coverage Config**: `.artgraph.json` の新セクション `{ "planCoverage": { "requireFilesSection": boolean } }`。デフォルト `false` (lenient)。

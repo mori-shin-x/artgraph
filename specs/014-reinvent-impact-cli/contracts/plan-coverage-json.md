@@ -19,6 +19,16 @@
       ]
     }
   ],
+  "implicitImpactsByReq": [
+    {
+      "reqId": "REQ-001",
+      "sourceFiles": ["src/auth.ts"]
+    },
+    {
+      "reqId": "REQ-003",
+      "sourceFiles": ["src/auth.ts", "src/session.ts"]
+    }
+  ],
   "summary": {
     "totalAffected": 5,
     "mentioned": 1,
@@ -40,7 +50,8 @@
 
 | field | type | 説明 |
 |---|---|---|
-| `implicitImpacts` | `ImpactGroup[]` | sourceFile ごとにグルーピングされた、tasks/plan/spec で言及されていない affected REQ 群 |
+| `implicitImpacts` | `ImpactGroup[]` | **by-sourceFile 軸**: sourceFile ごとにグルーピングされた、tasks/plan/spec で言及されていない affected REQ 群 |
+| `implicitImpactsByReq` | `ImplicitImpactByReq[]` | **by-FR 軸**: 同じ implicit データを REQ 軸で reorganize したビュー。「FR-003 はどの file 経由で来ているか」を直接知るためのもの。`implicitImpacts` の inversion で、データ重複は意図的 |
 | `summary` | `Summary` | 集計値(後述) |
 | `diagnostics` | `Diagnostic[]` | 検証側のメタ情報(missing Files: section 等)。常に出力(空配列もあり) |
 | `ignored` | `string[]` | `--ignore` で渡された REQ-ID 列をそのまま返す(透明性のため) |
@@ -72,6 +83,30 @@
 |---|---|---|
 | `reqId` | string | REQ-ID(graph 上の node ID と一致) |
 | `kind` | `"req"` | 固定値(将来 `"doc"` を含める場合に備えて enum 型で残す) |
+
+---
+
+## `ImplicitImpactByReq` (by-FR 軸)
+
+```json
+{
+  "reqId": "REQ-003",
+  "sourceFiles": ["src/auth.ts", "src/session.ts"]
+}
+```
+
+| field | type | 説明 |
+|---|---|---|
+| `reqId` | string | REQ-ID(graph 上の node ID と一致) |
+| `sourceFiles` | `string[]` | この REQ に波及した源の sourceFile 群(`implicitImpacts` 内で当該 reqId を含む group 全部の sourceFile を集めて dedup) |
+
+ソート順: `reqId` の lexicographic ascending、`sourceFiles[]` も lexicographic ascending(test の安定性のため `implicitImpacts` と同規約)。
+
+### `implicitImpactsByReq` 算出の不変条件
+
+- `implicitImpactsByReq` の REQ 集合 = `implicitImpacts[].reqs[].reqId` の union(同じ implicit データの inversion なので必ず一致)
+- `summary.implicit == implicitImpactsByReq.length`(unique REQ count)
+- 各 `implicitImpactsByReq[i].sourceFiles` は `implicitImpacts` の中で当該 reqId を含む group すべての sourceFile を網羅
 
 ---
 
@@ -145,6 +180,11 @@
       ]
     }
   ],
+  "implicitImpactsByReq": [
+    { "reqId": "REQ-001", "sourceFiles": ["src/auth.ts"] },
+    { "reqId": "REQ-003", "sourceFiles": ["src/auth.ts"] },
+    { "reqId": "REQ-012", "sourceFiles": ["src/parsers/markdown.ts"] }
+  ],
   "summary": { "totalAffected": 4, "mentioned": 1, "implicit": 3, "ignored": 0 },
   "diagnostics": [],
   "ignored": []
@@ -156,6 +196,7 @@
 ```json
 {
   "implicitImpacts": [],
+  "implicitImpactsByReq": [],
   "summary": { "totalAffected": 3, "mentioned": 3, "implicit": 0, "ignored": 0 },
   "diagnostics": [],
   "ignored": []
@@ -172,6 +213,9 @@
       "reqs": [{ "reqId": "REQ-001", "kind": "req" }]
     }
   ],
+  "implicitImpactsByReq": [
+    { "reqId": "REQ-001", "sourceFiles": ["src/auth.ts"] }
+  ],
   "summary": { "totalAffected": 3, "mentioned": 0, "implicit": 1, "ignored": 2 },
   "diagnostics": [
     { "kind": "missingFilesSection", "taskId": "T013", "line": 42 },
@@ -186,6 +230,7 @@
 ```json
 {
   "implicitImpacts": [],
+  "implicitImpactsByReq": [],
   "summary": { "totalAffected": 0, "mentioned": 0, "implicit": 0, "ignored": 0 },
   "diagnostics": [{ "kind": "emptyExtraction" }],
   "ignored": []
@@ -205,17 +250,22 @@
 
 ## Text format との対応
 
-`--format text`(default)は同じデータを人間可読に整形する。主要 field のマッピング:
+`--format text`(default)は同じデータを人間可読に整形する。**両軸を併記**する(by-file + by-FR):
 
 ```
 Implicit impacts (3 REQ(s) impacted but not mentioned):
 
-  src/auth.ts
-    REQ-001  (req)
-    REQ-003  (req)
+  By source file:
+    src/auth.ts
+      REQ-001  (req)
+      REQ-003  (req)
+    src/parsers/markdown.ts
+      REQ-012  (req)
 
-  src/parsers/markdown.ts
-    REQ-012  (req)
+  By requirement:
+    REQ-001  ← src/auth.ts
+    REQ-003  ← src/auth.ts
+    REQ-012  ← src/parsers/markdown.ts
 
 Diagnostics: 2
   [missingFilesSection] T013 (line 42)

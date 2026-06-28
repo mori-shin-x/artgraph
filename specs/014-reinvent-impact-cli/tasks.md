@@ -132,13 +132,13 @@ Files: src/config.ts, tests/config.test.ts
 
 Files: tests/plan-coverage.test.ts
 
-`plan-coverage` 主処理の単体・統合テスト: (a) impact() 呼び出しと affectedReqs 取得、(b) mention 引算で implicitImpacts 算出、(c) `--ignore` フィルタ、(d) `--gate` exit code、(e) `--require-files-section` 診断、(f) `diagnostics[]` 出力、(g) JSON output が [contracts/plan-coverage-json.md](./contracts/plan-coverage-json.md) と一致。
+`plan-coverage` 主処理の単体・統合テスト: (a) impact() 呼び出しと affectedReqs 取得、(b) mention 引算で implicitImpacts 算出、(c) `--ignore` フィルタ、(d) `--gate` exit code、(e) `--require-files-section` 診断、(f) `diagnostics[]` 出力、(g) JSON output が [contracts/plan-coverage-json.md](./contracts/plan-coverage-json.md) と一致(top-level に `implicitImpacts` と `implicitImpactsByReq` の **両軸が並ぶ**こと)、(h) by-FR 軸の inversion が正しい(同 REQ が複数 sourceFile から来る場合 `sourceFiles` が両方含む)、(i) `summary.implicit == implicitImpactsByReq.length` の不変条件、(j) text 出力が by-file / by-FR の両 view を含む。
 
 ### T014 [US1] Implement src/plan-coverage/index.ts [FR-013, FR-015, FR-016, FR-017, FR-019]
 
 Files: src/plan-coverage/index.ts
 
-主処理: (a) `spec-resolver` で spec dir 確定、(b) tasks.md / plan.md を読んで `extractFiles` で file 群取得、(c) その file 群を startIds に `impact(graph, fileStartIds, lock)` 呼び出し、(d) `affectedReqs` を `detectMentions` で振り分け、(e) `--ignore` で除外、(f) `--require-files-section` ON 時に task block の Files: 有無検査(Stage A の by-product として `sdd-files.ts` から task block の境界情報を返してもらう拡張が必要 — `extractFiles` の戻り値拡張で対応)、(g) JSON / text 整形して stdout。
+主処理: (a) `spec-resolver` で spec dir 確定、(b) tasks.md / plan.md を読んで `extractFiles` で file 群取得、(c) その file 群を startIds に `impact(graph, fileStartIds, lock)` 呼び出し、(d) `affectedReqs` を `detectMentions` で振り分け、(e) `--ignore` で除外、(f) `--require-files-section` ON 時に task block の Files: 有無検査(Stage A の by-product として `sdd-files.ts` から task block の境界情報を返してもらう拡張が必要 — `extractFiles` の戻り値拡張で対応)、(g) **by-sourceFile 軸 (`implicitImpacts`) と by-FR 軸 (`implicitImpactsByReq`) の両ビューを構築**(後者は前者の inversion: REQ→sourceFile[] の map 化、dedup + sort)、(h) JSON / text 整形して stdout(text は両ビュー併記)。
 
 ### T015 [US1] Add plan-coverage subcommand to src/cli.ts [FR-013]
 
