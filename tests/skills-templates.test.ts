@@ -302,13 +302,15 @@ describe("templates/skills metatest", () => {
       (dirName) => {
         const skill = readSkill(dirName);
         // SC-004 targets `npx artgraph <sub>` work-commands an agent would copy.
-        // Exempt: markdown table rows (the artgraph-setup PM mapping table is the
-        // canonical per-PM reference, kept by FR-011) and `npx --no-install ...`
-        // install probes (a flag sits between npx and artgraph).
+        // The regex tolerates intervening flags (`npx -y artgraph init`),
+        // double spaces, and case. It requires the token after `artgraph` to be
+        // a real subcommand (not starting with `-`), which exempts install
+        // probes like `npx --no-install artgraph --version`. Markdown table rows
+        // (the artgraph-setup PM mapping table, kept by FR-011) are also exempt.
         const offenders = skill.body
           .split("\n")
           .filter((line) => !line.trimStart().startsWith("|"))
-          .filter((line) => /\bnpx artgraph\s+[a-z]/.test(line));
+          .filter((line) => /\bnpx\s+(?:-\S+\s+)*artgraph\s+[^-\s]/i.test(line));
         expect(
           offenders,
           `${dirName}/SKILL.md body should use a PM-agnostic <PM-exec>/bare 'artgraph' form, not 'npx artgraph <sub>':\n${offenders.join("\n")}`,

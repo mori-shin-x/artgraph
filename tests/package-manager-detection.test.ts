@@ -98,7 +98,7 @@ describe("detectPackageManager — truth table (SC-001)", () => {
 
   it("4: empty dir (no package.json / lockfile / deno) → null + warn", () => {
     expect(detectPackageManager(dir)).toBeNull();
-    expect(errSpy).toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringMatching(/cannot detect/i));
   });
 
   it("deno is ignored when package.json is present (Node project wins)", () => {
@@ -143,6 +143,14 @@ describe("buildExecCommand (SC-003, contracts §2)", () => {
   it("omits trailing space when subcommand is empty", () => {
     expect(buildExecCommand("pnpm")).toBe("pnpm exec artgraph");
     expect(buildExecCommand("pnpm", "  ")).toBe("pnpm exec artgraph");
+    // Empty subcommand with a multi-word prefix must not leave a trailing space.
+    expect(buildExecCommand("deno")).toBe("deno run -A npm:artgraph/cli");
+  });
+
+  it("trims surrounding whitespace around the subcommand", () => {
+    expect(buildExecCommand("npm", "  check --diff  ")).toBe(
+      "npx artgraph check --diff",
+    );
   });
 });
 

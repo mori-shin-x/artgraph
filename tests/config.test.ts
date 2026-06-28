@@ -556,4 +556,34 @@ describe("loadConfig", () => {
       expect(config.lockFile).toBe(".trace.lock");
     });
   });
+
+  describe("packageManager (spec 015, FR-006, contracts §4)", () => {
+    const writeConfig = (obj: Record<string, unknown>) => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify(obj));
+    };
+
+    it.each(["npm", "pnpm", "bun", "deno"] as const)(
+      "accepts the valid value %s",
+      (pm) => {
+        writeConfig({ packageManager: pm });
+        expect(loadConfig(TMP_DIR).packageManager).toBe(pm);
+      },
+    );
+
+    it("drops an unknown string (e.g. yarn) to undefined", () => {
+      writeConfig({ packageManager: "yarn" });
+      expect(loadConfig(TMP_DIR).packageManager).toBeUndefined();
+    });
+
+    it("drops a non-string value (number) to undefined", () => {
+      writeConfig({ packageManager: 123 });
+      expect(loadConfig(TMP_DIR).packageManager).toBeUndefined();
+    });
+
+    it("is undefined when the field is absent", () => {
+      writeConfig({});
+      expect(loadConfig(TMP_DIR).packageManager).toBeUndefined();
+    });
+  });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   mkdtempSync,
   mkdirSync,
@@ -793,12 +793,18 @@ describe("computeStageGates (P0 flag matrix truth table)", () => {
 
 describe("runInit — packageManager recording (spec 015, FR-007/008, SC-002)", () => {
   let tmp: string;
+  let errSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     tmp = makeTmpDir();
+    // The undetectable-PM case warns to stderr by design; silence it so the
+    // test output stays clean (the warning content is asserted in
+    // package-manager-detection.test.ts).
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
   });
 
   afterEach(() => {
+    errSpy.mockRestore();
     cleanup(tmp);
   });
 

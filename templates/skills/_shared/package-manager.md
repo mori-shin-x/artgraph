@@ -28,10 +28,12 @@ The `artgraph-setup` Skill uses the rules below to pick the right install / exec
 ```bash
 detect_package_manager() {
   local pm_field
-  # 1. Corepack-style "packageManager" field in package.json
+  # 1. Corepack-style "packageManager" field in package.json.
+  #    Parse the TOP-LEVEL field only (via node, which is present in any artgraph
+  #    project) so this matches the TS detector exactly — a plain `grep` would
+  #    also match a nested "packageManager" key and diverge (SC-007).
   if [ -f package.json ]; then
-    pm_field=$(grep -oE '"packageManager"[[:space:]]*:[[:space:]]*"[^"]+"' package.json \
-      | sed -E 's/.*"([a-z]+)@.*/\1/')
+    pm_field=$(node -e 'try{const p=require("./package.json").packageManager;process.stdout.write(typeof p==="string"?(p.split("@")[0]||""):"")}catch{}' 2>/dev/null)
     case "$pm_field" in
       npm|pnpm|bun) echo "$pm_field"; return 0 ;;
       yarn)
@@ -55,7 +57,7 @@ detect_package_manager() {
   # 3. Fallback: package.json present but no other signal → pnpm (default PM)
   if [ -f package.json ]; then echo "pnpm"; return 0; fi
 
-  # 5. Give up
+  # 4. Give up
   echo "ERROR: Cannot detect package manager; ask the user which to use" >&2
   return 1
 }

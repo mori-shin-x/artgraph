@@ -16,7 +16,7 @@ then detects **drift** (spec changed but code/tests didn't), **orphans**, and
 ## Quickstart
 
 ```bash
-# Pick your package manager (npm / pnpm / Bun / Deno all supported; Yarn falls back to npm)
+# Pick your package manager (npm / pnpm / Bun / Deno all supported; Yarn falls back to pnpm)
 npm install -D artgraph && npx artgraph init       # default: full agent-native setup
 # pnpm add -D artgraph && pnpm exec artgraph init
 # bun add -d artgraph && bunx artgraph init
