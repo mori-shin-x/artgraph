@@ -337,6 +337,8 @@ exist purely to satisfy the deterministic detector.
 - Considered: 014-reinvent-impact-cli/FR-027 — out-of-scope marker (see #105)
 - Considered: 014-reinvent-impact-cli/FR-028 — implemented via T024
 - Considered: 014-reinvent-impact-cli/FR-029 — implemented via T024
+- Considered: 014-reinvent-impact-cli/FR-030 — implemented via T025 (collision with 016/FR-030 introduced post-merge by spec 016; bare `FR-030` mention at T025 heading authoritative for humans)
+- Considered: 014-reinvent-impact-cli/FR-031 — verified via T028 (collision with 016/FR-031 introduced post-merge by spec 016; bare `FR-031` mention at T028 heading authoritative for humans)
 - Considered: 014-reinvent-impact-cli/SC-001 — verified via existing tests/impact-cli.test.ts (T004)
 - Considered: 014-reinvent-impact-cli/SC-002 — verified via tests/sdd-files-parser.test.ts (T002) + tests/impact-cli.test.ts (T005)
 - Considered: 014-reinvent-impact-cli/SC-003 — verified via tests/plan-coverage.test.ts (T013) + tests/plan-coverage-integration.test.ts (T026)
@@ -375,3 +377,53 @@ mentions below are bookkeeping only.
 - Considered: 006-test-results/SC-005 — pre-existing test-results infrastructure, no behaviour change
 - Considered: 006-test-results/SC-006 — pre-existing test-results infrastructure, no behaviour change
 - Considered: 006-test-results/SC-007 — pre-existing test-results infrastructure, no behaviour change
+
+### Cross-spec REQs reached via shared CLI surface — spec 016 evolution
+
+These REQs belong to spec **016-impact-plan-symbol-level** and are reached
+because spec 016 added `@impl 016-impact-plan-symbol-level/FR-XXX` claims to
+the same shared CLI / parser / graph files that spec 014 owns (`src/cli.ts`,
+`src/config.ts`, `src/graph/traverse.ts`, `src/parsers/markdown.ts`,
+`src/parsers/sdd-files.ts`, `src/plan-coverage/index.ts`,
+`src/plan-coverage/mention.ts`, `src/plan-coverage/spec-resolver.ts`, and
+their tests). No behavioural change to spec 014 is intended by these entries
+— they exist purely so the deterministic mention detector clears the cross-
+spec impact set introduced after spec 014 was merged.
+
+- Considered: 016-impact-plan-symbol-level/FR-001 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-002 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-003 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-004 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-005 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-006 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-007 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-008 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-009 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-010 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-011 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-012 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-013 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-014 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-015 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-016 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-017 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-018 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-019 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-020 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-021 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-022 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-023 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-024 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-025 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-026 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-027 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-028 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-029 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-030 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/FR-031 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/SC-001 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/SC-002 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/SC-003 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/SC-004 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/SC-005 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 016-impact-plan-symbol-level/SC-006 — added post-merge by spec 016, no spec 014 behaviour change

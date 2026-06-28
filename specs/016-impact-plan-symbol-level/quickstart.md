@@ -30,9 +30,14 @@ pnpm build
 cd tests/fixtures/symbol-mode
 pnpm exec artgraph init --mode symbol --force
 pnpm exec artgraph scan
+
+# 後続コマンドの spec dir 解決のために env var を set (fixture 用)。
+# 通常の Spec Kit プロジェクトでは `.specify/feature.json` が自動的に
+# 解決されるが、本 fixture は最小構成なので env で明示。
+export SPECIFY_FEATURE_DIRECTORY=specs/001-symbol-demo
 ```
 
-期待: stdout に `symbol: 3` (3 export = `validateToken` / `issueToken` / `revokeToken`) を含む。それぞれ `@impl REQ-001` / `@impl REQ-005` / `@impl REQ-009`。
+期待: stdout の `symbol:` カウントが `4` (3 export from `src/auth.ts` = `validateToken` / `issueToken` / `revokeToken` + 1 from `src/session.ts` = `createSession`)。それぞれ `@impl REQ-001` / `@impl REQ-005` / `@impl REQ-009` / `@impl REQ-002`。Scenario A〜D は `src/auth.ts` の 3 symbol だけを起点に使う。
 
 ### A.2 symbol-level tasks.md で plan-coverage 実行 (二軸一致 = ドリフトなし)
 
@@ -266,12 +271,12 @@ pnpm exec artgraph plan-coverage --format json \
   | jq '.implicitImpacts | map({sourceSymbol, origin: (.originReqs | map(.reqId))})'
 ```
 
-期待:
+期待 (INV-S3 sort = `(file, symbol)` ascending、`issueToken < validateToken`):
 
 ```json
 [
-  {"sourceSymbol": "validateToken", "origin": ["REQ-001"]},
-  {"sourceSymbol": "issueToken",    "origin": ["REQ-005"]}
+  {"sourceSymbol": "issueToken",    "origin": ["REQ-005"]},
+  {"sourceSymbol": "validateToken", "origin": ["REQ-001"]}
 ]
 ```
 

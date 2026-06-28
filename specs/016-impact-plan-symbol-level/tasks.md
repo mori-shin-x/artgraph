@@ -411,3 +411,125 @@ Task T039: 1 file 多 symbol で 2 entry + originReqs 個別一致
 - spec 014 fixture との後方互換 / 旧 field 併走 / migration alias は本 spec で **採用しない** (artgraph 未リリース前提)
 - 各 phase の checkpoint で動作確認を行い、validation 失敗時は次 phase に進まない
 - commit は task 単位もしくは論理的なまとまりで行い、phase checkpoint で必ず 1 回 commit
+
+
+---
+
+## Considered: cross-spec / collision-qualified impacts
+
+**Why this section exists** (spec 016 self-dogfood finding, mirrors spec 014's
+appendix): the graph builder qualifies a REQ-ID as `<specDir>/<id>` when the
+bare `<id>` appears in multiple spec dirs (`src/graph/builder.ts:idMapping`).
+Because spec 016 touches the shared CLI / parser / graph surface
+(`src/cli.ts`, `src/config.ts`, `src/graph/traverse.ts`,
+`src/parsers/markdown.ts`, `src/parsers/sdd-files.ts`,
+`src/plan-coverage/index.ts`, `src/plan-coverage/mention.ts`,
+`src/plan-coverage/spec-resolver.ts`, and their tests), every spec that
+@impl-claims these files (006, 014, 016 itself with its own collisions) is
+reached by forward BFS from the `Files:` sections above.
+
+The bare `FR-XXX` / `SC-XXX` mentions in task headings above remain
+authoritative for human readers; the qualified forms below exist purely so the
+deterministic mention detector clears them. The entries are bookkeeping only:
+spec 016's behavioural surface does NOT change spec 006 / 014 — they are
+listed because their REQs share the same touched files at the lock level.
+
+- Considered: 006-test-results/FR-001 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/FR-002 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/FR-003 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/FR-004 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/FR-005 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/FR-006 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/FR-007 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/FR-008 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/FR-009 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/FR-010 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/FR-011 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/FR-012 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/SC-001 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/SC-002 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/SC-003 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/SC-004 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/SC-005 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/SC-006 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 006-test-results/SC-007 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-001 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-002 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-003 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-004 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-005 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-006 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-007 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-008 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-009 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-010 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-011 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-012 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-013 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-014 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-015 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-016 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-017 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-018 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-019 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-020 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-021 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-022 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-023 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-024 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-025 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-026 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-027 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-028 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-029 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-030 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/FR-031 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/SC-001 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/SC-002 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/SC-003 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/SC-004 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/SC-005 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/SC-006 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/SC-007 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/SC-008 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/SC-009 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 014-reinvent-impact-cli/SC-010 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-001 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-002 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-003 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-004 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-005 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-006 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-007 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-008 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-009 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-010 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-011 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-012 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-013 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-014 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-015 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-016 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-017 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-018 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-019 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-020 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-021 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-022 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-023 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-024 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-025 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-026 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-027 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-028 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-029 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-030 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/FR-031 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/SC-001 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/SC-002 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/SC-003 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/SC-004 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/SC-005 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: 016-impact-plan-symbol-level/SC-006 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: FR-032 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)
+- Considered: REQ-3 — cross-spec collision / shared infrastructure (spec 016 dogfood appendix)

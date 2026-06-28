@@ -37,7 +37,7 @@ describe("impact traversal", () => {
   it("should traverse from AUTH-001 to its implementors and tests", () => {
     const result = impact(graph, ["AUTH-001"], {});
 
-    expect(result.affectedReqs).toContain("AUTH-001");
+    expect(result.impactReqs).toContain("AUTH-001");
     expect(result.affectedFiles).toContain("src/auth/login.ts");
     expect(result.affectedFiles).toContain("src/auth/session.ts");
   });
@@ -46,7 +46,7 @@ describe("impact traversal", () => {
     const ids = resolveFileStartIds(graph, ["src/auth/login.ts"]);
     const result = impact(graph, ids, {});
 
-    expect(result.affectedReqs).toContain("AUTH-001");
+    expect(result.impactReqs).toContain("AUTH-001");
   });
 
   it("should detect drift when lock hash differs", () => {
@@ -144,20 +144,20 @@ describe("impact: depth limit (US3)", () => {
     // Without depth limit, should reach many nodes
     const fullResult = impact(graph, ["AUTH-001"], {});
     const fullCount =
-      fullResult.affectedReqs.length +
+      fullResult.impactReqs.length +
       fullResult.affectedDocs.length +
       fullResult.affectedFiles.length;
 
     // With maxDepth=1, should reach fewer nodes
     const limitedResult = impact(graph, ["AUTH-001"], {}, 1);
     const limitedCount =
-      limitedResult.affectedReqs.length +
+      limitedResult.impactReqs.length +
       limitedResult.affectedDocs.length +
       limitedResult.affectedFiles.length;
 
     expect(limitedCount).toBeLessThanOrEqual(fullCount);
     // AUTH-001 itself should always be included
-    expect(limitedResult.affectedReqs).toContain("AUTH-001");
+    expect(limitedResult.impactReqs).toContain("AUTH-001");
   });
 
   it("T041b: should not traverse beyond maxDepth", () => {
@@ -165,7 +165,7 @@ describe("impact: depth limit (US3)", () => {
 
     // With maxDepth=0, only start nodes themselves
     const result = impact(graph, ["AUTH-001"], {}, 0);
-    expect(result.affectedReqs).toContain("AUTH-001");
+    expect(result.impactReqs).toContain("AUTH-001");
     // Should not reach files at depth > 0
     expect(result.affectedFiles).toHaveLength(0);
   });
@@ -177,7 +177,7 @@ describe("impact: ImpactSummary (US3)", () => {
     const result = impact(graph, ["AUTH-001"], {});
 
     expect(result.summary).toBeDefined();
-    expect(result.summary!.reqs).toBe(result.affectedReqs.length);
+    expect(result.summary!.reqs).toBe(result.impactReqs.length);
     expect(result.summary!.docs).toBe(result.affectedDocs.length);
     expect(result.summary!.files).toBe(result.affectedFiles.length);
   });
@@ -191,7 +191,7 @@ describe("impact: end-to-end trace via contains (US3)", () => {
     const result = impact(graph, ["doc:auth-design"], {});
 
     // Should reach AUTH-001 via contains edge
-    expect(result.affectedReqs).toContain("AUTH-001");
+    expect(result.impactReqs).toContain("AUTH-001");
     // Should reach implementation files via implements edge
     expect(result.affectedFiles).toContain("src/auth/login.ts");
   });
@@ -303,7 +303,7 @@ describe("task-source edge semantics (meta-review remediation)", () => {
     const graph = makeTaskGraph();
     const result = impact(graph as any, ["T001"], {});
     expect(result.affectedTasks).toContain("T001");
-    expect(result.affectedReqs).not.toContain("T001"); // not silently bucketed as req
+    expect(result.impactReqs).not.toContain("T001"); // not silently bucketed as req
     expect(result.summary?.tasks).toBe(1);
   });
 
