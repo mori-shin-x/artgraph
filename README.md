@@ -352,20 +352,21 @@ Notes:
 
 ## Claude Code skills
 
-artgraph ships 7 Claude Code Skills that wire the CLI into the agent workflow:
+artgraph ships 8 Claude Code Skills that wire the CLI into the agent workflow:
 
-| Skill                | When it fires                                                                |
-| -------------------- | ---------------------------------------------------------------------------- |
-| `artgraph-setup`     | User wants to install / set up / add artgraph on a fresh project             |
-| `artgraph-integrate` | User wants to wire artgraph into an installed SDD tool (Spec Kit / Kiro)     |
-| `artgraph-detect`    | User asks whether artgraph is set up / what's installed / what's available   |
-| `artgraph-impact`    | User is planning, designing, scoping, or asking for change-impact analysis   |
-| `artgraph-verify`    | User reports implementation completion or wants a consistency check          |
-| `artgraph-coverage`  | User asks for progress, remaining work, or what's left to test               |
-| `artgraph-rename`    | User wants to rename / split / merge requirement IDs                         |
+| Skill                       | When it fires                                                                                                                              |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `artgraph-setup`            | User wants to install / set up / add artgraph on a fresh project                                                                           |
+| `artgraph-integrate`        | User wants to wire artgraph into an installed SDD tool (Spec Kit / Kiro)                                                                   |
+| `artgraph-detect`           | User asks whether artgraph is set up / what's installed / what's available                                                                 |
+| `artgraph-impact`           | File-based forward impact analysis. Input is file paths only — explicit paths, `--from-tasks <path>`, `--from-plan <path>`, or `--diff`    |
+| `artgraph-plan-coverage`    | Detects implicit impacts: files declared in `tasks.md` may affect existing REQs not mentioned in `tasks.md` / `plan.md` / `spec.md`. Run after `/speckit-tasks` or before `/speckit-implement` |
+| `artgraph-verify`           | User reports implementation completion or wants a consistency check                                                                        |
+| `artgraph-coverage`         | User asks for progress, remaining work, or what's left to test                                                                             |
+| `artgraph-rename`           | User wants to rename / split / merge requirement IDs                                                                                       |
 
 Skills live at `templates/skills/<name>/SKILL.md` and ship in English (for cross-agent reach + Claude Skills best practice). `artgraph init` installs them into `.claude/skills/` by default; pass `--no-skills` to opt out.
 
-> Note: `artgraph-impact` was previously called `artgraph-plan`. It was renamed because "plan" implies pre-change design while the underlying `artgraph impact --diff` only works once changes exist. The new Skill supports three input modes (diff / explicit targets / ask) so it covers both genuine planning and mid-flight impact analysis.
+> Note: `artgraph-impact` was previously called `artgraph-plan`. It was renamed because "plan" implies pre-change design while the underlying `artgraph impact --diff` only works once changes exist. Spec 014 then narrowed the CLI surface to **file-only** start sources (REQ-ID inputs now error out with a four-path migration hint), and split the "implicit impact" use case into the dedicated `artgraph-plan-coverage` Skill so each Skill's description matches what the CLI actually delivers.
 
 For implementation details and customization tips, see [docs/skills-guide.md](docs/skills-guide.md).
