@@ -28,11 +28,35 @@ export type Diagnostic = {
   path: string;
 };
 
+/**
+ * spec 014 (US1 / FR-018) — Task block surface info for `plan-coverage
+ * --require-files-section`. Populated only when the input text has heading-
+ * delimited task blocks (e.g. `### T013: ...`). Each entry records whether
+ * the block declares a `Files:` section so the caller can emit a
+ * `missingFilesSection` diagnostic. `taskId` is captured from the heading
+ * line via a heuristic regex; if the regex doesn't match (the block has a
+ * heading but no T-id prefix) the entry is omitted.
+ */
+export interface TaskBlock {
+  /** Task ID parsed from the heading (e.g. `T013`). */
+  taskId: string;
+  /** 1-based line number of the heading. */
+  line: number;
+  /** True if a `Files:` section was found inside the block scope. */
+  hasFilesSection: boolean;
+}
+
 export type ExtractResult = {
   /** dedup + sort 済み — both stages return a stable, lexicographic order. */
   files: string[];
   stage: "files-section" | "regex-fallback" | "empty";
   diagnostics: Diagnostic[];
+  /**
+   * spec 014: heading-delimited task blocks and their `Files:` status. Empty
+   * array when the input has no `### T<NNN>` headings (e.g. plan.md or a
+   * tasks.md that uses a different convention).
+   */
+  taskBlocks?: TaskBlock[];
 };
 
 export interface ExtractOptions {
@@ -191,15 +215,58 @@ function runStageB(text: string, options: ExtractOptions): string[] {
   return accepted;
 }
 
+// spec 014 — heuristic to detect `### T013: ...` style task headings. We
+// intentionally accept `T` followed by 1+ digits so both spec-kit (T001) and
+// numeric-only IDs work. Heading depth (`#`, `##`, `###`, ...) is not
+// constrained — tasks.md authors place T-IDs at varied levels.
+const TASK_HEADING_RE = /^#+\s+(T\d+)\b/;
+
+function extractTaskBlocks(lines: string[]): TaskBlock[] {
+  // Build the list of `(line, taskId)` headings first, then for each
+  // heading scan its scope (up to the next heading) for a `Files:` line.
+  // The scope rule is the same as Stage A so the two stay in lockstep.
+  const blocks: TaskBlock[] = [];
+  const headingPositions: Array<{ index: number; taskId: string }> = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = TASK_HEADING_RE.exec(lines[i]);
+    if (m) headingPositions.push({ index: i, taskId: m[1] });
+  }
+
+  for (let k = 0; k < headingPositions.length; k++) {
+    const { index, taskId } = headingPositions[k];
+    // Scope: from the line after the heading to (exclusive) the next
+    // markdown heading of any depth.
+    let scopeEnd = lines.length;
+    for (let j = index + 1; j < lines.length; j++) {
+      if (HEADING_RE.test(lines[j])) {
+        scopeEnd = j;
+        break;
+      }
+    }
+    let hasFilesSection = false;
+    for (let j = index + 1; j < scopeEnd; j++) {
+      if (HEADER_RE.test(lines[j])) {
+        hasFilesSection = true;
+        break;
+      }
+    }
+    blocks.push({ taskId, line: index + 1, hasFilesSection });
+  }
+
+  return blocks;
+}
+
 export function extractFiles(text: string, options: ExtractOptions): ExtractResult {
   const lines = text.split("\n");
   const stageA = runStageA(lines, options);
+  const taskBlocks = extractTaskBlocks(lines);
 
   if (stageA.files.length > 0) {
     return {
       files: Array.from(new Set(stageA.files)).sort(),
       stage: "files-section",
       diagnostics: stageA.diagnostics,
+      taskBlocks,
     };
   }
 
@@ -212,6 +279,7 @@ export function extractFiles(text: string, options: ExtractOptions): ExtractResu
       files: Array.from(new Set(stageBFiles)).sort(),
       stage: "regex-fallback",
       diagnostics: stageA.diagnostics,
+      taskBlocks,
     };
   }
 
@@ -219,5 +287,6 @@ export function extractFiles(text: string, options: ExtractOptions): ExtractResu
     files: [],
     stage: "empty",
     diagnostics: stageA.diagnostics,
+    taskBlocks,
   };
 }

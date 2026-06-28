@@ -3,6 +3,7 @@ import { resolve, relative, isAbsolute } from "node:path";
 import {
   DEFAULT_CONFIG,
   type ArtgraphConfig,
+  type PlanCoverageConfig,
   type ReqPatternConfig,
   type TaskConventionPreset,
 } from "./types.js";
@@ -330,6 +331,26 @@ function validateTaskRegexField(
   }
 }
 
+// spec 014 — `.artgraph.json` `planCoverage` section validation. Currently
+// only `requireFilesSection: boolean` is recognised; unknown fields are
+// silently dropped (no warning) so the schema can grow without breaking
+// existing configs that pre-load a future field.
+function validatePlanCoverage(value: unknown): PlanCoverageConfig | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Invalid planCoverage: must be an object");
+  }
+  const out: PlanCoverageConfig = {};
+  if ("requireFilesSection" in value) {
+    const v = (value as { requireFilesSection: unknown }).requireFilesSection;
+    if (typeof v !== "boolean") {
+      throw new Error("Invalid planCoverage.requireFilesSection: must be a boolean");
+    }
+    out.requireFilesSection = v;
+  }
+  return out;
+}
+
 // `testResultPaths` is fed straight into glob, so a non-string element (e.g.
 // `[123]`) would crash deep inside globSync with an opaque error. Validate the
 // shape up front and fail with a clear, actionable message instead.
@@ -368,6 +389,8 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
 
   validateTestResultPaths(raw.testResultPaths);
 
+  const planCoverage = validatePlanCoverage(raw.planCoverage);
+
   const lockFile = raw.lockFile ?? DEFAULT_CONFIG.lockFile;
   const resolvedLock = resolve(rootDir, lockFile);
   const relFromRoot = relative(rootDir, resolvedLock);
@@ -388,5 +411,6 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
     testResultPaths: raw.testResultPaths,
     taskConventions: raw.taskConventions,
     disableBuiltinTaskConventions: disabledBuiltins,
+    planCoverage,
   };
 }

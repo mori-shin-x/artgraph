@@ -24,6 +24,8 @@ import {
 } from "./hook-pretool.js";
 import type { ArtgraphConfig, TestResultMap } from "./types.js";
 import { runInit } from "./init.js";
+import { runPlanCoverage } from "./plan-coverage/index.js";
+import { resolveSpecDir } from "./plan-coverage/spec-resolver.js";
 import { loadTestResults } from "./test-results.js";
 import { executeRename, executeSplit, executeMerge } from "./rename-executor.js";
 import type { RenameResult } from "./rename-executor.js";
@@ -527,6 +529,108 @@ program
       console.log(JSON.stringify(result));
     } else {
       printImpactText(result);
+    }
+  });
+
+// spec 014 (FR-013 — FR-020): plan-coverage subcommand. Reads tasks.md /
+// plan.md (and the current spec.md) to detect REQs that are *affected*
+// (via the file → impact() blast) but *never mentioned* in the source
+// trio — i.e. the SDD author silently dragged in side effects.
+//
+// All defaults follow contracts/cli-flags.md §plan-coverage:
+//   --format text (default), --gate off, --ignore "", --require-files-section
+//   off unless `.artgraph.json`'s `planCoverage.requireFilesSection` is true.
+program
+  .command("plan-coverage")
+  .description(
+    "Detect implicit REQ impacts: REQs reached by tasks.md/plan.md `Files:` that are never mentioned in the spec trio.",
+  )
+  .option("--spec <dir>", "Spec directory (auto-detected via SPECIFY_FEATURE_DIRECTORY or .specify/feature.json)")
+  .option("--tasks <path>", "Override the tasks.md path (default: <spec-dir>/tasks.md)")
+  .option("--plan <path>", "Override the plan.md path (default: <spec-dir>/plan.md if present)")
+  .addOption(
+    new Option("--format <format>", "Output format")
+      .choices(["json", "text"])
+      .default("text"),
+  )
+  .option("--gate", "Exit 1 when implicit impacts or diagnostics are non-empty (CI use)")
+  .option("--ignore <csv>", "Comma-separated REQ-IDs to drop from implicit list (one-shot)", "")
+  .option(
+    "--require-files-section",
+    "Emit a missingFilesSection diagnostic for every task block without a Files: header",
+  )
+  .action((opts) => {
+    const rootDir = process.cwd();
+
+    // Resolve spec dir per the contract precedence.
+    const resolved = resolveSpecDir({
+      explicitFlag: opts.spec,
+      env: process.env,
+      repoRoot: rootDir,
+    });
+    if ("error" in resolved) {
+      console.error(resolved.error);
+      process.exit(1);
+    }
+    const specDir = resolved.dir;
+
+    // Resolve tasks.md / plan.md against the spec dir unless overridden.
+    const tasksPath: string = opts.tasks
+      ? (opts.tasks as string)
+      : resolve(specDir, "tasks.md");
+    if (!existsSync(tasksPath)) {
+      console.error(`error: tasks.md not found: ${tasksPath}`);
+      process.exit(1);
+    }
+    const planPathCandidate: string = opts.plan
+      ? (opts.plan as string)
+      : resolve(specDir, "plan.md");
+    const planPath: string | undefined = existsSync(planPathCandidate)
+      ? planPathCandidate
+      : undefined;
+
+    // Parse --ignore CSV. Empty entries are dropped silently so
+    // `--ignore ""` or trailing commas don't generate spurious IDs.
+    const ignore = ((opts.ignore as string) ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+
+    // `--require-files-section` flag overrides config; absence means we
+    // fall back to the planCoverage section's requireFilesSection (default
+    // false).
+    const config = loadConfig(rootDir);
+    const requireFilesSection: boolean =
+      opts.requireFilesSection === true
+        ? true
+        : config.planCoverage?.requireFilesSection ?? false;
+
+    const format: "json" | "text" = opts.format === "json" ? "json" : "text";
+
+    try {
+      const result = runPlanCoverage({
+        repoRoot: rootDir,
+        specDir,
+        tasksPath,
+        planPath,
+        format,
+        gate: opts.gate === true,
+        ignore,
+        requireFilesSection,
+      });
+
+      if (format === "json") {
+        console.log(JSON.stringify(result.json));
+      } else {
+        process.stdout.write(result.text);
+      }
+      if (result.exitCode !== 0) {
+        process.exit(result.exitCode);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`Error: ${msg}`);
+      process.exit(1);
     }
   });
 
