@@ -282,3 +282,98 @@ T002, T003 (sdd-files parser)
 - Phase 5–8 は Phase 4 (plan-coverage CLI) 完成後すべて並列
 
 LOC 見積(plan.md より): 600–900 LOC(うちテスト半分)。
+
+---
+
+## Considered: cross-spec / collision-qualified impacts
+
+**Why this section exists** (T027 dogfooding finding): the graph builder
+qualifies a REQ-ID as `<specDir>/<id>` when the bare `<id>` appears in
+multiple spec dirs (`src/graph/builder.ts:idMapping`). E.g. `FR-001` exists
+in both `006-test-results` and `014-reinvent-impact-cli`, so both get
+rewritten to `006-test-results/FR-001` and `014-reinvent-impact-cli/FR-001`.
+The bare `[FR-001]` mentions in the task headings above satisfy the
+human-reader contract, but `detectMentions` does an exact, boundary-anchored
+match against graph IDs — so the qualified forms also need to be referenced
+verbatim somewhere in the source trio for the mention detector to clear them.
+
+Each entry below is an explicit acknowledgement that the REQ is reached via
+`impact()` from this spec's modified files AND that the impact is intentional
+(either because the REQ belongs to spec 014 itself, or because the
+shared-CLI surface — `src/cli.ts`, `src/config.ts`, etc. — legitimately
+co-implements REQs from other specs that we do not modify in this PR).
+
+### Spec 014 own REQs (qualified due to collision with earlier specs)
+
+These REQs ARE the work of this spec. The bare `FR-XXX` / `SC-XXX` mentions
+above remain authoritative for human readers; the qualified forms below
+exist purely to satisfy the deterministic detector.
+
+- Considered: 014-reinvent-impact-cli/FR-001 — implemented via T007
+- Considered: 014-reinvent-impact-cli/FR-002 — implemented via T006
+- Considered: 014-reinvent-impact-cli/FR-003 — implemented via T007
+- Considered: 014-reinvent-impact-cli/FR-004 — implemented via T007
+- Considered: 014-reinvent-impact-cli/FR-005 — implemented via T002 / T003
+- Considered: 014-reinvent-impact-cli/FR-006 — implemented via T007
+- Considered: 014-reinvent-impact-cli/FR-007 — implemented via T007
+- Considered: 014-reinvent-impact-cli/FR-008 — implemented via T006 (unchanged)
+- Considered: 014-reinvent-impact-cli/FR-009 — implemented via T017
+- Considered: 014-reinvent-impact-cli/FR-010 — implemented via T017
+- Considered: 014-reinvent-impact-cli/FR-011 — implemented via T017
+- Considered: 014-reinvent-impact-cli/FR-012 — implemented via T017
+- Considered: 014-reinvent-impact-cli/FR-013 — implemented via T015
+- Considered: 014-reinvent-impact-cli/FR-014 — implemented via T011
+- Considered: 014-reinvent-impact-cli/FR-015 — implemented via T014
+- Considered: 014-reinvent-impact-cli/FR-016 — implemented via T014
+- Considered: 014-reinvent-impact-cli/FR-017 — implemented via T014 / T015
+- Considered: 014-reinvent-impact-cli/FR-018 — implemented via T012 / T014
+- Considered: 014-reinvent-impact-cli/FR-019 — implemented via T014 / T015
+- Considered: 014-reinvent-impact-cli/FR-020 — implemented via T010
+- Considered: 014-reinvent-impact-cli/FR-021 — implemented via T019
+- Considered: 014-reinvent-impact-cli/FR-022 — implemented via T019
+- Considered: 014-reinvent-impact-cli/FR-023 — implemented via T019
+- Considered: 014-reinvent-impact-cli/FR-024 — implemented via T021
+- Considered: 014-reinvent-impact-cli/FR-025 — implemented via T022
+- Considered: 014-reinvent-impact-cli/FR-026 — implemented via T023
+- Considered: 014-reinvent-impact-cli/FR-027 — out-of-scope marker (see #105)
+- Considered: 014-reinvent-impact-cli/FR-028 — implemented via T024
+- Considered: 014-reinvent-impact-cli/FR-029 — implemented via T024
+- Considered: 014-reinvent-impact-cli/SC-001 — verified via existing tests/impact-cli.test.ts (T004)
+- Considered: 014-reinvent-impact-cli/SC-002 — verified via tests/sdd-files-parser.test.ts (T002) + tests/impact-cli.test.ts (T005)
+- Considered: 014-reinvent-impact-cli/SC-003 — verified via tests/plan-coverage.test.ts (T013) + tests/plan-coverage-integration.test.ts (T026)
+- Considered: 014-reinvent-impact-cli/SC-004 — verified via tests/mention-detector.test.ts (T009)
+- Considered: 014-reinvent-impact-cli/SC-005 — verified via tests/skills-templates.test.ts (T018)
+- Considered: 014-reinvent-impact-cli/SC-006 — verified via tests/skills-templates.test.ts (T020)
+- Considered: 014-reinvent-impact-cli/SC-007 — verified via tests/init.test.ts (T021)
+- Considered: 014-reinvent-impact-cli/SC-008 — verified via tests/plan-coverage-integration.test.ts (T026 — gate × ignore matrix)
+- Considered: 014-reinvent-impact-cli/SC-009 — verified via tests/plan-coverage-integration.test.ts (T026 — require-files-section toggle)
+- Considered: 014-reinvent-impact-cli/SC-010 — peer review on docs/skills-guide.md + README.md (T024 / T025)
+
+### Cross-spec REQs reached via shared CLI surface
+
+These REQs belong to spec **006-test-results** and are reached because
+`src/cli.ts` registers BOTH spec 006's `--test-results` flag handling and
+spec 014's new `plan-coverage` subcommand on the same Commander tree.
+Modifying `src/cli.ts` necessarily forwards-touches the test-results impl
+edges. No behavioural change to spec 006 is intended in this PR — the
+mentions below are bookkeeping only.
+
+- Considered: 006-test-results/FR-001 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/FR-002 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/FR-003 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/FR-004 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/FR-005 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/FR-006 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/FR-007 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/FR-008 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/FR-009 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/FR-010 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/FR-011 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/FR-012 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/SC-001 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/SC-002 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/SC-003 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/SC-004 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/SC-005 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/SC-006 — pre-existing test-results infrastructure, no behaviour change
+- Considered: 006-test-results/SC-007 — pre-existing test-results infrastructure, no behaviour change
