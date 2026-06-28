@@ -69,17 +69,13 @@ describe("CLI: scan", () => {
 
 // ---------------------------------------------------------------------------
 // impact
+//
+// Spec 014 made `impact` file-only: REQ-ID / `doc:` prefix inputs are now
+// rejected by the CLI (covered by tests/impact-cli.test.ts). The remaining
+// smoke tests here use real file paths so they exercise the same code paths
+// the user will actually hit.
 // ---------------------------------------------------------------------------
 describe("CLI: impact", () => {
-  it("should show impact for a REQ-ID", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await run(["impact", "AUTH-001", "--format", "json"]);
-    expect(exitCode).toBe(0);
-
-    const result = JSON.parse(stdout);
-    expect(result.affectedFiles.length).toBeGreaterThan(0);
-    expect(result.affectedReqs).toContain("AUTH-001");
-  });
-
   it("should show impact for a file path", { timeout: 30000 }, async () => {
     const { stdout, exitCode } = await run(["impact", "src/auth/login.ts", "--format", "json"]);
     expect(exitCode).toBe(0);
@@ -88,17 +84,17 @@ describe("CLI: impact", () => {
     expect(result.affectedReqs).toContain("AUTH-001");
   });
 
-  it("should output human-readable text by default", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await run(["impact", "AUTH-001"]);
+  it("should output human-readable text by default (file input)", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["impact", "src/auth/login.ts"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Affected REQs:");
     expect(stdout).toContain("AUTH-001");
   });
 
-  it("should show impact for multiple targets", { timeout: 30000 }, async () => {
+  it("should show impact for multiple file targets", { timeout: 30000 }, async () => {
     const { stdout, exitCode } = await run([
       "impact",
-      "AUTH-001",
+      "src/auth/login.ts",
       "src/auth/session.ts",
       "--format",
       "json",
@@ -110,14 +106,14 @@ describe("CLI: impact", () => {
     expect(result.affectedFiles.length).toBeGreaterThan(0);
   });
 
-  it("should fail when no targets are given", { timeout: 30000 }, async () => {
+  it("should fail when no start source is given", { timeout: 30000 }, async () => {
     const { exitCode, stderr } = await run(["impact"]);
     expect(exitCode).toBe(1);
-    expect(stderr).toContain("No targets specified");
+    expect(stderr).toMatch(/no start source|no.*target/i);
   });
 
-  it("should fail when target does not match any node", { timeout: 30000 }, async () => {
-    const { exitCode, stderr } = await run(["impact", "NONEXISTENT-ID"]);
+  it("should fail when target file is not in the graph", { timeout: 30000 }, async () => {
+    const { exitCode, stderr } = await run(["impact", "src/does/not/exist.ts"]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("No matching nodes found");
   });
@@ -275,8 +271,15 @@ describe("CLI: graph", () => {
 // impact --depth
 // ---------------------------------------------------------------------------
 describe("CLI: impact --depth", () => {
-  it("T058: should accept --depth option", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await run(["impact", "AUTH-001", "--depth", "1", "--format", "json"]);
+  it("T058: should accept --depth option (file input)", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run([
+      "impact",
+      "src/auth/login.ts",
+      "--depth",
+      "1",
+      "--format",
+      "json",
+    ]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
@@ -284,7 +287,7 @@ describe("CLI: impact --depth", () => {
   });
 
   it("T059: should show summary in text output", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await run(["impact", "AUTH-001"]);
+    const { stdout, exitCode } = await run(["impact", "src/auth/login.ts"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Summary:");
     expect(stdout).toMatch(/\d+ docs/);
@@ -298,13 +301,23 @@ describe("CLI: impact --depth", () => {
 // ---------------------------------------------------------------------------
 describe("CLI: impact --depth validation", () => {
   it("should error on NaN --depth value", { timeout: 30000 }, async () => {
-    const { exitCode, stderr } = await run(["impact", "AUTH-001", "--depth", "abc"]);
+    const { exitCode, stderr } = await run([
+      "impact",
+      "src/auth/login.ts",
+      "--depth",
+      "abc",
+    ]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("Invalid --depth value");
   });
 
   it("should error on negative --depth value", { timeout: 30000 }, async () => {
-    const { exitCode, stderr } = await run(["impact", "AUTH-001", "--depth", "-1"]);
+    const { exitCode, stderr } = await run([
+      "impact",
+      "src/auth/login.ts",
+      "--depth",
+      "-1",
+    ]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("Invalid --depth value");
   });
@@ -322,34 +335,39 @@ describe("CLI: graph --kind validation", () => {
 });
 
 // ---------------------------------------------------------------------------
-// impact: 3-stage dependency chain E2E
+// impact: 3-stage dependency chain — now scoped to spec-file inputs
+//
+// Spec 014 dropped `doc:` prefix / bare doc-id positional inputs, but a
+// caller can still pass the spec file path itself: resolveFileStartIds()
+// drags in every doc / req node parsed out of that file via the
+// `node.filePath === input` branch. We use the doc-chain fixture's
+// `requirements.md` as the entry point so the traversal still reaches
+// the downstream `design` / `tasks` docs through `derives_from`.
 // ---------------------------------------------------------------------------
-describe("CLI: impact 3-stage dependency chain", () => {
-  it("should trace through full doc derives_from chain", { timeout: 30000 }, async () => {
-    // requirements -> design -> tasks (via derives_from chain in doc-chain fixtures)
-    // Starting from "requirements" should reach the whole chain including tasks
-    const { stdout, exitCode } = await run(["impact", "requirements", "--format", "json"]);
+describe("CLI: impact spec-file traversal", () => {
+  it("should trace through full doc derives_from chain when started from a spec file path", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run([
+      "impact",
+      "specs/doc-chain/requirements.md",
+      "--format",
+      "json",
+    ]);
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
     expect(result.affectedDocs).toContain("requirements");
     expect(result.affectedDocs).toContain("design");
-    // tasks.md (auto-generated doc ID) should also be reached via design -> tasks chain
     const hasTasksDoc = result.affectedDocs.some((d: string) => d.includes("tasks"));
     expect(hasTasksDoc).toBe(true);
   });
-});
 
-// ---------------------------------------------------------------------------
-// impact: contains reverse + --depth limit
-// ---------------------------------------------------------------------------
-describe("CLI: impact contains reverse + --depth limit", () => {
-  it("should reach req from doc via contains within depth limit", { timeout: 30000 }, async () => {
-    // doc:auth-design --contains--> AUTH-001
-    // With depth=1, starting from doc:auth-design should reach AUTH-001
+  it("should reach req from spec file via contains within depth limit", { timeout: 30000 }, async () => {
+    // specs/auth.md → doc:auth-design + AUTH-001/002/003 (filePath match).
+    // From there, AUTH-001 is depth 0, so --depth 1 is enough to reach
+    // implementation files (depth 1).
     const { stdout, exitCode } = await run([
       "impact",
-      "doc:auth-design",
+      "specs/auth.md",
       "--depth",
       "1",
       "--format",
@@ -359,23 +377,6 @@ describe("CLI: impact contains reverse + --depth limit", () => {
 
     const result = JSON.parse(stdout);
     expect(result.affectedReqs).toContain("AUTH-001");
-  });
-
-  it("should not reach impl files from doc with --depth 1", { timeout: 30000 }, async () => {
-    // doc:auth-design --contains(depth1)--> AUTH-001 --implements(depth2)--> file:src/auth/login.ts
-    // With depth=1, should NOT reach the implementation files (they are at depth 2)
-    const { stdout, exitCode } = await run([
-      "impact",
-      "doc:auth-design",
-      "--depth",
-      "1",
-      "--format",
-      "json",
-    ]);
-    expect(exitCode).toBe(0);
-
-    const result = JSON.parse(stdout);
-    expect(result.affectedFiles).toHaveLength(0);
   });
 });
 

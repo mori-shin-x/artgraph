@@ -141,15 +141,31 @@ export function findUncovered(graph: ArtifactGraph): string[] {
   return uncovered;
 }
 
-export function resolveStartIds(graph: ArtifactGraph, inputs: string[]): string[] {
+/**
+ * Resolve a list of file-path inputs into graph start-node ids for impact() /
+ * check() / hook-pretool. **File path only**: spec 014 (FR-001 / FR-002)
+ * removed the previous REQ-ID and `doc:` prefix branches so `artgraph impact`
+ * has a single mental model (file → forward impact). For any input string the
+ * resolver tries, in order:
+ *
+ *  1. `file:<input>` exact match — picks up the canonical file node.
+ *  2. Symbol nodes that live in `<input>` — kept alongside the file node so
+ *     symbol-mode graphs surface the inner symbols too.
+ *  3. Any other node whose `filePath === <input>` — this is what lets a
+ *     `specs/auth.md` path drag in the doc + REQ nodes parsed out of it
+ *     (the file path semantically points at the whole markdown contents).
+ *
+ * REQ-ID inputs (`AUTH-001`) and `doc:` prefix inputs (`doc:auth-design`) are
+ * rejected at the CLI layer — see the impact subcommand in `src/cli.ts`.
+ *
+ * Renamed from `resolveStartIds` in spec 014. The old name is intentionally
+ * not re-exported as an alias: any caller still using the broader semantics
+ * needs to be reviewed against the file-only contract.
+ */
+export function resolveFileStartIds(graph: ArtifactGraph, inputs: string[]): string[] {
   const ids: string[] = [];
 
   for (const input of inputs) {
-    if (graph.nodes.has(input)) {
-      ids.push(input);
-      continue;
-    }
-
     const fileId = `file:${input}`;
     if (graph.nodes.has(fileId)) {
       ids.push(fileId);
@@ -161,14 +177,8 @@ export function resolveStartIds(graph: ArtifactGraph, inputs: string[]): string[
       continue;
     }
 
-    // T048: doc: prefix resolution
-    const docId = `doc:${input}`;
-    if (graph.nodes.has(docId)) {
-      ids.push(docId);
-      // Do NOT continue — fall through to filePath match so that
-      // req/file nodes sharing the same filePath are also collected.
-    }
-
+    // filePath match — catches doc / req nodes parsed out of a spec file
+    // when the user passes the spec path itself (e.g. `specs/auth.md`).
     for (const [id, node] of graph.nodes) {
       if (node.filePath === input && !ids.includes(id)) {
         ids.push(id);

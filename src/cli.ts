@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
 import { Command, CommanderError, Option } from "commander";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
-import { impact, resolveStartIds } from "./graph/traverse.js";
+import { impact, resolveFileStartIds } from "./graph/traverse.js";
+import { extractFiles } from "./parsers/sdd-files.js";
 import { formatGraphText, formatGraphJSON } from "./graph/format.js";
 import type { NodeKind } from "./types.js";
 import type { BuildWarning } from "./graph/builder.js";
@@ -388,33 +389,122 @@ program
     }
   });
 
+// spec 014 (FR-001 / FR-003): REQ-ID inputs are no longer accepted here.
+// The four supported start sources are listed in this error so the user is
+// pushed onto the right tool for their actual intent. Kept as a const at
+// module scope so the wording stays in sync with the contract file and the
+// CLI tests can assert against a single canonical string.
+const IMPACT_REQ_ID_REJECTION = [
+  "error: REQ-ID inputs are not accepted by `artgraph impact`.",
+  "use one of the following start sources:",
+  "  artgraph impact <file>...          # explicit file paths",
+  "  artgraph impact --from-tasks <p>   # extract files from tasks.md",
+  "  artgraph impact --from-plan <p>    # extract files from plan.md",
+  "  artgraph impact --diff             # use git diff",
+].join("\n");
+
+// `doc:` prefix is also rejected (FR-001 / FR-002). Surface the same 4
+// start sources so the user has a complete menu — the underlying mental
+// model is identical: `impact` is now file-only.
+const IMPACT_DOC_PREFIX_REJECTION = [
+  "error: `doc:` prefix inputs are not accepted by `artgraph impact`.",
+  "use one of the following start sources:",
+  "  artgraph impact <file>...          # explicit file paths",
+  "  artgraph impact --from-tasks <p>   # extract files from tasks.md",
+  "  artgraph impact --from-plan <p>    # extract files from plan.md",
+  "  artgraph impact --diff             # use git diff",
+].join("\n");
+
+const REQ_ID_INPUT_RE = /^[A-Z]+-\d+$/;
+
 program
   .command("impact")
-  .description("Show impact from changed files or REQ-IDs")
-  .argument("[targets...]", "File paths or REQ-IDs")
+  .description("Show forward impact from file paths (spec 014: file-only)")
+  .argument("[targets...]", "File paths only — REQ-IDs and `doc:` prefix are rejected")
+  .option("--from-tasks <path>", "Extract files from a tasks.md and use them as the start set")
+  .option("--from-plan <path>", "Extract files from a plan.md and use them as the start set")
   .option("--diff", "Use git diff to detect changed files")
   .option("--depth <depth>", "Limit BFS traversal depth")
   .option("--format <format>", "Output format: json | text", "text")
   .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
   .action((targets: string[], opts) => {
     const rootDir = process.cwd();
+
+    // ----- Input validation: reject REQ-ID / doc: prefix BEFORE we touch
+    // the filesystem so the user gets the 4-path navigational error even on
+    // a repo without `.artgraph.json`. FR-001 / FR-003.
+    for (const t of targets) {
+      if (REQ_ID_INPUT_RE.test(t)) {
+        console.error(IMPACT_REQ_ID_REJECTION);
+        process.exit(1);
+      }
+      if (t.startsWith("doc:")) {
+        console.error(IMPACT_DOC_PREFIX_REJECTION);
+        process.exit(1);
+      }
+    }
+
+    // ----- Mutually exclusive start sources. Each of `targets[]`,
+    // `--from-tasks`, `--from-plan`, `--diff` counts as a single channel;
+    // contracts/cli-flags.md requires exactly one to be present.
+    const sourcesPicked = [
+      targets.length > 0 ? "targets" : null,
+      opts.fromTasks ? "--from-tasks" : null,
+      opts.fromPlan ? "--from-plan" : null,
+      opts.diff ? "--diff" : null,
+    ].filter((s): s is string => s !== null);
+
+    if (sourcesPicked.length > 1) {
+      console.error(
+        `error: start sources are mutually exclusive (specify only one): ${sourcesPicked.join(", ")}`,
+      );
+      process.exit(1);
+    }
+    if (sourcesPicked.length === 0) {
+      console.error(
+        "error: no start source specified. pass file paths, --from-tasks, --from-plan, or --diff.",
+      );
+      process.exit(1);
+    }
+
     const config = applyMode(loadConfig(rootDir), opts.mode);
     const { graph } = scan(rootDir, config);
     const lock = readLock(rootDir, config.lockFile);
 
-    const inputTargets = opts.diff ? getGitDiffFiles(rootDir) : targets;
-    if (inputTargets.length === 0) {
-      if (opts.diff) {
-        console.log("No changes detected in git diff.");
-      } else {
-        console.error("No targets specified. Use file paths, REQ-IDs, or --diff.");
+    // ----- Resolve the start file list. `--from-tasks` / `--from-plan`
+    // delegate to the spec 014 shared parser (`src/parsers/sdd-files.ts`),
+    // `--diff` re-uses the existing git helper, and bare positional inputs
+    // are taken as file paths verbatim.
+    let inputFiles: string[];
+    if (opts.fromTasks || opts.fromPlan) {
+      const sourcePath = (opts.fromTasks ?? opts.fromPlan) as string;
+      const sourceLabel = opts.fromTasks ? "--from-tasks" : "--from-plan";
+      if (!existsSync(sourcePath)) {
+        console.error(`error: ${sourceLabel} path not found: ${sourcePath}`);
+        process.exit(1);
       }
-      process.exit(opts.diff ? 0 : 1);
+      const text = readFileSync(sourcePath, "utf-8");
+      const extracted = extractFiles(text, { graph, repoRoot: rootDir });
+      if (extracted.stage === "empty" || extracted.files.length === 0) {
+        console.error(
+          `error: no files extracted from ${sourcePath}. add a \`Files: <path>\` section or reference existing file paths in the body.`,
+        );
+        process.exit(1);
+      }
+      inputFiles = extracted.files;
+    } else if (opts.diff) {
+      inputFiles = getGitDiffFiles(rootDir);
+      if (inputFiles.length === 0) {
+        console.log("No changes detected in git diff.");
+        process.exit(0);
+      }
+    } else {
+      inputFiles = targets;
     }
 
-    const startIds = resolveStartIds(graph, inputTargets);
+    const startIds = resolveFileStartIds(graph, inputFiles);
     if (startIds.length === 0) {
-      console.error(`No matching nodes found for: ${inputTargets.join(", ")}`);
+      console.error(`No matching nodes found for: ${inputFiles.join(", ")}`);
       process.exit(1);
     }
 
@@ -463,7 +553,7 @@ program
         console.log("No changes detected in git diff.");
         process.exit(0);
       }
-      const startIds = resolveStartIds(graph, diffFiles);
+      const startIds = resolveFileStartIds(graph, diffFiles);
       if (startIds.length === 0) {
         console.log("Changed files are not tracked in the graph.");
         process.exit(0);
@@ -621,7 +711,7 @@ program
         return;
       }
 
-      const startIds = resolveStartIds(graph, relativePaths);
+      const startIds = resolveFileStartIds(graph, relativePaths);
       if (startIds.length === 0) {
         process.stdout.write(JSON.stringify(buildHookOutput("artgraph impact: (none)")));
         const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;
