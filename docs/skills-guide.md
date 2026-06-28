@@ -168,6 +168,76 @@ artgraph plan-coverage --require-files-section
 - 動作: `artgraph rename` 系で spec 本文・`@impl` タグ・テストの `[ID]` / `req:` タグ・frontmatter (`depends_on` / `derives_from`) ・`.trace.lock` を一括書き換え。破壊的操作のため `--dry-run` で必ず影響範囲を確認
 - 参照: `templates/skills/artgraph-rename/SKILL.md`
 
+## File mode vs Symbol mode
+
+`artgraph impact` / `artgraph plan-coverage` の入力粒度には **file mode** (デフォルト) と **symbol mode** (opt-in) の 2 つがあります。`Files: src/auth.ts` のように file path だけを書けば file mode、`Files: src/auth.ts:validateToken` のように `path:symbol` の形で書けば symbol mode です。symbol mode は同一 file の他 symbol 経由の REQ を排除して過剰検知を抑制できる代わりに、graph に symbol node が必要になります。
+
+### Trade-off 表
+
+| 項目 | file mode | symbol mode |
+| --- | --- | --- |
+| 起動コスト (scan latency) | 低 — file 単位の content-hash | 高 — `ts-morph` で export 抽出 |
+| `Files:` syntax | `src/auth.ts` | `src/auth.ts:validateToken` (file 単位も混在 OK) |
+| 想定ユーザー | 新規実装 / 大規模 refactor | 既存関数 1 個だけ修正する保守ケース |
+| 必要な scan 設定 | デフォルト (`mode: "file"`) | `.artgraph.json` で `"mode": "symbol"` |
+| barrel / re-export | OK 対応 | 一部不可 (動的 import / namespace import は file-level fallback) |
+| 過剰検知の傾向 | 同 file 内の全 symbol を巻き込む | 当該 symbol からの forward 波及のみ |
+
+### `.artgraph.json` の `mode` 設定例
+
+```jsonc
+// file mode (デフォルト) — 何も書かなければこれ
+{
+  "mode": "file"
+}
+
+// symbol mode (opt-in) — 既存関数 1 個だけ修正するワークフロー向け
+{
+  "mode": "symbol"
+}
+```
+
+設定変更後は `artgraph scan` を再実行してください (`mode: "symbol"` で初めて scan すると `symbol:<path>#<name>` ノードが graph に登録されます)。`mode: "file"` のまま `Files: src/auth.ts:validateToken` のような symbol 入力を渡すと、`artgraph plan-coverage` は `unresolvedSymbol` diagnostic を立て、`artgraph impact` は exit 1 で「symbol-level input requires `artgraph scan --mode symbol`」のガイダンスを返します。
+
+`artgraph init` のデフォルトは現在も `mode: "file"` です。symbol mode への切り替えは `.artgraph.json` の手動編集または `artgraph init --mode symbol` の明示 opt-in が必要です(`init` のデフォルト維持は spec 016 FR-024 で確定)。
+
+### 二軸出力 (`impactReqs` / `originReqs`) によるドリフト追跡
+
+`artgraph impact` / `artgraph plan-coverage` は JSON / text の両方で次の二軸を返します(symbol mode / file mode どちらでも有効)。
+
+- **`impactReqs`** — startId (file または symbol node) からの forward BFS で到達した REQ 集合。「この変更が実際に手を伸ばす範囲」。
+- **`originReqs`** — startId の `@impl` claim を `implements` edge で **1-hop** 逆向きに辿った REQ 集合。「この変更が本来 claim している REQ」。
+
+二軸を比較してドリフトを判定します。
+
+| 状態 | 解釈 | 推奨対応 |
+| --- | --- | --- |
+| `impactReqs == originReqs` | ドリフトなし — claim と波及が一致 | そのまま実装 |
+| `impactReqs \ originReqs` 非空 | **ドリフト候補** — claim していない REQ に波及している | spec を見直して `depends_on` を追加するか、symbol を再分割する。CLI text 出力では `Drift candidates (impact \ origin):` セクションで表示 |
+| `originReqs \ impactReqs` 非空 | orphan claim — claim している REQ に到達できない | `artgraph check --gate` の領分 (Stop hook がブロック) |
+
+JSON consumer は `impactReqs \ originReqs` をクライアント側で計算してドリフト候補を抽出できます。
+
+```bash
+artgraph impact src/auth.ts:validateToken --format json |
+  jq '.impactReqs as $i | .originReqs as $o | $i - $o'
+```
+
+典型ワークフロー例 — `Files: src/auth.ts:validateToken` を tasks.md に書いた後、spec.md で `REQ-001 depends_on REQ-007` を追加すると、次の `artgraph plan-coverage` 実行で `impactReqs = ["REQ-001", "REQ-007"]` / `originReqs = ["REQ-001"]` となり、`REQ-007` がドリフト候補として可視化されます。
+
+### `Files:` syntax 例(symbol 含む)
+
+```markdown
+## T010 ユーザー認証 strict mode 対応
+
+Files: src/auth.ts:validateToken, src/session.ts:createSession, docs/auth.md
+```
+
+- `path:symbol` 形式 — symbol 単位で forward BFS を絞り込み(symbol mode 必須)
+- `path` 形式 — file 全体の symbol を巻き込んだ forward BFS(file mode / symbol mode どちらでも可)
+- 同一 tasks.md / plan.md 内で混在 OK(parser は per-entry に解決する)
+- 詳細な regex とエッジケースは `specs/016-impact-plan-symbol-level/contracts/sdd-files-parser.md` 参照
+
 ## Skills と Stop Hook の関係
 
 Skills と Stop hook は同じ `artgraph` CLI を共有しつつ、異なるタイミングで動作する補完関係にあります:

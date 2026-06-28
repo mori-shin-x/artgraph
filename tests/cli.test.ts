@@ -81,14 +81,19 @@ describe("CLI: impact", () => {
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
-    expect(result.affectedReqs).toContain("AUTH-001");
+    // spec 016 INV-S7: `affectedReqs` was renamed to `impactReqs`.
+    expect(result.impactReqs).toContain("AUTH-001");
+    // spec 016 INV-S6: `originReqs` axis is always present (possibly empty).
+    expect(Array.isArray(result.originReqs)).toBe(true);
   });
 
   it("should output human-readable text by default (file input)", { timeout: 30000 }, async () => {
     const { stdout, exitCode } = await run(["impact", "src/auth/login.ts"]);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain("Affected REQs:");
+    // spec 016 FR-023: text header is "Impact reqs:" + "Origin reqs ..."
+    expect(stdout).toContain("Impact reqs:");
     expect(stdout).toContain("AUTH-001");
+    expect(stdout).toContain("Origin reqs (@impl claims):");
   });
 
   it("should show impact for multiple file targets", { timeout: 30000 }, async () => {
@@ -102,7 +107,7 @@ describe("CLI: impact", () => {
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
-    expect(result.affectedReqs).toContain("AUTH-001");
+    expect(result.impactReqs).toContain("AUTH-001");
     expect(result.affectedFiles.length).toBeGreaterThan(0);
   });
 
@@ -283,7 +288,7 @@ describe("CLI: impact --depth", () => {
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
-    expect(result.affectedReqs).toContain("AUTH-001");
+    expect(result.impactReqs).toContain("AUTH-001");
   });
 
   it("T059: should show summary in text output", { timeout: 30000 }, async () => {
@@ -376,7 +381,7 @@ describe("CLI: impact spec-file traversal", () => {
     expect(exitCode).toBe(0);
 
     const result = JSON.parse(stdout);
-    expect(result.affectedReqs).toContain("AUTH-001");
+    expect(result.impactReqs).toContain("AUTH-001");
   });
 });
 
