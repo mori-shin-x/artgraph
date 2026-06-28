@@ -63,13 +63,13 @@ export function toRelativePath(filePath: string, rootDir: string): string {
 
 /**
  * ImpactResult を人間向けテキストに変換する。
- * affectedReqs を (req) 形式、affectedDocs を (doc) 形式で列挙。
+ * impactReqs を (req) 形式、affectedDocs を (doc) 形式で列挙。
  * 両方空なら "artgraph impact: (none)" を返す。
  */
 export function formatAdditionalContext(result: ImpactResult): string {
   const parts: string[] = [];
 
-  for (const req of result.affectedReqs) {
+  for (const req of result.impactReqs) {
     parts.push(`${req} (req)`);
   }
   // affectedTasks is post-PR — tolerate hand-built ImpactResult literals

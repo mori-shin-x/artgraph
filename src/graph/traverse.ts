@@ -1,14 +1,25 @@
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import type { ArtifactGraph, ImpactResult, DriftEntry } from "../types.js";
 import type { LockFile } from "../types.js";
+import type { SymbolEntry } from "../parsers/sdd-files.js";
 
-// BFS traversal is BIDIRECTIONAL: edges are followed in both directions regardless
-// of their declared source/target. This means:
+// spec 016 (R-006, data-model.md §2.3) — `impact()` BFS body is **unchanged
+// from spec 014**. The redesign reroutes the startId construction (now via
+// `resolveStartIds` taking `SymbolEntry[]`) and adds an out-of-band
+// `originReqs` axis (via `resolveOriginReqs`) computed at the CLI / plan-
+// coverage layer. The BFS traversal itself is BIDIRECTIONAL: edges are
+// followed in both directions regardless of their declared source/target.
+// This means:
 //   - From a req node, traversal reaches the parent doc (via reverse contains edge)
 //   - From a doc node, traversal reaches child reqs (via forward contains edge)
 //   - Starting from any req, the blast radius includes sibling reqs in the same doc
 //     (req -> parent doc -> sibling reqs -> their implementations)
 // Use --depth to limit traversal when contains edges cause unexpectedly wide reach.
+//
+// File→symbol expansion (the `node.kind === "file"` branch below) is the
+// reason a file startId still drags in same-file symbols; for symbol startIds
+// `resolveStartIds` deliberately omits the parent file node so a symbol-unit
+// input doesn't sweep up its siblings (R-006 mitigation).
 export function impact(
   graph: ArtifactGraph,
   startIds: string[],
@@ -46,7 +57,7 @@ export function impact(
 
   const affectedFileSet = new Set<string>();
   const affectedDocs: string[] = [];
-  const affectedReqs: string[] = [];
+  const impactReqs: string[] = [];
   const affectedTasks: string[] = [];
   const drifted: DriftEntry[] = [];
 
@@ -64,11 +75,11 @@ export function impact(
         affectedDocs.push(id);
         break;
       case "req":
-        affectedReqs.push(id);
+        impactReqs.push(id);
         break;
       case "task":
         // task は planning node — req/doc とは別チャネルで集計する。
-        // affectedReqs に混ぜると uncovered 計算が task ID を req と誤認する。
+        // impactReqs に混ぜると uncovered 計算が task ID を req と誤認する。
         affectedTasks.push(id);
         break;
     }
@@ -89,12 +100,16 @@ export function impact(
   return {
     affectedFiles,
     affectedDocs,
-    affectedReqs,
+    impactReqs,
     affectedTasks,
     drifted,
+    // spec 016: `originReqs` is populated by callers (CLI / plan-coverage)
+    // via `resolveOriginReqs` after impact() returns. impact() itself stays
+    // strictly forward-BFS so the two axes remain independent (R-006).
+    originReqs: [],
     summary: {
       docs: affectedDocs.length,
-      reqs: affectedReqs.length,
+      reqs: impactReqs.length,
       files: affectedFiles.length,
       tasks: affectedTasks.length,
     },
@@ -143,57 +158,103 @@ export function findUncovered(graph: ArtifactGraph): string[] {
 }
 
 /**
- * Resolve a list of file-path inputs into graph start-node ids for impact() /
- * check() / hook-pretool. **File path only**: spec 014 (FR-001 / FR-002)
- * removed the previous REQ-ID and `doc:` prefix branches so `artgraph impact`
- * has a single mental model (file → forward impact). For any input string the
- * resolver tries, in order:
+ * spec 016 (R-004, R-005, data-model.md §2.1) — single resolver for
+ * `impact()` / `check()` / `hook-pretool` / `plan-coverage` start ids.
+ * Replaces spec 014's `resolveFileStartIds` (now removed). Behavior per
+ * entry:
  *
- *  1. `file:<input>` exact match — picks up the canonical file node.
- *  2. Symbol nodes that live in `<input>` — kept alongside the file node so
- *     symbol-mode graphs surface the inner symbols too.
- *  3. Any other node whose `filePath === <input>` — this is what lets a
- *     `specs/auth.md` path drag in the doc + REQ nodes parsed out of it
- *     (the file path semantically points at the whole markdown contents).
+ *  - `entry.symbol !== undefined` → look up `symbol:<path>#<symbol>` in
+ *    the graph. Hit → push to `startIds` (file node intentionally NOT
+ *    added, so symbol-unit BFS doesn't sweep sibling symbols via the
+ *    file parent — see R-006). Miss → push the entry to `unresolvedSymbols`
+ *    so the caller can emit `unresolvedSymbol` diagnostics / error text.
+ *  - `entry.symbol === undefined` → file-unit. Look up `file:<path>`; on
+ *    hit push the file node id. Same-file symbols are reached during BFS
+ *    via the file→symbol expansion in `impact()`. As an additional
+ *    `filePath===` fallback (kept from spec 014), if the file node isn't
+ *    registered, drag in any node whose `filePath` equals the path so a
+ *    spec-md input (`specs/auth.md`) still surfaces its parsed doc / req
+ *    nodes.
  *
- * REQ-ID inputs (`AUTH-001`) and `doc:` prefix inputs (`doc:auth-design`) are
- * rejected at the CLI layer — see the impact subcommand in `src/cli.ts`.
- *
- * Renamed from `resolveStartIds` in spec 014. The old name is intentionally
- * not re-exported as an alias: any caller still using the broader semantics
- * needs to be reviewed against the file-only contract.
+ * `startIds` is dedup'd; order follows `entries[]` input order (INV-S2).
  */
-export function resolveFileStartIds(graph: ArtifactGraph, inputs: string[]): string[] {
-  const ids: string[] = [];
+export function resolveStartIds(
+  graph: ArtifactGraph,
+  entries: SymbolEntry[],
+): { startIds: string[]; unresolvedSymbols: SymbolEntry[] } {
+  const startIds: string[] = [];
+  const seen = new Set<string>();
+  const unresolvedSymbols: SymbolEntry[] = [];
 
-  for (const rawInput of inputs) {
+  const push = (id: string) => {
+    if (seen.has(id)) return;
+    seen.add(id);
+    startIds.push(id);
+  };
+
+  for (const entry of entries) {
     // Defensive normalization: `./src/foo.ts` / `src/sub/../foo.ts` get
-    // collapsed to `src/foo.ts` so the `file:<path>` lookup finds the node
-    // the graph builder registered under the canonical repo-relative path.
-    // The Stage A parser (spec 014) already normalizes, but callers that
-    // hand-roll inputs still need the safety net.
-    const input = normalizeForLookup(rawInput);
-    const fileId = `file:${input}`;
+    // collapsed to `src/foo.ts` so the `file:<path>` / `symbol:<path>#<n>`
+    // lookups find nodes the graph builder registered under the canonical
+    // repo-relative path. The Stage A parser already normalizes, but
+    // callers that hand-roll inputs still need the safety net.
+    const path = normalizeForLookup(entry.path);
+
+    if (entry.symbol !== undefined) {
+      const symId = `symbol:${path}#${entry.symbol}`;
+      if (graph.nodes.has(symId)) {
+        push(symId);
+      } else {
+        unresolvedSymbols.push(entry);
+      }
+      continue;
+    }
+
+    // file-unit entry: file node first, then the filePath= fallback for
+    // spec md paths and other non-file nodes parsed out of a file.
+    const fileId = `file:${path}`;
     if (graph.nodes.has(fileId)) {
-      ids.push(fileId);
+      push(fileId);
+      // Spec 014 behavior preserved: include same-file symbols explicitly so
+      // file-unit callers see them in `startIds`. impact()'s file→symbol
+      // expansion would also reach them during BFS, but pre-populating
+      // here keeps the contract observable to callers that don't run BFS.
       for (const [id, node] of graph.nodes) {
-        if (node.kind === "symbol" && node.filePath === input) {
-          ids.push(id);
-        }
+        if (node.kind === "symbol" && node.filePath === path) push(id);
       }
       continue;
     }
 
     // filePath match — catches doc / req nodes parsed out of a spec file
-    // when the user passes the spec path itself (e.g. `specs/auth.md`).
+    // when the caller passes the spec path itself (e.g. `specs/auth.md`).
     for (const [id, node] of graph.nodes) {
-      if (node.filePath === input && !ids.includes(id)) {
-        ids.push(id);
-      }
+      if (node.filePath === path) push(id);
     }
   }
 
-  return ids;
+  return { startIds, unresolvedSymbols };
+}
+
+/**
+ * spec 016 (R-015, INV-S5/INV-S6) — collect the REQ ids reached by walking
+ * each startId's `implements` edges 1 hop in reverse (edge.source ===
+ * startId, edge.target.kind === "req"). Returns dedup'd, reqId-asc sorted
+ * array. Empty when no startId has an `@impl` claim.
+ *
+ * The union semantics make this safe to call with a mixed set of file and
+ * symbol startIds; each contributes only the REQs it directly claims.
+ */
+export function resolveOriginReqs(graph: ArtifactGraph, startIds: string[]): string[] {
+  const startSet = new Set(startIds);
+  const reqs = new Set<string>();
+  for (const edge of graph.edges) {
+    if (edge.kind !== "implements") continue;
+    if (!startSet.has(edge.source)) continue;
+    const target = graph.nodes.get(edge.target);
+    if (!target || target.kind !== "req") continue;
+    reqs.add(edge.target);
+  }
+  return [...reqs].sort();
 }
 
 function normalizeForLookup(input: string): string {

@@ -1,40 +1,47 @@
-// spec 014 — `artgraph plan-coverage` core handler.
+// spec 016 — `artgraph plan-coverage` core handler (US1, two-axis output).
 //
 // Contracts:
-//   - specs/014-reinvent-impact-cli/contracts/plan-coverage-json.md
-//   - specs/014-reinvent-impact-cli/contracts/cli-flags.md
-//   - specs/014-reinvent-impact-cli/contracts/mention-semantics.md
+//   - specs/016-impact-plan-symbol-level/contracts/plan-coverage-json.md
+//   - specs/016-impact-plan-symbol-level/contracts/sdd-files-parser.md
+//   - specs/016-impact-plan-symbol-level/contracts/mention-semantics.md (spec 014, unchanged)
 //
-// Pipeline (FR-015):
-//   1. extract files from tasks.md (and plan.md if present) via the spec 014
-//      sdd-files parser — Stage A (`Files:` section) preferred, Stage B
-//      (regex fallback) only when Stage A is empty.
-//   2. for each unique source file run `impact(graph, [fileStartId], lock)`
-//      so we preserve the file→reqs mapping (a single union impact() loses
-//      that information).
-//   3. union all affected REQs → run `detectMentions` against the union of
-//      tasks/plan/spec text. Mentioned REQs drop out; the remainder is the
-//      raw implicit set.
-//   4. `--ignore` filter: subtract one-shot IDs (recorded in `ignored[]` for
-//      transparency).
-//   5. assemble two output axes — by-sourceFile (`implicitImpacts`) and
-//      by-FR (`implicitImpactsByReq`, an inversion of #4). Both are sorted
-//      lexicographic per the contract.
-//   6. `--require-files-section`: emit a `missingFilesSection` diagnostic
-//      for every task block in tasks.md that lacks a `Files:` header.
-//   7. text vs json formatting + exit code calculation.
+// Pipeline (data-model.md §3, FR-016..FR-023):
+//   1. extract entries from tasks.md (and plan.md when present) via the
+//      sdd-files parser. Stage A returns `SymbolEntry[]` carrying optional
+//      symbol attribution; Stage B (regex fallback) returns file-only
+//      entries (`symbol: undefined`).
+//   2. for each unique `(path, symbol ?? null)` entry:
+//        - resolveStartIds → forward-BFS impact() → `impactReqs`
+//        - resolveOriginReqs on the **primary** node id (file:<p> for file
+//          entries, symbol:<p>#<s> for symbol entries) → `originReqs`.
+//          Using the primary id intentionally excludes child-symbol claims
+//          when the entry is a file (so file-top `@impl` is reported alone).
+//   3. union impactReqs across entries → detectMentions vs the tasks/plan/
+//      spec text. Mentioned REQs drop out of every group's impactReqs but
+//      stay in `originReqs` (origin is the raw claim view; mention does not
+//      negate authorship).
+//   4. `--ignore` applies to BOTH axes per FR-022.
+//   5. assemble two output axes — by-(sourceFile, sourceSymbol?)
+//      (`implicitImpacts`) and by-REQ (`implicitImpactsByReq` with
+//      `sourceLocations` that retains symbol attribution). Sort INV-S3/S4.
+//   6. `--require-files-section` emits `missingFilesSection` per task block
+//      lacking a `Files:` header (unchanged from spec 014).
+//   7. unresolvedSymbol diagnostics from the parser are flattened into
+//      `diagnostics[]` and their entries are excluded from `implicitImpacts`
+//      (FR-021).
+//   8. text vs json formatting + exit code.
 //
-// `impact()` itself stays untouched (FR-008). The N×impact() pattern on the
-// by-sourceFile axis trades extra BFS work for the file→reqs provenance the
-// schema requires; with N typically <= 20 the cost is negligible.
+// `impact()` itself stays untouched (R-006). Per-entry impact() runs trade
+// extra BFS work for the per-(file,symbol) provenance the schema requires;
+// with N typically <= 20 the cost is negligible.
 
 import { existsSync, readFileSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { loadConfig } from "../config.js";
 import { scan } from "../scan.js";
 import { readLock } from "../lock.js";
-import { impact, resolveFileStartIds } from "../graph/traverse.js";
-import { extractFiles, type TaskBlock } from "../parsers/sdd-files.js";
+import { impact, resolveStartIds, resolveOriginReqs } from "../graph/traverse.js";
+import { extractFiles, type SymbolEntry, type TaskBlock } from "../parsers/sdd-files.js";
 import { detectMentions } from "./mention.js";
 
 export interface PlanCoverageOptions {
@@ -54,24 +61,66 @@ export interface PlanCoverageOptions {
   requireFilesSection: boolean;
 }
 
-export interface AffectedReqEntry {
+/**
+ * spec 016 (data-model.md §3.1) — element type for `impactReqs` /
+ * `originReqs`. spec 014's `AffectedReqEntry` alias is removed; callers
+ * use `ReqEntry` exclusively.
+ */
+export interface ReqEntry {
   reqId: string;
   kind: "req";
 }
 
 export interface ImpactGroup {
+  /** Repo-relative source path (POSIX) of the entry's file. */
   sourceFile: string;
-  reqs: AffectedReqEntry[];
+  /**
+   * spec 016 (FR-018) — present iff the entry was a `path:symbol`
+   * declaration. Omitted (JSON key absent) for file-unit entries.
+   */
+  sourceSymbol?: string;
+  /**
+   * Forward-BFS REQs reached from the entry's startIds, with mentioned
+   * and `--ignore` REQs subtracted. Sorted by reqId ascending (INV-S3).
+   */
+  impactReqs: ReqEntry[];
+  /**
+   * Raw `@impl` claim union from the entry's PRIMARY node only
+   * (`file:<p>` for file entries, `symbol:<p>#<s>` for symbol entries),
+   * 1 hop along `implements`. Mention is NOT subtracted — origin is the
+   * authorship view, independent from the implicit-impact axis. `[]` when
+   * the primary node has no `@impl` tag. Sorted ascending (INV-S5).
+   */
+  originReqs: ReqEntry[];
 }
 
 export interface ImplicitImpactByReq {
   reqId: string;
-  sourceFiles: string[];
+  /**
+   * spec 016 (FR-020, INV-S4) — origin locations for this REQ. `file` is
+   * always present; `symbol` is present when at least one symbol-unit
+   * entry reached the REQ. Sort: file ascending, then symbol ascending
+   * with `undefined` first (so the file-unit row precedes symbol rows on
+   * the same file).
+   */
+  sourceLocations: Array<{ file: string; symbol?: string }>;
 }
 
 export type PlanCoverageDiagnostic =
   | { kind: "missingFilesSection"; taskId: string; line: number }
   | { kind: "unresolvedFilePath"; sourceFile: string; line: number }
+  | {
+      /**
+       * spec 016 (FR-021) — flattened from the parser's
+       * `Diagnostic.unresolvedSymbol`. Emitted when the entry's path
+       * resolves but the symbol is not registered in the graph. The
+       * entry is dropped from `implicitImpacts` per contract §4.2.
+       */
+      kind: "unresolvedSymbol";
+      sourceFile: string;
+      symbol: string;
+      line: number;
+    }
   | { kind: "emptyExtraction" };
 
 export interface PlanCoverageSummary {
@@ -109,41 +158,151 @@ function sortStrings(arr: string[]): string[] {
   return [...arr].sort((a, b) => a.localeCompare(b));
 }
 
-function buildSourceFileGroups(
-  sourceFileToReqs: Map<string, Set<string>>,
-  excluded: Set<string>,
+function toReqEntries(reqIds: string[]): ReqEntry[] {
+  return reqIds.map((reqId) => ({ reqId, kind: "req" as const }));
+}
+
+// Mirror `normalizeForLookup` from src/graph/traverse.ts so the per-entry
+// origin-node id we build below uses the same canonical key the graph
+// builder registers under. Kept private so the two stay in lockstep.
+function normalizeForLookup(input: string): string {
+  if (isAbsolute(input)) return input;
+  const root = "/__artgraph__";
+  const abs = resolvePath(root, input);
+  const rel = relative(root, abs);
+  if (rel.length === 0 || rel === ".." || rel.startsWith(`..${sep}`)) return input;
+  return rel.split(sep).join("/");
+}
+
+/**
+ * Primary origin node id for an entry — used for `originReqs` resolution
+ * so a file-unit entry does NOT inherit its children symbols' `@impl`
+ * claims (data-model.md §3.2). `resolveStartIds` deliberately expands
+ * file-unit entries to include same-file symbols for BFS reach; that
+ * expansion is the WRONG basis for origin attribution.
+ */
+function entryOriginIds(entry: SymbolEntry): string[] {
+  const path = normalizeForLookup(entry.path);
+  if (entry.symbol !== undefined) return [`symbol:${path}#${entry.symbol}`];
+  return [`file:${path}`];
+}
+
+// Dedup key for ImpactGroup ordering / aggregation (INV-S3). Newline
+// guarantees the two pieces never collide for path/symbol pairs that
+// share characters (`a:b` vs `a` + `:b`).
+function dedupKey(path: string, symbol: string | undefined): string {
+  return `${path}\n${symbol ?? ""}`;
+}
+
+interface GroupDraft {
+  sourceFile: string;
+  sourceSymbol?: string;
+  impactReqs: Set<string>;
+  originReqs: Set<string>;
+}
+
+// INV-S3 / S4 sort: file ascending → symbol ascending with `undefined`
+// preceding any string. Kept inline so the two output axes share one
+// canonical compare definition.
+function compareLocations(
+  a: { file: string; symbol?: string },
+  b: { file: string; symbol?: string },
+): number {
+  const fileCmp = a.file.localeCompare(b.file);
+  if (fileCmp !== 0) return fileCmp;
+  if (a.symbol === b.symbol) return 0;
+  if (a.symbol === undefined) return -1;
+  if (b.symbol === undefined) return 1;
+  return a.symbol.localeCompare(b.symbol);
+}
+
+function buildImpactGroups(
+  drafts: GroupDraft[],
+  excludedFromImpact: Set<string>,
+  ignoreSet: Set<string>,
 ): ImpactGroup[] {
+  // Sort drafts by (file, symbol) so output order matches contract.
+  const sorted = [...drafts].sort((a, b) =>
+    compareLocations(
+      { file: a.sourceFile, symbol: a.sourceSymbol },
+      { file: b.sourceFile, symbol: b.sourceSymbol },
+    ),
+  );
   const groups: ImpactGroup[] = [];
-  for (const sourceFile of sortStrings([...sourceFileToReqs.keys()])) {
-    const reqs = sourceFileToReqs.get(sourceFile)!;
-    const visible = sortStrings(
-      [...reqs].filter((r) => !excluded.has(r)),
+  for (const d of sorted) {
+    // `impactReqs` view: subtract BOTH mentioned (the implicit semantics)
+    // and --ignore (one-shot suppression, FR-022).
+    const visibleImpact = sortStrings(
+      [...d.impactReqs].filter((r) => !excludedFromImpact.has(r)),
     );
-    if (visible.length === 0) continue;
-    groups.push({
-      sourceFile,
-      reqs: visible.map((reqId) => ({ reqId, kind: "req" as const })),
-    });
+    // `originReqs` view: raw authorship — only --ignore strips entries
+    // here (FR-022 says ignore applies to BOTH axes, but mention is the
+    // implicit-impact axis only; per data-model §3.2 originReqs is the
+    // unfiltered claim set).
+    const visibleOrigin = sortStrings(
+      [...d.originReqs].filter((r) => !ignoreSet.has(r)),
+    );
+    // Group inclusion follows the implicit-impact axis: a group surfaces
+    // ONLY when `impactReqs` (post mention + ignore subtraction) is
+    // non-empty — that is the user-attention axis. `originReqs` rides
+    // along as contextual claim data and may be empty (file-unit with no
+    // file-top `@impl`, contract §2.1) or non-empty. Per data-model.md
+    // §2.4 either axis empty is a valid shape, but a group whose
+    // impactReqs collapsed to [] under mention subtraction is "covered"
+    // and shouldn't pollute the implicit list.
+    if (visibleImpact.length === 0) continue;
+    const group: ImpactGroup = {
+      sourceFile: d.sourceFile,
+      impactReqs: toReqEntries(visibleImpact),
+      originReqs: toReqEntries(visibleOrigin),
+    };
+    // Only attach `sourceSymbol` when the entry was a symbol-unit declaration
+    // — file entries must serialize WITHOUT the key (contracts/plan-coverage-
+    // json.md §2.1).
+    if (d.sourceSymbol !== undefined) group.sourceSymbol = d.sourceSymbol;
+    groups.push(group);
   }
   return groups;
 }
 
 function buildByReqGroups(groups: ImpactGroup[]): ImplicitImpactByReq[] {
-  const reqToFiles = new Map<string, Set<string>>();
+  // For the by-REQ axis we invert only `impactReqs` — `originReqs` is the
+  // authorship view per group and does not roll up to the REQ index.
+  const reqToLocs = new Map<string, Array<{ file: string; symbol?: string }>>();
   for (const g of groups) {
-    for (const r of g.reqs) {
-      let bucket = reqToFiles.get(r.reqId);
+    for (const r of g.impactReqs) {
+      let bucket = reqToLocs.get(r.reqId);
       if (!bucket) {
-        bucket = new Set();
-        reqToFiles.set(r.reqId, bucket);
+        bucket = [];
+        reqToLocs.set(r.reqId, bucket);
       }
-      bucket.add(g.sourceFile);
+      const loc: { file: string; symbol?: string } = { file: g.sourceFile };
+      if (g.sourceSymbol !== undefined) loc.symbol = g.sourceSymbol;
+      bucket.push(loc);
     }
   }
-  return sortStrings([...reqToFiles.keys()]).map((reqId) => ({
-    reqId,
-    sourceFiles: sortStrings([...reqToFiles.get(reqId)!]),
-  }));
+  return sortStrings([...reqToLocs.keys()]).map((reqId) => {
+    const bucket = reqToLocs.get(reqId)!;
+    // Groups are already dedup'd by (file, symbol?), but the same group
+    // can contribute the same location once. Dedup defensively (cheap)
+    // before sorting so a future caller change can't introduce dups.
+    const seen = new Set<string>();
+    const unique: Array<{ file: string; symbol?: string }> = [];
+    for (const loc of bucket) {
+      const k = dedupKey(loc.file, loc.symbol);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      unique.push(loc);
+    }
+    return { reqId, sourceLocations: unique.sort(compareLocations) };
+  });
+}
+
+// Pretty-print a location for text output. Symbol entries collapse to
+// `path#symbol` (`#` chosen over `:` so the rendering does not look like
+// an additional path component).
+function formatLocation(loc: { file: string; symbol?: string }): string {
+  return loc.symbol !== undefined ? `${loc.file}#${loc.symbol}` : loc.file;
 }
 
 interface FormatTextOptions {
@@ -157,22 +316,37 @@ function formatText(
 ): string {
   const lines: string[] = [];
   const totalImplicit = result.implicitImpactsByReq.length;
-  if (totalImplicit === 0) {
+  if (totalImplicit === 0 && result.implicitImpacts.length === 0) {
     lines.push("No implicit impacts.");
   } else {
     lines.push(`Implicit impacts (${totalImplicit} REQ(s) impacted but not mentioned):`);
     lines.push("");
     lines.push("  By source file:");
     for (const g of result.implicitImpacts) {
-      lines.push(`    ${g.sourceFile}`);
-      for (const r of g.reqs) {
-        lines.push(`      ${r.reqId}  (${r.kind})`);
+      const header = formatLocation({ file: g.sourceFile, symbol: g.sourceSymbol });
+      lines.push(`    ${header}`);
+      lines.push(`      Impact reqs:`);
+      if (g.impactReqs.length === 0) lines.push(`        (none)`);
+      else for (const r of g.impactReqs) lines.push(`        ${r.reqId}  (${r.kind})`);
+      lines.push(`      Origin reqs (@impl claims):`);
+      if (g.originReqs.length === 0) lines.push(`        (none)`);
+      else for (const r of g.originReqs) lines.push(`        ${r.reqId}  (${r.kind})`);
+      // Drift candidates = impactReqs \ originReqs. Per FR-015 / quickstart D
+      // we OMIT the section entirely when the diff is empty (no drift).
+      const originSet = new Set(g.originReqs.map((r) => r.reqId));
+      const drift = g.impactReqs.filter((r) => !originSet.has(r.reqId));
+      if (drift.length > 0) {
+        lines.push(`      Drift candidates (impact \\ origin):`);
+        for (const r of drift) lines.push(`        ${r.reqId}  (${r.kind})`);
       }
     }
-    lines.push("");
-    lines.push("  By requirement:");
-    for (const r of result.implicitImpactsByReq) {
-      lines.push(`    ${r.reqId}  <- ${r.sourceFiles.join(", ")}`);
+    if (totalImplicit > 0) {
+      lines.push("");
+      lines.push("  By requirement:");
+      for (const r of result.implicitImpactsByReq) {
+        const locs = r.sourceLocations.map(formatLocation).join(", ");
+        lines.push(`    ${r.reqId}  <- ${locs}`);
+      }
     }
   }
 
@@ -186,6 +360,9 @@ function formatText(
           break;
         case "unresolvedFilePath":
           lines.push(`  [unresolvedFilePath] ${d.sourceFile} (line ${d.line})`);
+          break;
+        case "unresolvedSymbol":
+          lines.push(`  [unresolvedSymbol] ${d.sourceFile}#${d.symbol} (line ${d.line})`);
           break;
         case "emptyExtraction":
           lines.push(`  [emptyExtraction]`);
@@ -275,42 +452,61 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
   const specContent = safeRead(specPath);
 
   // Stage A/B extraction. tasks.md is the structured source; plan.md
-  // contributes additional file seeds when present. Diagnostics from both
-  // are flattened into the output.
+  // contributes additional file seeds when present.
   const tasksExtract = extractFiles(tasksContent, { graph, repoRoot });
   const planExtract = planContent !== undefined
     ? extractFiles(planContent, { graph, repoRoot })
     : undefined;
 
-  // Union of file seeds (dedup, sort for deterministic output downstream).
-  const fileSet = new Set<string>(tasksExtract.files);
-  if (planExtract) {
-    for (const f of planExtract.files) fileSet.add(f);
+  // Dedup entries across (tasks, plan) preserving first-seen order so
+  // groups appear in the order the author declared them (before the
+  // INV-S3 sort by file/symbol below).
+  const seenEntryKey = new Set<string>();
+  const entries: SymbolEntry[] = [];
+  for (const e of tasksExtract.entries) {
+    const k = dedupKey(e.path, e.symbol);
+    if (seenEntryKey.has(k)) continue;
+    seenEntryKey.add(k);
+    entries.push(e);
   }
-  const sourceFiles = sortStrings([...fileSet]);
+  if (planExtract) {
+    for (const e of planExtract.entries) {
+      const k = dedupKey(e.path, e.symbol);
+      if (seenEntryKey.has(k)) continue;
+      seenEntryKey.add(k);
+      entries.push(e);
+    }
+  }
 
   const diagnostics: PlanCoverageDiagnostic[] = [];
 
-  // Flatten Stage A's unresolvedFilePath diagnostics into the shared
-  // diagnostics[] (renaming the field to `sourceFile` to match the
-  // top-level contract).
-  for (const d of tasksExtract.diagnostics) {
-    if (d.kind === "unresolvedFilePath") {
-      diagnostics.push({ kind: "unresolvedFilePath", sourceFile: d.path, line: d.line });
-    }
-  }
-  if (planExtract) {
-    for (const d of planExtract.diagnostics) {
+  // Flatten parser diagnostics into the shared diagnostics[]. Both
+  // unresolvedFilePath and unresolvedSymbol travel here so the consumer
+  // sees a unified surface. INV-S1 (per-entry exclusivity) is preserved
+  // because the parser already enforces it upstream.
+  const flattenParserDiagnostics = (extract: typeof tasksExtract): void => {
+    for (const d of extract.diagnostics) {
       if (d.kind === "unresolvedFilePath") {
-        diagnostics.push({ kind: "unresolvedFilePath", sourceFile: d.path, line: d.line });
+        diagnostics.push({
+          kind: "unresolvedFilePath",
+          sourceFile: d.path,
+          line: d.line,
+        });
+      } else if (d.kind === "unresolvedSymbol") {
+        diagnostics.push({
+          kind: "unresolvedSymbol",
+          sourceFile: d.sourceFile,
+          symbol: d.symbol,
+          line: d.line,
+        });
       }
     }
-  }
+  };
+  flattenParserDiagnostics(tasksExtract);
+  if (planExtract) flattenParserDiagnostics(planExtract);
 
   // --require-files-section: emit `missingFilesSection` for every task
   // block in tasks.md (heading-delimited) that lacks a `Files:` header.
-  // Sourced from the parser's `taskBlocks` extension so the heading
-  // boundaries match Stage A scope rules.
   if (requireFilesSection && tasksExtract.taskBlocks) {
     const missing = tasksExtract.taskBlocks.filter((b: TaskBlock) => !b.hasFilesSection);
     for (const b of missing) {
@@ -322,10 +518,10 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
     }
   }
 
-  // No files extracted from either stream — short-circuit with the
+  // No entries extracted from either stream — short-circuit with the
   // emptyExtraction diagnostic. `--gate` still trips because the
   // diagnostic is non-empty.
-  if (sourceFiles.length === 0) {
+  if (entries.length === 0) {
     diagnostics.push({ kind: "emptyExtraction" });
     const result: PlanCoverageResult = {
       implicitImpacts: [],
@@ -341,23 +537,30 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
     };
   }
 
-  // ----- by-sourceFile axis: one impact() per file so we keep the
-  // file→reqs mapping. A single union impact() would lose that.
-  const sourceFileToReqs = new Map<string, Set<string>>();
+  // Per-entry impact + origin computation. Each entry yields at most one
+  // GroupDraft; entries that fail to resolve (unresolvedSymbol surfaced
+  // upstream, unresolvedFilePath with no graph match) are dropped here so
+  // they don't pollute the groups but their diagnostics are still surfaced.
+  const drafts: GroupDraft[] = [];
   const totalAffectedSet = new Set<string>();
-  for (const sourceFile of sourceFiles) {
-    const startIds = resolveFileStartIds(graph, [sourceFile]);
+  for (const entry of entries) {
+    const { startIds } = resolveStartIds(graph, [entry]);
     if (startIds.length === 0) {
-      // file not in graph and not a registered node — record (silently)
-      // and skip; the unresolvedFilePath warning above already covers it
-      // for Stage A.
-      sourceFileToReqs.set(sourceFile, new Set());
+      // Either the symbol was unresolved (parser already emitted the
+      // diagnostic; FR-021 says drop the entry from implicitImpacts) or
+      // the file path was unresolved (unresolvedFilePath already in
+      // diagnostics). Either way, no impact() to compute.
       continue;
     }
     const impactResult = impact(graph, startIds, lock);
-    const reqs = new Set(impactResult.affectedReqs);
-    sourceFileToReqs.set(sourceFile, reqs);
-    for (const r of reqs) totalAffectedSet.add(r);
+    const originReqs = resolveOriginReqs(graph, entryOriginIds(entry));
+    drafts.push({
+      sourceFile: entry.path,
+      sourceSymbol: entry.symbol,
+      impactReqs: new Set(impactResult.impactReqs),
+      originReqs: new Set(originReqs),
+    });
+    for (const r of impactResult.impactReqs) totalAffectedSet.add(r);
   }
 
   // Mention detection on the unique affected set. The detector is set-
@@ -369,19 +572,13 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
     spec: specContent,
   });
 
-  // The set of REQs we want to hide from `implicitImpacts`: mentioned
-  // ∪ --ignore. Ignored REQs are not mentioned in the contract sense,
-  // but the user asked to suppress them this round.
+  // REQs to hide from `impactReqs`: mentioned ∪ --ignore. Per FR-022 the
+  // --ignore set ALSO applies to `originReqs` (origins the user explicitly
+  // suppressed should not surface in either axis).
   const ignoreSet = new Set(ignore);
   const excludedFromImplicit = new Set<string>([...mentioned, ...ignoreSet]);
 
-  // Build the two output axes. The by-FR axis is the inversion of the
-  // by-sourceFile axis; we derive it from `implicitImpacts` so the two
-  // are guaranteed to agree.
-  const implicitImpacts = buildSourceFileGroups(
-    sourceFileToReqs,
-    excludedFromImplicit,
-  );
+  const implicitImpacts = buildImpactGroups(drafts, excludedFromImplicit, ignoreSet);
   const implicitImpactsByReq = buildByReqGroups(implicitImpacts);
 
   // Summary counters. `ignored` only counts REQs that would otherwise
@@ -407,9 +604,8 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
     ignored: [...ignore],
   };
 
-  // Exit code: --gate is the only thing that turns a "noisy report" into
-  // a hard failure. Empty implicit + empty diagnostics = clean even with
-  // --gate. --ignore that drains the implicit list also clears the gate.
+  // Exit code: --gate flips a noisy report into a hard failure. Empty
+  // implicit + empty diagnostics = clean even with --gate.
   const tripGate = gate && (implicitImpacts.length > 0 || diagnostics.length > 0);
   const exitCode: 0 | 1 = tripGate ? 1 : 0;
 

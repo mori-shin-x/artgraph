@@ -1,0 +1,8 @@
+{
+  "include": ["src/**/*.ts"],
+  "specDirs": ["specs"],
+  "testPatterns": ["tests/**/*.test.ts"],
+  "lockFile": ".trace.lock",
+  "mode": "symbol",
+  "docGraph": { "autoContains": false }
+}

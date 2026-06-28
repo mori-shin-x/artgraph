@@ -6,8 +6,34 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import { scan, reconcile } from "./scan.js";
-import { impact, resolveFileStartIds } from "./graph/traverse.js";
-import { extractFiles } from "./parsers/sdd-files.js";
+import { impact, resolveStartIds, resolveOriginReqs } from "./graph/traverse.js";
+import { extractFiles, type SymbolEntry } from "./parsers/sdd-files.js";
+
+// spec 016 (R-003) — direct CLI / hook-pretool / --diff inputs come in as raw
+// strings (file paths or `path:symbol` declarations). lift each into the
+// `SymbolEntry` shape expected by `resolveStartIds`. Keep this regex in sync
+// with `src/parsers/sdd-files.ts:PATH_SYMBOL_RE` so direct CLI inputs accept
+// the same syntax as the parser does for `Files:` sections.
+const CLI_PATH_SYMBOL_RE = /^([^:\s]+\.[\w]+):([^\s,()]+)$/;
+
+/**
+ * spec 016 (T027, R-003, contracts/cli-flags.md §1.1) — lift bare string
+ * targets to `SymbolEntry[]`. Each string matched against `CLI_PATH_SYMBOL_RE`:
+ *  - match  → `{ path, symbol, line: 1 }`
+ *  - no match → `{ path, line: 1 }` (symbol undefined, file-unit semantics)
+ *
+ * `line` is 1 because direct CLI input has no source line; the value is only
+ * used for diagnostic display when a symbol miss is reported.
+ */
+function pathsToEntries(paths: string[]): SymbolEntry[] {
+  return paths.map((p) => {
+    const m = CLI_PATH_SYMBOL_RE.exec(p);
+    if (m) {
+      return { path: m[1]!, symbol: m[2]!, line: 1 };
+    }
+    return { path: p, line: 1 };
+  });
+}
 import { formatGraphText, formatGraphJSON } from "./graph/format.js";
 import type { NodeKind } from "./types.js";
 import type { BuildWarning } from "./graph/builder.js";
@@ -437,8 +463,13 @@ const REQ_ID_INPUT_RE = /^(?:[A-Za-z][\w-]*\/)?[A-Z][A-Za-z]*-\d+(?:\.\d+)*$/;
 
 program
   .command("impact")
-  .description("Show forward impact from file paths (spec 014: file-only)")
-  .argument("[targets...]", "File paths only — REQ-IDs and `doc:` prefix are rejected")
+  .description(
+    "Show forward impact from file paths or symbol entries (spec 016: file or `path:symbol`)",
+  )
+  .argument(
+    "[targets...]",
+    "File paths or `path:symbol` entries — REQ-IDs and `doc:` prefix are rejected",
+  )
   .option("--from-tasks <path>", "Extract files from a tasks.md and use them as the start set")
   .option("--from-plan <path>", "Extract files from a plan.md and use them as the start set")
   .option("--diff", "Use git diff to detect changed files")
@@ -448,9 +479,18 @@ program
   .action((targets: string[], opts) => {
     const rootDir = process.cwd();
 
+    // spec 016 T026 / contracts/cli-flags.md §2 — validation order:
+    //   1. REQ-ID rejection
+    //   2. doc: prefix rejection
+    //   3. Mutually exclusive source check
+    //   4. (symbol syntax detection happens implicitly inside pathsToEntries)
+    //   5. graph scan + resolve start ids
+    //   6. scan-mode mismatch (R-010)
+    //   7. impact BFS
+
     // ----- Input validation: reject REQ-ID / doc: prefix BEFORE we touch
     // the filesystem so the user gets the 4-path navigational error even on
-    // a repo without `.artgraph.json`. FR-001 / FR-003.
+    // a repo without `.artgraph.json`. FR-012.
     for (const t of targets) {
       if (REQ_ID_INPUT_RE.test(t)) {
         console.error(IMPACT_REQ_ID_REJECTION);
@@ -489,11 +529,16 @@ program
     const { graph } = scan(rootDir, config);
     const lock = readLock(rootDir, config.lockFile);
 
-    // ----- Resolve the start file list. `--from-tasks` / `--from-plan`
-    // delegate to the spec 014 shared parser (`src/parsers/sdd-files.ts`),
-    // `--diff` re-uses the existing git helper, and bare positional inputs
-    // are taken as file paths verbatim.
-    let inputFiles: string[];
+    // ----- Build SymbolEntry[] from the chosen channel:
+    //   * --from-tasks / --from-plan → parser's ExtractResult.entries verbatim
+    //     (T028; symbol-unit declarations propagate through `resolveStartIds`).
+    //   * --diff → file-unit only (contracts/cli-flags.md §1.3; git diff has
+    //     no symbol resolution).
+    //   * positional targets → CLI_PATH_SYMBOL_RE lift in `pathsToEntries`
+    //     (T027). Symbol detection is a SIDE EFFECT of building the entries,
+    //     so it happens after #1-#3 above per the validation order.
+    let entries: SymbolEntry[];
+    let inputDisplayLabels: string[]; // for "No matching nodes found" message
     if (opts.fromTasks || opts.fromPlan) {
       const sourcePath = (opts.fromTasks ?? opts.fromPlan) as string;
       const sourceLabel = opts.fromTasks ? "--from-tasks" : "--from-plan";
@@ -509,9 +554,6 @@ program
       // flattening so the two CLIs stay consistent.
       for (const d of extracted.diagnostics) {
         if (d.kind === "unresolvedFilePath") {
-          // Defensive type guard: Agent B's Diagnostic.line is `number`, but
-          // we read it via `in` + typeof so the surrounding code keeps
-          // compiling even if a future variant lacks the field.
           const loc =
             "line" in d && typeof d.line === "number" ? ` (line ${d.line})` : "";
           console.error(
@@ -519,26 +561,81 @@ program
           );
         }
       }
-      if (extracted.stage === "empty" || extracted.files.length === 0) {
+      if (extracted.stage === "empty" || extracted.entries.length === 0) {
         console.error(
           `error: no files extracted from ${sourcePath}. add a \`Files: <path>\` section or reference existing file paths in the body.`,
         );
         process.exit(1);
       }
-      inputFiles = extracted.files;
+      // T028: hand `entries` straight to `resolveStartIds` so symbol-unit
+      // declarations propagate as `symbol:<path>#<name>` startIds.
+      entries = extracted.entries;
+      inputDisplayLabels = entries.map((e) =>
+        e.symbol ? `${e.path}:${e.symbol}` : e.path,
+      );
     } else if (opts.diff) {
-      inputFiles = getGitDiffFiles(rootDir);
-      if (inputFiles.length === 0) {
+      const diffFiles = getGitDiffFiles(rootDir);
+      if (diffFiles.length === 0) {
         console.log("No changes detected in git diff.");
         process.exit(0);
       }
+      entries = diffFiles.map((p) => ({ path: p, line: 1 }));
+      inputDisplayLabels = diffFiles.slice();
     } else {
-      inputFiles = targets;
+      entries = pathsToEntries(targets);
+      inputDisplayLabels = targets.slice();
     }
 
-    const startIds = resolveFileStartIds(graph, inputFiles);
+    const hasSymbolInput = entries.some((e) => e.symbol !== undefined);
+
+    const { startIds, unresolvedSymbols } = resolveStartIds(graph, entries);
+
+    // T029 / R-010 / contracts/cli-flags.md §4.2 — scan-mode mismatch.
+    // When the input includes any symbol entry but the current graph has zero
+    // `symbol` nodes, that's a global "you didn't scan in symbol mode" miss
+    // — every entry would otherwise pile up as `unresolvedSymbol`. Emit the
+    // dedicated global error so the user knows to flip `.artgraph.json`'s
+    // mode rather than going hunting for typos.
+    if (hasSymbolInput) {
+      let hasSymbolNode = false;
+      for (const node of graph.nodes.values()) {
+        if (node.kind === "symbol") {
+          hasSymbolNode = true;
+          break;
+        }
+      }
+      if (!hasSymbolNode) {
+        console.error(
+          [
+            "ERROR: symbol-level input requires `artgraph scan --mode symbol`.",
+            "       Set `mode: \"symbol\"` in `.artgraph.json` and re-run scan to enable",
+            "       symbol-mode lookup.",
+          ].join("\n"),
+        );
+        process.exit(1);
+      }
+    }
+
+    // T030 / R-009 / contracts/cli-flags.md §4.1 — per-entry symbol miss.
+    // Symbol nodes exist but this specific `path:symbol` isn't registered —
+    // typo, export rename, or a stale graph. Surface one line per entry so
+    // the user can target the fix.
+    if (unresolvedSymbols.length > 0) {
+      for (const u of unresolvedSymbols) {
+        const label = `${u.path}:${u.symbol}`;
+        console.error(`ERROR: No matching symbol found for: ${label}`);
+        console.error(
+          `  hint: check the export name with \`grep "export.*${u.symbol}" ${u.path}\``,
+        );
+        console.error(
+          `        or verify that \`mode: "symbol"\` is set in \`.artgraph.json\` and re-scan.`,
+        );
+      }
+      process.exit(1);
+    }
+
     if (startIds.length === 0) {
-      console.error(`No matching nodes found for: ${inputFiles.join(", ")}`);
+      console.error(`No matching nodes found for: ${inputDisplayLabels.join(", ")}`);
       process.exit(1);
     }
 
@@ -556,6 +653,12 @@ program
       maxDepth = parsed;
     }
     const result = impact(graph, startIds, lock, maxDepth);
+
+    // T031 / FR-014 / INV-S6 — populate `originReqs` axis. `impact()` itself
+    // stays purely forward-BFS; the origin axis is the union of each startId's
+    // direct `@impl` claim (1-hop reverse `implements` edge). Recompute here so
+    // the JSON / text outputs always carry both axes.
+    result.originReqs = resolveOriginReqs(graph, startIds);
 
     if (opts.format === "json") {
       console.log(JSON.stringify(result));
@@ -699,7 +802,7 @@ program
         console.log("No changes detected in git diff.");
         process.exit(0);
       }
-      const startIds = resolveFileStartIds(graph, diffFiles);
+      const { startIds } = resolveStartIds(graph, pathsToEntries(diffFiles));
       if (startIds.length === 0) {
         console.log("Changed files are not tracked in the graph.");
         process.exit(0);
@@ -707,7 +810,7 @@ program
       const impactResult = impact(graph, startIds, lock);
       scopedNodeIds = new Set([
         ...startIds,
-        ...impactResult.affectedReqs.map((r) => r),
+        ...impactResult.impactReqs.map((r) => r),
         ...impactResult.affectedDocs.map((d) => d),
         ...impactResult.affectedFiles.map((f) => `file:${f}`),
       ]);
@@ -857,7 +960,7 @@ program
         return;
       }
 
-      const startIds = resolveFileStartIds(graph, relativePaths);
+      const { startIds } = resolveStartIds(graph, pathsToEntries(relativePaths));
       if (startIds.length === 0) {
         process.stdout.write(JSON.stringify(buildHookOutput("artgraph impact: (none)")));
         const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;
@@ -959,24 +1062,62 @@ function printWarnings(warnings: BuildWarning[]) {
   }
 }
 
+// spec 016 T032 / FR-015 / FR-023 / contracts/cli-flags.md §5.2 — text formatter.
+// Three REQ-axis sections:
+//   - Impact reqs        = forward BFS reach
+//   - Origin reqs        = startId `@impl` claims (1-hop reverse)
+//   - Drift candidates   = (impactReqs \ originReqs), section omitted when empty
 function printImpactText(result: any) {
-  if (result.affectedReqs.length > 0) {
-    console.log("Affected REQs:");
-    for (const r of result.affectedReqs) console.log(`  ${r}`);
+  const impactReqs: string[] = Array.isArray(result.impactReqs) ? result.impactReqs : [];
+  const originReqs: string[] = Array.isArray(result.originReqs) ? result.originReqs : [];
+
+  if (impactReqs.length > 0) {
+    console.log("Impact reqs:");
+    for (const r of impactReqs) console.log(`  ${r}  (req)`);
+  } else {
+    // Keep a visible header even for empty impact so downstream readers /
+    // tests don't have to special-case "no impact" output.
+    console.log("Impact reqs:");
+    console.log("  (none)");
   }
+
+  // Origin section: always emit so the JSON consumer's text mirror is
+  // unambiguous; show `(none)` when the startIds have no @impl claim.
+  console.log("");
+  console.log("Origin reqs (@impl claims):");
+  if (originReqs.length > 0) {
+    for (const r of originReqs) console.log(`  ${r}  (req)`);
+  } else {
+    console.log("  (none)");
+  }
+
+  // Drift candidates — FR-015: omit the section entirely when the set
+  // difference is empty so a clean run doesn't print noise.
+  const originSet = new Set(originReqs);
+  const drift = impactReqs.filter((r) => !originSet.has(r));
+  if (drift.length > 0) {
+    console.log("");
+    console.log("Drift candidates (impact \\ origin):");
+    for (const r of drift) console.log(`  ${r}  (req)`);
+  }
+
   if (result.affectedTasks && result.affectedTasks.length > 0) {
+    console.log("");
     console.log("Affected Tasks:");
     for (const t of result.affectedTasks) console.log(`  ${t}`);
   }
-  if (result.affectedDocs.length > 0) {
+  if (result.affectedDocs && result.affectedDocs.length > 0) {
+    console.log("");
     console.log("Affected Docs:");
     for (const d of result.affectedDocs) console.log(`  ${d}`);
   }
-  if (result.affectedFiles.length > 0) {
+  if (result.affectedFiles && result.affectedFiles.length > 0) {
+    console.log("");
     console.log("Affected Files:");
     for (const f of result.affectedFiles) console.log(`  ${f}`);
   }
-  if (result.drifted.length > 0) {
+  if (result.drifted && result.drifted.length > 0) {
+    console.log("");
     console.log("Drifted:");
     for (const d of result.drifted) console.log(`  ${d.nodeId} (${d.kind})`);
   }
