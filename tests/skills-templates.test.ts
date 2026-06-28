@@ -31,6 +31,7 @@ const EXPECTED_SKILL_DIRS = discoverSkillDirs();
 // Contract subset: only these designated Skills must link to install-check.
 const SKILLS_LINKING_INSTALL_CHECK = [
   "artgraph-impact",
+  "artgraph-plan-coverage",
   "artgraph-verify",
   "artgraph-coverage",
   "artgraph-rename",
@@ -166,10 +167,68 @@ describe("templates/skills metatest", () => {
     },
   );
 
-  it("at least 7 Skill directories are present (regression guard)", () => {
+  it("at least 8 Skill directories are present (regression guard)", () => {
     // Pairs with the dynamic discoverSkillDirs() — if someone accidentally
     // moves a Skill out of templates/skills/, the count drops and this trips.
-    expect(EXPECTED_SKILL_DIRS.length).toBeGreaterThanOrEqual(7);
+    // Bumped from 7 to 8 with spec 014 (artgraph-plan-coverage added).
+    expect(EXPECTED_SKILL_DIRS.length).toBeGreaterThanOrEqual(8);
+  });
+
+  // SC-005 (spec 014): artgraph-impact description must NOT contain the
+  // wide-match planning/designing/scoping vocabulary that caused spec 012's
+  // mis-fires. The description must promise *only* file-based forward impact.
+  describe("artgraph-impact description honesty (spec 014 SC-005)", () => {
+    it("description contains no planning/designing/scoping (case-insensitive)", () => {
+      const skill = readSkill("artgraph-impact");
+      const description = skill.frontmatter.description as string;
+      const forbidden = /\b(planning|designing|scoping)\b/i;
+      const match = description.match(forbidden);
+      expect(
+        match,
+        `forbidden word "${match?.[0]}" found in artgraph-impact description; ` +
+          `spec 014 FR-009 requires file-based forward-impact phrasing only`,
+      ).toBeNull();
+    });
+  });
+
+  // SC-006 (spec 014): artgraph-plan-coverage Skill ships with the contract-
+  // mandated invariants — body cap, install-check linking, allowed-tools
+  // declaring the plan-coverage subcommand, and avoidance of the wide-match
+  // planning/designing vocabulary that the parent spec is designed to fix.
+  describe("artgraph-plan-coverage Skill contract (spec 014 SC-006)", () => {
+    it("declares plan-coverage subcommand in allowed-tools", () => {
+      const skill = readSkill("artgraph-plan-coverage");
+      const allowed = (skill.frontmatter["allowed-tools"] ?? []) as string[];
+      const hasNpx = allowed.some((t) =>
+        /^Bash\(npx artgraph plan-coverage\b/.test(t),
+      );
+      const hasDirect = allowed.some((t) =>
+        /^Bash\(artgraph plan-coverage\b/.test(t),
+      );
+      expect(
+        hasNpx,
+        `artgraph-plan-coverage allowed-tools must include "Bash(npx artgraph plan-coverage *)"`,
+      ).toBe(true);
+      expect(
+        hasDirect,
+        `artgraph-plan-coverage allowed-tools must include "Bash(artgraph plan-coverage *)"`,
+      ).toBe(true);
+    });
+
+    it("description does not lean on the wide-match planning/designing vocabulary", () => {
+      // The whole reason this Skill exists is to give plan-coverage its own
+      // narrow description. Re-introducing planning/designing here would
+      // bring spec 012's wide-match mis-fire back through the side door.
+      const skill = readSkill("artgraph-plan-coverage");
+      const description = skill.frontmatter.description as string;
+      const forbidden = /\b(planning|designing)\b/i;
+      const match = description.match(forbidden);
+      expect(
+        match,
+        `forbidden word "${match?.[0]}" found in artgraph-plan-coverage description; ` +
+          `spec 014 FR-021 requires a narrow "implicit impacts" promise`,
+      ).toBeNull();
+    });
   });
 
   it("every _shared/*.md fragment is referenced by at least one Skill", () => {

@@ -66,7 +66,7 @@ describe("KiroProvider", () => {
       const body = readFileSync(join(tmp, ".kiro/steering/artgraph.md"), "utf-8");
       expect(body).toMatch(/artgraph — Kiro integration/);
       expect(body).toMatch(/## When to run artgraph/);
-      expect(body).toMatch(/\| `artgraph impact <file>` \|/);
+      expect(body).toMatch(/\|\s+`artgraph impact <file>`\s+\|/);
       // trailing newline enforced by writeGuidanceFile
       expect(body.endsWith("\n")).toBe(true);
       expect(body.endsWith("\n\n")).toBe(false);

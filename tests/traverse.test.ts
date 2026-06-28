@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
 import { buildGraph } from "../src/graph/builder.js";
-import { impact, resolveStartIds, findOrphans, findUncovered } from "../src/graph/traverse.js";
+import { impact, resolveFileStartIds, findOrphans, findUncovered } from "../src/graph/traverse.js";
 import type { ArtgraphConfig, LockFile } from "../src/types.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
@@ -25,7 +25,7 @@ describe("impact traversal", () => {
   });
 
   it("should traverse from a file to connected REQs", () => {
-    const ids = resolveStartIds(graph, ["src/auth/login.ts"]);
+    const ids = resolveFileStartIds(graph, ["src/auth/login.ts"]);
     const result = impact(graph, ids, {});
 
     expect(result.affectedReqs).toContain("AUTH-001");
@@ -85,31 +85,37 @@ describe("findUncovered", () => {
   });
 });
 
-describe("resolveStartIds", () => {
+describe("resolveFileStartIds", () => {
   const { graph } = buildGraph(FIXTURE_DIR, config);
 
-  it("should resolve REQ-ID directly", () => {
-    const ids = resolveStartIds(graph, ["AUTH-001"]);
-    expect(ids).toEqual(["AUTH-001"]);
-  });
-
   it("should resolve file path to file:path", () => {
-    const ids = resolveStartIds(graph, ["src/auth/login.ts"]);
+    const ids = resolveFileStartIds(graph, ["src/auth/login.ts"]);
     expect(ids).toEqual(["file:src/auth/login.ts"]);
   });
 
-  it("T042: should resolve doc: prefix for file paths", () => {
-    const ids = resolveStartIds(graph, ["specs/prose-only.md"]);
-    expect(ids).toContain("doc:prose-only.md");
-  });
-
-  it("should resolve file path to both doc and req nodes in the same file", () => {
-    // auth.md has doc:auth-design and req nodes AUTH-001, AUTH-002, AUTH-003
-    const ids = resolveStartIds(graph, ["specs/auth.md"]);
+  it("should resolve a spec file path to its parsed doc + req nodes", () => {
+    // auth.md has doc:auth-design and req nodes AUTH-001, AUTH-002, AUTH-003.
+    // After spec 014 the direct REQ-ID / `doc:` lookups are gone, but the
+    // filePath-equality branch still drags in everything parsed out of a
+    // spec file when the caller passes the file path itself.
+    const ids = resolveFileStartIds(graph, ["specs/auth.md"]);
     expect(ids).toContain("doc:auth-design");
     expect(ids).toContain("AUTH-001");
     expect(ids).toContain("AUTH-002");
     expect(ids).toContain("AUTH-003");
+  });
+
+  it("rejects REQ-ID inputs (file-only contract — spec 014 FR-001)", () => {
+    // REQ-ID is no longer treated as a start node here; the CLI surfaces a
+    // dedicated 4-path error before reaching this function. Verifying the
+    // direct call returns empty pins the contract for non-CLI consumers.
+    const ids = resolveFileStartIds(graph, ["AUTH-001"]);
+    expect(ids).toEqual([]);
+  });
+
+  it("rejects bare `doc:` prefix inputs (file-only contract — spec 014 FR-002)", () => {
+    const ids = resolveFileStartIds(graph, ["doc:auth-design"]);
+    expect(ids).toEqual([]);
   });
 });
 
@@ -219,7 +225,7 @@ describe("impact: cyclic doc-to-doc graph", () => {
   });
 });
 
-describe("resolveStartIds (symbol mode)", () => {
+describe("resolveFileStartIds (symbol mode)", () => {
   const SYM_FIXTURE = resolve(import.meta.dirname, "fixtures/symbol-level");
   const symConfig: ArtgraphConfig = {
     include: ["src/**/*.ts"],
@@ -231,14 +237,14 @@ describe("resolveStartIds (symbol mode)", () => {
   const { graph } = buildGraph(SYM_FIXTURE, symConfig);
 
   it("should include symbol nodes when resolving file path", () => {
-    const ids = resolveStartIds(graph, ["src/utils.ts"]);
+    const ids = resolveFileStartIds(graph, ["src/utils.ts"]);
     expect(ids).toContain("file:src/utils.ts");
     expect(ids).toContain("symbol:src/utils.ts#foo");
     expect(ids).toContain("symbol:src/utils.ts#bar");
   });
 
   it("should not include symbol nodes from other files", () => {
-    const ids = resolveStartIds(graph, ["src/utils.ts"]);
+    const ids = resolveFileStartIds(graph, ["src/utils.ts"]);
     const defaultSymbols = ids.filter((id) => id.includes("defaults.ts"));
     expect(defaultSymbols).toHaveLength(0);
   });

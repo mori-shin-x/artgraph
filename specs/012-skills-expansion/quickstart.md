@@ -177,6 +177,7 @@ REQ-001 を変更しようと思うんだけど、何に影響する?
 
 ### Expected 1b
 
+> **Note (spec 014)**: REQ-ID 起点入力は spec 014 で撤去。現行 CLI では `artgraph impact <file>` / `--from-tasks <path>` / `--diff` を使う。本記述は execute 不能だが historical context として残す。
 - `artgraph-impact` Skill が発火し、ユーザー発話から `REQ-001` を抽出して mode (b) `artgraph impact REQ-001 --format json` を実行
 - 影響範囲が返る (真の Plan 段階 — diff 不要)
 
