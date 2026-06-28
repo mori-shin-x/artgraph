@@ -1,6 +1,6 @@
 ---
 name: "artgraph-impact"
-description: "Runs `artgraph impact` to inject change-impact context for planning, designing, or scoping work. Supports three input modes: (a) when git has changes, uses `--diff`; (b) when the user mentions REQ-IDs or file paths, calls `artgraph impact` with those targets; (c) when neither, asks the user which requirement or file to analyze. Use when the user is about to plan, design, scope, or analyze the impact of any change. Make sure to use this skill whenever the user enters planning mode, asks for impact analysis, or mentions designing changes."
+description: "Runs `artgraph impact` to surface which requirements, docs, and files a proposed file edit touches. Use when the user explicitly names file paths or wants the impact of files staged in `git diff` / declared in `tasks.md` / `plan.md`."
 allowed-tools:
   - "Bash(npx artgraph *)"
   - "Bash(artgraph *)"
@@ -12,7 +12,9 @@ disable-model-invocation: false
 
 ## Purpose
 
-Runs `artgraph impact` to surface which requirements, docs, and files a proposed change touches. Use the output to plan with explicit awareness of affected scope and drift.
+Runs `artgraph impact` to compute **forward propagation from one or more source files**: which requirements, docs, and other files a proposed file edit touches. The CLI is file-only — it does not accept REQ-IDs or `doc:` prefixes. Use the output to make a file edit with explicit awareness of its affected scope and drift.
+
+For detecting the **inverse** — REQs that are implicitly affected by files listed in `tasks.md` but never mentioned in spec/plan/tasks — use `artgraph-plan-coverage` instead.
 
 ## Input modes
 
@@ -21,8 +23,8 @@ Pick one based on what the user supplied:
 | Mode | Trigger | Command |
 | --- | --- | --- |
 | (a) Diff | `git status` shows staged or unstaged changes | `artgraph impact --diff --format json` |
-| (b) Explicit targets | User mentioned a REQ-ID (e.g. `FR-001`) or file path | `artgraph impact FR-001 src/auth.ts --format json` |
-| (c) Ask | Neither — no diff and no targets given | Ask the user: "Which requirement ID or file should I analyze the impact of?" then re-enter with mode (b) |
+| (b) Explicit file source | User named file paths, or pointed at a tasks.md / plan.md | `artgraph impact <file...>` OR `artgraph impact --from-tasks <path>` OR `artgraph impact --from-plan <path>` |
+| (c) Ask | Neither — no diff, no file paths, no tasks/plan path | Ask the user: "Which tasks.md / plan.md path, or which file(s) should I analyze?" then re-enter with mode (b) |
 
 ## Steps
 
@@ -45,24 +47,28 @@ git status --porcelain
   artgraph impact --diff --format json
   ```
 
-- Else if the user's message contains a REQ-ID (e.g. `FR-001`) or a file path, use mode (b):
+- Else if the user named file paths or pointed at a tasks.md / plan.md path, use mode (b). Pick the right form:
 
   ```bash
-  # Replace the arguments with the REQ-IDs or file paths the user named.
-  # Example:
-  #   artgraph impact FR-001 src/auth.ts --format json
-  artgraph impact FR-001 --format json
+  # Explicit file paths (REQ-IDs are rejected — file paths only)
+  artgraph impact src/auth.ts src/session.ts --format json
+
+  # tasks.md as the source of starting files (FR-004)
+  artgraph impact --from-tasks specs/<latest>/tasks.md --format json
+
+  # plan.md as the source of starting files (FR-006)
+  artgraph impact --from-plan  specs/<latest>/plan.md  --format json
   ```
 
-- Else use mode (c): ask the user which requirement ID or file to analyze, then re-enter with mode (b).
+- Else use mode (c): ask the user "Which tasks.md / plan.md path, or which file(s) should I analyze?", then re-enter with mode (b).
 
 ### 3. Parse the JSON output
 
 See [output schema](../_shared/output-schema.md) for the field shapes of `artgraph impact`. The result has `affectedReqs`, `affectedDocs`, `affectedFiles`, `drifted`.
 
-### 4. Inject into the plan
+### 4. Inject into the response
 
 Use the parsed output to:
-- Cite each `affectedReqs` ID in the plan so changes to those requirements are explicit.
-- Flag any `drifted` entries — the spec for those IDs has changed but the lock has not been reconciled. Block the plan until the user runs `artgraph reconcile`.
-- Cross-check the plan does not silently change `affectedFiles` outside its declared scope.
+- Cite each `affectedReqs` ID so changes to those requirements are explicit in the file edit.
+- Flag any `drifted` entries — the spec for those IDs has changed but the lock has not been reconciled. Block the edit until the user runs `artgraph reconcile`.
+- Cross-check that the edit does not silently change `affectedFiles` outside its declared scope.

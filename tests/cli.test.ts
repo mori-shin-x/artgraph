@@ -596,6 +596,7 @@ describe("CLI: init", () => {
       "artgraph-detect",
       "artgraph-impact",
       "artgraph-integrate",
+      "artgraph-plan-coverage",
       "artgraph-rename",
       "artgraph-setup",
       "artgraph-verify",
@@ -611,7 +612,8 @@ describe("CLI: init", () => {
     // H6: JSON shape changed from string[] to { skills, fragments }.
     expect(typeof result.skillsInstalled).toBe("object");
     expect(Array.isArray(result.skillsInstalled.skills)).toBe(true);
-    expect(result.skillsInstalled.skills.length).toBe(7);
+    // Bumped 7 -> 8 in spec 014 (artgraph-plan-coverage added).
+    expect(result.skillsInstalled.skills.length).toBe(8);
     expect(result.skillsInstalled.fragments.length).toBeGreaterThanOrEqual(3);
     expect(result.skillsInstalled.skills).toContain(".claude/skills/artgraph-impact/SKILL.md");
   });
