@@ -368,7 +368,7 @@ describe("runInit", () => {
     );
 
     expect(() =>
-      runInit(tmp, { force: true, noScan: true, withSkills: true }),
+      runInit(tmp, { force: true, noScan: true, withSkills: true, agents: ["claude"] }),
     ).toThrow(SkillsInstallError);
 
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
@@ -418,7 +418,7 @@ describe("runInit Skills installation (directory format)", () => {
   // on the Skills stage specifically.
 
   it("copies every <name>/SKILL.md into .claude/skills/<name>/ when Skills stage runs", () => {
-    const result = runInit(tmp, { noScan: true, withSkills: true });
+    const result = runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] });
 
     expect(result.skillsInstalled).toBeDefined();
     for (const dir of EXPECTED_SKILL_DIRS) {
@@ -431,7 +431,7 @@ describe("runInit Skills installation (directory format)", () => {
   });
 
   it("copies _shared/ fragments into .claude/skills/_shared/", () => {
-    runInit(tmp, { noScan: true, withSkills: true });
+    runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] });
     for (const name of ["install-check.md", "output-schema.md", "package-manager.md"]) {
       expect(existsSync(join(tmp, ".claude", "skills", "_shared", name))).toBe(true);
     }
@@ -444,7 +444,7 @@ describe("runInit Skills installation (directory format)", () => {
       "user content\n",
     );
 
-    expect(() => runInit(tmp, { noScan: true, withSkills: true })).toThrow(
+    expect(() => runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] })).toThrow(
       /artgraph-impact[/\\]SKILL\.md.*--force/,
     );
 
@@ -461,7 +461,7 @@ describe("runInit Skills installation (directory format)", () => {
       "user content\n",
     );
 
-    const result = runInit(tmp, { noScan: true, withSkills: true, force: true });
+    const result = runInit(tmp, { noScan: true, withSkills: true, force: true, agents: ["claude"] });
 
     expect(result.skillsInstalled!.length).toBeGreaterThan(0);
     const body = readFileSync(
@@ -480,7 +480,7 @@ describe("runInit Skills installation (directory format)", () => {
 
     let caught: unknown;
     try {
-      runInit(tmp, { noScan: true, withSkills: true });
+      runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] });
     } catch (e) {
       caught = e;
     }
@@ -496,7 +496,7 @@ describe("runInit Skills installation (directory format)", () => {
     mkdirSync(join(tmp, ".claude", "skills"), { recursive: true });
     writeFileSync(join(tmp, ".claude", "skills", "my-custom.md"), "user skill\n");
 
-    runInit(tmp, { noScan: true, withSkills: true, force: true });
+    runInit(tmp, { noScan: true, withSkills: true, force: true, agents: ["claude"] });
 
     // Custom file untouched, even when --force overwrites artgraph-* templates.
     expect(readFileSync(join(tmp, ".claude", "skills", "my-custom.md"), "utf-8")).toBe(
@@ -511,7 +511,7 @@ describe("runInit Skills installation (directory format)", () => {
       "preexisting\n",
     );
 
-    expect(() => runInit(tmp, { noScan: true, withSkills: true })).toThrow(SkillsInstallError);
+    expect(() => runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] })).toThrow(SkillsInstallError);
 
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
     expect(
@@ -540,7 +540,9 @@ describe("runInit default behavior (P0)", () => {
     mkdirSync(join(tmp, "src"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
 
-    const result = runInit(tmp);
+    // spec 013: programmatic runInit caller must pass `agents` explicitly —
+    // the CLI layer parses --agents=<list>, but here we wire it manually.
+    const result = runInit(tmp, { agents: ["claude"] });
 
     // 1. .artgraph.json
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
@@ -560,7 +562,7 @@ describe("runInit default behavior (P0)", () => {
   // deploy the new artgraph-plan-coverage Skill so /speckit-tasks → plan-coverage
   // workflow works out of the box.
   it("deploys artgraph-plan-coverage Skill in default mode (spec 014 SC-007)", () => {
-    const result = runInit(tmp);
+    const result = runInit(tmp, { agents: ["claude"] });
     const installedPath = join(
       tmp,
       ".claude",
@@ -607,8 +609,13 @@ describe("runInit default behavior (P0)", () => {
     expect(existsSync(join(tmp, ".specify", "extensions"))).toBe(false);
   });
 
-  it("--minimal --with-skills enables only Skills on top of bare config", () => {
-    const result = runInit(tmp, { minimal: true, withSkills: true });
+  it("--minimal --with-skills + agents=claude enables only Skills on top of bare config", () => {
+    // spec 013 (FR-013): --minimal + --with-skills still produces Skills
+    // when called via the programmatic API with `agents` explicitly set.
+    // The CLI layer ignores --agents under --minimal (warning), so this
+    // path is unreachable from the command line; this test exercises the
+    // direct runInit contract that other internal callers rely on.
+    const result = runInit(tmp, { minimal: true, withSkills: true, agents: ["claude"] });
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
     expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
     expect(result.skillsInstalled).toBeDefined();

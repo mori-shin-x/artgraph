@@ -57,6 +57,8 @@ import { executeRename, executeSplit, executeMerge } from "./rename-executor.js"
 import type { RenameResult } from "./rename-executor.js";
 import { getProviderStatuses, registerBuiltinProviders, runIntegrate } from "./integrate/index.js";
 import type { IntegrateResult, IntegrationProviderId } from "./types.js";
+import { parseAgentsList, AgentsParseError } from "./agents/parse-agents.js";
+import type { AgentId } from "./agents/descriptors.js";
 
 // Wire up the built-in integration providers (speckit / kiro) before
 // commander parses argv. Today the registration body is empty (T014); US1
@@ -125,6 +127,14 @@ program
   )
   .option("--integrate-gate", "Pass --gate to speckit during integration")
   .option("--no-integrate-gate", "Pass --no-gate to speckit during integration")
+  // spec 013 (FR-001 / FR-002) — Tier 1 agent ids the user wants to target.
+  // Required when Skills or agent-context distribution runs; rejected
+  // (with a "Did you mean ...?" hint) for unknown / uppercase / empty /
+  // duplicate values per contracts/cli-flags.md.
+  .option(
+    "--agents <list>",
+    "Comma-separated Tier 1 agent ids to target (claude, codex, cursor, copilot, kiro). Required for Skills / agent-context distribution.",
+  )
   .option("--format <format>", "Output format: json | text", "text")
   .action((opts) => {
     const rootDir = process.cwd();
@@ -180,6 +190,57 @@ program
       ? (opts.integrateGate as boolean)
       : true; // contract default
 
+    // spec 013 (T005 / T006) — --agents=<csv> parsing + orthogonality.
+    //
+    // Parse the raw flag value first so a malformed list (uppercase,
+    // duplicate, unknown id) fails with the canonical "Did you mean ...?"
+    // hint before we even look at the other gates. The parser throws
+    // `AgentsParseError` with the full stderr-ready message; we surface it
+    // verbatim and exit 1.
+    let parsedAgents: AgentId[] | undefined;
+    if (opts.agents !== undefined) {
+      try {
+        parsedAgents = parseAgentsList(String(opts.agents));
+      } catch (e) {
+        if (e instanceof AgentsParseError) {
+          console.error(e.message);
+          process.exit(1);
+        }
+        throw e;
+      }
+    }
+
+    // Orthogonality rules (FR-013, contracts/cli-flags.md):
+    //   - --minimal:                  every cross-agent stage off, --agents ignored (warn if given)
+    //   - --no-skills --no-agent-context: both off, --agents ignored (warn if given)
+    //   - else:                       --agents required, error with 3-option UX if missing
+    //
+    // We deliberately key the "skip" decision on the user-facing flag
+    // intent (NOT computeStageGates) so that --with-skills under --minimal
+    // does NOT bypass the spec-013 requirement: --minimal stays "all off"
+    // for the cross-agent stages regardless of the legacy --with-* opt-ins.
+    const skipDueToMinimal = opts.minimal === true;
+    const skipDueToBothStagesOff =
+      !skipDueToMinimal && opts.skills === false && opts.agentContext === false;
+
+    if (skipDueToMinimal && parsedAgents !== undefined) {
+      console.error(
+        "WARNING: --minimal overrides --agents (all cross-agent stages disabled)",
+      );
+      parsedAgents = undefined;
+    } else if (skipDueToBothStagesOff && parsedAgents !== undefined) {
+      console.error(
+        "WARNING: --no-skills --no-agent-context disables every cross-agent stage; --agents value is ignored",
+      );
+      parsedAgents = undefined;
+    }
+
+    const agentsRequired = !(skipDueToMinimal || skipDueToBothStagesOff);
+    if (agentsRequired && parsedAgents === undefined) {
+      console.error(AGENTS_REQUIRED_ERROR);
+      process.exit(1);
+    }
+
     try {
       const result = runInit(rootDir, {
         force: opts.force,
@@ -197,6 +258,7 @@ program
         withAgentContext: opts.withAgentContext === true,
         integrations,
         integrateGate,
+        agents: parsedAgents,
       });
 
       if (opts.format === "json") {
@@ -416,6 +478,25 @@ program
       printWarnings(result.warnings);
     }
   });
+
+// spec 013 (FR-002 / SC-006) — verbatim error UX emitted to stderr when
+// `--agents=<list>` is missing on a path that runs the Skills or
+// agent-context distribution stage. The 3-option enumeration is part of
+// the spec contract and is asserted as plain text by the CLI error tests
+// (T013 in Phase 3); changes here must be mirrored in contracts/cli-flags.md.
+const AGENTS_REQUIRED_ERROR = [
+  "ERROR: --agents=<list> is required when Skills or agent-context distribution runs.",
+  "",
+  "Supported values: claude, codex, cursor, copilot, kiro",
+  "",
+  "To resolve, choose one:",
+  "  1. Specify target agents:",
+  "       artgraph init --agents=<list>          (e.g. --agents=claude,codex)",
+  "  2. Skip Skills and agent-context distribution:",
+  "       artgraph init --no-skills --no-agent-context",
+  "  3. Skip every extra setup stage:",
+  "       artgraph init --minimal",
+].join("\n");
 
 // spec 014 (FR-001 / FR-003): REQ-ID inputs are no longer accepted here.
 // The four supported start sources are listed in this error so the user is

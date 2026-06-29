@@ -200,6 +200,20 @@ export interface InitOptions {
    * Other providers ignore this flag.
    */
   integrateGate?: boolean;
+  /**
+   * spec 013 (FR-001 / FR-002) — Tier 1 agent ids the user selected via
+   * `--agents=<csv>`. Alpha-sorted, deduped, fully validated by
+   * `parseAgentsList`. The Skills and agent-context distribution stages
+   * iterate over this list; the SDD-integrate stage ignores it.
+   *
+   * Empty array means the user passed `--no-skills --no-agent-context` (or
+   * `--minimal`) and explicitly opted out of every cross-agent stage. The
+   * CLI layer enforces "required when Skills/agent-context runs" before
+   * `runInit` is called, so by the time the array reaches here it is
+   * either non-empty (will be used) or empty (every cross-agent stage is
+   * gated off).
+   */
+  agents?: import("./agents/descriptors.js").AgentId[];
 }
 
 // ---------------------------------------------------------------------------

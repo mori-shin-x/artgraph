@@ -20,6 +20,7 @@ import {
   type DetectionResult,
   type InitOptions,
 } from "./types.js";
+import type { AgentId } from "./agents/descriptors.js";
 import { scan, reconcile } from "./scan.js";
 import type { BuildWarning } from "./graph/builder.js";
 import { getProviderStatuses, runIntegrate } from "./integrate/index.js";
@@ -380,10 +381,25 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
 
   const stages = computeStageGates(options);
 
+  // spec 013 Phase 2 gate: the legacy `installSkills` only writes to
+  // `.claude/skills/`, so it must fire only when "claude" is in the
+  // selected Tier 1 agents. Other agents are wired through the new
+  // per-agent `distribute()` in Phase 3 (T009 / T010); until then they
+  // are no-ops here.
+  //
+  // When `options.agents` is undefined (no spec-013 input — e.g. a test
+  // that constructs `RunInitOptions` directly without setting `agents`),
+  // the legacy Claude path is skipped. Every CLI invocation passes
+  // `agents` after `--agents` parsing + orthogonality, so this only
+  // affects programmatic callers.
+  const claudeSelected =
+    options.agents === undefined ? false : options.agents.includes("claude");
+  const skillsStageActive = stages.skills && claudeSelected;
+
   // Pre-flight: fail before any write if the Skills stage cannot proceed
   // cleanly (templates missing, conflicts without --force). Keeps partial
   // -state windows closed: validation failure leaves disk untouched.
-  if (stages.skills) {
+  if (skillsStageActive) {
     validateSkillsInstall(abs, { force: options.force });
   }
 
@@ -418,7 +434,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   //   3. scan + reconcile (writes .trace.lock)
   //   4. write .artgraph.json (final, only reached if everything above
   //      succeeded)
-  const skillsInstalled = stages.skills
+  const skillsInstalled = skillsStageActive
     ? installSkills(abs, { force: options.force })
     : undefined;
 

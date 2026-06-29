@@ -543,7 +543,9 @@ describe("CLI: init", () => {
   });
 
   it("should create .artgraph.json and .trace.lock", { timeout: 30000 }, async () => {
-    const { exitCode, stdout } = await runInit([]);
+    // spec 013: --agents=claude needed for the default Skills + agent-context
+    // path; we keep the legacy single-Claude expectation here.
+    const { exitCode, stdout } = await runInit(["--agents=claude"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Created .artgraph.json");
     expect(stdout).toContain("Created .trace.lock");
@@ -551,7 +553,7 @@ describe("CLI: init", () => {
   });
 
   it("should output JSON with --format json", { timeout: 30000 }, async () => {
-    const { exitCode, stdout } = await runInit(["--format", "json"]);
+    const { exitCode, stdout } = await runInit(["--agents=claude", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
     expect(result.configPath).toBeDefined();
@@ -565,7 +567,7 @@ describe("CLI: init", () => {
     const { join } = require("node:path");
     writeFileSync(join(initTmp, ".artgraph.json"), "{}\n");
 
-    const { exitCode, stderr } = await runInit([]);
+    const { exitCode, stderr } = await runInit(["--agents=claude"]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("already exists");
   });
@@ -575,22 +577,38 @@ describe("CLI: init", () => {
     const { join } = require("node:path");
     writeFileSync(join(initTmp, ".artgraph.json"), "{}\n");
 
-    const { exitCode, stdout } = await runInit(["--force"]);
+    const { exitCode, stdout } = await runInit(["--agents=claude", "--force"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Created .artgraph.json");
   });
 
   it("should skip scan with --no-scan", { timeout: 30000 }, async () => {
-    const { exitCode, stdout } = await runInit(["--no-scan"]);
+    const { exitCode, stdout } = await runInit(["--agents=claude", "--no-scan"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("scan skipped");
     expect(stdout).not.toContain("Nodes:");
   });
 
+  // spec 013 (FR-002 / SC-006): `init` without --agents fails fast with the
+  // 3-corrective-option error UX before any disk write.
+  it("fails with the spec-013 3-option error when --agents is missing", { timeout: 30000 }, async () => {
+    const { existsSync } = require("node:fs");
+    const { join } = require("node:path");
+    const { exitCode, stderr } = await runInit([]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("ERROR: --agents=<list> is required");
+    expect(stderr).toContain("Supported values: claude, codex, cursor, copilot, kiro");
+    expect(stderr).toContain("1. Specify target agents:");
+    expect(stderr).toContain("2. Skip Skills and agent-context distribution:");
+    expect(stderr).toContain("3. Skip every extra setup stage:");
+    // No .artgraph.json gets written when --agents validation fails.
+    expect(existsSync(join(initTmp, ".artgraph.json"))).toBe(false);
+  });
+
   it("default init installs skills as part of the full agent-native setup (text output)", { timeout: 30000 }, async () => {
     const { existsSync } = require("node:fs");
     const { join } = require("node:path");
-    const { exitCode, stdout } = await runInit(["--no-scan"]);
+    const { exitCode, stdout } = await runInit(["--agents=claude", "--no-scan"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Installed");
     expect(stdout).toContain("Claude Code skills");
@@ -611,7 +629,7 @@ describe("CLI: init", () => {
   });
 
   it("default init reports skillsInstalled in JSON output", { timeout: 30000 }, async () => {
-    const { exitCode, stdout } = await runInit(["--no-scan", "--format", "json"]);
+    const { exitCode, stdout } = await runInit(["--agents=claude", "--no-scan", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
     // H6: JSON shape changed from string[] to { skills, fragments }.
@@ -632,10 +650,20 @@ describe("CLI: init", () => {
     expect(existsSync(join(initTmp, ".claude", "skills"))).toBe(false);
   });
 
-  it("--no-skills suppresses skills install while keeping the rest of the default flow", { timeout: 30000 }, async () => {
+  // spec 013 (FR-013): --minimal overrides --agents — stderr WARNING, no install.
+  it("--minimal --agents=claude warns and ignores --agents", { timeout: 30000 }, async () => {
     const { existsSync } = require("node:fs");
     const { join } = require("node:path");
-    const { exitCode, stdout } = await runInit(["--no-scan", "--no-skills"]);
+    const { exitCode, stderr } = await runInit(["--minimal", "--agents=claude"]);
+    expect(exitCode).toBe(0);
+    expect(stderr).toMatch(/WARNING:\s*--minimal overrides --agents/);
+    expect(existsSync(join(initTmp, ".claude", "skills"))).toBe(false);
+  });
+
+  it("--no-skills --no-agent-context suppresses skills install (no --agents needed)", { timeout: 30000 }, async () => {
+    const { existsSync } = require("node:fs");
+    const { join } = require("node:path");
+    const { exitCode, stdout } = await runInit(["--no-scan", "--no-skills", "--no-agent-context"]);
     expect(exitCode).toBe(0);
     expect(stdout).not.toContain("Installed");
     expect(existsSync(join(initTmp, ".claude", "skills"))).toBe(false);
@@ -654,7 +682,7 @@ describe("CLI: init", () => {
         "user\n",
       );
 
-      const { exitCode, stderr } = await runInit(["--no-scan"]);
+      const { exitCode, stderr } = await runInit(["--agents=claude", "--no-scan"]);
       expect(exitCode).toBe(1);
       expect(stderr).toMatch(/artgraph-impact[/\\]SKILL\.md.*--force/);
       // Pre-flight validation must reject before any write.
