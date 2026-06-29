@@ -296,6 +296,142 @@ describe("templates/skills metatest", () => {
     ).toEqual([]);
   });
 
+  describe("package-manager agnosticism (spec 015, FR-009/010, SC-004)", () => {
+    it.each(EXPECTED_SKILL_DIRS)(
+      "%s body has no bare `npx artgraph <subcommand>` command example",
+      (dirName) => {
+        const skill = readSkill(dirName);
+        // SC-004 targets `npx artgraph <sub>` work-commands an agent would copy.
+        // The regex tolerates intervening flags (`npx -y artgraph init`),
+        // double spaces, and case. It requires the token after `artgraph` to be
+        // a real subcommand (not starting with `-`), which exempts install
+        // probes like `npx --no-install artgraph --version`. Markdown table rows
+        // (the artgraph-setup PM mapping table, kept by FR-011) and blockquote
+        // explainer lines (the `> <PM-exec> is ...` note added by PR #112
+        // meta-followups) are also exempt: both are documentation, not commands
+        // the agent would copy verbatim.
+        const offenders = skill.body
+          .split("\n")
+          .filter((line) => !line.trimStart().startsWith("|"))
+          .filter((line) => !line.trimStart().startsWith(">"))
+          .filter((line) => /\bnpx\s+(?:-\S+\s+)*artgraph\s+[^-\s]/i.test(line));
+        expect(
+          offenders,
+          `${dirName}/SKILL.md body should use a PM-agnostic <PM-exec>/bare 'artgraph' form, not 'npx artgraph <sub>':\n${offenders.join("\n")}`,
+        ).toEqual([]);
+      },
+    );
+
+    // PR #112 meta-followup: body command lines should use `<PM-exec> <sub>`
+    // rather than a bare `artgraph <sub>` form, so the same Skill works under
+    // any of the four supported package managers without local rewriting.
+    // Exempt:
+    //   * artgraph-setup — the PM mapping table legitimately uses the runners.
+    //   * artgraph-detect Step 1 — the `command -v artgraph || npx --no-install
+    //     artgraph --version` probe is intentionally PM-fixed (it must run
+    //     before PM detection has happened).
+    //   * table rows starting with `|`.
+    //   * blockquote explainer lines starting with `>`.
+    //   * lines where `artgraph` is inside inline backticks (e.g. prose
+    //     mentions like `artgraph rename`) — these don't get copy/pasted.
+    it.each(EXPECTED_SKILL_DIRS)(
+      "%s body uses `<PM-exec> <sub>` not bare `artgraph <sub>` (PR #112)",
+      (dirName) => {
+        if (dirName === "artgraph-setup" || dirName === "artgraph-detect") {
+          return;
+        }
+        const skill = readSkill(dirName);
+        const subcommands =
+          /(coverage|impact|check|plan-coverage|rename|integrate|reconcile|init)/;
+        const offenders = skill.body
+          .split("\n")
+          .filter((line) => !line.trimStart().startsWith("|"))
+          .filter((line) => !line.trimStart().startsWith(">"))
+          // Strip inline-code spans (`...`) so prose mentions don't count.
+          .map((line) => line.replace(/`[^`]*`/g, ""))
+          .filter((line) => {
+            const re = new RegExp(
+              `(^|\\s)artgraph\\s+${subcommands.source}\\b`,
+            );
+            return re.test(line);
+          });
+        expect(
+          offenders,
+          `${dirName}/SKILL.md body should call <PM-exec> <sub>, not bare 'artgraph <sub>':\n${offenders.join("\n")}`,
+        ).toEqual([]);
+      },
+    );
+
+    it.each(EXPECTED_SKILL_DIRS)(
+      "%s allowed-tools pre-approves the bare artgraph bin",
+      (dirName) => {
+        const skill = readSkill(dirName);
+        const tools = (skill.frontmatter["allowed-tools"] as string[]) ?? [];
+        const hasBare = tools.some((t) => /^Bash\(artgraph( |\*| plan-coverage)/.test(t));
+        expect(
+          hasBare,
+          `${dirName}/SKILL.md allowed-tools must include a bare 'Bash(artgraph ...)' entry; got ${JSON.stringify(tools)}`,
+        ).toBe(true);
+      },
+    );
+
+    it.each(EXPECTED_SKILL_DIRS)(
+      "%s allowed-tools pre-approves all 4 PM exec runners",
+      (dirName) => {
+        const skill = readSkill(dirName);
+        const tools = (skill.frontmatter["allowed-tools"] as string[]) ?? [];
+        const joined = tools.join("\n");
+        for (const runner of ["npx artgraph", "pnpm exec artgraph", "bunx artgraph", "deno run"]) {
+          expect(
+            joined,
+            `${dirName}/SKILL.md allowed-tools must pre-approve '${runner}'; got ${JSON.stringify(tools)}`,
+          ).toContain(runner);
+        }
+      },
+    );
+
+    // PR #112 meta-followup #3: every PM-exec entry in allowed-tools must use a
+    // **space-bounded** scope (`Bash(pnpm exec artgraph *)`, not `Bash(pnpm
+    // exec artgraph*)`). The space prevents `pnpm exec artgraphfoo` from
+    // falsely matching the artgraph scope; and the explicit deno specifier
+    // (`deno run -A npm:artgraph/cli *`) prevents `Bash(deno run*)` from
+    // pre-approving every deno script in the repo.
+    it.each(EXPECTED_SKILL_DIRS)(
+      "%s allowed-tools have space-bounded PM-exec scopes (PR #112)",
+      (dirName) => {
+        const skill = readSkill(dirName);
+        const tools = (skill.frontmatter["allowed-tools"] as string[]) ?? [];
+        for (const tool of tools) {
+          // glob-without-space bug: `Bash(pnpm exec artgraph*)` etc.
+          expect(
+            tool,
+            `${dirName}/SKILL.md allowed-tools entry "${tool}" must keep a space before '*' to avoid prefix bleed`,
+          ).not.toMatch(/(?:pnpm exec artgraph|bunx artgraph|npx artgraph)(?:\s+plan-coverage)?\*/);
+          // unbounded deno: `Bash(deno run*)` would also approve `deno run mything`
+          expect(
+            tool,
+            `${dirName}/SKILL.md allowed-tools entry "${tool}" must scope deno to 'npm:artgraph/cli', not the generic 'deno run*'`,
+          ).not.toMatch(/^Bash\(deno run\*/);
+        }
+      },
+    );
+  });
+
+  // PR #112 meta-followup #4: artgraph-detect must list all 8 canonical
+  // Skills (the regression test from FR-021 only counts directories on disk;
+  // this test pins the body text the user actually sees).
+  describe("artgraph-detect canonical Skill set (PR #112)", () => {
+    it("body lists artgraph-plan-coverage in the canonical set", () => {
+      const skill = readSkill("artgraph-detect");
+      expect(skill.body).toMatch(/artgraph-plan-coverage/);
+    });
+
+    it("body summary template says 'N of 8 installed' (not 7)", () => {
+      const skill = readSkill("artgraph-detect");
+      expect(skill.body).toMatch(/N of 8 installed/);
+    });
+  });
+
   // US4 (spec 016): symbol-level + dual-axis guidance must appear in the two
   // updated Skills, in docs/skills-guide.md, and in README.md (FR-026..FR-029).
   // The Skill body-line cap (≤ 100 lines, FR-030) is enforced by the generic

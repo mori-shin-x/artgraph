@@ -389,11 +389,24 @@ export interface PlanCoverageConfig {
   requireFilesSection?: boolean;
 }
 
+/**
+ * Supported package managers. Yarn is intentionally excluded — it falls back to
+ * pnpm (the default PM) with a warning. See specs/015-pkg-mgr-agnostic/.
+ */
+export type PackageManager = "npm" | "pnpm" | "bun" | "deno";
+
 export interface ArtgraphConfig {
   include: string[];
   specDirs: string[];
   testPatterns: string[];
   lockFile: string;
+  /**
+   * Package manager detected at `init` time and recorded so downstream tooling
+   * (hooks / agent-context / plugin templating in #109/#110/#111) can build the
+   * right exec command without re-sniffing lockfiles. Absent when detection
+   * failed. Optional.
+   */
+  packageManager?: PackageManager;
   reqPatterns?: ReqPatternConfig;
   docGraph?: DocGraphConfig;
   mode?: "file" | "symbol";
