@@ -123,13 +123,36 @@ describe("e2e: artgraph doctor — drift / FAIL detection", () => {
     expect(r.stdout).toContain("wrapper-no-import");
   });
 
-  it("quickstart §3-6: extraneous file → exit 1 + extraneous-file finding", () => {
-    const obsoleteDir = join(proj.dir, ".claude/skills/artgraph-old");
-    mkdirSync(obsoleteDir, { recursive: true });
-    writeFileSync(join(obsoleteDir, "SKILL.md"), "obsolete\n", "utf-8");
+  it("quickstart §3-6: extraneous file inside a canonical Skill dir → exit 1", () => {
+    // spec 013 FR-011 (d) scope: doctor flags extras INSIDE canonical
+    // top-level dirs (e.g. `artgraph-impact/`). A non-canonical sibling dir
+    // (`artgraph-old/`) is treated as third-party Skills and ignored —
+    // covered by the unit suite.
+    const extra = join(proj.dir, ".claude/skills/artgraph-impact/leftover.md");
+    writeFileSync(extra, "leftover from older artgraph version\n", "utf-8");
     const r = runCli(proj.dir, ["doctor"]);
     expect(r.status).toBe(1);
     expect(r.stdout).toContain("extraneous-file");
+    expect(r.stdout).toContain("artgraph-impact/leftover.md");
+  });
+
+  it("ignores third-party Skill dirs under <agent_skills_path>/ (FR-011 (d) scope)", () => {
+    // Drop a non-artgraph dir alongside the canonical distribution. This is
+    // exactly what the polish-phase dogfooding hit: speckit's own Skills
+    // landed in `.claude/skills/speckit-*` and the previous doctor logic
+    // mis-flagged them all as extraneous.
+    const speckitDir = join(proj.dir, ".claude/skills/speckit-implement");
+    mkdirSync(speckitDir, { recursive: true });
+    writeFileSync(join(speckitDir, "SKILL.md"), "third-party\n", "utf-8");
+    const r = runCli(proj.dir, ["doctor", "--format", "json"]);
+    expect(r.status, `stdout: ${r.stdout} stderr: ${r.stderr}`).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    expect(parsed.summary.failCount).toBe(0);
+    const offending = parsed.findings.find(
+      (f: { kind: string; path: string }) =>
+        f.kind === "extraneous-file" && f.path.includes("speckit-implement"),
+    );
+    expect(offending).toBeUndefined();
   });
 });
 

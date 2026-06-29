@@ -150,17 +150,52 @@ describe("runDoctor — FAIL: extraneous-file", () => {
     proj.cleanup();
   });
 
-  it("flags a file not present in canonical templates/skills/", () => {
-    const obsoleteDir = join(proj.dir, ".claude/skills/artgraph-old");
-    mkdirSync(obsoleteDir, { recursive: true });
-    writeFileSync(join(obsoleteDir, "SKILL.md"), "obsolete\n", "utf-8");
+  it("flags an extra file dropped inside a canonical artgraph Skill dir", () => {
+    // Inside a canonical top-level dir (`artgraph-impact/`) — any file that
+    // doesn't match the canonical set is an artgraph remnant we should warn
+    // about. Mirrors quickstart §3-6.
+    const extra = join(proj.dir, ".claude/skills/artgraph-impact/extra-file.md");
+    writeFileSync(extra, "remnant\n", "utf-8");
     const report = runDoctor({ rootDir: proj.dir });
     const f = findFinding(report.findings, (x) => x.kind === "extraneous-file");
     expect(f, JSON.stringify(report.findings, null, 2)).toBeDefined();
     expect(f!.agent).toBe("claude");
-    expect(f!.path).toContain("artgraph-old/SKILL.md");
+    expect(f!.path).toContain("artgraph-impact/extra-file.md");
     expect(f!.expected).toBe("not present");
     expect(f!.actual).toBe("present");
+  });
+
+  it("ignores third-party Skill dirs that artgraph never owned (spec 013 FR-011 (d) scope)", () => {
+    // Non-artgraph top-level dir (e.g. spec kit skills shipped by another
+    // tool) — doctor must NOT flag these. Mirrors the polish-phase fault
+    // where 11 `.claude/skills/speckit-*/SKILL.md` files were incorrectly
+    // reported as extraneous.
+    const speckitDir = join(proj.dir, ".claude/skills/speckit-implement");
+    mkdirSync(speckitDir, { recursive: true });
+    writeFileSync(join(speckitDir, "SKILL.md"), "third-party\n", "utf-8");
+    const report = runDoctor({ rootDir: proj.dir });
+    const f = findFinding(
+      report.findings,
+      (x) => x.kind === "extraneous-file" && x.path.includes("speckit-implement"),
+    );
+    expect(f, `unexpected finding for third-party dir: ${JSON.stringify(f)}`).toBeUndefined();
+    // And no other agents' extraneous flag should trip on it either.
+    expect(report.summary.failCount).toBe(0);
+  });
+
+  it("ignores a non-canonical artgraph-prefixed dir (treated as third-party)", () => {
+    // `artgraph-old/` is NOT in the canonical top-level set. Under the
+    // tightened FR-011 (d) scope, doctor only walks subtrees rooted at
+    // canonical top-level dirs, so this is left alone.
+    const obsoleteDir = join(proj.dir, ".claude/skills/artgraph-old");
+    mkdirSync(obsoleteDir, { recursive: true });
+    writeFileSync(join(obsoleteDir, "SKILL.md"), "obsolete\n", "utf-8");
+    const report = runDoctor({ rootDir: proj.dir });
+    const f = findFinding(
+      report.findings,
+      (x) => x.kind === "extraneous-file" && x.path.includes("artgraph-old"),
+    );
+    expect(f).toBeUndefined();
   });
 });
 

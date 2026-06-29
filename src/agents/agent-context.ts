@@ -189,6 +189,7 @@ export interface WriteResult {
   path: string;
 }
 
+// @impl 013-cross-agent-extensions/FR-005
 /**
  * Write (or refresh) the artgraph block inside `<rootDir>/AGENTS.md`. Returns
  * `written: false` when the on-disk content already matches the desired
@@ -241,12 +242,13 @@ export function buildCopilotWrapperBody(): string {
   ].join("\n");
 }
 
+// @impl 013-cross-agent-extensions/FR-006 013-cross-agent-extensions/FR-007
 /**
  * Write (or refresh) the artgraph wrapper file for `agentId`. Returns
  * `written: false` when no on-disk change is needed (idempotent).
  *
- *   - `claude`  → `<rootDir>/CLAUDE.md`
- *   - `copilot` → `<rootDir>/.github/copilot-instructions.md` (mkdir -p
+ *   - `claude`  → `<rootDir>/CLAUDE.md`         (FR-006 — `@AGENTS.md` のみ、本文の二重コピーなし)
+ *   - `copilot` → `<rootDir>/.github/copilot-instructions.md` (FR-007 — 同上、`mkdir -p`
  *                 `.github/` if missing)
  *
  * Marker-bounded write preserves any user content outside the block — see

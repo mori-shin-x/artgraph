@@ -137,6 +137,7 @@ export function planDistribution(
   return targets;
 }
 
+// @impl 013-cross-agent-extensions/FR-003 013-cross-agent-extensions/FR-004
 /**
  * Distribute one agent's Skills tree to its canonical path.
  *
@@ -157,6 +158,13 @@ export function planDistribution(
  *          `expectedSha256`, treat as a hard failure (rollback + throw).
  *   6. On any mid-loop exception, unlink every file written in this call
  *      and rmdir every directory created in this call, in reverse order.
+ *
+ * FR-003: per-agent canonical Skills paths come from `descriptor.skillsPath`;
+ * the SKILL.md ファイル群と frontmatter は AGENT_DESCRIPTORS 経由で 5 エージェント
+ * 共通の `templates/skills/<name>/SKILL.md` から取り出され、バイト一致で配置される。
+ * FR-004: `_shared/` 配下も `SkillSource.entries` に含まれるため、SKILL.md と同じ
+ * 配布先に同じディレクトリ構造で書き込まれる (各 SKILL.md の `../_shared/...`
+ * 相対参照が解決可能になる)。
  */
 export function distribute(
   descriptor: AgentDescriptor,
@@ -166,11 +174,12 @@ export function distribute(
   const force = opts.force === true;
   const targets = planDistribution(descriptor, source, opts.rootDir);
 
+  // @impl 013-cross-agent-extensions/FR-009 013-cross-agent-extensions/FR-010
   // Pre-flight classification — every target lands in exactly one bucket:
-  //   noopCandidates: existing + sha256 match → skip (idempotent)
-  //   driftConflicts: existing + sha256 mismatch + !force → throw
-  //   driftOverwrite: existing + sha256 mismatch + force  → overwrite
-  //   symlinkConflicts: existing + isSymbolicLink → always throw
+  //   noopCandidates: existing + sha256 match → skip (idempotent)        (FR-009)
+  //   driftConflicts: existing + sha256 mismatch + !force → throw        (FR-009)
+  //   driftOverwrite: existing + sha256 mismatch + force  → overwrite    (FR-010)
+  //   symlinkConflicts: existing + isSymbolicLink → always throw         (FR-010 — user-managed)
   //   freshWrites:    not existing → write new
   const noopCandidates: DistributionTarget[] = [];
   const driftConflicts: DistributionTarget[] = [];

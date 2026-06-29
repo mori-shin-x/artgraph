@@ -213,6 +213,7 @@ program
       }
     }
 
+    // @impl 013-cross-agent-extensions/FR-013
     // Orthogonality rules (FR-013, contracts/cli-flags.md):
     //   - --minimal:                  every cross-agent stage off, --agents ignored (warn if given)
     //   - --no-skills --no-agent-context: both off, --agents ignored (warn if given)
@@ -238,6 +239,7 @@ program
       parsedAgents = undefined;
     }
 
+    // @impl 013-cross-agent-extensions/FR-002
     const agentsRequired = !(skipDueToMinimal || skipDueToBothStagesOff);
     if (agentsRequired && parsedAgents === undefined) {
       console.error(AGENTS_REQUIRED_ERROR);
@@ -925,6 +927,7 @@ program
 // Independent of `artgraph check` per FR-012: the doctor MUST NOT participate
 // in the `check --gate` decision (regression-tested in
 // `tests/check-gate-no-regression.test.ts`).
+// @impl 013-cross-agent-extensions/FR-012
 program
   .command("doctor")
   .description("Diagnose Tier 1 cross-agent distribution health")

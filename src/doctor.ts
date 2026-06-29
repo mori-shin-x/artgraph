@@ -93,6 +93,7 @@ export interface DoctorOptions {
 // Engine (T025)
 // ---------------------------------------------------------------------------
 
+// @impl 013-cross-agent-extensions/FR-011
 /**
  * Run the doctor diagnostics and return a deterministic `DoctorReport`. Pure
  * function modulo `fs.read*` — never writes, never spawns processes, never
@@ -234,28 +235,63 @@ function addExtraneousFindings(
 ): void {
   const distRoot = resolve(rootAbs, descriptor.skillsPath);
   if (!existsSync(distRoot)) return;
-  // Build the canonical set of relative paths for fast membership lookup.
-  // Compare in POSIX form, mirroring `SkillFile.relPath`.
+
+  // spec 013 FR-011 (d) — extraneous-file detection is scoped to artgraph's
+  // own canonical top-level dirs (e.g. `artgraph-impact/`, `_shared/`). Any
+  // dir under `<agent_skills_path>/` that is NOT one of those canonical
+  // top-levels belongs to another tool's Skills (e.g. `.claude/skills/
+  // speckit-implement/SKILL.md`) and is out of artgraph's scope; we ignore
+  // it entirely so doctor does not spuriously flag third-party Skills.
+  //
+  // Within each canonical top-level dir, every file MUST match a canonical
+  // relPath; mismatches (old version remnants, manually added files) are
+  // reported as `extraneous-file`.
+  const canonicalTopLevels = new Set<string>(
+    source.entries.map((e) => e.topLevel),
+  );
   const canonical = new Set<string>();
   for (const entry of source.entries) {
     for (const file of entry.files) {
       canonical.add(file.relPath);
     }
   }
-  const onDisk: string[] = [];
-  walk(distRoot, distRoot, onDisk);
-  for (const abs of onDisk) {
-    const relPosix = toPosix(abs.slice(distRoot.length + 1));
-    if (!canonical.has(relPosix)) {
-      out.push({
-        severity: "fail",
-        agent: descriptor.id,
-        kind: "extraneous-file",
-        path: toRepoRel(rootAbs, abs),
-        expected: "not present",
-        actual: "present",
-        message: `Distribution contains a file not in canonical templates/skills/. Remove it (or report a stale artgraph version that left it behind).`,
-      });
+
+  // Enumerate `<distRoot>/<topLevel>` only for topLevels that appear in the
+  // canonical set; everything else (non-artgraph Skills) is left untouched.
+  let topLevelDirs: string[];
+  try {
+    topLevelDirs = readdirSync(distRoot);
+  } catch {
+    return;
+  }
+  for (const topLevel of topLevelDirs) {
+    if (!canonicalTopLevels.has(topLevel)) continue;
+    const subRoot = resolve(distRoot, topLevel);
+    let stat;
+    try {
+      stat = statSync(subRoot);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) continue;
+
+    const onDisk: string[] = [];
+    walk(subRoot, subRoot, onDisk);
+    for (const abs of onDisk) {
+      // Compute the file's relPath relative to `distRoot`, matching the
+      // POSIX form used by `SkillFile.relPath`.
+      const relPosix = toPosix(abs.slice(distRoot.length + 1));
+      if (!canonical.has(relPosix)) {
+        out.push({
+          severity: "fail",
+          agent: descriptor.id,
+          kind: "extraneous-file",
+          path: toRepoRel(rootAbs, abs),
+          expected: "not present",
+          actual: "present",
+          message: `Distribution contains a file not in canonical templates/skills/. Remove it (or report a stale artgraph version that left it behind).`,
+        });
+      }
     }
   }
 }

@@ -103,9 +103,12 @@ grep -q "claude" stderr.txt    # サポート値一覧の提示
 cd /tmp/artgraph-q1
 npx artgraph init --agents=claude,codex
 sha1=$(find .claude .agents AGENTS.md CLAUDE.md -type f -exec cat {} \; | sha1sum)
-npx artgraph init --agents=claude,codex
+# 2 回目は `.artgraph.json` の存在ガードを回避するため `--force` を付ける。
+# canonical と一致していれば distribute() / agent-context writer は no-op
+# になり、配布物の内容は変化しない (= 冪等)。
+npx artgraph init --agents=claude,codex --force
 sha2=$(find .claude .agents AGENTS.md CLAUDE.md -type f -exec cat {} \; | sha1sum)
-test "$sha1" = "$sha2"    # 2 回目で内容に変化が無いこと
+test "$sha1" = "$sha2"    # 2 回目 (--force) でも内容に変化が無いこと (冪等)
 ```
 
 ### 1-6. `--minimal` + `--agents` 警告
@@ -241,10 +244,18 @@ echo $?    # 0 期待 (異常扱いしない)
 
 ```bash
 cd /tmp/artgraph-q1
-echo "obsolete" > .claude/skills/artgraph-old/SKILL.md  # canonical に無いディレクトリ
+# canonical な artgraph Skill dir (例: artgraph-impact/) の内側に
+# canonical に無いファイルがあれば extraneous-file として報告される。
+echo "leftover from older artgraph version" > .claude/skills/artgraph-impact/leftover.md
 npx artgraph doctor; echo $?
-# 期待: 非 0 終了、extraneous-file finding、path=.claude/skills/artgraph-old/SKILL.md
+# 期待: 非 0 終了、extraneous-file finding、path=.claude/skills/artgraph-impact/leftover.md
 ```
+
+**スコープ補足 (FR-011 (d))**:
+doctor の `extraneous-file` 判定は **artgraph が canonical で書き出す top-level dir
+(例: `artgraph-impact/`, `_shared/`) の配下** に限定される。`<agent_skills_path>/`
+直下に置かれた非 artgraph 由来の dir (例: `.claude/skills/speckit-implement/SKILL.md`
+のような他ツールの Skills) は対象外で、警告も出さない。
 
 ---
 

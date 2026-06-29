@@ -1,6 +1,13 @@
 // spec 013 T031 [US4] (C3 remediation) — non-regression for FR-012 後段
 // "doctor は gate に組み込まない".
 //
+// FR-014 scope-out enforcement: this file also doubles as a one-shot
+// guard against the negative requirements in spec 013 FR-014 — no MCP
+// server bootstrap, no plugin marketplace manifest, and no non-Claude
+// agent hooks distribution. The smoke test below greps the source tree
+// for those forbidden surfaces.
+// @impl 013-cross-agent-extensions/FR-014
+//
 // Strategy: a hybrid static + behavioural check.
 //   (a) **Static grep** of `src/check.ts` proves the gate module has no
 //       compile-time dependency on the doctor surface (no `doctor` /

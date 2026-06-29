@@ -269,11 +269,17 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     config.packageManager = detectedPm;
   }
 
+  // @impl 013-cross-agent-extensions/FR-008
   // Partial-state guard: distribute Skills BEFORE writing `.artgraph.json`
   // so a mid-loop copy failure (which `distribute()` already rolls back)
   // never leaves an orphan config file on disk. The order is:
   //   1. read canonical Skills source (no write)
   //   2. distribute() per agent (writes to <agent.skillsPath>/, self-rollback)
+  //      - FR-008: Kiro descriptor's `skillsPath` is `.kiro/skills/` only;
+  //        `.kiro/steering/artgraph.md` is the integrate stage (step 5) /
+  //        KiroProvider's responsibility, NOT this distribute() call.
+  //        The two stages stay orthogonal so `--agents=kiro` and
+  //        `--integrations=...,kiro,...` can be combined or used alone.
   //   3. scan + reconcile (writes .trace.lock)
   //   4. write .artgraph.json (final, only reached if everything above
   //      succeeded)

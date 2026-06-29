@@ -29,6 +29,7 @@ export class AgentsParseError extends Error {
 
 const SUPPORTED_LIST = AGENT_IDS.join(", ");
 
+// @impl 013-cross-agent-extensions/FR-001
 /**
  * Parse the raw `--agents=<csv>` value into a normalized, alpha-sorted
  * `AgentId[]`. Throws `AgentsParseError` on any contract violation.
