@@ -364,16 +364,18 @@ Notes:
 
 artgraph ships 8 Claude Code Skills that wire the CLI into the agent workflow:
 
-| Skill                       | When it fires                                                                                                                              |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `artgraph-setup`            | User wants to install / set up / add artgraph on a fresh project                                                                           |
-| `artgraph-integrate`        | User wants to wire artgraph into an installed SDD tool (Spec Kit / Kiro)                                                                   |
-| `artgraph-detect`           | User asks whether artgraph is set up / what's installed / what's available                                                                 |
-| `artgraph-impact`           | File-based forward impact analysis. Input is file paths only — explicit paths, `--from-tasks <path>`, `--from-plan <path>`, or `--diff`    |
-| `artgraph-plan-coverage`    | Detects implicit impacts: files declared in `tasks.md` may affect existing REQs not mentioned in `tasks.md` / `plan.md` / `spec.md`. Run after `/speckit-tasks` or before `/speckit-implement` |
-| `artgraph-verify`           | User reports implementation completion or wants a consistency check                                                                        |
-| `artgraph-coverage`         | User asks for progress, remaining work, or what's left to test                                                                             |
-| `artgraph-rename`           | User wants to rename / split / merge requirement IDs                                                                                       |
+| Skill                       | Input mode    | When it fires                                                                                                                              |
+| --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `artgraph-setup`            | n/a           | User wants to install / set up / add artgraph on a fresh project                                                                           |
+| `artgraph-integrate`        | n/a           | User wants to wire artgraph into an installed SDD tool (Spec Kit / Kiro)                                                                   |
+| `artgraph-detect`           | n/a           | User asks whether artgraph is set up / what's installed / what's available                                                                 |
+| `artgraph-impact`           | file + symbol | Forward impact analysis. Input is file paths or `path:symbol` pairs (REQ-IDs are rejected) — explicit args, `--from-tasks <path>`, `--from-plan <path>`, or `--diff` |
+| `artgraph-plan-coverage`    | file + symbol | Detects implicit impacts: files / `path:symbol` declared in `tasks.md` may affect existing REQs not mentioned in `tasks.md` / `plan.md` / `spec.md`. Run after `/speckit-tasks` or before `/speckit-implement` |
+| `artgraph-verify`           | n/a           | User reports implementation completion or wants a consistency check                                                                        |
+| `artgraph-coverage`         | n/a           | User asks for progress, remaining work, or what's left to test                                                                             |
+| `artgraph-rename`           | n/a           | User wants to rename / split / merge requirement IDs                                                                                       |
+
+Skills marked `file + symbol` accept either `src/auth.ts` (file unit) or `src/auth.ts:validateToken` (symbol unit). Symbol-level input additionally requires `.artgraph.json` to be set to `"mode": "symbol"` and the graph re-scanned — see [docs/skills-guide.md](docs/skills-guide.md#file-mode-vs-symbol-mode) for the trade-off, config example, and the `impactReqs` / `originReqs` dual-axis drift guide.
 
 Skills live at `templates/skills/<name>/SKILL.md` and ship in English (for cross-agent reach + Claude Skills best practice). `artgraph init` installs them into `.claude/skills/` by default; pass `--no-skills` to opt out.
 

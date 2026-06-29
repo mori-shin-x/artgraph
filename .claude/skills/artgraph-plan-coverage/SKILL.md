@@ -13,9 +13,9 @@ disable-model-invocation: false
 
 ## Purpose
 
-Runs `artgraph plan-coverage` to detect **implicit impacts**: REQs that the files listed in `tasks.md` will touch via the artgraph graph, but which are never mentioned in `tasks.md` / `plan.md` / `spec.md`. These are the "I forgot existing requirement X also lives in this file" misses that `artgraph impact` (forward, file-only) and `artgraph check` (drift vs lock) cannot catch on their own.
+Runs `artgraph plan-coverage` to detect **implicit impacts**: REQs that the files (or `path:symbol` pairs) listed in `tasks.md` will touch via the artgraph graph, but which are never mentioned in `tasks.md` / `plan.md` / `spec.md`. These are the "I forgot existing requirement X also lives in this file" misses that `artgraph impact` (forward) and `artgraph check` (drift vs lock) cannot catch on their own.
 
-Complementary to `artgraph-impact`: that Skill answers "what does this file edit touch?" — this Skill answers "of the things this plan touches, what did the human forget to write down?".
+Complementary to `artgraph-impact`: that Skill answers "what does this edit touch?" — this Skill answers "of the things this plan touches, what did the human forget to write down?".
 
 ## Steps
 
@@ -24,6 +24,8 @@ Complementary to `artgraph-impact`: that Skill answers "what does this file edit
 See [install-check](../_shared/install-check.md) for the standard pre-flight check.
 
 > `<PM-exec>` is the project's package runner: `npx` (npm), `pnpm exec`, `bunx`, or `deno run -A npm:artgraph/cli`. Substitute the one detected by `_shared/package-manager.md` (or written in `.artgraph.json#packageManager`).
+
+**Symbol-level entries** (`Files: src/auth.ts:validateToken`) require `.artgraph.json` to be set to `"mode": "symbol"` and the graph re-scanned. See [Skills Guide — file vs symbol mode](../../../docs/skills-guide.md#file-mode-vs-symbol-mode) for trade-offs.
 
 ### 2. Pick a mode and run
 
@@ -43,26 +45,40 @@ See [install-check](../_shared/install-check.md) for the standard pre-flight che
 
 ### 3. Parse the JSON output
 
-The result has two views of the same implicit-impact data plus a summary:
+The result carries the **dual-axis impact view** (per `implicitImpacts` entry) plus a summary:
 
 | field | shape | use |
 | --- | --- | --- |
-| `implicitImpacts` | `[{ sourceFile, reqs: [{ reqId, kind }] }]` | "Which REQs does each file I'm touching pull in?" (by-sourceFile) |
-| `implicitImpactsByReq` | `[{ reqId, sourceFiles: [string] }]` | "Which files does this implicit REQ come from?" (by-FR — inverse view) |
+| `implicitImpacts` | `[{ sourceFile, sourceSymbol?, impactReqs: ReqEntry[], originReqs: ReqEntry[] }]` | "Which REQs does each file or symbol I'm touching pull in?" `impactReqs` = forward BFS reach; `originReqs` = 1-hop `@impl` claim of that start id |
+| `implicitImpactsByReq` | `[{ reqId, sourceLocations: Array<{file, symbol?}> }]` | "Which file or symbol does this implicit REQ come from?" (inverse view) |
 | `summary` | `{ totalAffected, mentioned, implicit, ignored }` | invariant: `totalAffected == mentioned + implicit + ignored` |
-| `diagnostics` | `[{ kind, ... }]` | e.g. `missingFilesSection`, `unresolvedFilePath`, `emptyExtraction` |
+| `diagnostics` | `[{ kind, ... }]` | `missingFilesSection` / `unresolvedFilePath` / `unresolvedSymbol` / `emptyExtraction` |
 | `ignored` | `string[]` | the `--ignore` REQ-IDs, echoed back for transparency |
 
-If `implicitImpacts` is empty, report "No implicit impacts." and stop. If `diagnostics` contains `emptyExtraction`, warn explicitly: "No implicit impacts because nothing was extracted — add a `Files:` section." (silent green guard).
+#### Reading the two axes — drift detection
+
+Compare per-entry `impactReqs` against `originReqs`:
+
+- **`impactReqs \ originReqs` non-empty → drift candidate.** The start id reaches a REQ it does not `@impl`-claim. Surface those REQs and ask the user to either tag the symbol with `@impl REQ-XXX` or update the spec graph.
+- **Sets equal → no drift.** Claim and reach match.
+- **`originReqs \ impactReqs` non-empty → orphan claim.** Out of scope for this Skill — `artgraph check --gate` (Stop hook) will report it.
+
+#### Diagnostics
+
+- `unresolvedSymbol` (`{ sourceFile, symbol, line }`): the file exists but no exported symbol of that name was found in the symbol-mode graph. The entry is excluded from `implicitImpacts`. Ask the user whether to (a) fix the typo, (b) drop the `:symbol` suffix to fall back to file unit, or (c) re-run `<PM-exec> scan` if the symbol was just added.
+- `emptyExtraction`: nothing was extracted — warn "add a `Files:` section."
+- `missingFilesSection` (opt-in via `--require-files-section`): some task blocks lack a `Files:` section.
+
+If `implicitImpacts` is empty and no warnings fire, report "No implicit impacts." and stop.
 
 ### 4. Resolve each implicit REQ — pick one of three paths
 
 For every `reqId` in `implicitImpactsByReq`, help the user choose one of:
 
-1. **Mention it.** Add a reference to the REQ-ID anywhere in `tasks.md`, `plan.md`, or `spec.md` — any label works (e.g. `Considered: REQ-003 — investigated, no impact`, `Affected: REQ-003`, `[REQ-003]`, a heading). The next `plan-coverage` run will see the mention and drop the REQ from `implicitImpacts`.
-2. **`--ignore` (one-shot).** For CI-only suppression: `<PM-exec> plan-coverage --gate --ignore REQ-003,REQ-007`. Not persisted anywhere — exists only for the current command. Use sparingly; prefer (1).
-3. **Future: `--require-ack-keyword` (strict mode).** Out of scope for this Skill — tracked separately for a future spec.
+1. **Mention it.** Add a reference to the REQ-ID anywhere in `tasks.md`, `plan.md`, or `spec.md` — any label works (e.g. `Considered: REQ-003 — investigated, no impact`, `Affected: REQ-003`, `[REQ-003]`, a heading). The next run drops the REQ from `implicitImpacts`.
+2. **`--ignore` (one-shot).** For CI-only suppression: `<PM-exec> plan-coverage --gate --ignore REQ-003,REQ-007`. Not persisted; exists only for the current command. Use sparingly; prefer (1).
+3. **Future: `--require-ack-keyword` (strict mode).** Out of scope for this Skill.
 
 ### 5. Report back
 
-Summarize: how many implicit REQs were found, the by-file breakdown, and the proposed action per REQ (which of the three paths above). If `--gate` was used in CI and any implicit impacts remain, the CLI exits 1 — surface that exit code to the caller.
+Summarize: implicit REQ count, by-source-location breakdown (note `file` vs `file:symbol`), drift candidates per entry, and the proposed action per REQ. If `--gate` was used in CI and any implicit impacts remain, the CLI exits 1 — surface that exit code to the caller.

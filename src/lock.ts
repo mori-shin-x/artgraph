@@ -20,12 +20,10 @@ function assertWithinRoot(rootDir: string, fullPath: string): void {
 }
 
 /**
- * Thrown by `readLock` when the on-disk lock file uses the legacy v1
- * `dependsOn: string[]` shape (issue #35 / lock-schema-v2). v1 cannot be
- * silently migrated because the structured `provenances` array does not exist
- * on disk — fabricating it would invent provenance the parser never produced.
- * Surface a clear, actionable error instead so downstream code (`renameLockKey`,
- * `mergeLockKeys`, drift checks) never has to defend against the v1 shape.
+ * Thrown by `readLock` when the on-disk lock file is not a JSON object at the
+ * top level (e.g. a corrupted or hand-edited file). Surfacing a clear,
+ * actionable error keeps downstream code (`renameLockKey`, `mergeLockKeys`,
+ * drift checks) free of defensive shape-guards.
  */
 export class LockSchemaError extends Error {
   constructor(message: string) {
@@ -39,21 +37,6 @@ function validateLockSchema(lock: unknown): asserts lock is LockFile {
     throw new LockSchemaError(
       `LockFile must be a JSON object at the top level. Delete .trace.lock and re-run \`artgraph scan\` to regenerate.`,
     );
-  }
-  for (const [id, entry] of Object.entries(lock as Record<string, unknown>)) {
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
-    const deps = (entry as { dependsOn?: unknown }).dependsOn;
-    if (deps === undefined) continue;
-    if (!Array.isArray(deps)) continue;
-    for (const d of deps) {
-      if (typeof d === "string") {
-        throw new LockSchemaError(
-          `LockFile schema v1 detected at "${id}".dependsOn (string element).\n` +
-            `Schema v2 requires {id, provenances} objects.\n` +
-            `Delete .trace.lock and re-run \`artgraph scan\` to regenerate.`,
-        );
-      }
-    }
   }
 }
 
@@ -69,7 +52,7 @@ export function readLock(rootDir: string, lockPath: string): LockFile {
     return {};
   }
   // Schema validation is a hard fail (LockSchemaError), not a soft warning:
-  // continuing with a v1 shape causes cryptic TypeErrors in rename / merge.
+  // a non-object top level would cause cryptic TypeErrors in rename / merge.
   validateLockSchema(parsed);
   return parsed;
 }
