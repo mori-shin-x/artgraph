@@ -1,15 +1,5 @@
-import {
-  copyFileSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  rmdirSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { existsSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   DEFAULT_CONFIG,
   type ArtgraphConfig,
@@ -20,16 +10,36 @@ import {
   type DetectionResult,
   type InitOptions,
 } from "./types.js";
-import type { AgentId } from "./agents/descriptors.js";
+import {
+  type AgentId,
+  type AgentDescriptor,
+  findDescriptor,
+} from "./agents/descriptors.js";
 import { scan, reconcile } from "./scan.js";
 import type { BuildWarning } from "./graph/builder.js";
 import { getProviderStatuses, runIntegrate } from "./integrate/index.js";
 import { detectPackageManager } from "./package-manager.js";
 import { loadConfig } from "./config.js";
+import { readSkillSource } from "./agents/source.js";
+import {
+  distribute,
+  DistributionError,
+  type DistributeResult,
+} from "./agents/distribute.js";
+import { writeAgentsMd, writeWrapper, type WriteResult } from "./agents/agent-context.js";
 
+// `templates/skills/` lives next to `dist/`, so resolve relative to the
+// compiled module path (works for both `dist/init.js` and `src/init.ts` via
+// ts-node / vitest).
 const SKILLS_TEMPLATE_DIR = resolve(import.meta.dirname, "../templates/skills");
-const SKILLS_DEST_SUBDIR = join(".claude", "skills");
 
+/**
+ * Retained for spec 013 source.ts — the new per-agent `distribute()` path uses
+ * `DistributionError` for write-time failures, but `readSkillSource()` still
+ * throws this class when the canonical templates tree is missing or malformed
+ * (a packaging fault). Keeping the class here keeps the import path stable for
+ * the existing test suite.
+ */
 export class SkillsInstallError extends Error {
   readonly partiallyInstalled: string[];
   constructor(message: string, partiallyInstalled: string[] = []) {
@@ -46,7 +56,35 @@ export interface InitResult {
   scanSummary?: ScanSummary;
   warnings: BuildWarning[];
   lockPath?: string;
+  /**
+   * Backward-compat field: relative POSIX paths of every Skill file written
+   * into `.claude/skills/` when `claude` is one of the selected agents. The
+   * CLI text/JSON formatter still consumes this for the "Installed N Claude
+   * Code skills" output. For per-agent detail, see `agentDistributions`.
+   *
+   * Populated as `[...writtenPaths, ...noopPaths]` so an idempotent re-run
+   * still reports the full file list (legacy `installSkills` errored on
+   * conflict, so a "noop" result never existed there; we collapse both into
+   * one list here to preserve the same surface).
+   *
+   * Absent when `claude` is not in `options.agents` or when the Skills stage
+   * is gated off (`--no-skills`, `--minimal`, etc.).
+   */
   skillsInstalled?: string[];
+  /**
+   * spec 013 (T010) — per-agent distribute() summary. Keyed by `AgentId`, so a
+   * `--agents=claude,codex` run gets two entries. Paths are absolute (mirrors
+   * `DistributeResult.writtenPaths` / `noopPaths`). Empty `{}` (not undefined)
+   * when the Skills stage ran with zero agents (only possible programmatically;
+   * the CLI rejects that combination).
+   */
+  agentDistributions?: Record<string, { writtenPaths: string[]; noopPaths: string[] }>;
+  /**
+   * spec 013 (T021) — per-file outcome for the agent-context stage. One entry
+   * each for AGENTS.md and any wrapper file that ran. `written: false` marks
+   * files that were already byte-identical on disk (idempotent re-run).
+   */
+  agentContextWritten?: { path: string; written: boolean }[];
   /**
    * Per-provider result for any one-shot integrations triggered by
    * `--integrate=<tools>` (FR-022/023/024). Empty / undefined when the
@@ -115,202 +153,6 @@ export function generateConfig(detection: DetectionResult): ArtgraphConfig {
   };
 }
 
-interface SkillTemplate {
-  /** Top-level entry name under templates/skills (e.g. "_shared" or "artgraph-impact"). */
-  topLevel: string;
-  /** All files belonging to this entry, as paths relative to templates/skills. */
-  files: string[];
-}
-
-function walkDir(root: string, current: string, out: string[]): void {
-  for (const entry of readdirSync(current)) {
-    // Skip hidden entries (e.g. .DS_Store, .git) so junk files dropped into
-    // templates/skills/ never end up copied into the user's repo.
-    if (entry.startsWith(".")) continue;
-    const full = join(current, entry);
-    const stat = statSync(full);
-    if (stat.isDirectory()) {
-      walkDir(root, full, out);
-    } else if (stat.isFile()) {
-      out.push(relative(root, full));
-    }
-  }
-}
-
-function readSkillTemplates(templateDir: string): SkillTemplate[] {
-  if (!existsSync(templateDir)) {
-    throw new SkillsInstallError(
-      `Skills template directory not found at ${templateDir}. This is likely a packaging issue.`,
-    );
-  }
-  const topEntries = readdirSync(templateDir).filter(
-    (name) => !name.startsWith(".") && statSync(join(templateDir, name)).isDirectory(),
-  );
-  if (topEntries.length === 0) {
-    throw new SkillsInstallError(
-      `No skill template directories found in ${templateDir}. Expected templates/skills/<name>/SKILL.md or templates/skills/_shared/. This is likely a packaging issue.`,
-    );
-  }
-  const templates: SkillTemplate[] = [];
-  for (const topLevel of topEntries) {
-    const files: string[] = [];
-    walkDir(templateDir, join(templateDir, topLevel), files);
-    if (topLevel !== "_shared") {
-      // Every skill directory MUST contain SKILL.md (Claude Code Skills contract).
-      const hasSkillMd = files.some((f) => f === join(topLevel, "SKILL.md"));
-      if (!hasSkillMd) {
-        throw new SkillsInstallError(
-          `Skill directory ${topLevel}/ is missing SKILL.md. This is likely a packaging issue.`,
-        );
-      }
-    }
-    templates.push({ topLevel, files });
-  }
-  return templates;
-}
-
-// `templateDir` is for test injection only; production callers omit it and the
-// constant `SKILLS_TEMPLATE_DIR` (resolved relative to dist/) is used.
-export interface SkillsInstallOptions {
-  force?: boolean;
-  templateDir?: string;
-}
-
-function findConflicts(destDir: string, templates: SkillTemplate[]): string[] {
-  const conflicts: string[] = [];
-  for (const t of templates) {
-    for (const rel of t.files) {
-      const dst = join(destDir, rel);
-      let s: ReturnType<typeof lstatSync> | undefined;
-      try {
-        s = lstatSync(dst);
-      } catch {
-        // ENOENT (or any stat failure): treat as no conflict and let the
-        // copy step surface the real error if there is one.
-        continue;
-      }
-      if (s.isSymbolicLink()) {
-        // Refuse to follow symlinks even with --force: copyFileSync would
-        // overwrite the symlink target (potentially a sensitive file
-        // outside the skills tree). Always flag as a hard conflict.
-        conflicts.push(`${rel} (symlink — refusing to overwrite)`);
-      } else {
-        conflicts.push(rel);
-      }
-    }
-  }
-  return conflicts;
-}
-
-/**
- * Returns true if any symlink-flagged conflict is present in the list
- * produced by `findConflicts`. Symlink conflicts are non-overridable: even
- * `--force` must refuse them to avoid clobbering files outside the skills
- * tree via a malicious or accidental symlink.
- */
-function hasSymlinkConflict(conflicts: string[]): boolean {
-  return conflicts.some((c) => c.includes("(symlink"));
-}
-
-// Throws if installation cannot proceed cleanly. Mirrors installSkills's
-// validation (templates available, no conflicts unless --force) without writing.
-// Use this as a pre-flight check before any other side effects.
-export function validateSkillsInstall(rootDir: string, options: SkillsInstallOptions = {}): void {
-  const abs = resolve(rootDir);
-  const destDir = resolve(abs, SKILLS_DEST_SUBDIR);
-  const templateDir = options.templateDir ?? SKILLS_TEMPLATE_DIR;
-  const templates = readSkillTemplates(templateDir);
-
-  const conflicts = findConflicts(destDir, templates);
-  // Symlinks are NEVER overwritten, even with --force. copyFileSync would
-  // follow them and clobber whatever they point at, which is a security
-  // hazard outside the skills tree.
-  if (hasSymlinkConflict(conflicts)) {
-    const symlinks = conflicts.filter((c) => c.includes("(symlink"));
-    throw new SkillsInstallError(
-      `Refusing to overwrite symlink(s) in ${SKILLS_DEST_SUBDIR}: ${symlinks.join(", ")}. Remove the symlink(s) and rerun.`,
-    );
-  }
-  if (!options.force && conflicts.length > 0) {
-    throw new SkillsInstallError(
-      `Skill file(s) already exist in ${SKILLS_DEST_SUBDIR}: ${conflicts.join(", ")}. Use --force to overwrite.`,
-    );
-  }
-}
-
-export function installSkills(rootDir: string, options: SkillsInstallOptions = {}): string[] {
-  const abs = resolve(rootDir);
-  const destDir = resolve(abs, SKILLS_DEST_SUBDIR);
-  const templateDir = options.templateDir ?? SKILLS_TEMPLATE_DIR;
-  const templates = readSkillTemplates(templateDir);
-
-  const conflicts = findConflicts(destDir, templates);
-  // Symlinks: refuse always (see validateSkillsInstall).
-  if (hasSymlinkConflict(conflicts)) {
-    const symlinks = conflicts.filter((c) => c.includes("(symlink"));
-    throw new SkillsInstallError(
-      `Refusing to overwrite symlink(s) in ${SKILLS_DEST_SUBDIR}: ${symlinks.join(", ")}. Remove the symlink(s) and rerun.`,
-    );
-  }
-  if (!options.force && conflicts.length > 0) {
-    throw new SkillsInstallError(
-      `Skill file(s) already exist in ${SKILLS_DEST_SUBDIR}: ${conflicts.join(", ")}. Use --force to overwrite.`,
-    );
-  }
-
-  // Track every absolute path we wrote and every directory we created so
-  // that a mid-loop failure can roll back to the pre-install state. Without
-  // this, a partial copy leaves orphan files in `.claude/skills/` that the
-  // user then has to clean up by hand before retrying.
-  const writtenAbs: string[] = [];
-  const dirsCreated: string[] = [];
-
-  const ensureDir = (path: string): void => {
-    if (existsSync(path)) return;
-    mkdirSync(path, { recursive: true });
-    dirsCreated.push(path);
-  };
-
-  ensureDir(destDir);
-  const installed: string[] = [];
-  let currentRel = "";
-  try {
-    for (const t of templates) {
-      for (const rel of t.files) {
-        currentRel = rel;
-        const src = join(templateDir, rel);
-        const dst = join(destDir, rel);
-        ensureDir(join(dst, ".."));
-        copyFileSync(src, dst);
-        writtenAbs.push(dst);
-        installed.push(join(SKILLS_DEST_SUBDIR, rel));
-      }
-    }
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    // Roll back in reverse order: files first, then empty directories.
-    for (const f of [...writtenAbs].reverse()) {
-      try {
-        unlinkSync(f);
-      } catch {
-        // best-effort cleanup
-      }
-    }
-    for (const d of [...dirsCreated].reverse()) {
-      try {
-        rmdirSync(d);
-      } catch {
-        // best-effort: leave non-empty dirs (likely held user content)
-      }
-    }
-    throw new SkillsInstallError(
-      `Failed to copy ${currentRel} into ${SKILLS_DEST_SUBDIR}: ${msg}`,
-      installed,
-    );
-  }
-  return installed;
-}
-
 /**
  * Decide which stages of `init` to run based on the new flag matrix
  * (spec 012-skills-expansion, contracts/cli-flags.md).
@@ -362,14 +204,6 @@ function installHooks(_rootDir: string, _options: { force?: boolean } = {}): voi
   // <rootDir>/.claude/settings.json with the 4-case strategy.
 }
 
-/**
- * Agent-context snippet injection. P1 (T027) replaces this stub.
- */
-function installAgentContext(_rootDir: string, _options: { force?: boolean } = {}): void {
-  // P1 (T027): inject the CLAUDE.md / AGENTS.md snippet between the
-  // <!-- artgraph: BEGIN agent context --> markers.
-}
-
 export function runInit(rootDir: string, options: InitOptions = {}): InitResult {
   const abs = resolve(rootDir);
   const configPath = resolve(abs, ".artgraph.json");
@@ -381,26 +215,35 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
 
   const stages = computeStageGates(options);
 
-  // spec 013 Phase 2 gate: the legacy `installSkills` only writes to
-  // `.claude/skills/`, so it must fire only when "claude" is in the
-  // selected Tier 1 agents. Other agents are wired through the new
-  // per-agent `distribute()` in Phase 3 (T009 / T010); until then they
-  // are no-ops here.
-  //
-  // When `options.agents` is undefined (no spec-013 input — e.g. a test
-  // that constructs `RunInitOptions` directly without setting `agents`),
-  // the legacy Claude path is skipped. Every CLI invocation passes
-  // `agents` after `--agents` parsing + orthogonality, so this only
-  // affects programmatic callers.
-  const claudeSelected =
-    options.agents === undefined ? false : options.agents.includes("claude");
-  const skillsStageActive = stages.skills && claudeSelected;
+  // spec 013 (FR-002 / FR-013) — the Skills and agent-context stages both key
+  // on `options.agents`. The CLI layer (`src/cli.ts`) enforces "agents
+  // required when these stages run" before calling us, so by the time we get
+  // here either:
+  //   - agents is undefined or empty → both stages no-op (programmatic caller
+  //     that opted out, or CLI under --minimal / --no-skills --no-agent-context)
+  //   - agents is non-empty → both stages iterate over the list
+  const agentsList: AgentId[] = options.agents ?? [];
+  const skillsStageActive = stages.skills && agentsList.length > 0;
+  const agentContextStageActive = stages.agentContext && agentsList.length > 0;
 
-  // Pre-flight: fail before any write if the Skills stage cannot proceed
-  // cleanly (templates missing, conflicts without --force). Keeps partial
-  // -state windows closed: validation failure leaves disk untouched.
+  // Pre-flight: stage the Skills source + per-agent descriptor table BEFORE
+  // any write so a missing template or broken descriptor fails fast (no
+  // partial `.artgraph.json` left behind). `readSkillSource()` throws
+  // `SkillsInstallError` on packaging faults.
+  let skillSource: ReturnType<typeof readSkillSource> | undefined;
+  let skillDescriptors: AgentDescriptor[] | undefined;
   if (skillsStageActive) {
-    validateSkillsInstall(abs, { force: options.force });
+    skillSource = readSkillSource(SKILLS_TEMPLATE_DIR);
+    skillDescriptors = agentsList.map((id) => {
+      const d = findDescriptor(id);
+      if (!d) {
+        // Defensive: parse-agents.ts already validates this, but a programmatic
+        // caller could bypass it. Fail loudly rather than silently dropping the
+        // agent.
+        throw new Error(`unknown agent id passed to runInit: ${id}`);
+      }
+      return d;
+    });
   }
 
   const detection = detectProject(abs);
@@ -426,17 +269,39 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     config.packageManager = detectedPm;
   }
 
-  // Partial-state guard: install Skills BEFORE writing `.artgraph.json` so a
-  // mid-loop copy failure (which `installSkills` already rolls back) never
-  // leaves an orphan config file on disk. The order is:
-  //   1. validate Skills (pre-flight, no write)
-  //   2. install Skills (writes to .claude/skills/, self-rollback on failure)
+  // Partial-state guard: distribute Skills BEFORE writing `.artgraph.json`
+  // so a mid-loop copy failure (which `distribute()` already rolls back)
+  // never leaves an orphan config file on disk. The order is:
+  //   1. read canonical Skills source (no write)
+  //   2. distribute() per agent (writes to <agent.skillsPath>/, self-rollback)
   //   3. scan + reconcile (writes .trace.lock)
   //   4. write .artgraph.json (final, only reached if everything above
   //      succeeded)
-  const skillsInstalled = skillsStageActive
-    ? installSkills(abs, { force: options.force })
-    : undefined;
+  //   5. one-shot integrations (`--integrations=<list>` / auto-detect)
+  //   6. agent-context (AGENTS.md + wrappers)
+  let agentDistributions: Record<string, { writtenPaths: string[]; noopPaths: string[] }> | undefined;
+  let skillsInstalled: string[] | undefined;
+  if (skillsStageActive && skillSource && skillDescriptors) {
+    agentDistributions = {};
+    for (const descriptor of skillDescriptors) {
+      const result: DistributeResult = distribute(descriptor, skillSource, {
+        rootDir: abs,
+        force: options.force ?? false,
+      });
+      agentDistributions[descriptor.id] = {
+        writtenPaths: result.writtenPaths,
+        noopPaths: result.noopPaths,
+      };
+      // Backward-compat: surface the Claude paths as POSIX-relative entries so
+      // the legacy `skillsInstalled` field still works for existing CLI text
+      // / JSON consumers (cli.ts H6 split, `tests/cli.test.ts` assertions).
+      if (descriptor.id === "claude") {
+        skillsInstalled = result.targets.map((t) =>
+          toPosixRel(abs, t.dstAbsPath),
+        );
+      }
+    }
+  }
 
   let scanSummary: ScanSummary | undefined;
   let warnings: BuildWarning[] = [];
@@ -466,8 +331,23 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   if (stages.hooks) {
     installHooks(abs, { force: options.force });
   }
-  if (stages.agentContext) {
-    installAgentContext(abs, { force: options.force });
+
+  // spec 013 T021 — agent-context stage. AGENTS.md is canonical (always
+  // written when any agent is selected); wrappers are emitted only for the
+  // agents that need one (claude / copilot per descriptor table).
+  let agentContextWritten: { path: string; written: boolean }[] | undefined;
+  if (agentContextStageActive) {
+    agentContextWritten = [];
+    const ag: WriteResult = writeAgentsMd(abs);
+    agentContextWritten.push({ path: ag.path, written: ag.written });
+    if (agentsList.includes("claude")) {
+      const w = writeWrapper(abs, "claude");
+      agentContextWritten.push({ path: w.path, written: w.written });
+    }
+    if (agentsList.includes("copilot")) {
+      const w = writeWrapper(abs, "copilot");
+      agentContextWritten.push({ path: w.path, written: w.written });
+    }
   }
 
   return {
@@ -478,6 +358,8 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     warnings,
     lockPath,
     skillsInstalled,
+    agentDistributions,
+    agentContextWritten,
     integrationResults: integration.results,
     integrationWarnings: integration.warnings,
     integrationFailureCount: integration.failureCount > 0 ? integration.failureCount : undefined,
@@ -557,3 +439,16 @@ function runRequestedIntegrations(
     failureCount,
   };
 }
+
+// Convert an absolute path to a repo-root-relative POSIX path
+// (`/abs/.claude/skills/x` → `.claude/skills/x`). Mirrors the format the
+// legacy `installSkills` returned so the CLI output stays stable.
+function toPosixRel(rootAbs: string, abs: string): string {
+  // Normalise Windows backslashes for downstream POSIX consumers (CLI text +
+  // JSON assertions in tests are POSIX-typed).
+  const stripped = abs.startsWith(rootAbs + "/") || abs.startsWith(rootAbs + "\\")
+    ? abs.slice(rootAbs.length + 1)
+    : abs;
+  return stripped.split(/\\|\//).filter((s) => s.length > 0).join("/");
+}
+

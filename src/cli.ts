@@ -105,21 +105,21 @@ function resolveTestResults(
 program
   .command("init")
   .description(
-    "Initialize artgraph for this project (default: config + scan + Skills + auto-integrate detected SDD tools; Stop hook and agent-context snippet land in PR-B). Use --minimal for bare config only.",
+    "Initialize artgraph for this project (default: config + scan + Skills + auto-integrate detected SDD tools + AGENTS.md / wrapper injection; Stop hook lands in PR-B). Use --minimal for bare config only.",
   )
   .option("--force", "Overwrite existing .artgraph.json")
   .option("--minimal", "Bare config only — opt out of every extra setup stage")
   // Stage opt-outs (in default mode)
   .option("--no-scan", "Skip initial scan + reconcile")
-  .option("--no-skills", "Skip Claude Code Skills install (default mode only — already off under --minimal)")
+  .option("--no-skills", "Skip Skills distribution to the selected --agents (default mode only — already off under --minimal)")
   .option("--no-integrate", "Skip SDD-tool auto-integration (default mode only)")
   .option("--no-hooks", "Skip Stop hook installation (default mode only; P1 deliverable)")
-  .option("--no-agent-context", "Skip CLAUDE.md / AGENTS.md snippet injection (default mode only; P1 deliverable)")
+  .option("--no-agent-context", "Skip AGENTS.md / wrapper injection (default mode only)")
   // Stage opt-ins (used with --minimal)
-  .option("--with-skills", "Install Claude Code Skills into .claude/skills/ (use with --minimal)")
+  .option("--with-skills", "Distribute Skills to the selected --agents canonical paths (use with --minimal)")
   .option("--with-integrate", "Auto-integrate detected SDD tools (use with --minimal)")
   .option("--with-hooks", "Install Stop hook (use with --minimal; P1 deliverable, no effect yet)")
-  .option("--with-agent-context", "Inject CLAUDE.md / AGENTS.md snippet (use with --minimal; P1 deliverable, no effect yet)")
+  .option("--with-agent-context", "Inject AGENTS.md + wrapper(s) for the selected --agents (use with --minimal)")
   // Explicit integrate list (overrides auto-detect)
   .option(
     "--integrations <tools>",
@@ -152,14 +152,12 @@ program
       process.exit(1);
     }
 
-    // C1: --with-hooks / --with-agent-context are accepted (so the flag
-    // surface is stable for PR-B) but currently no-op. Warn so the user
-    // doesn't think they got hooks/snippet without checking output.
+    // C1: --with-hooks is accepted (so the flag surface is stable for PR-B)
+    // but currently no-op. Warn so the user doesn't think they got hooks
+    // without checking output. --with-agent-context now lands real output
+    // (AGENTS.md + wrappers, spec 013 T021); the warning was removed.
     if (opts.withHooks === true) {
       console.error("WARNING: --with-hooks is a P1 deliverable; the flag has no effect in this release.");
-    }
-    if (opts.withAgentContext === true) {
-      console.error("WARNING: --with-agent-context is a P1 deliverable; the flag has no effect in this release.");
     }
 
     // Parse --integrations: "all" stays as the literal sentinel; otherwise
