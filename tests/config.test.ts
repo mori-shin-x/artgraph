@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { resolve } from "node:path";
 import { writeFileSync, existsSync, unlinkSync, mkdirSync } from "node:fs";
 import { loadConfig } from "../src/config.js";
@@ -554,6 +554,77 @@ describe("loadConfig", () => {
       writeFileSync(CONFIG_PATH, JSON.stringify({}));
       const config = loadConfig(TMP_DIR);
       expect(config.lockFile).toBe(".trace.lock");
+    });
+  });
+
+  describe("packageManager (spec 015, FR-006, contracts §4)", () => {
+    const writeConfig = (obj: Record<string, unknown>) => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify(obj));
+    };
+
+    it.each(["npm", "pnpm", "bun", "deno"] as const)(
+      "accepts the valid value %s",
+      (pm) => {
+        writeConfig({ packageManager: pm });
+        expect(loadConfig(TMP_DIR).packageManager).toBe(pm);
+      },
+    );
+
+    it("drops yarn to undefined AND warns to stderr (yarn is the one ex-supported PM)", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        writeConfig({ packageManager: "yarn" });
+        expect(loadConfig(TMP_DIR).packageManager).toBeUndefined();
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toMatch(/yarn.*not supported/i);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("does NOT warn for an unknown non-yarn string (typo stays silent)", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        writeConfig({ packageManager: "npmm" });
+        expect(loadConfig(TMP_DIR).packageManager).toBeUndefined();
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("drops a non-string value (number) to undefined", () => {
+      writeConfig({ packageManager: 123 });
+      expect(loadConfig(TMP_DIR).packageManager).toBeUndefined();
+    });
+
+    it("is undefined when the field is absent", () => {
+      writeConfig({});
+      expect(loadConfig(TMP_DIR).packageManager).toBeUndefined();
+    });
+  });
+
+  describe("top-level JSON shape", () => {
+    // Hand-edited configs can accidentally produce a non-object root
+    // (array / number / string / null). The old code silently fell back to
+    // every default because every `raw.<field>` was just `undefined`. Now we
+    // reject the wrong root shape up front with a clear message.
+    it.each([
+      ["array", "[1, 2, 3]"],
+      ["number", "42"],
+      ["string", '"hello"'],
+      ["null", "null"],
+    ])("rejects a non-object root: %s", (_label, raw) => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, raw);
+      expect(() => loadConfig(TMP_DIR)).toThrow(/must be a JSON object/);
+    });
+
+    it("accepts an empty object root", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, "{}");
+      expect(() => loadConfig(TMP_DIR)).not.toThrow();
     });
   });
 });

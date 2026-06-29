@@ -7,7 +7,8 @@
     "artgraph": "./dist/cli.js"
   },
   "exports": {
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./cli": "./dist/cli.js"
   },
   "files": [
     "dist",

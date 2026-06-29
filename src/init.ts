@@ -23,6 +23,8 @@ import {
 import { scan, reconcile } from "./scan.js";
 import type { BuildWarning } from "./graph/builder.js";
 import { getProviderStatuses, runIntegrate } from "./integrate/index.js";
+import { detectPackageManager } from "./package-manager.js";
+import { loadConfig } from "./config.js";
 
 const SKILLS_TEMPLATE_DIR = resolve(import.meta.dirname, "../templates/skills");
 const SKILLS_DEST_SUBDIR = join(".claude", "skills");
@@ -371,7 +373,8 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   const abs = resolve(rootDir);
   const configPath = resolve(abs, ".artgraph.json");
 
-  if (existsSync(configPath) && !options.force) {
+  const hasExistingConfig = existsSync(configPath);
+  if (hasExistingConfig && !options.force) {
     throw new Error(".artgraph.json already exists. Use --force to overwrite.");
   }
 
@@ -385,7 +388,39 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   }
 
   const detection = detectProject(abs);
-  const config = generateConfig(detection);
+
+  // On `--force` over an existing config, MERGE the user's customizations
+  // (reqPatterns / taskConventions / planCoverage / docGraph / mode / lockFile
+  // / include / etc.) instead of nuking them. Only the detection-driven
+  // `packageManager` field is refreshed below. Initial inits (no existing
+  // config) keep the generateConfig path so detection-derived defaults
+  // (include, specDirs) are still applied.
+  const config: ArtgraphConfig = hasExistingConfig
+    ? loadConfig(abs)
+    : generateConfig(detection);
+
+  // Record the detected package manager so downstream tooling (hooks /
+  // agent-context / plugin templating in #109/#110/#111) can build exec
+  // commands without re-sniffing lockfiles. `detectPackageManager` warns to
+  // stderr and returns null when nothing is detectable; in that case we leave
+  // the existing `packageManager` value alone (preserving any prior detection
+  // recorded in the file) instead of clobbering it with undefined (FR-008).
+  const detectedPm = detectPackageManager(abs);
+  if (detectedPm) {
+    config.packageManager = detectedPm;
+  }
+
+  // Partial-state guard: install Skills BEFORE writing `.artgraph.json` so a
+  // mid-loop copy failure (which `installSkills` already rolls back) never
+  // leaves an orphan config file on disk. The order is:
+  //   1. validate Skills (pre-flight, no write)
+  //   2. install Skills (writes to .claude/skills/, self-rollback on failure)
+  //   3. scan + reconcile (writes .trace.lock)
+  //   4. write .artgraph.json (final, only reached if everything above
+  //      succeeded)
+  const skillsInstalled = stages.skills
+    ? installSkills(abs, { force: options.force })
+    : undefined;
 
   let scanSummary: ScanSummary | undefined;
   let warnings: BuildWarning[] = [];
@@ -394,7 +429,6 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   if (stages.scan) {
     const scanResult = scan(abs, config);
     reconcile(abs, config, scanResult.graph);
-    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
     scanSummary = {
       nodeCount: scanResult.nodeCount,
       edgeCount: scanResult.edgeCount,
@@ -405,13 +439,9 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     };
     warnings = scanResult.warnings;
     lockPath = resolve(abs, config.lockFile);
-  } else {
-    writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
   }
 
-  const skillsInstalled = stages.skills
-    ? installSkills(abs, { force: options.force })
-    : undefined;
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
 
   const integration = stages.integrate
     ? runRequestedIntegrations(abs, detection, options)

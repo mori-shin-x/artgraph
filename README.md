@@ -15,8 +15,13 @@ then detects **drift** (spec changed but code/tests didn't), **orphans**, and
 
 ## Quickstart
 
+> **Pre-release**: artgraph is not yet on npm. Until `v0.1.0` ships, install from the GitHub repo
+> (e.g. `npm install -D ShintaroMorimoto/artgraph` / `pnpm add -D github:ShintaroMorimoto/artgraph` /
+> `bun add -d github:ShintaroMorimoto/artgraph`). The plain `artgraph` registry name in the commands
+> below will start resolving once the first release is published.
+
 ```bash
-# Pick your package manager (npm / pnpm / Bun / Deno all supported; Yarn falls back to npm)
+# Pick your package manager (npm / pnpm / Bun / Deno all supported; Yarn falls back to pnpm)
 npm install -D artgraph && npx artgraph init       # default: full agent-native setup
 # pnpm add -D artgraph && pnpm exec artgraph init
 # bun add -d artgraph && bunx artgraph init
@@ -28,6 +33,10 @@ npm install -D artgraph && npx artgraph init       # default: full agent-native 
 If you use Claude Code, you can skip the manual install entirely — type `/artgraph-setup` and the Skill detects the package manager, installs artgraph, and runs `init` for you in one turn.
 
 ### End-to-end: spec → `@impl` → `check`
+
+> The examples below call `artgraph` directly — substitute your package runner if
+> the binary isn't on your `PATH`: `npx artgraph` (npm) / `pnpm exec artgraph` /
+> `bunx artgraph` / `deno run -A npm:artgraph/cli`.
 
 ```bash
 # 1. Write a requirement
@@ -50,9 +59,9 @@ describe("auth", () => {
 EOF
 
 # 4. Snapshot the baseline, then change the spec to see drift surface
-npx artgraph reconcile
+artgraph reconcile
 sed -i 's/email and password\./email, password, and TOTP./' specs/auth.md
-npx artgraph check
+artgraph check
 ```
 
 ```
@@ -63,7 +72,7 @@ COVERAGE:
   REQ-001: verified
 ```
 
-Add `--gate` (`npx artgraph check --gate`) to a CI step or pre-commit hook to
+Add `--gate` (`artgraph check --gate`) to a CI step or pre-commit hook to
 exit non-zero whenever drift, orphans, or uncovered requirements are present.
 
 A runnable copy of this flow lives in [`examples/basic/`](./examples/basic).

@@ -3,6 +3,9 @@ name: "artgraph-verify"
 description: "Runs `artgraph check --diff` to self-check spec/code/test consistency. Use when implementation is complete or before code review. Make sure to use this skill whenever the user reports implementation completion or asks for a consistency check."
 allowed-tools:
   - "Bash(npx artgraph *)"
+  - "Bash(pnpm exec artgraph *)"
+  - "Bash(bunx artgraph *)"
+  - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
   - "Bash(git diff*)"
 user-invocable: true
@@ -19,10 +22,12 @@ The agent runs `artgraph check --diff` to self-check spec/impl/test consistency 
 
 See [install-check](../_shared/install-check.md) for the standard pre-flight check.
 
+> `<PM-exec>` is the project's package runner: `npx` (npm), `pnpm exec`, `bunx`, or `deno run -A npm:artgraph/cli`. Substitute the one detected by `_shared/package-manager.md` (or written in `.artgraph.json#packageManager`).
+
 ### 2. Run the consistency check
 
 ```bash
-artgraph check --diff --format json
+<PM-exec> check --diff --format json
 ```
 
 - `--diff` scopes the check to files changed by git diff.
