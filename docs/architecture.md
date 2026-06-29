@@ -204,6 +204,8 @@ drift = 現在の hash ≠ lock の hash。
 共通フラグ: `--mode`, `--diff`, `--gate`, `--type req|doc|code|test`, `--format json|text`。
 `impact`/`check` は全エッジ型（doc↔doc 含む）を辿る。
 
+**Update (spec 013, 2026-06)**: 当初の `artgraph mcp-server` 構想は spec 013 で再評価した結果スコープ外とし、5 エージェント (Claude Code / Codex CLI / Cursor / GitHub Copilot / Kiro) を **Tier 1** として位置づけ、Skills + AGENTS.md + 薄ラッパー方式でカバーする構成に転換した。`artgraph init --agents=<csv>` で各エージェントの canonical Skills パス (`.claude/skills/` / `.agents/skills/` / `.cursor/skills/` / `.github/skills/` / `.kiro/skills/`) に同一の SKILL.md を配布し、AGENTS.md を canonical agent-context として `CLAUDE.md` / `.github/copilot-instructions.md` から `@AGENTS.md` 取り込みのみで参照する。診断は新サブコマンド `artgraph doctor` が drift / 欠落 / extraneous-file を検出する。MCP サーバの差別化価値は将来 Tier 2 拡張時 (Cline / Goose / Continue 等) に再検討する。詳細は [`specs/013-cross-agent-extensions/research.md`](../specs/013-cross-agent-extensions/research.md) R4 を参照。
+
 ## 8. Claude Code 統合
 
 - Plan 精緻化 → `mcp-server` を登録し、エージェントがプラン時に `impact` を呼ぶ。任意で SessionStart で現状を context 注入。

@@ -10,4 +10,4 @@ coverage/
 !.claude/skills/artgraph-*/
 !.claude/skills/_shared/
 !.claude/skills/speckit-*/
-CLAUDE.md
+# CLAUDE.md is now an artgraph-managed thin wrapper (spec 013) — tracked.
