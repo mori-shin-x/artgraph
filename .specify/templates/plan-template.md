@@ -42,6 +42,17 @@
 
 [Gates determined based on constitution file]
 
+### Engineering Hygiene Gates
+
+*設計時に確認する横断ゲート。背景と全カテゴリは `docs/review-patterns-checklist.md`。
+実装時の項目は tasks.md の Definition of Done を参照。*
+
+- [ ] **前提検証 (Cat6)**: issue/spec の前提（既出荷機能・依存 spec・既存挙動）を実コードで裏取りした。覆る前提があればスコープを再定義した。
+- [ ] **ID 衝突 (Cat6)**: 新規 REQ-ID を発行する場合、既存 spec との衝突を確認した（衝突するとグラフで qualified 化され mention 検出から外れる）。
+- [ ] **SSOT ペア (Cat2)**: 同じ知識が 2 箇所以上に出る箇所を列挙し、真実源と等価性メタテストをタスク化した（bash↔TS など）。
+- [ ] **CLI 規約 (Cat5)**: 新コマンド/フラグが `--format json|text`・`.choices()`・数値検証・対称なエラー挙動・共有 ID regex に沿う設計になっている。
+- [ ] **走査仕様 (Cat7)**: グラフ操作の方向（forward/reverse）・dedup key・境界（同一ファイル/stem/コードフェンス）を plan に明記した。
+
 ## Project Structure
 
 ### Documentation (this feature)
