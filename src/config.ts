@@ -344,6 +344,17 @@ function validatePackageManager(value: unknown): PackageManager | undefined {
   if (value === "npm" || value === "pnpm" || value === "bun" || value === "deno") {
     return value;
   }
+  // Yarn is the one unsupported value we expect users to actually try (it was a
+  // first-class PM until spec 015 dropped it). Surface a warning so the silent
+  // drop doesn't surprise anyone debugging "why is my packageManager gone?".
+  // Other unknown values (typos like "npmm") stay silent — warning on every
+  // typo would be noise.
+  if (value === "yarn") {
+    console.warn(
+      "WARNING: Yarn is not supported; ignoring `.artgraph.json` packageManager field",
+    );
+    return undefined;
+  }
   return undefined;
 }
 
@@ -390,6 +401,14 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new Error(`Failed to parse ${configPath}: ${msg}`);
+  }
+
+  // Hand-edited configs that accidentally produce a JSON array / number / null
+  // / string would otherwise sail through field-by-field validation (every
+  // `raw.<field>` is just `undefined`) and silently fall back to defaults.
+  // Reject the wrong top-level shape up front with an actionable message.
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error("`.artgraph.json` must be a JSON object");
   }
 
   if (raw.reqPatterns) {

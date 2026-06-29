@@ -75,11 +75,17 @@ jobs:
 
       - if: matrix.pm == 'bun'
         uses: oven-sh/setup-bun@v2
+        with:
+          # Pin to the 1.3.x line the SC-006 research was validated against;
+          # patch updates are still picked up automatically.
+          bun-version: 1.3.x
 
       - if: matrix.pm == 'deno'
         uses: denoland/setup-deno@v2
         with:
-          deno-version: v2.x
+          # Pin to the 2.9.x line the SC-006 research was validated against;
+          # patch updates are still picked up automatically.
+          deno-version: v2.9.x
 
       - run: pnpm install --frozen-lockfile
 

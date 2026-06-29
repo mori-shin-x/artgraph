@@ -27,7 +27,7 @@
 **注**:
 - 評価順は 1a–1d (field) → 2a–2e (lockfile) → 3 (pkg.json default) → 4 (fail) を厳守。
 - **deno の検出は row 2b の 1 箇所のみ** (`package.json` 無し かつ deno マーカーのいずれか)。`deno.lock` (lockfile) と `deno.json(c)` (config) を 1 つの分岐に統合する (元の bash スニペットの combined check と一致)。`package.json` があれば Node プロジェクトとして扱い deno 判定はしない。
-- `packageManager` field のパースは `^([a-z]+)@` 形 (corepack 規約)。値が壊れている / 4 PM 以外の未知値なら field 分岐をスキップして lockfile sniff へフォールスルー。
+- `packageManager` field のパースは `^([a-z]+)@` 形 (Corepack-style `<pm>@<version>` 形式。Corepack 本体は npm/pnpm/yarn のみ対応だが、artgraph は同形を Bun にも拡張して解釈する)。値が壊れている (`@` 抜きの bare 値含む) / 4 PM 以外の未知値なら field 分岐をスキップして lockfile sniff へフォールスルー。
 - 1d / 2d の Yarn fallback 先は **pnpm** (spec 012 の bash は npm だったが本 spec で変更)。
 
 ### テスト fixture (最小 8 系統 — SC-001)

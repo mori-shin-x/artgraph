@@ -3,9 +3,10 @@ name: "artgraph-detect"
 description: "Reports the current artgraph installation, integration, and Skill availability in the project. Use when the user asks whether artgraph is set up, what's installed, or what's available. Make sure to use this skill whenever the user is uncertain about the project's artgraph state."
 allowed-tools:
   - "Bash(npx artgraph *)"
-  - "Bash(pnpm exec artgraph*)"
-  - "Bash(bunx artgraph*)"
-  - "Bash(deno run*)"
+  - "Bash(npx --no-install artgraph *)"
+  - "Bash(pnpm exec artgraph *)"
+  - "Bash(bunx artgraph *)"
+  - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
   - "Bash(ls *)"
   - "Bash(test *)"
@@ -54,7 +55,7 @@ Also check for the tool markers themselves, to distinguish "tool not present" fr
 ls .claude/skills/ 2>/dev/null || echo "no .claude/skills/"
 ```
 
-Report which `artgraph-*` Skills are present. The canonical set is: `artgraph-coverage`, `artgraph-detect`, `artgraph-impact`, `artgraph-integrate`, `artgraph-rename`, `artgraph-setup`, `artgraph-verify`. Missing entries suggest the user ran `init --minimal` or `--no-skills`, or deleted Skills manually. To reinstall only the Skills without touching config / hooks / integration, recommend `<PM-exec> artgraph init --minimal --with-skills --force` (where `<PM-exec>` is the project's package-runner: `npx` / `pnpm exec` / `bunx` / `deno run -A npm:artgraph/cli`). `--force` is required because `.artgraph.json` already exists.
+Report which `artgraph-*` Skills are present. The canonical set is: `artgraph-coverage`, `artgraph-detect`, `artgraph-impact`, `artgraph-integrate`, `artgraph-plan-coverage`, `artgraph-rename`, `artgraph-setup`, `artgraph-verify`. Missing entries suggest the user ran `init --minimal` or `--no-skills`, or deleted Skills manually. To reinstall only the Skills without touching config / hooks / integration, recommend `<PM-exec> init --minimal --with-skills --force` (where `<PM-exec>` is the project's package runner: `npx artgraph` / `pnpm exec artgraph` / `bunx artgraph` / `deno run -A npm:artgraph/cli`). `--force` is required because `.artgraph.json` already exists.
 
 ### 5. Summarize
 
@@ -64,7 +65,7 @@ Print a 4-line summary like:
 artgraph: installed | not installed
 config: present | missing
 integrations: speckit=[yes/no/not-detected] kiro=[yes/no/not-detected]
-skills: N of 7 installed (missing: <list>)
+skills: N of 8 installed (missing: <list>)
 ```
 
-Suggest next steps based on what's missing: invoke `artgraph-setup` if the CLI is not installed, `artgraph-integrate` if SDD tools are present but not yet integrated, and `<PM-exec> artgraph init --minimal --with-skills --force` if any canonical Skills are absent.
+Suggest next steps based on what's missing: invoke `artgraph-setup` if the CLI is not installed, `artgraph-integrate` if SDD tools are present but not yet integrated, and `<PM-exec> init --minimal --with-skills --force` if any canonical Skills are absent.

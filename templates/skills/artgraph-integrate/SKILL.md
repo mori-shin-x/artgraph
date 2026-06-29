@@ -3,9 +3,9 @@ name: "artgraph-integrate"
 description: "Wires artgraph into an installed SDD tool (Spec Kit / Kiro). Use when the user asks to integrate, hook up, or connect artgraph with an existing SDD tool. Make sure to use this skill whenever the user mentions integrating artgraph with a Spec Kit or Kiro project that already has `artgraph` installed."
 allowed-tools:
   - "Bash(npx artgraph *)"
-  - "Bash(pnpm exec artgraph*)"
-  - "Bash(bunx artgraph*)"
-  - "Bash(deno run*)"
+  - "Bash(pnpm exec artgraph *)"
+  - "Bash(bunx artgraph *)"
+  - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
 user-invocable: true
 disable-model-invocation: false
@@ -21,10 +21,12 @@ This Skill discovers which SDD tools are present in the current project and runs
 
 See [install-check](../_shared/install-check.md) for the standard pre-flight check. If artgraph is not installed, stop and invoke the `artgraph-setup` Skill instead.
 
+> `<PM-exec>` is the project's package runner: `npx` (npm), `pnpm exec`, `bunx`, or `deno run -A npm:artgraph/cli`. Substitute the one detected by `_shared/package-manager.md` (or written in `.artgraph.json#packageManager`).
+
 ### 2. List available providers and their status
 
 ```bash
-artgraph integrate list --format json
+<PM-exec> integrate list --format json
 ```
 
 The JSON output has `providers[]` with `id`, `displayName`, `detected`, `installed`. Filter for providers where `detected: true && installed: false` — those are integrate candidates.
@@ -45,10 +47,10 @@ For each detected-but-not-installed provider:
 
 ```bash
 # speckit example
-artgraph integrate speckit --gate
+<PM-exec> integrate speckit --gate
 
 # kiro example
-artgraph integrate kiro
+<PM-exec> integrate kiro
 ```
 
 If the command exits non-zero, surface stderr and stop. Do not retry.
@@ -56,7 +58,7 @@ If the command exits non-zero, surface stderr and stop. Do not retry.
 ### 5. Verify
 
 ```bash
-artgraph integrate list
+<PM-exec> integrate list
 ```
 
 Confirm the previously-pending providers now show `installed: yes`. Report the final list to the user.

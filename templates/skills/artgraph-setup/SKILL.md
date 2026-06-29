@@ -8,13 +8,14 @@ allowed-tools:
   - "Bash(bun add*)"
   - "Bash(deno add*)"
   - "Bash(npx artgraph *)"
-  - "Bash(pnpm exec artgraph*)"
-  - "Bash(bunx artgraph*)"
-  - "Bash(deno run*)"
+  - "Bash(pnpm exec artgraph *)"
+  - "Bash(bunx artgraph *)"
+  - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
   - "Bash(test *)"
   - "Bash(ls *)"
   - "Bash(command *)"
+  - "Bash(node -e *)"
 user-invocable: true
 disable-model-invocation: false
 ---
@@ -33,9 +34,16 @@ See [install-check](../_shared/install-check.md). For this Skill the probe is ex
 
 ### 2. Detect the package manager
 
-Run this whole block as one Bash call. Lockfile-only detection covers the common cases; for finer rules (Corepack `packageManager` field, etc.) see [package-manager](../_shared/package-manager.md), and if that disagrees with the lockfile result, ask the user.
+Run this whole block as one Bash call. The Corepack `packageManager` field wins over lockfile sniffing; the canonical rules and rationale live in [package-manager](../_shared/package-manager.md). If both signals disagree (e.g. `packageManager: bun@*` with a `pnpm-lock.yaml`), ask the user.
 
 ```bash
+if [ -f package.json ]; then
+  pm_field=$(node -e 'try{const p=require("./package.json").packageManager;if(typeof p==="string"){const m=p.match(/^([a-z]+)@/);process.stdout.write(m?m[1]:"")}}catch{}' 2>/dev/null)
+  case "$pm_field" in
+    npm|pnpm|bun) echo "Detected: $pm_field"; exit 0 ;;
+    yarn) echo "WARN: packageManager=yarn; falling back to pnpm (Yarn not supported)" >&2; echo "Detected: pnpm"; exit 0 ;;
+  esac
+fi
 if [ -f bun.lockb ] || [ -f bun.lock ]; then echo "Detected: bun"
 elif { [ -f deno.lock ] || [ -f deno.json ] || [ -f deno.jsonc ]; } && [ ! -f package.json ]; then echo "Detected: deno"
 elif [ -f pnpm-lock.yaml ]; then echo "Detected: pnpm"

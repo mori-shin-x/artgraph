@@ -15,6 +15,11 @@ then detects **drift** (spec changed but code/tests didn't), **orphans**, and
 
 ## Quickstart
 
+> **Pre-release**: artgraph is not yet on npm. Until `v0.1.0` ships, install from the GitHub repo
+> (e.g. `npm install -D ShintaroMorimoto/artgraph` / `pnpm add -D github:ShintaroMorimoto/artgraph` /
+> `bun add -d github:ShintaroMorimoto/artgraph`). The plain `artgraph` registry name in the commands
+> below will start resolving once the first release is published.
+
 ```bash
 # Pick your package manager (npm / pnpm / Bun / Deno all supported; Yarn falls back to pnpm)
 npm install -D artgraph && npx artgraph init       # default: full agent-native setup

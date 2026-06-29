@@ -9,7 +9,6 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -252,16 +251,19 @@ describe("runInit", () => {
     expect(() => runInit(tmp)).toThrow(".artgraph.json already exists");
   });
 
-  it("overwrites existing .artgraph.json with --force", () => {
+  it("preserves user customizations on --force (merge mode, not full overwrite)", () => {
+    // --force re-init must NOT clobber user-edited fields. Only the
+    // detection-driven `packageManager` is refreshed; everything else
+    // (include / specDirs / reqPatterns / etc.) is loaded from the existing
+    // config and re-emitted as-is.
     mkdirSync(join(tmp, "src"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
     writeFileSync(join(tmp, ".artgraph.json"), '{"include":["old"]}\n');
 
-    const result = runInit(tmp, { force: true });
+    runInit(tmp, { force: true });
 
     const config = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
-    expect(config.include).toContain("src/**/*.ts");
-    expect(config.include).not.toContain("old");
+    expect(config.include).toEqual(["old"]);
   });
 
   it("generates only .artgraph.json with --no-scan", () => {
@@ -276,7 +278,7 @@ describe("runInit", () => {
     expect(result.lockPath).toBeUndefined();
   });
 
-  it("supports --force combined with --no-scan", () => {
+  it("supports --force combined with --no-scan (preserves user fields)", () => {
     mkdirSync(join(tmp, "src"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
     writeFileSync(join(tmp, ".artgraph.json"), '{"include":["old"]}\n');
@@ -286,7 +288,91 @@ describe("runInit", () => {
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
     expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
     const config = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
-    expect(config.include).not.toContain("old");
+    expect(config.include).toEqual(["old"]);
+  });
+
+  it("preserves every user-editable field across --force re-init (only refreshes packageManager)", () => {
+    // Initial config sets every optional field that users actually customize
+    // (reqPatterns / taskConventions / planCoverage / docGraph / mode / lockFile
+    // / include / specDirs / testPatterns / testResultPaths). The merge path
+    // must round-trip all of them; only `packageManager` may be re-detected.
+    writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "x" }));
+    writeFileSync(join(tmp, "package-lock.json"), "{}"); // → npm
+    const userConfig = {
+      include: ["custom/**/*.ts"],
+      specDirs: ["my-specs"],
+      testPatterns: ["my-tests/**/*.test.ts"],
+      lockFile: "build/.trace.lock",
+      packageManager: "pnpm", // stale — should be overwritten with the npm signal
+      reqPatterns: { listItem: "^(CUSTOM-\\d+)\\s" },
+      docGraph: { autoNodes: false },
+      mode: "symbol",
+      testResultPaths: ["junit/results.xml"],
+      taskConventions: [
+        { name: "openspec", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" },
+      ],
+      planCoverage: { requireFilesSection: true },
+    };
+    writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify(userConfig));
+
+    runInit(tmp, { force: true, minimal: true });
+
+    const written = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
+    expect(written.packageManager).toBe("npm"); // refreshed from lockfile signal
+    expect(written.include).toEqual(["custom/**/*.ts"]);
+    expect(written.specDirs).toEqual(["my-specs"]);
+    expect(written.testPatterns).toEqual(["my-tests/**/*.test.ts"]);
+    expect(written.lockFile).toBe("build/.trace.lock");
+    expect(written.reqPatterns).toEqual({ listItem: "^(CUSTOM-\\d+)\\s" });
+    expect(written.docGraph).toEqual({ autoNodes: false });
+    expect(written.mode).toBe("symbol");
+    expect(written.testResultPaths).toEqual(["junit/results.xml"]);
+    expect(written.taskConventions).toEqual([
+      { name: "openspec", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" },
+    ]);
+    expect(written.planCoverage).toEqual({ requireFilesSection: true });
+  });
+
+  it("keeps existing packageManager when --force re-detection is inconclusive", () => {
+    // Empty dir (no package.json / lockfile / deno marker) → detection
+    // returns null. The merge path must NOT clobber the previously recorded
+    // packageManager with undefined in that case.
+    writeFileSync(
+      join(tmp, ".artgraph.json"),
+      JSON.stringify({ include: ["src/**/*.ts"], packageManager: "pnpm" }),
+    );
+
+    runInit(tmp, { force: true, minimal: true });
+
+    const written = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
+    expect(written.packageManager).toBe("pnpm");
+  });
+
+  it("partial-state guard: installSkills failure leaves no .artgraph.json / .trace.lock orphan", () => {
+    // Force `installSkills` to fail mid-loop AFTER the conflict pre-flight
+    // accepts the layout: place a DIRECTORY at the destination path of a
+    // SKILL.md and pass --force. `findConflicts` flags it as a regular
+    // conflict (lstat says non-symlink), `--force` lets it through, then
+    // `copyFileSync` blows up with EISDIR. With the order fixed (skills first,
+    // config write last), neither `.artgraph.json` nor `.trace.lock` should
+    // be on disk after the throw.
+    mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), {
+      recursive: true,
+    });
+    // Stash a marker inside the offending dir so the rollback's `rmdirSync`
+    // (which only removes empty dirs) can't accidentally tidy it away and
+    // make the failure go silent next iteration.
+    writeFileSync(
+      join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md", "marker"),
+      "user content\n",
+    );
+
+    expect(() =>
+      runInit(tmp, { force: true, noScan: true, withSkills: true }),
+    ).toThrow(SkillsInstallError);
+
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
+    expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
   });
 
   it("handles empty project with no ts files", () => {
@@ -679,8 +765,21 @@ describe("skill template <-> dogfood sync", () => {
   // Guards against drift between templates/skills/ (the distributed source
   // of truth) and .claude/skills/ (this repo's dogfood copy). If one is
   // updated without the other, this test fails.
-  function sha256(path: string): string {
-    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  //
+  // The check normalises line endings (CRLF → LF) and per-line trailing
+  // whitespace before comparing so an editor that silently re-saves with a
+  // different EOL convention or a stray trailing space doesn't break CI. The
+  // intent — "every byte that semantically matters must match" — is preserved.
+  function normalize(content: string): string {
+    return content
+      .replace(/\r\n/g, "\n")
+      .split("\n")
+      .map((line) => line.replace(/[\t ]+$/, ""))
+      .join("\n")
+      .replace(/\n+$/, "");
+  }
+  function readNormalized(path: string): string {
+    return normalize(readFileSync(path, "utf-8"));
   }
 
   const templateDir = resolve(import.meta.dirname, "..", "templates", "skills");
@@ -713,7 +812,9 @@ describe("skill template <-> dogfood sync", () => {
       const rel = tPath.substring(templateDir.length + 1);
       const dPath = join(dogfoodDir, rel);
       expect(existsSync(dPath), `dogfood file missing: ${dPath}`).toBe(true);
-      expect(sha256(dPath), `content drift in ${rel}`).toBe(sha256(tPath));
+      expect(readNormalized(dPath), `content drift in ${rel}`).toBe(
+        readNormalized(tPath),
+      );
     }
 
     // Reverse direction: every dogfood file must have a matching template (no stale files)

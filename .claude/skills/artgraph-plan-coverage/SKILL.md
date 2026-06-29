@@ -3,9 +3,9 @@ name: "artgraph-plan-coverage"
 description: "Detects implicit impacts: REQs reached by tasks.md `Files:` but not mentioned in `tasks.md` / `plan.md` / `spec.md` (reverse audit). Use after editing tasks.md / plan.md (e.g. after `/speckit-tasks`, or after updating `.kiro/specs/<name>/tasks.md`), before implementation."
 allowed-tools:
   - "Bash(npx artgraph plan-coverage *)"
-  - "Bash(pnpm exec artgraph plan-coverage*)"
-  - "Bash(bunx artgraph plan-coverage*)"
-  - "Bash(deno run*)"
+  - "Bash(pnpm exec artgraph plan-coverage *)"
+  - "Bash(bunx artgraph plan-coverage *)"
+  - "Bash(deno run -A npm:artgraph/cli plan-coverage *)"
   - "Bash(artgraph plan-coverage *)"
 user-invocable: true
 disable-model-invocation: false
@@ -23,20 +23,22 @@ Complementary to `artgraph-impact`: that Skill answers "what does this file edit
 
 See [install-check](../_shared/install-check.md) for the standard pre-flight check.
 
+> `<PM-exec>` is the project's package runner: `npx` (npm), `pnpm exec`, `bunx`, or `deno run -A npm:artgraph/cli`. Substitute the one detected by `_shared/package-manager.md` (or written in `.artgraph.json#packageManager`).
+
 ### 2. Pick a mode and run
 
 | Mode | Trigger | Command |
 | --- | --- | --- |
-| (a) Auto-detect spec | Spec Kit project (`SPECIFY_FEATURE_DIRECTORY` env or `.specify/feature.json`) | `artgraph plan-coverage --format json` |
-| (b) Explicit `--spec` | Kiro project, multiple specs in flight, or auto-detect failed | `artgraph plan-coverage --spec <dir> --format json` |
+| (a) Auto-detect spec | Spec Kit project (`SPECIFY_FEATURE_DIRECTORY` env or `.specify/feature.json`) | `<PM-exec> plan-coverage --format json` |
+| (b) Explicit `--spec` | Kiro project, multiple specs in flight, or auto-detect failed | `<PM-exec> plan-coverage --spec <dir> --format json` |
 
 ```bash
 # (a) auto-detect — Spec Kit canonical lookup order
-artgraph plan-coverage --format json
+<PM-exec> plan-coverage --format json
 
 # (b) explicit spec dir — required for Kiro (no canonical current-spec marker)
-artgraph plan-coverage --spec .specify/specs/<name>/ --format json
-artgraph plan-coverage --spec .kiro/specs/<name>/    --format json
+<PM-exec> plan-coverage --spec .specify/specs/<name>/ --format json
+<PM-exec> plan-coverage --spec .kiro/specs/<name>/    --format json
 ```
 
 ### 3. Parse the JSON output
@@ -58,7 +60,7 @@ If `implicitImpacts` is empty, report "No implicit impacts." and stop. If `diagn
 For every `reqId` in `implicitImpactsByReq`, help the user choose one of:
 
 1. **Mention it.** Add a reference to the REQ-ID anywhere in `tasks.md`, `plan.md`, or `spec.md` — any label works (e.g. `Considered: REQ-003 — investigated, no impact`, `Affected: REQ-003`, `[REQ-003]`, a heading). The next `plan-coverage` run will see the mention and drop the REQ from `implicitImpacts`.
-2. **`--ignore` (one-shot).** For CI-only suppression: `artgraph plan-coverage --gate --ignore REQ-003,REQ-007`. Not persisted anywhere — exists only for the current command. Use sparingly; prefer (1).
+2. **`--ignore` (one-shot).** For CI-only suppression: `<PM-exec> plan-coverage --gate --ignore REQ-003,REQ-007`. Not persisted anywhere — exists only for the current command. Use sparingly; prefer (1).
 3. **Future: `--require-ack-keyword` (strict mode).** Out of scope for this Skill — tracked separately for a future spec.
 
 ### 5. Report back

@@ -39,7 +39,7 @@ fixture: `package.json` (`type: module`) + `specs/auth.md` (`REQ-001`) + `src/au
 
 **結論**: Deno 2.x の Node 互換レイヤで `ts-morph` は**そのまま動作する**。Deno は独自 TS パーサを「型チェック」に使うが、npm パッケージとして読み込まれた `typescript` パッケージはそのまま実行されるため、`ts-morph` が内部で持つ TS compiler が機能する。**Deno を正式サポート対象にできる** (best-effort 降格は不要)。
 
-> 注意: Deno のバージョン要件。npm specifier は Deno >= 1.45 で安定。本検証は 2.9.0。対応表には「Deno >= 1.45 (npm 指定子)」を明記する。
+> 注意: Deno のバージョン要件。`deno add` subcommand は Deno >= 1.42 で導入 (`npm:` specifier 自体は Deno 1.28 で stable)。本検証は 2.9.0。対応表には「Deno >= 1.42 (`deno add`)」を明記する。
 
 ## R3: `deno run -A npm:artgraph/cli` の解決 — ⚠️ `exports` に `./cli` 追加が必須
 

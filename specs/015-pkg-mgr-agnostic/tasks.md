@@ -49,7 +49,7 @@ Node >= 22 (`node -v`)、pnpm available、`bun --version` (1.x)、`deno --versio
 
 **⚠️ CRITICAL**: 別 issue #109 / #110 / #111 が consume する基盤。最優先で完成させる。[contracts/package-manager.md](./contracts/package-manager.md) を SSOT とする。
 
-### T002 [US1] Write tests/package-manager-detection.test.ts [FR-001, FR-002, FR-003, FR-004, FR-005, SC-001, SC-003]
+### T002 [US1] Write tests/package-manager-detection.test.ts [FR-001, FR-002, FR-003, FR-004, FR-005, FR-018, SC-001, SC-003]
 
 Files: tests/package-manager-detection.test.ts
 
@@ -190,6 +190,26 @@ Files: (no source changes)
 Files: (no source changes)
 
 `artgraph reconcile` 後に `artgraph plan-coverage --spec specs/015-pkg-mgr-agnostic/` を本 tasks.md に対して実行し、暗黙波及がゼロ (= tasks.md の Files: が触れる REQ/FR がすべて spec/plan/tasks で mention 済) であることを確認。
+
+---
+
+## Phase 9: 敵対的レビュー / メタレビュー対応 (PR #112 中の追補)
+
+### T021 [Polish] 既存タスクの達成範囲拡張 (PR 中 review 反映)
+
+Files: (拡張のみ — 担当ファイルは下記 task に紐づく)
+
+PR #112 の 4 観点敵対的レビュー + メタレビューで妥当判定された指摘を、新規タスクを切らず既存タスクの中で吸収した。記録のみのドキュメント反映:
+
+- **T002 拡張** — `tests/package-manager-detection.test.ts` に (a) 検出不能 warning 文言マッチ (`/cannot detect/i`)、(b) `buildExecCommand` の trim + multi-word prefix (`deno run -A npm:artgraph/cli`) 末尾空白回避を追加 (SC-001/SC-003 の精度向上)。
+- **T003 拡張** — `src/package-manager.ts` の `buildExecCommand` に前後空白トリム + 空 subcommand での末尾空白回避ロジックを追加 (FR-004 補強)。
+- **T005 拡張** — `tests/config.test.ts` に `loadConfig` 読み込み側テストを新設 (有効 4 値採用 / `"yarn"` などの未知文字列→`undefined` / 型違い→`undefined` / フィールド欠落→`undefined`)。FR-006 / contracts §4 の読み込み側カバレッジ。
+- **T007 拡張** — `tests/init.test.ts` の検出不能ケースに `console.error` spy を追加し test output を清潔化 (動作仕様は不変)。
+- **T008 拡張** — `templates/skills/_shared/package-manager.md` の bash `packageManager` field 検出を `grep` から node の top-level JSON parse に変更。nested `"packageManager"` 誤検出による TS との SC-007 乖離を解消。
+- **T011 拡張** — `tests/skills-templates.test.ts` の SC-004 offender 正規表現を、フラグ / 大文字 / 二重空白に対応するよう強化 (`--no-install` probe は subcommand が `-` 始まりのため引き続き除外)。
+- **T013 補完漏れ修正** — `docs/skills-guide.md` L15/L67 に残っていた「Yarn フォールバック先 npm」表記を pnpm に修正 (FR-014/SC-005 の実装漏れ)。
+
+これらは新規 FR/SC を生まず、既存 FR/SC の達成精度を上げる修正に閉じている (詳細はコミット `74144ed`)。
 
 ---
 

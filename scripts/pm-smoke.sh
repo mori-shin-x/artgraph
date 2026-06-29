@@ -37,22 +37,31 @@ run() {
 case "$PM" in
   npm)
     TARBALL="$(cd "$ROOT" && npm pack --silent --pack-destination "$FIX")"
-    ( cd "$FIX" && npm install --no-save "./$TARBALL" >/dev/null 2>&1 )
+    ( cd "$FIX" && npm install --no-save "./$TARBALL" >/dev/null )
     RUNNER="npx --no-install artgraph"
     ;;
   pnpm)
     TARBALL="$(cd "$ROOT" && npm pack --silent --pack-destination "$FIX")"
-    ( cd "$FIX" && pnpm add "./$TARBALL" >/dev/null 2>&1 )
+    ( cd "$FIX" && pnpm add "./$TARBALL" >/dev/null )
     RUNNER="pnpm exec artgraph"
     ;;
   bun)
     TARBALL="$(cd "$ROOT" && npm pack --silent --pack-destination "$FIX")"
-    ( cd "$FIX" && bun add "./$TARBALL" >/dev/null 2>&1 )
-    RUNNER="bunx artgraph"
+    ( cd "$FIX" && bun add "./$TARBALL" >/dev/null )
+    # `--bun` forces bunx to spawn the script under the Bun runtime; without
+    # it bunx honours the `#!/usr/bin/env node` shebang and silently runs on
+    # Node — defeating the SC-006 goal of proving ts-morph works on Bun.
+    RUNNER="bunx --bun artgraph"
     ;;
   deno)
-    # artgraph is unpublished, so run the built entry directly (research R4).
-    RUNNER="deno run -A $ROOT/dist/cli.js"
+    # artgraph is unpublished, but we still want to exercise the
+    # `package.json#exports."./cli"` resolution path (not just dist/cli.js
+    # directly). Pack + npm-install into the fixture, then let Deno resolve
+    # `npm:artgraph/cli` via the local node_modules (--node-modules-dir=manual
+    # tells Deno to trust the existing tree instead of hitting the registry).
+    TARBALL="$(cd "$ROOT" && npm pack --silent --pack-destination "$FIX")"
+    ( cd "$FIX" && npm install --no-save "./$TARBALL" >/dev/null )
+    RUNNER="deno run -A --node-modules-dir=manual npm:artgraph/cli"
     ;;
   *)
     echo "ERROR: unknown PM '$PM' (expected npm|pnpm|bun|deno)" >&2

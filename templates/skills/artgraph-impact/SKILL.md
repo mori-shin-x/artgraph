@@ -3,9 +3,9 @@ name: "artgraph-impact"
 description: "Runs `artgraph impact` to surface which requirements, docs, and files a proposed file edit touches (forward: files → REQs). Use when the user explicitly names file paths or wants the impact of files staged in `git diff` / declared in `tasks.md` / `plan.md`."
 allowed-tools:
   - "Bash(npx artgraph *)"
-  - "Bash(pnpm exec artgraph*)"
-  - "Bash(bunx artgraph*)"
-  - "Bash(deno run*)"
+  - "Bash(pnpm exec artgraph *)"
+  - "Bash(bunx artgraph *)"
+  - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
   - "Bash(git diff*)"
   - "Bash(git status*)"
@@ -25,8 +25,8 @@ Pick one based on what the user supplied:
 
 | Mode | Trigger | Command |
 | --- | --- | --- |
-| (a) Diff | `git status` shows staged or unstaged changes | `artgraph impact --diff --format json` |
-| (b) Explicit file source | User named file paths, or pointed at a tasks.md / plan.md | `artgraph impact <file...>` OR `artgraph impact --from-tasks <path>` OR `artgraph impact --from-plan <path>` |
+| (a) Diff | `git status` shows staged or unstaged changes | `<PM-exec> impact --diff --format json` |
+| (b) Explicit file source | User named file paths, or pointed at a tasks.md / plan.md | `<PM-exec> impact <file...>` OR `<PM-exec> impact --from-tasks <path>` OR `<PM-exec> impact --from-plan <path>` |
 | (c) Ask | Neither — no diff, no file paths, no tasks/plan path | Ask the user: "Which tasks.md / plan.md path, or which file(s) should I analyze?" then re-enter with mode (b) |
 
 ## Steps
@@ -34,6 +34,8 @@ Pick one based on what the user supplied:
 ### 1. Prerequisite check
 
 See [install-check](../_shared/install-check.md) for the standard pre-flight check.
+
+> `<PM-exec>` is the project's package runner: `npx` (npm), `pnpm exec`, `bunx`, or `deno run -A npm:artgraph/cli`. Substitute the one detected by `_shared/package-manager.md` (or written in `.artgraph.json#packageManager`).
 
 ### 2. Pick a mode and run
 
@@ -47,20 +49,20 @@ git status --porcelain
 - If output is non-empty, use mode (a):
 
   ```bash
-  artgraph impact --diff --format json
+  <PM-exec> impact --diff --format json
   ```
 
 - Else if the user named file paths or pointed at a tasks.md / plan.md path, use mode (b). Pick the right form:
 
   ```bash
   # Explicit file paths (REQ-IDs are rejected — file paths only)
-  artgraph impact src/auth.ts src/session.ts --format json
+  <PM-exec> impact src/auth.ts src/session.ts --format json
 
   # tasks.md as the source of starting files (FR-004)
-  artgraph impact --from-tasks specs/<latest>/tasks.md --format json
+  <PM-exec> impact --from-tasks specs/<latest>/tasks.md --format json
 
   # plan.md as the source of starting files (FR-006)
-  artgraph impact --from-plan  specs/<latest>/plan.md  --format json
+  <PM-exec> impact --from-plan  specs/<latest>/plan.md  --format json
   ```
 
 - Else use mode (c): ask the user "Which tasks.md / plan.md path, or which file(s) should I analyze?", then re-enter with mode (b).
