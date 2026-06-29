@@ -3,6 +3,7 @@ import { resolve, relative, isAbsolute } from "node:path";
 import {
   DEFAULT_CONFIG,
   type ArtgraphConfig,
+  type PackageManager,
   type PlanCoverageConfig,
   type ReqPatternConfig,
   type TaskConventionPreset,
@@ -335,6 +336,28 @@ function validateTaskRegexField(
 // only `requireFilesSection: boolean` is recognised; unknown fields are
 // silently dropped (no warning) so the schema can grow without breaking
 // existing configs that pre-load a future field.
+// `packageManager` is recorded by `init` for downstream exec-command building.
+// Be lenient on read: accept only the 4 known values, silently drop anything
+// else (unknown string / wrong type) so a hand-edited config never crashes the
+// CLI. Mirrors the lenient posture of the other optional fields.
+function validatePackageManager(value: unknown): PackageManager | undefined {
+  if (value === "npm" || value === "pnpm" || value === "bun" || value === "deno") {
+    return value;
+  }
+  // Yarn is the one unsupported value we expect users to actually try (it was a
+  // first-class PM until spec 015 dropped it). Surface a warning so the silent
+  // drop doesn't surprise anyone debugging "why is my packageManager gone?".
+  // Other unknown values (typos like "npmm") stay silent — warning on every
+  // typo would be noise.
+  if (value === "yarn") {
+    console.warn(
+      "WARNING: Yarn is not supported; ignoring `.artgraph.json` packageManager field",
+    );
+    return undefined;
+  }
+  return undefined;
+}
+
 function validatePlanCoverage(value: unknown): PlanCoverageConfig | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -380,6 +403,14 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
     throw new Error(`Failed to parse ${configPath}: ${msg}`);
   }
 
+  // Hand-edited configs that accidentally produce a JSON array / number / null
+  // / string would otherwise sail through field-by-field validation (every
+  // `raw.<field>` is just `undefined`) and silently fall back to defaults.
+  // Reject the wrong top-level shape up front with an actionable message.
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new Error("`.artgraph.json` must be a JSON object");
+  }
+
   if (raw.reqPatterns) {
     validateReqPatterns(raw.reqPatterns);
   }
@@ -405,6 +436,7 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
     specDirs: raw.specDirs ?? DEFAULT_CONFIG.specDirs,
     testPatterns: raw.testPatterns ?? DEFAULT_CONFIG.testPatterns,
     lockFile,
+    packageManager: validatePackageManager(raw.packageManager),
     reqPatterns: raw.reqPatterns,
     docGraph: raw.docGraph,
     mode: raw.mode === "symbol" ? "symbol" : "file",
