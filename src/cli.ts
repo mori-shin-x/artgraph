@@ -59,6 +59,11 @@ import { getProviderStatuses, registerBuiltinProviders, runIntegrate } from "./i
 import type { IntegrateResult, IntegrationProviderId } from "./types.js";
 import { parseAgentsList, AgentsParseError } from "./agents/parse-agents.js";
 import type { AgentId } from "./agents/descriptors.js";
+import {
+  runDoctor,
+  formatDoctorReportJson,
+  formatDoctorReportText,
+} from "./doctor.js";
 
 // Wire up the built-in integration providers (speckit / kiro) before
 // commander parses argv. Today the registration body is empty (T014); US1
@@ -912,6 +917,48 @@ program
 
     if (opts.gate && !result.pass) {
       process.exit(2);
+    }
+  });
+
+// spec 013 T028 — `artgraph doctor` subcommand. Diagnoses Tier 1 distribution
+// health (Skills sha256 / AGENTS.md marker / wrappers / extraneous files).
+// Independent of `artgraph check` per FR-012: the doctor MUST NOT participate
+// in the `check --gate` decision (regression-tested in
+// `tests/check-gate-no-regression.test.ts`).
+program
+  .command("doctor")
+  .description("Diagnose Tier 1 cross-agent distribution health")
+  .option(
+    "--agents <list>",
+    "Comma-separated agent ids to diagnose (default: all detected)",
+  )
+  .addOption(
+    new Option("--format <format>", "Output format")
+      .choices(["text", "json"])
+      .default("text"),
+  )
+  .action((opts) => {
+    const rootDir = process.cwd();
+    let agents: AgentId[] | undefined;
+    if (opts.agents !== undefined) {
+      try {
+        agents = parseAgentsList(String(opts.agents));
+      } catch (e) {
+        if (e instanceof AgentsParseError) {
+          console.error(e.message);
+          process.exit(1);
+        }
+        throw e;
+      }
+    }
+    const report = runDoctor({ rootDir, agents });
+    const out =
+      opts.format === "json"
+        ? formatDoctorReportJson(report)
+        : formatDoctorReportText(report);
+    console.log(out);
+    if (report.summary.failCount > 0) {
+      process.exitCode = 1;
     }
   });
 
