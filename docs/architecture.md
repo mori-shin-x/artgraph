@@ -282,27 +282,40 @@ MVP: データモデルは最初から型付きアーティファクトグラフ
 
 ## 11. 先行事例（学ぶ点）
 
-- CoDD（Coherence-Driven Development）: frontmatter スキーマ（node_id/depends_on/relation）は D7 のグラフ層としてそのまま採用。Green/Amber/Gray は depth/型ベースに読み替え。`extract`（ブラウンフィールド）、Skills/Hook/MCP の作法も参考。※ CoDD の LLM 伝播層は取り込まない＝棲み分け（artgraph は統合＋決定性、CoDD は doc 限定＋自動修正が厚い）。
-- **StrictDoc**（最重要・最近の競合）: Tree-sitter による AST 解析で要求↔コード（関数・クラス）↔テストを決定的にトレース。非 LLM。Apache 2.0、Python 製、v0.24.0 / 2026-06-15 リリース。**artgraph との残る差別化は「JS/TS ネイティブ」と「AST 由来の自動エッジ（手動 `@relation` マーカー不要）」の2点に絞られる。** ここを明確に上回らないと優位性が崩れる。
+- **CoDD（Coherence-Driven Development）**（**現役で最も近い競合に浮上** — 2026-07 再調査）: 当初評価（doc 限定・LLM 伝播）は陳腐化。現在は要求↔設計↔コード↔設定↔テストの **5 層接続マップ＋影響分類（Green/Amber/Gray）＋コミットをブロックする pre-commit ゲート＋MCP 統合**を持ち、伝播ロジックは決定的（生成側に LLM）。108★・3.5 ヶ月で 16→108 と急成長。frontmatter スキーマ（node_id/depends_on/relation）は D7 のグラフ層としてそのまま採用、`extract`（ブラウンフィールド）、Skills/Hook/MCP の作法も引き続き参考。**残る差別化は「要求 ID 主キー」「AST シンボル精度」「TS ネイティブ CLI」の 3 点** — 成長速度からウォッチ最優先。
+- **StrictDoc**: Tree-sitter による AST 解析で要求↔コード（関数・クラス）↔テストを決定的にトレース。非 LLM。Apache 2.0、Python 製、v0.25.1 / 2026-07-02 リリースと活発だが、**2026-07 時点でも JS/TS 非対応のまま**（tree-sitter パーサーは Python / C/C++ のみ、関数レベルパース計画 Issue #1957 にも JS/TS への言及なし）。**artgraph との残る差別化は「JS/TS ネイティブ」と「AST 由来の自動エッジ（手動 `@relation` マーカー不要）」の2点に絞られる。** ここを明確に上回らないと優位性が崩れる（tsパーサー追加はアーキテクチャ上あり得る増分なので Issue #1957 を継続監視）。
+- **fiberplane/drift**（技術的に最も近い類似物 — 2026-07 再調査で発見）: tree-sitter の AST フィンガープリントで markdown doc をコード対象に束縛し、`drift.lock` ＋ `drift check` で CI をフェイルさせる。GitHub Action・`--changed` による PR スコープ絞り込みあり。Zig 製、116★。**lock＋決定的検証＋Action という artgraph と同型の UX が doc↔code の 2 層だけで既に成立している実例**として、Action 化・PR スコープ UX の設計を参考にする。要求モデル・テスト層・orphan/uncovered 分析は無い。
+- **rac-core（Requirements as Code）**（思想的に最も近い隣人 — 2026-07 再調査で発見）: 型付き Markdown アーティファクト＋スキーマ検証＋「LLM ゼロ・ネットワークゼロ・決定的」＋ read-only MCP ＋ CI ゲート（`rac gate`）。258★・2026-06 リリースで活発。**コード/テストへのエッジを持たない**（知識アーティファクト間のみ）ため直接競合ではないが、code エッジを足せば直撃する。read-only MCP の設計と「決定的であること自体を製品名で語る」ポジショニングが参考。
+- **Cladding / Ironclad**（qwerfunch/cladding、9★・週次リリース）: JS/TS・AST ベースで spec/design/code/tests/docs を跨ぐ drift 検出器 40 種＋決定的ゲート 15 段＋knowledge graph。LLM グレーダーを内蔵したエージェント統治レイヤーであり中立な単体 CLI ではないが、**新規参入で最も 4 交差点に近い**。継続監視。
+- **rtmx**（25★、Go）: 要求↔テストの対応を**テストランナーの実行結果から自動導出**する（10+ フレームワーク対応）。「アノテーションを書かせず実行結果からエッジを得る」アプローチは、artgraph のテスト層のタグ依存（`[REQ-001]`）を軽減するヒントになる。
+- **Dosu**（商用 SaaS）: docs freshness を「決定的チェック 3 種（git age / TTL 契約 / シンボルレベル drift）＋グレーゾーンのみ LLM」で採点。**純 LLM ドリフト検出の誤検知問題を商用側が自認し決定性へ収束した**構図で、artgraph の bootstrap 構想（生成は LLM・検証は決定的）と同じ役割分担の先行例。
 - OpenFastTrace: ID モデル、Needs/Covers、"Outdated" 安全網。
 - reqmd: カバレッジを .md に書き戻す UX。
 - eslint-plugin-traceability: grep 可能な検証チェックポイント、`traceability-maint` リネーム CLI。
 - oxc / typescript-go(tsgo) / oxlint / rslint: 「fast core ＋ tsgo」の実装パターン。
 - VSDD（SDD+TDD+VDD 融合）: Chainlink ビード追跡（REQ-001→PROP-001→TEST-001→IMPL-001）で仕様→コードの双方向チェーンを管理するコンセプト。**実態は方法論ドキュメント（gist）であり Claude Code プラグインや動作する CLI 実装は確認できず**、`.vsdd/state.json` 等の具体仕様も裏付けが取れない。ビード ID の連番方式や 4段チェーンのアイデアは参考になるが、実装事例としては扱わない。
-- Spec Kit: SDD ツールの代表格。**Spec Kit 114k+ stars（2026-06 時点）**、急増中。仕様ファイルから AI がコード生成する「前半パイプライン」。artgraph は後半（継続的整合性検証）を担う補完レイヤーとして共存する設計。
-- **OpenSpec**（`Fission-AI/OpenSpec`、**55k+ stars**、BMAD-METHOD より多い）: Markdown ベースの SDD で、`openspec/specs/` を正本、`openspec/changes/<name>/` を提案中デルタとして管理し、propose → implement → archive（specs/ へマージ）のライフサイクルを持つ。要件は `### Requirement: <name>` 見出し駆動で **ID 文字列を持たない**（artgraph の ID 主キー前提と相性が悪い）。artgraph 側は `ID = <domain>/slug(requirement-name)` の slug 派生で対応可（Issue #25 で設計検討中）。
+- Spec Kit: SDD ツールの代表格。**Spec Kit 117k+ stars（2026-07 時点）**、急増中。仕様ファイルから AI がコード生成する「前半パイプライン」。2026 年に入り (a) `/speckit.converge`（実装後にコードベースを spec と突き合わせて未実装作業を tasks.md へ追記 — エージェント実行・非決定的・機能単位）がコアに、(b) **公式拡張カタログに検証/ドリフト系拡張が約 26 個**（spec-kit-sync 21★ / verify / ci-guard / v-model 等、ほぼ全て LLM プロンプトパック）が出現。**後半需要の実証であると同時に、artgraph が「決定的 CLI」として掲載を狙うべき配布チャネル**。artgraph は後半（継続的整合性検証）を担う補完レイヤーとして共存する設計。
+- **OpenSpec**（`Fission-AI/OpenSpec`、**58k+ stars**、BMAD-METHOD より多い）: Markdown ベースの SDD で、`openspec/specs/` を正本、`openspec/changes/<name>/` を提案中デルタとして管理し、propose → implement → archive（specs/ へマージ）のライフサイクルを持つ。`/opsx:verify` で実装を change アーティファクトと突き合わせる機能を追加したが **LLM 裁定・助言的・非ゲート**。要件は `### Requirement: <name>` 見出し駆動で **ID 文字列を持たない**（artgraph の ID 主キー前提と相性が悪い）。artgraph 側は `ID = <domain>/slug(requirement-name)` の slug 派生で対応可（Issue #25 で設計検討中）。
 - cc-sdd: Claude Code Skills 駆動の SDD ツール。artgraph の Skills 統合方針と直接競合せず、補完関係。
 - dev-flow-gate: **実態は `sd0xdev/sd0x-dev-flow` で Stop Hook ベースの 4 フェーズ品質ゲート（Plan→Build→Gate→Ship）**。プロセス的アプローチ（構造的グラフなし）。artgraph の check --gate と組み合わせ可能。
 - DocDD（AI 駆動ドキュメント駆動開発）: frontmatter で `depends_on` を宣言し AI が下流を伝播更新。artgraph の D7 と同じ宣言形式だが伝播が LLM 依存。frontmatter 互換を維持しておけば DocDD 採用プロジェクトからの移行が容易。
-- ContextGit: Python + MCP Server で diff→影響ドキュメント検出。技術的に最も近いが牽引力を得られていない（10 stars）。TS 特化・AST 解析なし。「技術的に実現可能でも普及が難しい」リスクを示唆。
+- ContextGit: Python + MCP Server で diff→影響ドキュメント検出。v1.2（2025-12）で JSDoc 注釈経由の JS/TS 対応と 5 層（BR/SR/AR/コード/テスト）を追加したが **AST 解析なし・リンクは手動、10 stars のまま**。「技術的に最も近い」の座は fiberplane/drift と CoDD に譲ったが、「技術的に実現可能でも普及が難しい」リスクの傍証としては引き続き有効。
 - `konstantin-hatvan/traceability-tool`（**2024-12 アーカイブ済**、修士論文成果物、8 stars）: TS 製 CLI でマークダウン要求 ID とコード注釈を紐づける。**概念的に artgraph に最も近い JS/TS 向けツール**だが、AST なし・lock なし・アーカイブ。「同じ問題を認識して着手したが完成しなかった」市場の難しさの傍証。
 - 2層仕様構造パターン（kozoka_ai 記事）: 作業 spec（機能単位）と権威仕様書（ドメイン単位）を分離し、カテゴリ命名規則で自動ルーティング。artgraph が仕様の粒度問題（D3）に対して提示できる運用パターンの参考。
 
 ## 参考リンク
 
-- StrictDoc: https://github.com/strictdoc-project/strictdoc
+- StrictDoc: https://github.com/strictdoc-project/strictdoc （関数レベルパース計画: https://github.com/strictdoc-project/strictdoc/issues/1957）
 - OpenSpec: https://github.com/Fission-AI/OpenSpec
 - CoDD: https://github.com/yohey-w/codd-dev
+- fiberplane/drift: https://github.com/fiberplane/drift
+- rac-core: https://github.com/itsthelore/rac-core
+- Cladding: https://github.com/qwerfunch/cladding
+- rtmx: https://github.com/rtmx-ai/rtmx
+- Spec Kit 拡張カタログ: https://github.github.io/spec-kit/community/extensions.html
+- Kiro spec correctness: https://kiro.dev/docs/specs/correctness/
+- Dosu freshness scoring: https://dosu.dev/blog/score-documentation-freshness-in-ci
+- The Spec Growth Engine（arXiv 2606.27045）: https://arxiv.org/abs/2606.27045
 - traceability-tool: https://github.com/konstantin-hatvan/traceability-tool
 - Kiro Issue #9435: https://github.com/kirodotdev/Kiro/issues/9435
 - DORA 2025: https://cloud.google.com/blog/products/ai-machine-learning/announcing-the-2025-dora-report
