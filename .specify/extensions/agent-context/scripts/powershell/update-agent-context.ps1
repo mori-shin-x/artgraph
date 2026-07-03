@@ -304,6 +304,8 @@ $lines = @($MarkerStart,
 if ($PlanPath) {
     $lines += "at $PlanPath"
 }
+$lines += 'Before implementing, apply the engineering hygiene checklist at'
+$lines += 'docs/review-patterns-checklist.md to preempt recurring review findings.'
 $lines += $MarkerEnd
 $Section = ($lines -join "`n") + "`n"
 

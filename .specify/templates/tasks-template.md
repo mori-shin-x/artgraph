@@ -250,3 +250,19 @@ With multiple developers:
 - Commit after each task or logical group
 - Stop at any checkpoint to validate story independently
 - Avoid: vague tasks, same file conflicts, cross-story dependencies that break independence
+
+---
+
+## Definition of Done（各タスク／PR 提出前）
+
+> 直近 PR のレビュー指摘の大半は同じ観点の抜けで再発している。**敵対的レビューで見つける前に
+> 最初から潰す**ための固定チェック。詳細と背景は `docs/review-patterns-checklist.md`。
+
+- [ ] **異常系 (Cat1)**: 入力関数で 8 系統（null / 空・0件 / 型違い / 巨大 / 非ASCII / BOM / 壊れた JSON・YAML / 不在パス）を処理した。
+- [ ] **安全な書き込み (Cat1)**: 書き込みは atomic（tmp+rename）かつ成功後に確定し、symlink / repo 外パスを拒否した。
+- [ ] **SSOT 等価性 (Cat2)**: 同じ知識を 2 箇所に書いた場合、共有定数/ヘルパに集約したか、等価性メタテストを追加した。
+- [ ] **doc 同時更新 (Cat3)**: 同じ変更で spec / README / SKILL / コメント / バージョン文言を更新した。
+- [ ] **反証可能テスト (Cat4)**: negative / boundary / matrix / anti-vacuous をセットで書き、完全一致比較（SHA・whitespace 固定）を避けた。
+- [ ] **CLI 一貫性 (Cat5)**: 新フラグは `.choices()`・`--format json|text`（失敗時も遵守）・数値検証・対称なエラー挙動・共有 ID regex に沿う。
+- [ ] **走査の精度 (Cat7)**: グラフ操作は方向 / dedup key / 境界（コードフェンス等）をコメント＋テストで pin した。
+- [ ] **ドッグフード (Cat3)**: `artgraph check --diff` が drift=0、`artgraph plan-coverage` が implicit=0。
