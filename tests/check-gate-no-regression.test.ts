@@ -70,7 +70,11 @@ describe("check --gate non-regression (FR-012 後段)", () => {
     // pollute the grep.
     const checkStart = cliSource.indexOf('.command("check")');
     expect(checkStart, "could not locate check subcommand in cli.ts").toBeGreaterThan(0);
-    const checkEnd = cliSource.indexOf("\nprogram", checkStart + 1);
+    // Accept both top-level (`\nprogram`) and indented-inside-registerCommands
+    // (`\n  program`) — oxfmt normalises whichever style the surrounding scope
+    // uses, so pinning to one indentation would be a maintenance trap.
+    const nextProgramMatch = cliSource.slice(checkStart + 1).search(/\n[ \t]*program(\s|\.|\r?\n)/);
+    const checkEnd = nextProgramMatch >= 0 ? checkStart + 1 + nextProgramMatch : -1;
     expect(checkEnd).toBeGreaterThan(checkStart);
     const checkBlock = cliSource.slice(checkStart, checkEnd);
 
