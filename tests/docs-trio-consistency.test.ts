@@ -13,7 +13,7 @@ import { resolve } from "node:path";
 // documented-but-unshipped) stage fails CI instead of reaching users.
 //
 // The stage list below is the test's single source of truth. Adding a new
-// init stage means updating it here — and the assertions then force the
+// init stage means updating it here, and the assertions then force the
 // README paragraph, the skills-guide section, and the cli.ts flag surface
 // to be updated in the same PR.
 
@@ -83,32 +83,81 @@ const STALE_MARKERS = [
   /\(P1\)/,
 ];
 
-/** The one README paragraph that enumerates the full default setup. */
+/**
+ * The one README paragraph that enumerates the full default setup. Matches
+ * up to the next blank line (not a single physical line) so a hard-wrap of
+ * the paragraph doesn't silently truncate the extracted text and turn the
+ * downstream assertions into misleading "docs regressed" failures.
+ */
 function readmeDefaultSetupParagraph(): string {
-  const match = readme.match(/^`artgraph init` runs the full setup:.*$/m);
+  const match = readme.match(
+    /^`artgraph init` runs the full setup:[\s\S]*?(?=\n\s*\n|(?![\s\S]))/m,
+  );
   if (!match) {
     throw new Error(
       "README.md: could not find the default-setup paragraph " +
-        '(a line starting with "`artgraph init` runs the full setup:"). ' +
+        '(a paragraph starting with "`artgraph init` runs the full setup:"). ' +
         "If the Quickstart wording changed, update docs-trio-consistency.test.ts to match.",
     );
   }
   return match[0];
 }
 
-/** The skills-guide section describing `init` default behavior. */
+/**
+ * Slice the stage enumeration out of an enumeration-bearing text: everything
+ * up to the first sentence break. Stage-mention assertions must run against
+ * this slice, not the full paragraph, because incidental later mentions in
+ * the same paragraph (e.g. "--no-hooks" or "share the Stop hook with
+ * teammates") would otherwise keep /Stop hook/ green after the stage was
+ * dropped from the enumeration itself.
+ */
+function enumerationSentence(text: string, label: string): string {
+  const end = text.indexOf(". ");
+  if (end === -1) {
+    throw new Error(
+      `${label}: expected a sentence break after the stage enumeration; ` +
+        "if the wording changed, update docs-trio-consistency.test.ts to match.",
+    );
+  }
+  return text.slice(0, end);
+}
+
+/**
+ * The skills-guide section describing `init` default behavior. The heading
+ * text after "## `init` " is Japanese; anchoring on the ASCII prefix keeps
+ * the regex free of non-ASCII characters and survives heading-wording edits.
+ * The terminator accepts either the next "## " heading or end-of-file, so
+ * the extraction keeps working if the section is moved to the end.
+ */
 function skillsGuideInitSection(): string {
-  // Heading is "## `init` のデフォルト挙動" — anchor on the ASCII prefix so
-  // this file stays ASCII-only.
-  const match = skillsGuide.match(/^## `init` [^\n]*\n([\s\S]*?)(?=^## )/m);
+  const match = skillsGuide.match(/^## `init` [^\n]*\n([\s\S]*?)(?=^## |(?![\s\S]))/m);
   if (!match) {
     throw new Error(
       "docs/skills-guide.md: could not find the `init` default-behavior section " +
         '(a "## `init` ..." heading). ' +
-        "If the section was renamed, update docs-trio-consistency.test.ts to match.",
+        "If the section was renamed or restructured, update docs-trio-consistency.test.ts to match.",
     );
   }
   return match[1];
+}
+
+/**
+ * Only the "- " stage bullet lines of the skills-guide init section. The
+ * section also documents the opt-out flags in a table, so matching stage
+ * mentions against the whole section would let flag names (--no-integrate,
+ * "bare config") mask a stage dropped from the bullet list.
+ */
+function skillsGuideStageBullets(): string {
+  const bullets = skillsGuideInitSection()
+    .split("\n")
+    .filter((line) => line.startsWith("- "));
+  if (bullets.length === 0) {
+    throw new Error(
+      "docs/skills-guide.md: the `init` section no longer contains a '- ' stage " +
+        "bullet list; update docs-trio-consistency.test.ts to match.",
+    );
+  }
+  return bullets.join("\n");
 }
 
 /** Source text of one commander command block in src/cli.ts. */
@@ -144,15 +193,19 @@ describe("docs-trio consistency: README / docs/skills-guide.md / src/cli.ts (#13
   describe("every default stage is described by all three sources", () => {
     for (const stage of DEFAULT_STAGES) {
       it(`stage "${stage.id}" appears in the cli.ts init description`, () => {
-        expect(cliInitDescription()).toMatch(stage.mention);
+        expect(enumerationSentence(cliInitDescription(), "src/cli.ts init description")).toMatch(
+          stage.mention,
+        );
       });
 
-      it(`stage "${stage.id}" appears in the README default-setup paragraph`, () => {
-        expect(readmeDefaultSetupParagraph()).toMatch(stage.mention);
+      it(`stage "${stage.id}" appears in the README default-setup enumeration`, () => {
+        expect(
+          enumerationSentence(readmeDefaultSetupParagraph(), "README default-setup paragraph"),
+        ).toMatch(stage.mention);
       });
 
-      it(`stage "${stage.id}" appears in the skills-guide init section`, () => {
-        expect(skillsGuideInitSection()).toMatch(stage.mention);
+      it(`stage "${stage.id}" appears in the skills-guide stage bullet list`, () => {
+        expect(skillsGuideStageBullets()).toMatch(stage.mention);
       });
     }
   });
@@ -210,7 +263,7 @@ describe("docs-trio consistency: README / docs/skills-guide.md / src/cli.ts (#13
             expect.fail(
               `${label}:${line} contains stale marker ${marker}: "${hit[0]}". ` +
                 "A shipped feature is still described as future work (or vice " +
-                "versa) — update the doc, or ship the feature before advertising it.",
+                "versa); update the doc, or ship the feature before advertising it.",
             );
           }
         });
