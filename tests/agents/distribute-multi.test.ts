@@ -29,11 +29,7 @@
 import { describe, it, expect } from "vitest";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import {
-  AGENT_DESCRIPTORS,
-  DISTRIBUTED_AGENT_DESCRIPTORS,
-  type AgentDescriptor,
-} from "../../src/agents/descriptors.js";
+import { AGENT_DESCRIPTORS, DISTRIBUTED_AGENT_DESCRIPTORS } from "../../src/agents/descriptors.js";
 import { readSkillSource } from "../../src/agents/source.js";
 import { distribute } from "../../src/agents/distribute.js";
 import {

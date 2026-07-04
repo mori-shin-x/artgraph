@@ -20,11 +20,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  AGENT_DESCRIPTORS,
-  DISTRIBUTED_AGENT_DESCRIPTORS,
-  type AgentId,
-} from "../../src/agents/descriptors.js";
+import { DISTRIBUTED_AGENT_DESCRIPTORS } from "../../src/agents/descriptors.js";
 import { createFreshProject, readDistributedTree } from "../agents/helpers.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");

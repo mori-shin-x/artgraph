@@ -28,11 +28,7 @@ import {
   writeGitAttributes,
   writeWrapper,
 } from "../src/agents/agent-context.js";
-import {
-  AGENT_DESCRIPTORS,
-  DISTRIBUTED_AGENT_DESCRIPTORS,
-  findDescriptor,
-} from "../src/agents/descriptors.js";
+import { DISTRIBUTED_AGENT_DESCRIPTORS, findDescriptor } from "../src/agents/descriptors.js";
 import { createFreshProject } from "./agents/helpers.js";
 
 function sha256(filePath: string): string {
