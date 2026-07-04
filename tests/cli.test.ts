@@ -550,6 +550,38 @@ describe("CLI: init", () => {
     expect(stdout).toContain("Nodes:");
   });
 
+  // Issue #122: on a brownfield repo (TS files, no specs, no @impl), the
+  // closing hint must NOT tell the user to run `artgraph check` — there's
+  // nothing to check yet. Instead it must announce that `impact --diff`
+  // already works off the import graph, and that tags are optional.
+  it("shows zero-tag onboarding hint when scan finds files but no reqs/docs (issue #122)", { timeout: 30000 }, async () => {
+    const { exitCode, stdout } = await runInit([]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Zero-tag ready");
+    expect(stdout).toContain("artgraph impact --diff");
+    expect(stdout).toContain("Tags are optional");
+    // Regression guard: the classic "verify traceability" line must not
+    // fire in the brownfield case — it's the misleading message we
+    // replaced.
+    expect(stdout).not.toContain("verify traceability");
+  });
+
+  // Once req nodes exist the classic closing hint should come back — the
+  // zero-tag branch is opt-in on empty scan summaries, not blanket.
+  it("keeps the classic 'verify traceability' hint once reqs are present", { timeout: 30000 }, async () => {
+    const { mkdirSync, writeFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    mkdirSync(join(initTmp, "specs"), { recursive: true });
+    writeFileSync(
+      join(initTmp, "specs", "auth.md"),
+      "- REQ-001: users can sign in.\n",
+    );
+    const { exitCode, stdout } = await runInit([]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("verify traceability");
+    expect(stdout).not.toContain("Zero-tag ready");
+  });
+
   it("should output JSON with --format json", { timeout: 30000 }, async () => {
     const { exitCode, stdout } = await runInit(["--format", "json"]);
     expect(exitCode).toBe(0);

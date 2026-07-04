@@ -27,6 +27,9 @@
     "typecheck": "tsc --noEmit",
     "knip": "knip",
     "check-versions": "node scripts/check-extension-version.mjs",
+    "demo:record": "node scripts/record-tag-zero-demo.mjs",
+    "demo:svg": "svg-term --in docs/demo/tag-zero.cast --out docs/demo/tag-zero.svg --window --width 96 --height 24 --padding 12",
+    "demo": "pnpm build && pnpm demo:record && pnpm demo:svg",
     "prepublishOnly": "rm -rf dist && tsc && pnpm check-versions && pnpm test:unit && pnpm test:e2e"
   },
   "repository": {
@@ -67,6 +70,7 @@
     "knip": "^6.17.1",
     "oxfmt": "^0.55.0",
     "oxlint": "^1.70.0",
+    "svg-term-cli": "^2.1.1",
     "typescript": "^5.8.3",
     "vitest": "^4.1.9"
   },

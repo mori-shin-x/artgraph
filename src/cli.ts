@@ -277,9 +277,32 @@ program
         // Closing hints + integration Tips (FR-012/013). Tips appear *after*
         // the standard next-step lines so the user sees the actionable
         // discovery cue last.
+        //
+        // Issue #122: tag-zero brownfield onboarding. When the scan found TS
+        // files but zero req/doc nodes, the classic `check` message ("verify
+        // traceability") is misleading — there's nothing to trace yet. Swap
+        // to a message that tells the user impact analysis is ALREADY working
+        // off their imports and that tagging is optional / incremental.
         if (result.scanSummary) {
-          console.log(`\nRun "artgraph check" to verify traceability.`);
-          console.log(`Run "artgraph impact --diff" to see impact of your changes.`);
+          const isBrownfieldZeroTag =
+            result.scanSummary.fileCount > 0 &&
+            result.scanSummary.reqCount === 0 &&
+            result.scanSummary.docCount === 0;
+          if (isBrownfieldZeroTag) {
+            console.log(
+              `\nZero-tag ready: no specs or @impl claims detected yet.`,
+            );
+            console.log(
+              `Impact analysis works right now from your TS imports — try:`,
+            );
+            console.log(`  artgraph impact --diff`);
+            console.log(
+              `Tags are optional; add them incrementally as your specs grow.`,
+            );
+          } else {
+            console.log(`\nRun "artgraph check" to verify traceability.`);
+            console.log(`Run "artgraph impact --diff" to see impact of your changes.`);
+          }
         }
 
         // Skip Tips entirely if the user already requested one-shot integration —

@@ -13,6 +13,30 @@ implements them (`@impl` tags) and the tests that verify them (`[ID]` / `req:` t
 then detects **drift** (spec changed but code/tests didn't), **orphans**, and
 **uncovered** requirements.
 
+## 30-second tag-zero start
+
+Have an existing TypeScript repo? Get impact analysis in three commands — **no
+specs, no `@impl` tags, no config required**:
+
+<!-- Regenerate with: pnpm demo:record — see scripts/record-tag-zero-demo.mjs -->
+<p align="center">
+  <img src="./docs/demo/tag-zero.svg" alt="30-second tag-zero demo: artgraph init followed by artgraph impact --diff on a brownfield TS repo" />
+</p>
+
+```bash
+npx artgraph init             # brownfield-safe; no specs required
+# ... edit a file ...
+npx artgraph impact --diff    # → files affected via your TS import graph
+```
+
+That's the entire onboarding. `impact --diff` walks the deterministic
+TypeScript import graph, so it works from day one on any TS repo. Specs,
+`@impl` tags, and drift detection are opt-in — add them progressively as
+your project demands more traceability.
+
+Ready for the full workflow (specs → tags → drift detection → CI gates)?
+Continue with **Quickstart** below.
+
 ## Quickstart
 
 > **Pre-release**: artgraph is not yet on npm. Until `v0.1.0` ships, install from the GitHub repo
