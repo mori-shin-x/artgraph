@@ -8,3 +8,44 @@
 # nx 数日) の発覚タイミングをカバーするため 7 日まで広げる。
 # 重大 CVE の即時対応が必要な場合は CLI flag で個別 override する。
 minimumReleaseAge: 10080
+
+# レビュー指摘 G1 対応: devDependency `svg-term-cli@2.1.1` の推移的依存に
+# Critical/High の既知脆弱性 (xmldom, plist, node-fetch, cross-spawn,
+# trim-newlines, uuid) が含まれるため、安全なバージョンに固定する。
+# `package.json` の `pnpm.overrides` は pnpm 10+ では読まれないため
+# (`pnpm install` 時に `[WARN] The "pnpm" field in package.json is no
+# longer read by pnpm` が出る)、ここに記載するのが正しい設定場所。
+overrides:
+  # plist を 3.0.6 に上げると内部の XML パーサーが自前実装 (xmlbuilder
+  # ベース) に置き換わり、外部パッケージ "xmldom" への依存自体が消える。
+  # これにより xmldom 由来の Critical/High/Moderate 8 件がまとめて解消する
+  # (xmldom 単体では "xmldom" パッケージ名で 0.6.1 以降が公開されておらず、
+  # 後継の "@xmldom/xmldom" に移行しない限り単体では修正不可能なため)。
+  # plist.parse() の公開 API は 2.x -> 3.x で変わっていないことを確認済み。
+  plist: 3.0.6
+  # 1.x 系は要修正版が存在しない (patched: >=2.6.7)。3.x は ESM 専用で
+  # svg-term-cli 側の `require("node-fetch")` を壊すため 2.x 系最終版に固定。
+  node-fetch: 2.7.0
+  # svg-term-cli の execa@0.8.0 経由で cross-spawn@5.1.0 (脆弱) が入るが、
+  # 本リポジトリは既に別経路で cross-spawn@7.0.6 (パッチ済み) を使っており
+  # API 互換 (module.exports = spawn 形式) を確認済みのため、これに統一する。
+  cross-spawn: 7.0.6
+  # meow@3.7.0 が呼び出す trim-newlines の callable なデフォルトエクスポート
+  # 形式は 3.0.1 でも維持されているため互換。patched: >=3.0.1。
+  trim-newlines: 3.0.1
+  # tempfile@2.0.0 は `require("uuid").v4()` の形で呼び出しており、
+  # uuid@11 系の CJS ビルド (dist/cjs/index.js) でも `exports.v4` が
+  # 維持されているため互換。patched: >=11.1.1。
+  uuid: 11.1.1
+  # 注意: nth-check@2.0.1 は CJS の `require("nth-check")` がオブジェクト
+  # (`{ parse, compile, default }`) を返す形式に変わっており、旧来の
+  # `require("nth-check")(rule)` という直接呼び出し (css-select@2.1.0 が
+  # 内部で使用) は本来 `TypeError: is not a function` になる非互換がある。
+  # ただし svg-term-cli が生成する SVG の <style> は class セレクタのみで
+  # :nth-child 系疑似クラスを含まないため、その非互換コードパス自体が
+  # 実行時に到達しない (実機で `svg-term --in ... --out ...` を実行し
+  # svgo の inlineStyles プラグイン (デフォルト有効) 経由で css-select が
+  # 動く経路も含めて動作確認済み)。将来 svg-term 側のテンプレートが
+  # :nth-child 系セレクタを出力するよう変わった場合はここで例外が発生する
+  # (無言の脆弱性ではなく、明示的なクラッシュとして顕在化する) 点に留意。
+  nth-check: 2.0.1
