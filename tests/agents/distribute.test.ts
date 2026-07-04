@@ -26,25 +26,12 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
-import {
-  AGENT_DESCRIPTORS,
-  type AgentDescriptor,
-} from "../../src/agents/descriptors.js";
+import { AGENT_DESCRIPTORS, type AgentDescriptor } from "../../src/agents/descriptors.js";
 import { readSkillSource } from "../../src/agents/source.js";
-import {
-  DistributionError,
-  distribute,
-  planDistribution,
-} from "../../src/agents/distribute.js";
+import { DistributionError, distribute, planDistribution } from "../../src/agents/distribute.js";
 import { createFreshProject, readDistributedTree } from "./helpers.js";
 
-const REPO_TEMPLATES_DIR = resolve(
-  import.meta.dirname,
-  "..",
-  "..",
-  "templates",
-  "skills",
-);
+const REPO_TEMPLATES_DIR = resolve(import.meta.dirname, "..", "..", "templates", "skills");
 
 // Sha256 of a file in the source tree (for direct expected-value assertions
 // independent of `readSkillSource`'s own implementation).
@@ -65,9 +52,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           const result = distribute(descriptor, source, { rootDir: dir });
 
           // Every file in the canonical source has a matching destination.
-          const expectedRelPaths = source.entries
-            .flatMap((e) => e.files)
-            .map((f) => f.relPath);
+          const expectedRelPaths = source.entries.flatMap((e) => e.files).map((f) => f.relPath);
           expect(result.targets.length).toBe(expectedRelPaths.length);
           expect(result.writtenPaths.length).toBe(expectedRelPaths.length);
           expect(result.noopPaths.length).toBe(0);
@@ -118,9 +103,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           expect(snapshot.paths).toEqual(expectedPaths);
 
           for (const rel of expectedPaths) {
-            const file = source.entries
-              .flatMap((e) => e.files)
-              .find((f) => f.relPath === rel)!;
+            const file = source.entries.flatMap((e) => e.files).find((f) => f.relPath === rel)!;
             expect(snapshot.sha256[rel], `sha mismatch ${rel}`).toBe(file.sha256);
           }
         } finally {
@@ -162,12 +145,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           distribute(descriptor, source, { rootDir: dir });
 
           // Tamper with one SKILL.md so the second call sees drift.
-          const tampered = join(
-            dir,
-            descriptor.skillsPath,
-            "artgraph-impact",
-            "SKILL.md",
-          );
+          const tampered = join(dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
           writeFileSync(tampered, "user edit\n", "utf-8");
 
           let caught: unknown;
@@ -197,12 +175,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           const source = readSkillSource(REPO_TEMPLATES_DIR);
           distribute(descriptor, source, { rootDir: dir });
 
-          const tampered = join(
-            dir,
-            descriptor.skillsPath,
-            "artgraph-impact",
-            "SKILL.md",
-          );
+          const tampered = join(dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
           writeFileSync(tampered, "user edit\n", "utf-8");
 
           const result = distribute(descriptor, source, {
@@ -286,12 +259,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
         try {
           const source = readSkillSource(REPO_TEMPLATES_DIR);
           // Plant a symlink at one of the destinations BEFORE distributing.
-          const dstSkillMd = join(
-            dir,
-            descriptor.skillsPath,
-            "artgraph-impact",
-            "SKILL.md",
-          );
+          const dstSkillMd = join(dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
           mkdirSync(dirname(dstSkillMd), { recursive: true });
           // Point at a harmless file the test owns. The point is that
           // distribute() must not follow the symlink and overwrite it.
@@ -307,9 +275,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           }
           expect(caught).toBeInstanceOf(DistributionError);
           if (caught instanceof DistributionError) {
-            expect(caught.conflictPaths.some((p) => p.includes("symlink"))).toBe(
-              true,
-            );
+            expect(caught.conflictPaths.some((p) => p.includes("symlink"))).toBe(true);
           }
           // The decoy target was NOT clobbered.
           expect(readFileSync(decoyTarget, "utf-8")).toBe("decoy\n");
@@ -391,12 +357,8 @@ describe("distribute() — PR #114 cluster B regressions", () => {
         if (caught instanceof DistributionError) {
           // Message pinpoints the offending ancestor (.claude), not the leaf.
           expect(caught.message).toMatch(/symlink/);
-          expect(caught.conflictPaths.some((p) => p.includes("symlink ancestor"))).toBe(
-            true,
-          );
-          expect(
-            caught.conflictPaths.some((p) => p.includes(".claude")),
-          ).toBe(true);
+          expect(caught.conflictPaths.some((p) => p.includes("symlink ancestor"))).toBe(true);
+          expect(caught.conflictPaths.some((p) => p.includes(".claude"))).toBe(true);
         }
         // No skills bytes leaked into the outside/ landing dir.
         expect(existsSync(join(outside, "skills"))).toBe(false);
@@ -418,12 +380,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
     try {
       const source = readSkillSource(REPO_TEMPLATES_DIR);
       // Pre-create a directory where `artgraph-impact/SKILL.md` should land.
-      const badLeaf = join(
-        dir,
-        CLAUDE.skillsPath,
-        "artgraph-impact",
-        "SKILL.md",
-      );
+      const badLeaf = join(dir, CLAUDE.skillsPath, "artgraph-impact", "SKILL.md");
       mkdirSync(badLeaf, { recursive: true });
       // Sanity: the leaf really is a directory.
       expect(statSync(badLeaf).isDirectory()).toBe(true);
@@ -440,9 +397,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
         expect(caught.message.toLowerCase()).not.toMatch(/symlink/);
         expect(caught.message).toMatch(/non-regular/);
         // conflictPaths call out the offending SKILL.md relpath, non-symlink kind.
-        expect(
-          caught.conflictPaths.some((p) => p.includes("artgraph-impact/SKILL.md")),
-        ).toBe(true);
+        expect(caught.conflictPaths.some((p) => p.includes("artgraph-impact/SKILL.md"))).toBe(true);
         for (const p of caught.conflictPaths) {
           expect(p.toLowerCase()).not.toMatch(/symlink/);
         }
@@ -489,18 +444,8 @@ describe("distribute() — PR #114 cluster B regressions", () => {
 
         // (1) Baseline distribute lands canonical bytes at both targets.
         distribute(CLAUDE, source, { rootDir: projectDir });
-        const targetA = join(
-          projectDir,
-          CLAUDE.skillsPath,
-          "artgraph-a",
-          "SKILL.md",
-        );
-        const targetB = join(
-          projectDir,
-          CLAUDE.skillsPath,
-          "artgraph-b",
-          "SKILL.md",
-        );
+        const targetA = join(projectDir, CLAUDE.skillsPath, "artgraph-a", "SKILL.md");
+        const targetB = join(projectDir, CLAUDE.skillsPath, "artgraph-b", "SKILL.md");
         expect(existsSync(targetA)).toBe(true);
         expect(existsSync(targetB)).toBe(true);
 
@@ -545,9 +490,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
         expect(readFileSync(targetB, "utf-8")).toBe(userBytesB);
 
         // No orphan backup/tmp files linger under A's parent.
-        const aDirEntries = readdirSync(
-          join(projectDir, CLAUDE.skillsPath, "artgraph-a"),
-        );
+        const aDirEntries = readdirSync(join(projectDir, CLAUDE.skillsPath, "artgraph-a"));
         for (const name of aDirEntries) {
           expect(name.includes(".artgraph-backup-")).toBe(false);
           expect(name.includes(".artgraph-tmp-")).toBe(false);
@@ -562,10 +505,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
           // Also restore the read-only target so vitest's recursive
           // cleanup can unlink it.
           try {
-            chmodSync(
-              join(projectDir, CLAUDE.skillsPath, "artgraph-b", "SKILL.md"),
-              0o644,
-            );
+            chmodSync(join(projectDir, CLAUDE.skillsPath, "artgraph-b", "SKILL.md"), 0o644);
           } catch {
             /* best-effort */
           }
@@ -848,12 +788,7 @@ describe("distribute() — PR #114 OUT-4", () => {
           },
         ]);
 
-        const targetA = join(
-          projectDir,
-          CLAUDE.skillsPath,
-          "artgraph-a",
-          "SKILL.md",
-        );
+        const targetA = join(projectDir, CLAUDE.skillsPath, "artgraph-a", "SKILL.md");
 
         // Pre-create + lock B's directory (real chmod, same technique as
         // the B1/B5 tests above) so B's write — the SECOND target in the
