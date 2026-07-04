@@ -44,6 +44,16 @@ npm install -D artgraph && npx artgraph init --agents=claude       # pick your a
 
 If you use Claude Code, you can skip the manual install entirely — type `/artgraph-setup` and the Skill detects the package manager, installs artgraph, and runs `init` for you in one turn.
 
+### Windows note
+
+On Windows, artgraph distributes a `.gitattributes` file into each `<agent-skills-path>/` that forces LF for the tracked files. Do NOT set `core.autocrlf=true` globally — if `.gitattributes` is not committed, `artgraph doctor` may report drift after checkout. Alternatively add `.claude/skills/** text eol=lf` (and equivalents for other agents) to your repo's `.gitattributes`.
+
+Selecting `--agents=copilot` creates `.github/skills/` in your repo. If your project uses CODEOWNERS / branch protection for `.github/`, coordinate with your team before running `artgraph init --agents=copilot`.
+
+### Committing distributed Skills
+
+Distributed Skills under `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, and `.kiro/skills/` are safe to commit — they're deterministic byte-identical outputs of `artgraph init --agents=<list>`. Team members without artgraph installed still get the Skills via `git pull`. If you prefer to keep them out of git (e.g. to avoid bumping the diff on every artgraph upgrade), add the paths to `.gitignore`; teammates then need to run `artgraph init --agents=<list>` locally.
+
 ### End-to-end: spec → `@impl` → `check`
 
 > The examples below call `artgraph` directly — substitute your package runner if

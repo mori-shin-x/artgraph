@@ -15,33 +15,60 @@
 // no markdown AST traversal, no link resolution — those concerns belong to
 // downstream Skills / doctor.
 //
+// Concurrency: every writer here is atomic (tmp + rename) but does NOT
+// coordinate concurrent `artgraph init` runs on the same file. Two processes
+// racing on AGENTS.md / a wrapper file follow last-writer-wins semantics; an
+// interleaved user editor save between one process's read and write can be
+// silently overwritten. Callers must serialize concurrent runs on the same
+// project root — see B8 in the PR #114 review.
+//
 // `src/init.ts` wires these helpers in T021. `tests/agent-context.test.ts`
 // (T022) exercises every export at the unit level.
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { atomicWriteFile } from "../integrate/atomic-write.js";
+import type { AgentDescriptor } from "./descriptors.js";
 
 // ---------------------------------------------------------------------------
 // Marker block (T018)
 // ---------------------------------------------------------------------------
 
-/** Literal opening marker. Case-sensitive (R2). */
+/** Literal opening marker (canonical / lowercase). Writers always emit this. */
 export const MARKER_BEGIN = "<!-- artgraph:begin -->";
-/** Literal closing marker. Case-sensitive (R2). */
+/** Literal closing marker (canonical / lowercase). Writers always emit this. */
 export const MARKER_END = "<!-- artgraph:end -->";
 
 /**
- * Match the first artgraph-managed block in a file. Allows optional inner
- * whitespace around `artgraph:begin` / `artgraph:end` so manually-edited
- * markers do not get orphaned, but the rest is case-sensitive (per spec).
- * Body match is lazy (`*?`) so we always stop at the first `artgraph:end`.
+ * Thrown by {@link applyMarkerBlock} when the input file contains a stray
+ * `<!-- artgraph:begin -->` (or `end`) line but no matched pair. Silently
+ * appending in that state would grow half-broken markers into an unrecoverable
+ * lazy-match span on the next round (see PR #114 finding A3).
+ *
+ * Callers that want to self-heal should surface the message and hint the user
+ * to run `artgraph doctor` for a per-file diagnosis.
  */
-const MARKER_RE = /<!--\s*artgraph:begin\s*-->[\s\S]*?<!--\s*artgraph:end\s*-->/;
+export class MarkerBlockCorruptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MarkerBlockCorruptError";
+  }
+}
+
+// Line-anchored (multiline) so prose or code-fence occurrences of the literal
+// marker string cannot silently absorb user text between them (A1). The `i`
+// flag self-heals IDE autocorrect that title-cases the marker into
+// `<!-- artgraph:Begin -->` / `<!-- artgraph:End -->` (OPS-9). Trailing
+// `\r?$` keeps CRLF line endings well-behaved (Windows / git autocrlf).
+const MARKER_RE =
+  /^<!--\s*artgraph:begin\s*-->[\s\S]*?<!--\s*artgraph:end\s*-->\r?$/im;
+/** Global variant for enumeration / duplicate-block detection (A2). */
+const MARKER_RE_GLOBAL =
+  /^<!--\s*artgraph:begin\s*-->[\s\S]*?<!--\s*artgraph:end\s*-->\r?$/gim;
 
 /** Begin/end discovery regexes for the `inspectMarkerBlock` diagnostic. */
-const BEGIN_RE = /<!--\s*artgraph:begin\s*-->/;
-const END_RE = /<!--\s*artgraph:end\s*-->/;
+const BEGIN_RE = /^<!--\s*artgraph:begin\s*-->\r?$/im;
+const END_RE = /^<!--\s*artgraph:end\s*-->\r?$/im;
 
 export interface MarkerBlockResult {
   /** True iff the existing content already contained a marker block. */
@@ -54,11 +81,20 @@ export interface MarkerBlockResult {
  * Build the file content after applying `body` inside the artgraph marker
  * block. Pure function — no IO.
  *
- *   - If a marker block is present, it is replaced in-place. Anything outside
- *     the markers is preserved byte-for-byte (FR-009 / FR-010).
- *   - If no marker block is present, the block is appended at EOF. When the
- *     existing content is empty the leading `\n\n` separator is omitted so
- *     the new file does not begin with blank lines.
+ *   - If a single marker block is present, it is replaced in-place. Anything
+ *     outside the markers is preserved byte-for-byte (FR-009 / FR-010).
+ *   - If MORE THAN ONE block is present (duplicate / stale copies), the first
+ *     block is replaced with the canonical version and every subsequent block
+ *     is removed. This self-heals the case where an IDE autocorrect or a
+ *     stale append accidentally produced duplicates (A2 / OPS-9).
+ *   - If a stray `<!-- artgraph:begin -->` or `<!-- artgraph:end -->` line
+ *     lingers without a matched pair, {@link MarkerBlockCorruptError} is
+ *     thrown. Silently appending would let the next round's lazy match
+ *     swallow user prose between the stray marker and the newly appended
+ *     canonical marker (A3).
+ *   - Otherwise the block is appended at EOF. When the existing content is
+ *     empty (or whitespace-only, BND-6) the leading `\n\n` separator is
+ *     omitted so the new file does not begin with blank lines.
  *
  * `body` is inserted verbatim between `${MARKER_BEGIN}\n` and `\n${MARKER_END}`,
  * so callers must NOT pass the markers themselves.
@@ -66,14 +102,46 @@ export interface MarkerBlockResult {
 export function applyMarkerBlock(existingContent: string, body: string): MarkerBlockResult {
   const block = `${MARKER_BEGIN}\n${body}\n${MARKER_END}`;
 
-  if (MARKER_RE.test(existingContent)) {
+  const allMatches = [...existingContent.matchAll(MARKER_RE_GLOBAL)];
+
+  if (allMatches.length === 1) {
     return {
       found: true,
       newContent: existingContent.replace(MARKER_RE, block),
     };
   }
 
-  if (existingContent.length === 0) {
+  if (allMatches.length > 1) {
+    // Collapse duplicates to a single canonical block at the position of the
+    // FIRST match. Iterate the trailing matches back-to-front so earlier
+    // indices remain valid as we slice them out. Then rewrite the first
+    // match with the canonical body.
+    let result = existingContent;
+    for (let i = allMatches.length - 1; i > 0; i--) {
+      const m = allMatches[i];
+      if (m.index === undefined) continue;
+      const start = m.index;
+      const end = start + m[0].length;
+      result = result.slice(0, start) + result.slice(end);
+    }
+    result = result.replace(MARKER_RE, block);
+    return { found: true, newContent: result };
+  }
+
+  // No matched pair. Refuse when a stray begin OR end lingers alone; the
+  // next round would otherwise lazy-match through user prose (A3).
+  if (BEGIN_RE.test(existingContent) || END_RE.test(existingContent)) {
+    throw new MarkerBlockCorruptError(
+      "artgraph marker block is corrupt: found a stray `<!-- artgraph:begin -->` " +
+        "or `<!-- artgraph:end -->` line with no matching pair. Fix the markers " +
+        "by hand, or run `artgraph doctor` for a per-file diagnosis.",
+    );
+  }
+
+  // Treat any all-whitespace existingContent as empty for the append separator
+  // (BND-6). Otherwise `"\n"` alone would produce three consecutive blank
+  // lines at the head of the output.
+  if (existingContent.trim().length === 0) {
     return { found: false, newContent: `${block}\n` };
   }
 
@@ -81,16 +149,16 @@ export function applyMarkerBlock(existingContent: string, body: string): MarkerB
 }
 
 export interface MarkerBlockHealth {
-  /** True iff at least one `<!-- artgraph:begin -->` marker is present. */
+  /** True iff at least one line-anchored `<!-- artgraph:begin -->` is present. */
   hasBegin: boolean;
-  /** True iff at least one `<!-- artgraph:end -->` marker is present. */
+  /** True iff at least one line-anchored `<!-- artgraph:end -->` is present. */
   hasEnd: boolean;
   /** True iff a complete begin/end pair (begin appearing before end) exists. */
   hasMatchedPair: boolean;
   /**
    * The body text between the markers when `hasMatchedPair` is true; `null`
    * otherwise. The body is returned without the surrounding newlines that
-   * `applyMarkerBlock` adds around `${body}`.
+   * `applyMarkerBlock` adds around `${body}`. CRLF-safe.
    */
   bodyText: string | null;
 }
@@ -101,10 +169,8 @@ export interface MarkerBlockHealth {
  * "half-written / corrupted block".
  */
 export function inspectMarkerBlock(content: string): MarkerBlockHealth {
-  const beginMatch = content.match(BEGIN_RE);
-  const endMatch = content.match(END_RE);
-  const hasBegin = beginMatch !== null;
-  const hasEnd = endMatch !== null;
+  const hasBegin = BEGIN_RE.test(content);
+  const hasEnd = END_RE.test(content);
 
   const pairMatch = content.match(MARKER_RE);
   const hasMatchedPair = pairMatch !== null;
@@ -127,8 +193,8 @@ export function inspectMarkerBlock(content: string): MarkerBlockHealth {
       const inner = whole.slice(beginIdx + beginLen, endIdx);
       // Drop the single leading and trailing newline that `applyMarkerBlock`
       // inserts around the body, but leave any user-authored blank lines
-      // inside the block intact.
-      bodyText = inner.replace(/^\n/, "").replace(/\n$/, "");
+      // inside the block intact. CRLF-safe via `\r?\n` (BND-5).
+      bodyText = inner.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
     }
   }
 
@@ -198,6 +264,12 @@ export interface WriteResult {
  *
  * Writes are atomic (tmp + rename) via `atomicWriteFile`, the same primitive
  * used by integrate providers — see `src/integrate/atomic-write.ts`.
+ *
+ * Contract note (OPS-7): the marker block is artgraph-managed and refreshed
+ * idempotently on every call regardless of the top-level `--force` flag.
+ * `--force` only gates user-drift Skill file overwrites in `distribute()`;
+ * it does NOT gate the AGENTS.md / wrapper block bodies, which are always
+ * treated as machine-owned canonical content.
  */
 export function writeAgentsMd(rootDir: string): WriteResult {
   const absPath = resolve(rootDir, "AGENTS.md");
@@ -253,6 +325,25 @@ export function buildCopilotWrapperBody(): string {
  *
  * Marker-bounded write preserves any user content outside the block — see
  * `applyMarkerBlock` for the exact contract.
+ *
+ * EOF-append convention (OUT-8): when the wrapper file already contains
+ * user prose OUTSIDE the marker block, the artgraph block is appended at
+ * end-of-file with a single blank-line separator. In IDE flows where the
+ * whole wrapper is fed to the model as a prompt, this means the artgraph
+ * section appears AFTER user-authored context; if load-order priority
+ * matters for a particular agent, edit the wrapper by hand to move the
+ * marker block above your prose — the writer only round-trips whatever
+ * position it finds on the next run.
+ *
+ * Contract note (OPS-7): the marker block is artgraph-managed and refreshed
+ * regardless of `--force`. `--force` gates user-drift Skill file overwrites
+ * only, not the wrapper body.
+ *
+ * Failure rollback (A-adj-2): when the wrapper's parent directory
+ * (`.github/` for copilot) had to be created by this call and the atomic
+ * write then fails, the newly-created directory is `rmdir`'d so a partial
+ * failure does not leave an orphan empty `.github/` on disk. Pre-existing
+ * parents are left untouched.
  */
 export function writeWrapper(rootDir: string, agentId: "claude" | "copilot"): WriteResult {
   const relPath = agentId === "claude" ? "CLAUDE.md" : ".github/copilot-instructions.md";
@@ -262,13 +353,89 @@ export function writeWrapper(rootDir: string, agentId: "claude" | "copilot"): Wr
   // For the copilot wrapper, `.github/` may not exist yet — create it
   // before any read attempt so writeMarkerFile's atomic rename has a target
   // directory. mkdirSync recursive is a no-op when the directory already
-  // exists, so this is safe to call unconditionally for both agents.
+  // exists, so this is safe to call unconditionally for both agents. We
+  // remember whether the directory existed pre-call so a downstream failure
+  // can roll it back (A-adj-2).
+  const parent = dirname(absPath);
+  const parentExisted = existsSync(parent);
+  if (!parentExisted) {
+    mkdirSync(parent, { recursive: true });
+  }
+
+  try {
+    return writeMarkerFile(absPath, body);
+  } catch (e) {
+    if (!parentExisted) {
+      // Roll back the parent dir we just created if it is still empty.
+      // Best-effort: any concurrent writer that dropped a sibling file
+      // here means we should leave the dir in place.
+      try {
+        rmdirSync(parent);
+      } catch {
+        /* swallow: dir may already be non-empty or removed */
+      }
+    }
+    throw e;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// .gitattributes writer (OPS-2 partial mitigation)
+// ---------------------------------------------------------------------------
+
+/**
+ * Contents of the user-repo `.gitattributes` file that pins the Skill dist
+ * tree to LF line endings. Windows git default (`core.autocrlf=true`) would
+ * otherwise translate LF → CRLF on checkout, and the LF-hashed doctor check
+ * would silently `skill-file-drift` FAIL every SKILL.md.
+ */
+const GITATTRIBUTES_CONTENT = "** text eol=lf\n";
+
+/**
+ * Write (or refresh) `<rootDir>/<descriptor.skillsPath>/.gitattributes` with
+ * the canonical `** text eol=lf` directive. Returns `written: false` when
+ * the on-disk contents already match (idempotent).
+ *
+ * Motivation (OPS-2): git for Windows defaults to `core.autocrlf=true`; the
+ * distributed SKILL.md files are LF and the doctor hash check is against the
+ * LF originals. Without a pinned `.gitattributes` in the Skill dist tree,
+ * every subsequent `git add` / `git checkout` in a Windows repo re-encodes
+ * the files as CRLF and doctor reports every SKILL.md as `skill-file-drift`.
+ *
+ * NOT wired into `runInit` — exposed as a helper so a follow-up patch can
+ * enable it once the doctor CRLF-normalization landing plan is settled.
+ * Writes atomically via `atomicWriteFile`.
+ */
+export function writeGitAttributes(
+  rootDir: string,
+  descriptor: AgentDescriptor,
+): WriteResult {
+  const absPath = resolve(rootDir, descriptor.skillsPath, ".gitattributes");
+
+  // Parent may not exist on a fresh project (Skill dist tree not yet
+  // populated). Create it so the atomic rename has a target dir.
   const parent = dirname(absPath);
   if (!existsSync(parent)) {
     mkdirSync(parent, { recursive: true });
   }
 
-  return writeMarkerFile(absPath, body);
+  let existing: string | null = null;
+  try {
+    existing = readFileSync(absPath, "utf-8");
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code !== "ENOENT") {
+      throw new Error(
+        `cannot read existing file at ${absPath}: ${err.message ?? String(e)}`,
+      );
+    }
+  }
+
+  if (existing === GITATTRIBUTES_CONTENT) {
+    return { written: false, path: absPath };
+  }
+  atomicWriteFile(absPath, GITATTRIBUTES_CONTENT);
+  return { written: true, path: absPath };
 }
 
 // ---------------------------------------------------------------------------
@@ -280,9 +447,30 @@ export function writeWrapper(rootDir: string, agentId: "claude" | "copilot"): Wr
  * file (treating ENOENT as empty content), recomputes the marker-bounded
  * output, and only writes when the bytes actually differ — guarantees byte-
  * stable idempotency on repeated runs.
+ *
+ * Contract note (OPS-7): the block content is artgraph-managed and always
+ * refreshed to match the canonical body on every call — `--force` at the
+ * CLI layer does NOT gate this. Callers must not gate on it here.
+ *
+ * Error handling (A-adj-3): only `ENOENT` from `readFileSync` is treated as
+ * "empty file, will create". `EACCES` / `EPERM` / `EISDIR` and other read
+ * errors are re-thrown with the target path in the message so the CLI can
+ * surface a specific error line instead of an opaque errno.
  */
 function writeMarkerFile(absPath: string, body: string): WriteResult {
-  const existing = existsSync(absPath) ? readFileSync(absPath, "utf-8") : "";
+  let existing: string;
+  try {
+    existing = readFileSync(absPath, "utf-8");
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") {
+      existing = "";
+    } else {
+      throw new Error(
+        `cannot read existing file at ${absPath}: ${err.message ?? String(e)}`,
+      );
+    }
+  }
   const { newContent } = applyMarkerBlock(existing, body);
   if (newContent === existing) {
     return { written: false, path: absPath };

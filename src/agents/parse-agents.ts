@@ -54,13 +54,43 @@ export function parseAgentsList(raw: string): AgentId[] {
   const nonLowercase = trimmed.filter((t) => t !== t.toLowerCase());
   if (nonLowercase.length > 0) {
     const formatted = nonLowercase.map((t) => `"${t}"`).join(", ");
-    // Suggest the lowercase form only when it would resolve to a known id.
-    const suggestion = nonLowercase
-      .map((t) => t.toLowerCase())
-      .find((t) => findDescriptor(t) !== undefined);
-    const hint = suggestion ? ` Did you mean "${suggestion}"?` : "";
+    // E1: suggest the lowercase form for EVERY mismatched token that would
+    // resolve to a known id — not just the first one (`.find` previously
+    // dropped every suggestion after the first match, so
+    // `--agents=CLAUDE,CODEX` only hinted at "claude").
+    const suggestions = [
+      ...new Set(
+        nonLowercase
+          .map((t) => t.toLowerCase())
+          .filter((t) => findDescriptor(t) !== undefined),
+      ),
+    ];
+    const hint =
+      suggestions.length > 0
+        ? ` Did you mean ${suggestions.map((s) => `"${s}"`).join(", ")}?`
+        : "";
+
+    // E1: also surface case-normalized duplicates in this same error so a
+    // combo like `Claude,claude` doesn't force the user through two
+    // sequential fix-and-retry cycles (uppercase error, then — once fixed —
+    // a separate duplicate error).
+    const lowercased = trimmed.map((t) => t.toLowerCase());
+    const seenLower = new Set<string>();
+    const dupesLower = new Set<string>();
+    for (const t of lowercased) {
+      if (seenLower.has(t)) dupesLower.add(t);
+      seenLower.add(t);
+    }
+    const dupeNote =
+      dupesLower.size > 0
+        ? ` Also duplicated once case is normalized: ${[...dupesLower]
+            .sort()
+            .map((t) => `"${t}"`)
+            .join(", ")}.`
+        : "";
+
     throw new AgentsParseError(
-      `ERROR: Unknown agent identifier(s): ${formatted}.${hint} Supported values: ${SUPPORTED_LIST}.`,
+      `ERROR: Unknown agent identifier(s): ${formatted}.${hint}${dupeNote} Supported values: ${SUPPORTED_LIST}.`,
     );
   }
 

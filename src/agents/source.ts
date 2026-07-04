@@ -20,7 +20,13 @@
 // install path until that path is removed.
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { join, relative } from "node:path";
 import { SkillsInstallError } from "../init.js";
 
@@ -76,6 +82,16 @@ export function readSkillSource(templatesDir: string): SkillSource {
     );
   }
 
+  // BND-3 — `_shared/` on its own is not a distributable Skill set (`_shared/`
+  // is a follower dir referenced by `../_shared/...` from real Skills). If
+  // every discovered top-level is `_shared`, refuse to proceed — otherwise
+  // distribute would silently succeed with zero `SKILL.md` files.
+  if (topLevels.every((t) => t === "_shared")) {
+    throw new SkillsInstallError(
+      `Only _shared/ found in ${templatesDir} — no distributable Skills. Expected templates/skills/<name>/SKILL.md. This is likely a packaging issue.`,
+    );
+  }
+
   const entries: SkillEntry[] = [];
   for (const topLevel of topLevels) {
     const isShared = topLevel === "_shared";
@@ -112,12 +128,22 @@ function collectFiles(root: string, current: string): SkillFile[] {
 function walk(root: string, current: string, out: SkillFile[]): void {
   for (const entry of readdirSync(current)) {
     // Hidden files (`.DS_Store`, `.git`, editor swap files) never travel
-    // with the distribution. Symlinks are inspected via `statSync` which
-    // follows them, but the install layer (`installSkills`) refuses to
-    // overwrite symlink targets defensively.
+    // with the distribution. Symlinks are refused defensively so a stray
+    // template-tree symlink can never make it into the distribution.
     if (entry.startsWith(".")) continue;
     const full = join(current, entry);
-    const stat = statSync(full);
+    // C-adj-3 — `lstatSync` (not `statSync`) so a broken / dangling symlink
+    // introduced by pnpm hoisting or hand-edit of `templates/skills/` cannot
+    // crash `readSkillSource`. Wrapped in try/catch to survive EACCES on
+    // hardened build machines. Symlinks are always skipped (canonical Skill
+    // files are plain files by contract).
+    let stat;
+    try {
+      stat = lstatSync(full);
+    } catch {
+      continue;
+    }
+    if (stat.isSymbolicLink()) continue;
     if (stat.isDirectory()) {
       walk(root, full, out);
       continue;

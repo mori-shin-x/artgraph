@@ -55,10 +55,15 @@ import { resolveSpecDir } from "./plan-coverage/spec-resolver.js";
 import { loadTestResults } from "./test-results.js";
 import { executeRename, executeSplit, executeMerge } from "./rename-executor.js";
 import type { RenameResult } from "./rename-executor.js";
-import { getProviderStatuses, registerBuiltinProviders, runIntegrate } from "./integrate/index.js";
+import {
+  getProviderStatuses,
+  listProviders,
+  registerBuiltinProviders,
+  runIntegrate,
+} from "./integrate/index.js";
 import type { IntegrateResult, IntegrationProviderId } from "./types.js";
 import { parseAgentsList, AgentsParseError } from "./agents/parse-agents.js";
-import type { AgentId } from "./agents/descriptors.js";
+import { AGENT_IDS, type AgentId } from "./agents/descriptors.js";
 import {
   runDoctor,
   formatDoctorReportJson,
@@ -112,7 +117,10 @@ program
   .description(
     "Initialize artgraph for this project (default: config + scan + Skills + auto-integrate detected SDD tools + AGENTS.md / wrapper injection; Stop hook lands in PR-B). Use --minimal for bare config only.",
   )
-  .option("--force", "Overwrite existing .artgraph.json")
+  .option(
+    "--force",
+    "Overwrite existing .artgraph.json, distributed Skill files, and integration files. Refuses symlinks even with --force.",
+  )
   .option("--minimal", "Bare config only — opt out of every extra setup stage")
   // Stage opt-outs (in default mode)
   .option("--no-scan", "Skip initial scan + reconcile")
@@ -128,7 +136,7 @@ program
   // Explicit integrate list (overrides auto-detect)
   .option(
     "--integrations <tools>",
-    "Comma-separated SDD tools to integrate (overrides auto-detect; e.g. speckit,kiro or all)",
+    "Comma-separated SDD tools to integrate (overrides auto-detect; e.g. speckit,kiro or 'all' (= auto-detect every installed SDD tool))",
   )
   .option("--integrate-gate", "Pass --gate to speckit during integration")
   .option("--no-integrate-gate", "Pass --no-gate to speckit during integration")
@@ -138,7 +146,11 @@ program
   // duplicate values per contracts/cli-flags.md.
   .option(
     "--agents <list>",
-    "Comma-separated Tier 1 agent ids to target (claude, codex, cursor, copilot, kiro). Required for Skills / agent-context distribution.",
+    // E-adj-A9 / BND-7: derive the id list from AGENT_IDS (descriptors.ts is
+    // the single source of truth) instead of hardcoding it a second time —
+    // a 6th agent id landing in descriptors.ts would otherwise leave this
+    // help text silently stale.
+    `Comma-separated Tier 1 agent ids to target (${AGENT_IDS.join(", ")}). Required for Skills / agent-context distribution.`,
   )
   .option("--format <format>", "Output format: json | text", "text")
   .action((opts) => {
@@ -157,6 +169,26 @@ program
       process.exit(1);
     }
 
+    // D3 / D-adj-3 / D-adj-6: `--minimal --with-skills` (or
+    // `--with-agent-context`) without `--agents` used to silently no-op —
+    // `agentsRequired` is false under `--minimal`, so the missing-`--agents`
+    // gate below never fired, and the distribution stage skipped itself
+    // with zero agents and zero warning. That's the same "no-op combination"
+    // family the mutex-conflict detector above already guards against, and
+    // it's asymmetric with `--with-hooks`, which at least WARNs about being
+    // a no-op. Treat it as a hard error, consistent with the
+    // AGENTS_REQUIRED_ERROR path used everywhere else --agents is missing.
+    if (
+      opts.minimal === true &&
+      (opts.withSkills === true || opts.withAgentContext === true) &&
+      !opts.agents
+    ) {
+      console.error(
+        "ERROR: --with-skills / --with-agent-context under --minimal requires --agents=<list>; otherwise this is a no-op.",
+      );
+      process.exit(1);
+    }
+
     // C1: --with-hooks is accepted (so the flag surface is stable for PR-B)
     // but currently no-op. Warn so the user doesn't think they got hooks
     // without checking output. --with-agent-context now lands real output
@@ -168,17 +200,39 @@ program
     // Parse --integrations: "all" stays as the literal sentinel; otherwise
     // it's a comma-separated provider id list. Empty/undefined leaves
     // integrations unspecified so runInit's auto-detect kicks in.
-    const integrations = parseInitIntegrations(opts.integrations);
+    let integrations = parseInitIntegrations(opts.integrations);
 
     // M12: surface valid provider ids when the user fat-fingers an
-    // --integrations value. runInit's own warning also fires later, but
-    // showing the valid set here gives the user the hint *before* init runs.
-    const VALID_PROVIDER_IDS = new Set(["speckit", "kiro"]);
+    // --integrations value, and do it *before* runInit runs.
+    //
+    // OUT-10: derive the valid-id set from the live provider registry
+    // (the same source `getProviderStatuses` reads) instead of a hardcoded
+    // `{"speckit","kiro"}` literal, so a newly-registered provider (e.g.
+    // openspec) doesn't silently fall through this check as "unknown".
+    const VALID_PROVIDER_IDS = new Set(listProviders().map((p) => p.id));
     if (Array.isArray(integrations)) {
-      const invalid = integrations.filter((id) => !VALID_PROVIDER_IDS.has(id as string));
+      const invalid = integrations.filter(
+        (id) => !VALID_PROVIDER_IDS.has(id as IntegrationProviderId),
+      );
       if (invalid.length > 0) {
         const valid = [...VALID_PROVIDER_IDS].join(", ");
         console.error(`WARNING: unknown integration provider(s): ${invalid.join(", ")} (valid: ${valid})`);
+
+        // E2: drop the invalid ids before handing the list to runInit so
+        // its own `runRequestedIntegrations` unknown-provider warning
+        // doesn't fire a second time for the same id (previously the same
+        // "unknown provider" fact was reported twice, once here and once
+        // from init.ts). Only reassign when at least one valid id
+        // survives — an all-invalid list must still reach runInit as a
+        // non-empty array so it stays on the "explicit request, zero real
+        // integrations" path rather than falling through to the
+        // auto-detect branch (which an empty array would trigger).
+        const validOnly = integrations.filter((id) =>
+          VALID_PROVIDER_IDS.has(id as IntegrationProviderId),
+        );
+        if (validOnly.length > 0) {
+          integrations = validOnly;
+        }
       }
     }
 
@@ -202,15 +256,7 @@ program
     // verbatim and exit 1.
     let parsedAgents: AgentId[] | undefined;
     if (opts.agents !== undefined) {
-      try {
-        parsedAgents = parseAgentsList(String(opts.agents));
-      } catch (e) {
-        if (e instanceof AgentsParseError) {
-          console.error(e.message);
-          process.exit(1);
-        }
-        throw e;
-      }
+      parsedAgents = parseAgentsFlag(String(opts.agents));
     }
 
     // @impl 013-cross-agent-extensions/FR-013
@@ -370,6 +416,29 @@ program
   });
 
 /**
+ * E-adj-A5: `init` and `doctor` both need to parse `--agents=<csv>` and both
+ * need the same "print `AgentsParseError.message` verbatim, exit 1"
+ * wrapping around `parseAgentsList`. The two call sites used to duplicate
+ * this try/catch byte-for-byte; centralizing it here means a future change
+ * to the error-to-exit behavior only has to land once.
+ *
+ * `doctor`'s call site still inlines its own copy of this pattern — Cluster
+ * D owns migrating it onto this helper alongside its own try/catch wrapping
+ * of the doctor action.
+ */
+function parseAgentsFlag(raw: string): AgentId[] {
+  try {
+    return parseAgentsList(raw);
+  } catch (e) {
+    if (e instanceof AgentsParseError) {
+      console.error(e.message);
+      process.exit(1);
+    }
+    throw e;
+  }
+}
+
+/**
  * Parse the comma-separated value passed to `--integrate`. Returns:
  *   - undefined when the flag was not supplied
  *   - "all" when the user passed the special sentinel
@@ -390,7 +459,17 @@ function parseInitIntegrations(
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
-  if (ids.length === 0) return undefined;
+  if (ids.length === 0) {
+    // E-adj-A7: a non-empty value that still yields zero ids (",,," and
+    // friends) silently fell back to auto-detect with no signal that the
+    // flag's value was discarded. Warn so the user isn't left wondering why
+    // every SDD tool got auto-integrated instead of the (mistyped)
+    // explicit list they gave.
+    console.error(
+      `WARNING: invalid --integrations value '${raw}' — falling back to auto-detect.`,
+    );
+    return undefined;
+  }
   return ids as IntegrationProviderId[];
 }
 
@@ -492,7 +571,9 @@ program
 const AGENTS_REQUIRED_ERROR = [
   "ERROR: --agents=<list> is required when Skills or agent-context distribution runs.",
   "",
-  "Supported values: claude, codex, cursor, copilot, kiro",
+  // E-adj-A9 / BND-7: derive from AGENT_IDS instead of a second hardcoded
+  // literal (descriptors.ts is the single source of truth).
+  `Supported values: ${AGENT_IDS.join(", ")}`,
   "",
   "To resolve, choose one:",
   "  1. Specify target agents:",
@@ -501,6 +582,15 @@ const AGENTS_REQUIRED_ERROR = [
   "       artgraph init --no-skills --no-agent-context",
   "  3. Skip every extra setup stage:",
   "       artgraph init --minimal",
+  "",
+  // E-adj-A6: --with-skills / --with-agent-context under --minimal is a
+  // no-op unless --agents is also given — spell that out here since option
+  // 3 above (--minimal) reads like a standalone fix, and D3 hard-errors on
+  // exactly this combination.
+  "Additional notes:",
+  "  --minimal requires --with-skills (or --with-agent-context) AND --agents",
+  "  together to opt back into Skills / agent-context distribution; either",
+  "  alone is a no-op.",
 ].join("\n");
 
 // spec 014 (FR-001 / FR-003): REQ-ID inputs are no longer accepted here.
@@ -954,14 +1044,23 @@ program
         throw e;
       }
     }
-    const report = runDoctor({ rootDir, agents });
-    const out =
-      opts.format === "json"
-        ? formatDoctorReportJson(report)
-        : formatDoctorReportText(report);
-    console.log(out);
-    if (report.summary.failCount > 0) {
-      process.exitCode = 1;
+    // C1 — mirror the `init` action's try/catch so `SkillsInstallError`,
+    // `EACCES` reads, unknown-agent throws, etc. surface as a single
+    // `Error: <msg>` line rather than a raw Node stack trace.
+    try {
+      const report = runDoctor({ rootDir, agents });
+      const out =
+        opts.format === "json"
+          ? formatDoctorReportJson(report)
+          : formatDoctorReportText(report);
+      console.log(out);
+      if (report.summary.failCount > 0) {
+        process.exitCode = 1;
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`Error: ${msg}`);
+      process.exit(1);
     }
   });
 

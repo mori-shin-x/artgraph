@@ -12,10 +12,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
@@ -375,6 +377,286 @@ describe("runDoctor — explicit --agents filter", () => {
     expect(report.summary.agents).toEqual(["claude"]);
     // No codex-keyed findings should leak through.
     expect(report.findings.some((f) => f.agent === "codex")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #114 cluster D regressions — new finding kinds and defensive I/O.
+// ---------------------------------------------------------------------------
+
+describe("runDoctor — A6: wrapper-broken-marker (not wrapper-no-import)", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+    initProject(proj.dir, ["claude"]);
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  it("flags a wrapper whose end marker is removed as `wrapper-broken-marker`, not `wrapper-no-import`", () => {
+    const claudeMd = join(proj.dir, "CLAUDE.md");
+    const body = readFileSync(claudeMd, "utf-8");
+    // Wipe the end marker but keep the @AGENTS.md line inside the (now
+    // half-broken) block. Old behavior would mis-report this as
+    // `wrapper-no-import` because `bodyText` is null → blockBody = "" →
+    // include check fails.
+    const broken = body.replace(/<!--\s*artgraph:end\s*-->/g, "");
+    writeFileSync(claudeMd, broken, "utf-8");
+    const report = runDoctor({ rootDir: proj.dir });
+
+    // Correct kind emitted.
+    const brokenFinding = findFinding(
+      report.findings,
+      (x) => x.kind === "wrapper-broken-marker" && x.agent === "claude",
+    );
+    expect(brokenFinding, JSON.stringify(report.findings, null, 2)).toBeDefined();
+    expect(brokenFinding!.path).toBe("CLAUDE.md");
+
+    // The obsolete `wrapper-no-import` must NOT double-fire for the same file.
+    const noImport = findFinding(
+      report.findings,
+      (x) => x.kind === "wrapper-no-import" && x.agent === "claude",
+    );
+    expect(noImport).toBeUndefined();
+  });
+});
+
+describe("runDoctor — A-adj-1: brokenMarkerDescription counts strays", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+    initProject(proj.dir, ["claude"]);
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  it("reports begin/end counts when multiple strays are present", () => {
+    const agentsMd = join(proj.dir, "AGENTS.md");
+    // Add 2 stray begin markers on top of the canonical pair, then wipe every
+    // end marker. Result: 3 begins, 0 ends.
+    let body = readFileSync(agentsMd, "utf-8");
+    body = `<!-- artgraph:begin -->\nstray one\n\n<!-- artgraph:begin -->\nstray two\n\n${body}`;
+    body = body.replace(/<!--\s*artgraph:end\s*-->/g, "");
+    writeFileSync(agentsMd, body, "utf-8");
+    const report = runDoctor({ rootDir: proj.dir });
+    const f = findFinding(report.findings, (x) => x.kind === "agents-md-marker-broken");
+    expect(f, JSON.stringify(report.findings, null, 2)).toBeDefined();
+    // Message actual field must expose the counts.
+    expect(f!.actual).toMatch(/3 begin/);
+    expect(f!.actual).toMatch(/0 end/);
+  });
+});
+
+describe("runDoctor — C2: walk skips symlinks", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+    initProject(proj.dir, ["claude"]);
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  it("does not recurse into a symlink loop inside a canonical Skill dir", () => {
+    const impactDir = join(proj.dir, ".claude/skills/artgraph-impact");
+    const loop = join(impactDir, "loop");
+    // `ln -s . loop` inside the canonical dir — a naive statSync-based walk
+    // would recurse until RangeError. After the fix, walk uses lstat and skips
+    // symlinks entirely.
+    symlinkSync(impactDir, loop, "dir");
+    expect(() => runDoctor({ rootDir: proj.dir })).not.toThrow();
+    const report = runDoctor({ rootDir: proj.dir });
+    // Symlink is not a canonical file → must not surface as extraneous either.
+    const extra = findFinding(
+      report.findings,
+      (x) => x.kind === "extraneous-file" && x.path.includes("loop"),
+    );
+    expect(extra).toBeUndefined();
+  });
+});
+
+describe("runDoctor — C3: TOCTOU race on skill file read", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+    initProject(proj.dir, ["claude"]);
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  it("treats a missing skill file (whatever the syscall order) as skill-file-missing without throwing", () => {
+    // Delete several canonical files. Old code used `existsSync` + `hashFile`
+    // and would surface a raw ENOENT if a concurrent process removed a file
+    // between the two syscalls; the fix uses `try { hashFile } catch (ENOENT)`.
+    rmSync(join(proj.dir, ".claude/skills/artgraph-verify/SKILL.md"));
+    rmSync(join(proj.dir, ".claude/skills/artgraph-detect/SKILL.md"));
+    expect(() => runDoctor({ rootDir: proj.dir })).not.toThrow();
+    const report = runDoctor({ rootDir: proj.dir });
+    const missing = report.findings.filter((x) => x.kind === "skill-file-missing");
+    expect(missing.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("runDoctor — C4: walk-error on unreadable subtree", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+  let chmodTarget: string | null = null;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+    initProject(proj.dir, ["claude"]);
+    chmodTarget = null;
+  });
+
+  afterEach(() => {
+    // Restore perms so cleanup can remove the dir.
+    if (chmodTarget && existsSync(chmodTarget)) {
+      try {
+        chmodSync(chmodTarget, 0o755);
+      } catch {
+        // best-effort
+      }
+    }
+    proj.cleanup();
+  });
+
+  it("emits a `walk-error` finding when readdirSync throws EACCES instead of crashing", () => {
+    if (process.getuid && process.getuid() === 0) {
+      // Root ignores mode bits; skip this test.
+      return;
+    }
+    // Nest an artgraph-canonical subtree we can chmod (walk() only recurses
+    // into canonical top-levels). Drop an inner dir + file, then remove
+    // read permission on the inner dir → walk's readdirSync throws EACCES.
+    const canonicalTop = join(proj.dir, ".claude/skills/artgraph-rename");
+    const innerDir = join(canonicalTop, "extra-nested");
+    mkdirSync(innerDir, { recursive: true });
+    writeFileSync(join(innerDir, "leaf.md"), "leaf\n", "utf-8");
+    chmodSync(innerDir, 0o000);
+    chmodTarget = innerDir;
+
+    const report = runDoctor({ rootDir: proj.dir });
+    const walkErr = findFinding(
+      report.findings,
+      (x) => x.kind === "walk-error" && x.path.includes("extra-nested"),
+    );
+    expect(walkErr, JSON.stringify(report.findings, null, 2)).toBeDefined();
+    expect(walkErr!.agent).toBe("claude");
+  });
+});
+
+describe("runDoctor — D1: distribution-absent single finding", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+    initProject(proj.dir, ["claude"]);
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  it("emits exactly one `distribution-absent` finding (not N skill-file-missing) when --agents=<uninstalled>", () => {
+    // codex distribution was never provisioned (only claude was) — the old
+    // code would flood N `skill-file-missing`.
+    const report = runDoctor({ rootDir: proj.dir, agents: ["codex"] });
+    const absent = report.findings.filter((x) => x.kind === "distribution-absent");
+    expect(absent.length, JSON.stringify(report.findings, null, 2)).toBe(1);
+    expect(absent[0]!.agent).toBe("codex");
+    // No stray per-file findings.
+    const skillMissing = report.findings.filter(
+      (x) => x.kind === "skill-file-missing" && x.agent === "codex",
+    );
+    expect(skillMissing.length).toBe(0);
+    // `codex` still shows up in the summary so JSON consumers see it.
+    expect(report.summary.agents).toContain("codex");
+  });
+});
+
+describe("runDoctor — D2: walk skips dot files", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+    initProject(proj.dir, ["claude"]);
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  it("does not flag `.DS_Store` / `.gitkeep` droppings as extraneous-file", () => {
+    const dsStore = join(proj.dir, ".claude/skills/artgraph-impact/.DS_Store");
+    writeFileSync(dsStore, "\x00\x00\x00", "utf-8");
+    const swp = join(proj.dir, ".claude/skills/artgraph-impact/.SKILL.md.swp");
+    writeFileSync(swp, "editor swap", "utf-8");
+    const report = runDoctor({ rootDir: proj.dir });
+    const extra = report.findings.filter(
+      (x) =>
+        x.kind === "extraneous-file" &&
+        (x.path.includes(".DS_Store") || x.path.includes(".swp")),
+    );
+    expect(extra.length, JSON.stringify(extra, null, 2)).toBe(0);
+  });
+});
+
+describe("runDoctor — D5: auto-detect skips empty / no-canonical dirs", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  it("does not treat a bare `.kiro/skills/` (no canonical top-level) as an installed distribution", () => {
+    // Simulate a third-party tool (or `mkdir` typo) that created an empty
+    // `.kiro/skills/` on its own. artgraph never touched it → doctor must
+    // not auto-detect kiro.
+    const kiroSkills = join(proj.dir, ".kiro/skills");
+    mkdirSync(kiroSkills, { recursive: true });
+    const report = runDoctor({ rootDir: proj.dir });
+    expect(report.summary.agents).not.toContain("kiro");
+  });
+
+  it("still treats a `.kiro/skills/` with at least one canonical top-level as installed", () => {
+    initProject(proj.dir, ["kiro"]);
+    const report = runDoctor({ rootDir: proj.dir });
+    expect(report.summary.agents).toContain("kiro");
+  });
+});
+
+describe("runDoctor — D-adj-1: throws on unknown agent id", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+    initProject(proj.dir, ["claude"]);
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  it("throws Error when opts.agents contains an unknown id (programmatic caller path)", () => {
+    // Cast through unknown so we can exercise the defensive throw without
+    // pushing an invalid AgentId literal into the type system.
+    expect(() =>
+      runDoctor({ rootDir: proj.dir, agents: ["ghost" as unknown as "claude"] }),
+    ).toThrow(/Unknown agent id/);
   });
 });
 

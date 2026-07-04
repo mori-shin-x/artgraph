@@ -646,7 +646,7 @@ describe("runInit default behavior (P0)", () => {
     expect(existsSync(join(tmp, ".claude", "settings.json"))).toBe(false);
   });
 
-  it("default mode does NOT create or modify CLAUDE.md (agent-context stub no-op in P0)", () => {
+  it("default mode without --agents does NOT create or modify CLAUDE.md (agent-context stage requires --agents)", () => {
     runInit(tmp);
     expect(existsSync(join(tmp, "CLAUDE.md"))).toBe(false);
   });
@@ -722,6 +722,22 @@ describe("readSkillSource (packaging-fault surface)", () => {
       );
     } finally {
       rmSync(customTemplates, { recursive: true, force: true });
+    }
+  });
+
+  // PR #114 BND-3 — `_shared/` alone is not a distributable set.
+  it("throws SkillsInstallError when the only top-level dir is `_shared/`", () => {
+    const sharedOnly = mkdtempSync(join(tmpdir(), "artgraph-shared-only-"));
+    mkdirSync(join(sharedOnly, "_shared"), { recursive: true });
+    writeFileSync(join(sharedOnly, "_shared", "helper.md"), "shared fragment\n");
+
+    try {
+      expect(() => readSkillSource(sharedOnly)).toThrow(SkillsInstallError);
+      expect(() => readSkillSource(sharedOnly)).toThrow(
+        /Only _shared.*no distributable Skills/i,
+      );
+    } finally {
+      rmSync(sharedOnly, { recursive: true, force: true });
     }
   });
 });

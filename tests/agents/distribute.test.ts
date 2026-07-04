@@ -15,9 +15,12 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -314,6 +317,405 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           cleanup();
         }
       });
+    },
+  );
+});
+
+// ===========================================================================
+// PR #114 review-cluster B: A4 / A-adj-4 / B1 / B5 / B9 regression tests.
+//
+// Each of these exercises a specific failure mode that the previous
+// implementation silently mishandled. The tests use a claude descriptor and
+// a synthetic (or partial) skills-source so we do NOT depend on the real
+// `templates/skills/` tree — otherwise a template change would break
+// unrelated safety assertions.
+//
+// Filesystem-permission-based tests (B1, B5, B9) only make sense on POSIX
+// where `chmod` and `lstat` return standard errno codes. They are gated
+// with `it.skipIf(process.platform === "win32")` so Windows CI skips them
+// rather than reports flakes.
+// ===========================================================================
+
+const CLAUDE = AGENT_DESCRIPTORS.find((d) => d.id === "claude")!;
+const IS_WIN = process.platform === "win32";
+
+/**
+ * Build a self-contained skills-source under `sourceDir` and return the
+ * `SkillSource` for it. Callers can then `distribute()` against a fresh
+ * project without touching the real `templates/skills/` tree.
+ *
+ * `entries[i].body` bytes are written verbatim; the returned SkillSource is
+ * re-computed via `readSkillSource` so the sha256 fields match the on-disk
+ * content exactly.
+ */
+function makeSyntheticSource(
+  sourceDir: string,
+  entries: Array<{ relPath: string; body: string }>,
+): ReturnType<typeof readSkillSource> {
+  for (const { relPath, body } of entries) {
+    const abs = join(sourceDir, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, body, "utf-8");
+  }
+  return readSkillSource(sourceDir);
+}
+
+describe("distribute() — PR #114 cluster B regressions", () => {
+  // -------------------------------------------------------------------------
+  // A4 — intermediate-directory symlink attack. If `.claude/` (or any
+  // ancestor) is a symlink pointing outside the project tree, the previous
+  // implementation would write through it, silently landing skills bytes on
+  // some out-of-repo location. `findSymlinkAncestor` must catch this.
+  // -------------------------------------------------------------------------
+  it.skipIf(IS_WIN)(
+    "A4: refuses to write through an ancestor-directory symlink (intermediate .claude → outside/)",
+    () => {
+      const { dir, cleanup } = createFreshProject();
+      try {
+        const source = readSkillSource(REPO_TEMPLATES_DIR);
+        // Prepare an "outside" directory INSIDE the tmpdir (so we do not
+        // pollute the real filesystem) and symlink `.claude` at it. From
+        // distribute's perspective this ancestor is a symlink and any
+        // downstream write would land in `outside/`.
+        const outside = join(dir, "outside-landing");
+        mkdirSync(outside);
+        symlinkSync(outside, join(dir, ".claude"));
+
+        let caught: unknown;
+        try {
+          distribute(CLAUDE, source, { rootDir: dir, force: true });
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(DistributionError);
+        if (caught instanceof DistributionError) {
+          // Message pinpoints the offending ancestor (.claude), not the leaf.
+          expect(caught.message).toMatch(/symlink/);
+          expect(caught.conflictPaths.some((p) => p.includes("symlink ancestor"))).toBe(
+            true,
+          );
+          expect(
+            caught.conflictPaths.some((p) => p.includes(".claude")),
+          ).toBe(true);
+        }
+        // No skills bytes leaked into the outside/ landing dir.
+        expect(existsSync(join(outside, "skills"))).toBe(false);
+        expect(existsSync(join(outside, "artgraph-impact"))).toBe(false);
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // A-adj-4 — a directory sitting at the leaf target should not be
+  // labelled "symlink". This regressed because the previous impl folded
+  // any non-file into the `symlinkConflicts` bucket, so the error message
+  // told the user to remove a "symlink" that was actually a directory.
+  // -------------------------------------------------------------------------
+  it("A-adj-4: directory at leaf target uses the non-regular bucket, not the symlink one", () => {
+    const { dir, cleanup } = createFreshProject();
+    try {
+      const source = readSkillSource(REPO_TEMPLATES_DIR);
+      // Pre-create a directory where `artgraph-impact/SKILL.md` should land.
+      const badLeaf = join(
+        dir,
+        CLAUDE.skillsPath,
+        "artgraph-impact",
+        "SKILL.md",
+      );
+      mkdirSync(badLeaf, { recursive: true });
+      // Sanity: the leaf really is a directory.
+      expect(statSync(badLeaf).isDirectory()).toBe(true);
+
+      let caught: unknown;
+      try {
+        distribute(CLAUDE, source, { rootDir: dir, force: true });
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(DistributionError);
+      if (caught instanceof DistributionError) {
+        // Message must NOT mislabel the conflict as a symlink.
+        expect(caught.message.toLowerCase()).not.toMatch(/symlink/);
+        expect(caught.message).toMatch(/non-regular/);
+        // conflictPaths call out the offending SKILL.md relpath, non-symlink kind.
+        expect(
+          caught.conflictPaths.some((p) => p.includes("artgraph-impact/SKILL.md")),
+        ).toBe(true);
+        for (const p of caught.conflictPaths) {
+          expect(p.toLowerCase()).not.toMatch(/symlink/);
+        }
+      }
+      // The pre-existing directory was not touched.
+      expect(existsSync(badLeaf)).toBe(true);
+      expect(statSync(badLeaf).isDirectory()).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // B1 — mid-loop --force failure MUST restore the user's original bytes
+  // for any drift-overwrite target that already succeeded. The regression
+  // was that unlink-based rollback deleted the just-written canonical AND
+  // the user edit it replaced, leaving the user with nothing.
+  //
+  // Reproduction: two drifted files (A and B). B's parent is chmod 0500
+  // so the write for B fails at copyFileSync-to-tmp. A's backup MUST be
+  // rename'd back over A so A retains "USER BYTES A".
+  // -------------------------------------------------------------------------
+  it.skipIf(IS_WIN)(
+    "B1: mid-loop --force failure restores the user's pre-call bytes for succeeded drift-overwrites",
+    () => {
+      const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
+      const { dir: sourceDir, cleanup: cleanupSource } = createFreshProject();
+      // Track the chmod-locked dir so we can restore perms in finally
+      // (otherwise vitest cleanup rm can't traverse).
+      let locked: string | null = null;
+      try {
+        // Synthetic source with two Skill entries — deterministic ordering
+        // (`artgraph-a` < `artgraph-b`) ensures A is processed before B.
+        const source = makeSyntheticSource(sourceDir, [
+          {
+            relPath: "artgraph-a/SKILL.md",
+            body: "---\nname: artgraph-a\ndescription: A stub\n---\ncanonical-A\n",
+          },
+          {
+            relPath: "artgraph-b/SKILL.md",
+            body: "---\nname: artgraph-b\ndescription: B stub\n---\ncanonical-B\n",
+          },
+        ]);
+
+        // (1) Baseline distribute lands canonical bytes at both targets.
+        distribute(CLAUDE, source, { rootDir: projectDir });
+        const targetA = join(
+          projectDir,
+          CLAUDE.skillsPath,
+          "artgraph-a",
+          "SKILL.md",
+        );
+        const targetB = join(
+          projectDir,
+          CLAUDE.skillsPath,
+          "artgraph-b",
+          "SKILL.md",
+        );
+        expect(existsSync(targetA)).toBe(true);
+        expect(existsSync(targetB)).toBe(true);
+
+        // (2) User tampers with both files.
+        const userBytesA = "USER EDIT A — must survive rollback\n";
+        const userBytesB = "USER EDIT B — this one's dir gets locked\n";
+        writeFileSync(targetA, userBytesA, "utf-8");
+        writeFileSync(targetB, userBytesB, "utf-8");
+
+        // (3) Break B's write two ways so BOTH the pre-fix and the
+        //     post-fix paths hit an EACCES on B:
+        //       * chmod 0444 on `targetB` — read-only file blocks the
+        //         PRE-fix `copyFileSync(src, dst)` open-for-write path
+        //         (that is the exact regression scenario documented in
+        //         the review comment).
+        //       * chmod 0500 on `.claude/skills/artgraph-b/` — read-exec
+        //         parent blocks the POST-fix `copyFileSync(src, tmp)`
+        //         and `copyFileSync(dst, backup)` steps because both
+        //         create new files in that dir.
+        //     A's parent stays writable, so A's backup+rename path
+        //     succeeds and rollback can rename backup → A.
+        chmodSync(targetB, 0o444);
+        locked = join(projectDir, CLAUDE.skillsPath, "artgraph-b");
+        chmodSync(locked, 0o500);
+
+        // (4) --force distribute triggers driftOverwrite for both. Order:
+        //     A first (write + backup succeed), B second (EACCES).
+        let caught: unknown;
+        try {
+          distribute(CLAUDE, source, { rootDir: projectDir, force: true });
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(DistributionError);
+
+        // (5) THE CORE B1 ASSERTION: user's bytes at A are preserved.
+        // Old impl deleted the canonical replacement AND the backup, so
+        // A would be lost. New impl renames backup → target.
+        expect(existsSync(targetA)).toBe(true);
+        expect(readFileSync(targetA, "utf-8")).toBe(userBytesA);
+        // B was untouched by distribute (write failed before rename).
+        expect(readFileSync(targetB, "utf-8")).toBe(userBytesB);
+
+        // No orphan backup/tmp files linger under A's parent.
+        const aDirEntries = readdirSync(
+          join(projectDir, CLAUDE.skillsPath, "artgraph-a"),
+        );
+        for (const name of aDirEntries) {
+          expect(name.includes(".artgraph-backup-")).toBe(false);
+          expect(name.includes(".artgraph-tmp-")).toBe(false);
+        }
+      } finally {
+        if (locked !== null) {
+          try {
+            chmodSync(locked, 0o755);
+          } catch {
+            /* best-effort */
+          }
+          // Also restore the read-only target so vitest's recursive
+          // cleanup can unlink it.
+          try {
+            chmodSync(
+              join(projectDir, CLAUDE.skillsPath, "artgraph-b", "SKILL.md"),
+              0o644,
+            );
+          } catch {
+            /* best-effort */
+          }
+        }
+        cleanupProject();
+        cleanupSource();
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // B5 — rollback must remove every intermediate directory that was
+  // created during the aborted run. The regression: `mkdirSync({recursive:
+  // true})` reported only the leaf, so nested empty ancestors were left
+  // behind (which doctor's auto-detect then read as "installed").
+  //
+  // Reproduction: one target that forces 3 nested dir creates (a,
+  // a/nested, a/nested/deep) then a second target whose parent is chmod
+  // 0500 so its write fails. The rollback must rmdir the whole a/…/deep
+  // chain.
+  // -------------------------------------------------------------------------
+  it.skipIf(IS_WIN)(
+    "B5: rollback removes every intermediate directory tracked during the aborted call",
+    () => {
+      const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
+      const { dir: sourceDir, cleanup: cleanupSource } = createFreshProject();
+      let locked: string | null = null;
+      try {
+        // Two synthetic entries. The first entry contains a deeply nested
+        // reference file that forces `.claude/skills/artgraph-a/nested/deep/`
+        // to be created a segment at a time. The second entry's parent is
+        // pre-created and chmod'd so its write fails.
+        const source = makeSyntheticSource(sourceDir, [
+          {
+            relPath: "artgraph-a/SKILL.md",
+            body: "---\nname: artgraph-a\ndescription: A stub\n---\na\n",
+          },
+          {
+            relPath: "artgraph-a/nested/deep/reference.md",
+            body: "reference body\n",
+          },
+          {
+            relPath: "artgraph-b/SKILL.md",
+            body: "---\nname: artgraph-b\ndescription: B stub\n---\nb\n",
+          },
+        ]);
+
+        // Pre-create `.claude/skills/artgraph-b/` chmod 0500 so writing
+        // into it fails. This also implicitly creates `.claude/` and
+        // `.claude/skills/` (both are NOT in dirsCreated because they
+        // pre-existed at distribute() entry).
+        locked = join(projectDir, CLAUDE.skillsPath, "artgraph-b");
+        mkdirSync(locked, { recursive: true });
+        chmodSync(locked, 0o500);
+
+        let caught: unknown;
+        try {
+          distribute(CLAUDE, source, { rootDir: projectDir });
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(DistributionError);
+
+        // THE CORE B5 ASSERTION: every intermediate dir that WAS created
+        // during the aborted run is gone. Under the old code, `.claude/
+        // skills/artgraph-a/nested` (and `.../nested/deep`) leaked as
+        // empty orphans because only the leaf was tracked.
+        const aRoot = join(projectDir, CLAUDE.skillsPath, "artgraph-a");
+        const nested = join(aRoot, "nested");
+        const deep = join(nested, "deep");
+        expect(existsSync(deep), "deep must be rmdir'd").toBe(false);
+        expect(existsSync(nested), "nested must be rmdir'd").toBe(false);
+        expect(existsSync(aRoot), "artgraph-a must be rmdir'd").toBe(false);
+
+        // Pre-existing dirs are untouched.
+        expect(existsSync(locked)).toBe(true);
+        expect(existsSync(join(projectDir, CLAUDE.skillsPath))).toBe(true);
+      } finally {
+        if (locked !== null) {
+          try {
+            chmodSync(locked, 0o755);
+          } catch {
+            /* best-effort */
+          }
+        }
+        cleanupProject();
+        cleanupSource();
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // B9 — a non-ENOENT lstat error must surface as DistributionError with
+  // a clear message, NOT be silently reinterpreted as "path is absent".
+  // The regression was that `catch { freshWrites.push(t) }` folded EACCES
+  // into the "we can write freshly here" bucket, so the user later saw an
+  // opaque `copyfile EACCES` with no hint that the real cause was a
+  // permission-denied lstat on the leaf's parent.
+  // -------------------------------------------------------------------------
+  it.skipIf(IS_WIN)(
+    "B9: non-ENOENT lstat errors (EACCES) surface as DistributionError, not silent freshWrite",
+    () => {
+      const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
+      const { dir: sourceDir, cleanup: cleanupSource } = createFreshProject();
+      let locked: string | null = null;
+      try {
+        const source = makeSyntheticSource(sourceDir, [
+          {
+            relPath: "artgraph-a/SKILL.md",
+            body: "---\nname: artgraph-a\ndescription: A stub\n---\na\n",
+          },
+        ]);
+
+        // First distribute to establish a real leaf at
+        // `.claude/skills/artgraph-a/SKILL.md`, then strip the parent dir
+        // of its execute bit — that makes `lstatSync(leaf)` return EACCES
+        // even though the file is there.
+        distribute(CLAUDE, source, { rootDir: projectDir });
+        locked = join(projectDir, CLAUDE.skillsPath, "artgraph-a");
+        // 0o666 = rw for everyone but NO execute. Without x, path
+        // traversal into the dir (which lstat of the leaf requires) is
+        // denied.
+        chmodSync(locked, 0o666);
+
+        let caught: unknown;
+        try {
+          distribute(CLAUDE, source, { rootDir: projectDir, force: true });
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(DistributionError);
+        if (caught instanceof DistributionError) {
+          // Message pinpoints the leaf and includes an errno hint so the
+          // user knows this is a permission issue on the parent dir, not
+          // a "file missing" problem.
+          expect(caught.message).toMatch(/Cannot inspect/);
+          expect(caught.message).toMatch(/EACCES/);
+          expect(caught.message).toMatch(/SKILL\.md/);
+        }
+      } finally {
+        if (locked !== null) {
+          try {
+            chmodSync(locked, 0o755);
+          } catch {
+            /* best-effort */
+          }
+        }
+        cleanupProject();
+        cleanupSource();
+      }
     },
   );
 });

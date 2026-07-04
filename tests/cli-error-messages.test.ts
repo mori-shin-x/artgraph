@@ -115,4 +115,41 @@ describe("CLI: --agents error UX (spec 013 FR-001 / FR-002 / SC-006 / A1)", () =
     // are acceptable contracts here; assert on the canonical fragments.
     expect(stderr).toMatch(/--agents=<list> (requires at least one non-empty value|is required)/);
   });
+
+  // ---------------------------------------------------------------------
+  // E1: the "Did you mean ...?" hint must list EVERY uppercase/mixed-case
+  // token, not just the first one that `.find` used to return.
+  // ---------------------------------------------------------------------
+  it("--agents=CLAUDE,CODEX (multi-uppercase) hints at both lowercased forms", async () => {
+    const { exitCode, stderr } = await runAt(initTmp, ["init", "--agents=CLAUDE,CODEX"]);
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain('Unknown agent identifier(s): "CLAUDE", "CODEX"');
+    expect(stderr).toContain('Did you mean "claude", "codex"?');
+  });
+
+  // ---------------------------------------------------------------------
+  // E1: uppercase + duplicate-once-normalized must report BOTH problems in
+  // a single error instead of staging them (uppercase error first, then a
+  // separate duplicate error once the user "fixes" the case).
+  // ---------------------------------------------------------------------
+  it("--agents=Claude,claude reports the uppercase AND the case-normalized duplicate together", async () => {
+    const { exitCode, stderr } = await runAt(initTmp, ["init", "--agents=Claude,claude"]);
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain('Unknown agent identifier(s): "Claude"');
+    expect(stderr).toContain('Did you mean "claude"?');
+    expect(stderr).toContain("Also duplicated once case is normalized");
+    expect(stderr).toContain('"claude"');
+  });
+
+  // ---------------------------------------------------------------------
+  // E-adj-A6: AGENTS_REQUIRED_ERROR must explain that --minimal only
+  // reactivates Skills / agent-context distribution when paired with both
+  // --with-skills (or --with-agent-context) AND --agents.
+  // ---------------------------------------------------------------------
+  it("the 3-option error explains the --minimal + --with-* + --agents interaction", async () => {
+    const { exitCode, stderr } = await runAt(initTmp, ["init"]);
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toContain("Additional notes:");
+    expect(stderr).toMatch(/--minimal requires --with-skills.*AND --agents/s);
+  });
 });

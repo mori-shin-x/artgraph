@@ -8,26 +8,63 @@
 //   - No LLM / stochastic / heuristic decision is taken; every branch keys off
 //     a literal sha256 comparison (R3) or a deterministic filesystem stat.
 //   - sha256 hashes are recomputed after each write to verify byte equality
-//     with the canonical source (catches corrupted filesystems / atomic-rename
-//     edge cases).
-//   - Symlinks at the destination are NEVER overwritten, even with
-//     `force: true` — `copyFileSync` would follow them and clobber whatever
+//     with the canonical source (catches read-path corruption and
+//     atomic-rename edge cases that would otherwise leave a "successfully
+//     written" file with the wrong bytes).
+//   - NOTE (OPS-15): the post-write sha256 verifies byte-equality between
+//     the on-disk bytes and the canonical source AT THE MOMENT WE HASH
+//     THEM. The read may be served from the kernel page cache, so this
+//     check does NOT guarantee filesystem copy-on-write ordering, hardware
+//     `fsync`, or power-loss durability. Those properties would require
+//     `fsync` + directory `fsync`, which we do not attempt; guaranteeing
+//     durability is the OS / package-manager's job.
+//
+// Symlink policy (extended for A4):
+//   - Symlinks at the LEAF destination are NEVER overwritten, even with
+//     `force: true`. `copyFileSync` would follow them and clobber whatever
 //     they point at, which is a security hazard outside the skills tree.
-//     Mirrors the existing `src/init.ts:findConflicts` policy.
+//   - EVERY intermediate directory from `rootDir` down to `dirname(dst)` is
+//     also lstat-checked. A symlink anywhere in that ancestor chain is
+//     refused (A4): otherwise a malicious symlink at, say,
+//     `.claude/skills/artgraph-impact/` planted before init could redirect
+//     the write to `../../../etc`. This mirrors the intent of
+//     `src/init.ts:findConflicts` and expands it to the full ancestor path.
 //
 // Idempotency (FR-009 / SC-004):
 //   - When a target already exists and its sha256 matches the canonical, the
 //     write is skipped and the path is reported under `noopPaths`.
 //   - When a target already exists and its sha256 differs, `force: false`
 //     throws `DistributionError` (collecting every drifted path before
-//     throwing); `force: true` overwrites.
+//     throwing); `force: true` overwrites via the non-destructive path
+//     described below.
 //
-// Rollback (mirrors `src/init.ts:installSkills`):
-//   - If any write in the loop fails, every file written so far in this call
-//     is unlinked and every directory created in this call is removed
-//     (best-effort, in reverse order). This keeps the pre-call filesystem
-//     state intact on a mid-run failure so the user does not have to clean
-//     up half-written distributions by hand before retrying.
+// Non-destructive drift overwrite + rollback (B1 hardening):
+//   - Each write goes through a sibling tmp file (`.artgraph-tmp-<sha8>`) and
+//     a `renameSync` onto the destination (B4). Direct `copyFileSync(src,
+//     dst)` is NOT used: it opens+truncates+streams, so a concurrent doctor
+//     (or an ENOSPC mid-copy) could see a partial file at the destination.
+//     `renameSync` is a single directory-entry swap that every mainstream
+//     filesystem treats as atomic within the same volume.
+//   - For drift-overwrite targets we FIRST copy the current bytes to a
+//     sibling `.artgraph-backup-<sha8>.tmp` before staging the new tmp.
+//     If any subsequent write in the loop fails (post-write sha256
+//     mismatch, ENOSPC on a later target, etc.), the rollback restores the
+//     backup via `renameSync(backup, target)` — the user's original edit is
+//     preserved.
+//   - On success the backups are `unlinkSync`-ed at the end of the loop.
+//   - Only fresh-write targets are unlinked on rollback (nothing to restore
+//     to). If a rollback step itself fails (e.g. Windows AV holding a
+//     file open, EACCES), the affected path is reported in
+//     `DistributionError.partiallyWritten` so the caller can surface
+//     "manual cleanup required" to the user.
+//
+// Rollback (mirrors `src/init.ts:installSkills`, extended for B5):
+//   - Every directory created by this call is tracked individually (B5).
+//     `mkdirSync({recursive:true})` creates all missing ancestors in one
+//     call but reports only the leaf; walking upward first and mkdir-ing
+//     each segment lets rollback remove them all leaf-first without
+//     leaving orphaned empty ancestors that doctor's auto-detect would
+//     mistake for an "installed" state.
 //
 // Kiro scope note (FR-008):
 //   - `distribute()` for `descriptor.id === "kiro"` writes ONLY into
@@ -35,13 +72,14 @@
 //     `KiroProvider` (spec 009) responsibility, reached via
 //     `--integrations=kiro`. distribute() must never touch `.kiro/steering/`.
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   rmdirSync,
   unlinkSync,
 } from "node:fs";
@@ -68,8 +106,10 @@ export interface DistributeOptions {
   rootDir: string;
   /**
    * When true, drifted files (existing but sha256 mismatch) at the target
-   * are overwritten. Symlinks at the target are STILL refused even with
-   * `force: true` (mirrors `src/init.ts:findConflicts`).
+   * are overwritten. Symlinks at the target — or ANY ancestor directory of
+   * the target between `rootDir` and the leaf — are STILL refused even
+   * with `force: true` (A4). Non-regular filesystem entries (directories,
+   * sockets, etc.) at the leaf are also refused (A-adj-4).
    */
   force?: boolean;
 }
@@ -86,14 +126,15 @@ export interface DistributeResult {
 /**
  * Thrown when distribution cannot complete cleanly. `conflictPaths` lists the
  * targets that triggered the failure (drifted without `--force`, symlinks,
- * post-write sha256 mismatches, etc.) so the caller can render an actionable
- * stderr message.
+ * non-regular filesystem entries, post-write sha256 mismatches, etc.) so the
+ * caller can render an actionable stderr message.
  *
  * `partiallyWritten` lists targets that DID land on disk before this call
- * rolled back. In the normal failure path the rollback unlinks them, so this
- * field is empty; it is populated only when the rollback itself fails (e.g.
- * read-only parent directory), so the caller can surface "manual cleanup
- * required" to the user.
+ * rolled back, but whose rollback step itself failed (e.g. `unlinkSync` or
+ * `renameSync(backup, dst)` throwing EACCES / EBUSY). In the normal failure
+ * path the rollback fully restores the pre-call state and this field is
+ * empty; it is populated only when the rollback cannot complete, so the
+ * caller can surface "manual cleanup required" to the user.
  */
 export class DistributionError extends Error {
   readonly conflictPaths: string[];
@@ -143,21 +184,41 @@ export function planDistribution(
  *
  * Algorithm (deterministic, no statistics / LLM):
  *   1. Build the `DistributionTarget[]` plan via `planDistribution`.
- *   2. Pre-flight: for every target that already exists:
- *        - if `lstat.isSymbolicLink()` → push to symlink-conflicts (refused
- *          even with `--force`).
- *        - else compute on-disk sha256; if it matches `expectedSha256` → mark
- *          as no-op candidate; otherwise push to drift-conflicts.
- *   3. If symlink-conflicts.length > 0 → throw (never overridable).
- *   4. If drift-conflicts.length > 0 AND `force === false` → throw.
- *   5. Otherwise write every "new" or "drifted+force" target:
- *        - ensure parent directory exists (`mkdir -p`, tracked for rollback)
- *        - `copyFileSync(src, dst)` (atomic on POSIX; falls through on
- *          Windows but the rollback path covers partial-copy failures).
- *        - re-read the destination and recompute sha256; if it doesn't match
- *          `expectedSha256`, treat as a hard failure (rollback + throw).
- *   6. On any mid-loop exception, unlink every file written in this call
- *      and rmdir every directory created in this call, in reverse order.
+ *   2. Pre-flight: for every target:
+ *        - Walk each ancestor from `rootDir` down to `dirname(dst)`; if any
+ *          ancestor is a symlink (via `lstatSync`) → symlink-conflict (A4).
+ *        - `lstatSync(dst)`; only ENOENT counts as "not there" — any other
+ *          errno (EACCES / EPERM / ELOOP / ENOTDIR / …) surfaces as a
+ *          DistributionError with the raw errno message (B9), so a
+ *          permission-denied stat does not cascade into a bewildering
+ *          `copyfile EACCES`.
+ *        - If leaf is a symlink → symlink-conflict.
+ *        - If leaf exists but is not a regular file (directory / socket /
+ *          …) → non-regular-conflict (A-adj-4 — distinct from symlink so
+ *          the message is not misleading).
+ *        - Else regular file: sha256 match → no-op; mismatch + `!force` →
+ *          drift-conflict; mismatch + `force` → drift-overwrite bucket.
+ *   3. If symlink-conflicts > 0 → throw (never overridable).
+ *   4. If non-regular-conflicts > 0 → throw (never overridable).
+ *   5. If drift-conflicts > 0 → throw.
+ *   6. Otherwise write every fresh-write or drift-overwrite target:
+ *        - `ensureDirTracked(dirname(dst), dirsCreated)` — creates every
+ *          missing ancestor segment individually so rollback can clean
+ *          them up leaf-first (B5).
+ *        - For a drift-overwrite target, first `copyFileSync(dst, backup)`
+ *          onto a sibling `.artgraph-backup-<sha8>.tmp` so a mid-loop
+ *          failure can restore the user's pre-call bytes (B1).
+ *        - Stage the new bytes via `copyFileSync(src, tmp)` onto a sibling
+ *          `.artgraph-tmp-<sha8>` and then `renameSync(tmp, dst)`. This
+ *          replaces `copyFileSync(src, dst)`, which is NOT atomic (B4).
+ *        - Re-read the destination and recompute sha256; if it doesn't
+ *          match `expectedSha256`, treat as a hard failure (rollback +
+ *          throw). See the header note about page-cache limits (OPS-15).
+ *   7. On success, `unlinkSync` every backup.
+ *   8. On any mid-loop exception, restore drift-overwrite targets from
+ *      backup, unlink fresh-write targets, and rmdir every tracked
+ *      directory (leaf-first). Any rollback step that itself fails is
+ *      reported in `DistributionError.partiallyWritten`.
  *
  * FR-003: per-agent canonical Skills paths come from `descriptor.skillsPath`;
  * the SKILL.md ファイル群と frontmatter は AGENT_DESCRIPTORS 経由で 5 エージェント
@@ -172,39 +233,74 @@ export function distribute(
   opts: DistributeOptions,
 ): DistributeResult {
   const force = opts.force === true;
+  const absRoot = resolve(opts.rootDir);
   const targets = planDistribution(descriptor, source, opts.rootDir);
 
   // @impl 013-cross-agent-extensions/FR-009 013-cross-agent-extensions/FR-010
   // Pre-flight classification — every target lands in exactly one bucket:
-  //   noopCandidates: existing + sha256 match → skip (idempotent)        (FR-009)
-  //   driftConflicts: existing + sha256 mismatch + !force → throw        (FR-009)
-  //   driftOverwrite: existing + sha256 mismatch + force  → overwrite    (FR-010)
-  //   symlinkConflicts: existing + isSymbolicLink → always throw         (FR-010 — user-managed)
-  //   freshWrites:    not existing → write new
+  //   noopCandidates:      existing + sha256 match → skip (idempotent)          (FR-009)
+  //   driftConflicts:      existing + sha256 mismatch + !force → throw          (FR-009)
+  //   driftOverwrite:      existing + sha256 mismatch + force  → overwrite      (FR-010)
+  //   symlinkConflicts:    leaf OR ancestor is a symlink → always throw         (FR-010 — user-managed / A4)
+  //   nonRegularConflicts: leaf exists but is not a regular file → always throw (A-adj-4)
+  //   freshWrites:         not existing → write new
   const noopCandidates: DistributionTarget[] = [];
   const driftConflicts: DistributionTarget[] = [];
   const driftOverwrite: DistributionTarget[] = [];
-  const symlinkConflicts: DistributionTarget[] = [];
+  const symlinkConflicts: Array<{
+    target: DistributionTarget;
+    symlinkPath: string;
+    kind: "leaf" | "ancestor";
+  }> = [];
+  const nonRegularConflicts: DistributionTarget[] = [];
   const freshWrites: DistributionTarget[] = [];
 
   for (const t of targets) {
+    // A4: intermediate-directory symlink detection. Walk every ancestor
+    // from `absRoot` down to `dirname(dst)` and reject if any is a
+    // symlink — otherwise a planted symlink at `.claude/` could redirect
+    // writes out of the repo tree entirely. Non-existent ancestors are
+    // fine (they'll be created under `ensureDirTracked` below); non-ENOENT
+    // lstat errors surface as DistributionError.
+    const symlinkAncestor = findSymlinkAncestor(absRoot, t.dstAbsPath);
+    if (symlinkAncestor !== null) {
+      symlinkConflicts.push({
+        target: t,
+        symlinkPath: symlinkAncestor,
+        kind: "ancestor",
+      });
+      continue;
+    }
+
     let stat: ReturnType<typeof lstatSync> | undefined;
     try {
       stat = lstatSync(t.dstAbsPath);
-    } catch {
-      // ENOENT (file does not exist) — pristine write.
-      freshWrites.push(t);
-      continue;
+    } catch (e) {
+      // B9: only ENOENT counts as "absent". EACCES / EPERM / ELOOP /
+      // ENOTDIR (etc.) are real errors and must not be silently
+      // reinterpreted as "path is available — go write".
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === "ENOENT") {
+        freshWrites.push(t);
+        continue;
+      }
+      throw new DistributionError(
+        `Cannot inspect ${t.dstAbsPath} (${err.code ?? "unknown errno"}): ${err.message}`,
+      );
     }
     if (stat.isSymbolicLink()) {
-      symlinkConflicts.push(t);
+      symlinkConflicts.push({
+        target: t,
+        symlinkPath: t.dstAbsPath,
+        kind: "leaf",
+      });
       continue;
     }
     if (!stat.isFile()) {
-      // Directory or special file where a Skill file should live. Treat as
-      // a hard conflict (cannot overwrite a directory with a regular file
-      // via copyFileSync). Surface like a symlink: refuse even with --force.
-      symlinkConflicts.push(t);
+      // A-adj-4: directory (or socket / block / char device) where a Skill
+      // file should live. Treat as a hard conflict distinct from the
+      // symlink bucket so the error message does not mislabel the cause.
+      nonRegularConflicts.push(t);
       continue;
     }
     const onDiskSha = hashFile(t.dstAbsPath);
@@ -218,9 +314,23 @@ export function distribute(
   }
 
   if (symlinkConflicts.length > 0) {
-    const list = symlinkConflicts.map((t) => `${t.srcRelPath} (symlink — refusing to overwrite)`);
+    const list = symlinkConflicts.map(({ target, symlinkPath, kind }) =>
+      kind === "leaf"
+        ? `${target.srcRelPath} (symlink at ${symlinkPath} — refusing to overwrite)`
+        : `${target.srcRelPath} (symlink ancestor ${symlinkPath} — refusing to write through)`,
+    );
     throw new DistributionError(
-      `Refusing to overwrite non-regular file(s) in ${descriptor.skillsPath}: ${list.join(", ")}. Remove the entry/entries and rerun.`,
+      `Refusing to write through symlink(s) in ${descriptor.skillsPath}: ${list.join(", ")}. Remove the entry/entries and rerun.`,
+      list,
+    );
+  }
+  if (nonRegularConflicts.length > 0) {
+    const list = nonRegularConflicts.map(
+      (t) =>
+        `${t.srcRelPath} (existing non-regular filesystem entry at ${t.dstAbsPath} — refusing to overwrite)`,
+    );
+    throw new DistributionError(
+      `Refusing to overwrite non-regular filesystem entry/entries in ${descriptor.skillsPath}: ${list.join(", ")}. Remove the entry/entries and rerun.`,
       list,
     );
   }
@@ -234,30 +344,64 @@ export function distribute(
 
   // Now perform the writes. Track everything we touch so we can roll back
   // on a mid-loop failure (filesystem error, post-write sha256 mismatch).
-  const writtenAbs: string[] = [];
   const dirsCreated: string[] = [];
+  // freshWrite targets that were successfully renamed onto — unlink on rollback.
+  const writtenFresh: string[] = [];
+  // drift-overwrite targets → their `.artgraph-backup-<sha8>.tmp` sibling.
+  // Rollback restores by `renameSync(backup, target)`; success unlinks the
+  // backup.
+  const writtenDrift = new Map<string, string>();
 
-  const ensureDir = (path: string): void => {
-    if (existsSync(path)) return;
-    mkdirSync(path, { recursive: true });
-    dirsCreated.push(path);
-  };
-
-  const writePlan = [...freshWrites, ...driftOverwrite];
-
+  // In-flight state for the failing iteration: cleaned in the catch handler.
+  let currentTmp: string | null = null;
+  let currentBackup: string | null = null;
   let currentSrc = "";
+
+  const driftOverwriteSet = new Set(driftOverwrite);
+  const writePlan: DistributionTarget[] = [...freshWrites, ...driftOverwrite];
+
   try {
     for (const t of writePlan) {
       currentSrc = t.srcRelPath;
       const src = join(source.sourceRoot, t.srcRelPath);
-      ensureDir(dirname(t.dstAbsPath));
-      copyFileSync(src, t.dstAbsPath);
-      writtenAbs.push(t.dstAbsPath);
+      const dstDir = dirname(t.dstAbsPath);
+      const isDrift = driftOverwriteSet.has(t);
+
+      // B5: create each missing ancestor segment individually so every
+      // intermediate dir lands in `dirsCreated` — rollback can then rmdir
+      // the full chain leaf-first.
+      ensureDirTracked(dstDir, dirsCreated);
+
+      // B1: for drift-overwrite, snapshot the current bytes BEFORE any
+      // write so we can restore the user's pre-call file if a later
+      // iteration fails.
+      if (isDrift) {
+        currentBackup = `${t.dstAbsPath}.artgraph-backup-${sha8()}.tmp`;
+        copyFileSync(t.dstAbsPath, currentBackup);
+      }
+
+      // B4: tmp+rename instead of direct copyFileSync. `copyFileSync(src,
+      // dst)` opens+truncates+streams — a concurrent doctor could observe
+      // a partial file at the destination. `renameSync(tmp, dst)` is a
+      // single directory-entry swap.
+      currentTmp = `${t.dstAbsPath}.artgraph-tmp-${sha8()}`;
+      copyFileSync(src, currentTmp);
+      renameSync(currentTmp, t.dstAbsPath);
+      currentTmp = null; // consumed by rename
+
+      if (isDrift) {
+        // currentBackup was set two branches above when isDrift is true.
+        writtenDrift.set(t.dstAbsPath, currentBackup as string);
+      } else {
+        writtenFresh.push(t.dstAbsPath);
+      }
+      currentBackup = null; // ownership transferred to writtenDrift (or n/a)
 
       // Post-write verification: re-read the destination and recompute
-      // sha256. Catches filesystem corruption or atomic-rename mistakes that
-      // would otherwise leave a "successfully written" file with the wrong
-      // bytes. This is deterministic — purely a hash comparison.
+      // sha256. Catches read-path bugs or atomic-rename mistakes that
+      // would otherwise leave a "successfully written" file with the
+      // wrong bytes. Purely deterministic — a hash comparison. See the
+      // header note about page-cache vs. hardware flush (OPS-15).
       const actualSha = hashFile(t.dstAbsPath);
       if (actualSha !== t.expectedSha256) {
         throw new Error(
@@ -265,25 +409,83 @@ export function distribute(
         );
       }
     }
+
+    // Every write succeeded — retire the backups. Best-effort: a leaked
+    // backup would only be visible until the next `artgraph init`, so we
+    // do not error out on unlink failures here.
+    for (const backup of writtenDrift.values()) {
+      try {
+        unlinkSync(backup);
+      } catch {
+        // best-effort
+      }
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    // Roll back: files first, then any directory we created.
+
+    // Clean up any in-flight tmp/backup that belongs to the failing
+    // iteration. Best-effort: unlinkSync throws ENOENT if the file never
+    // materialised, which is the common case for early failures.
+    if (currentTmp !== null) {
+      try {
+        unlinkSync(currentTmp);
+      } catch {
+        /* best-effort */
+      }
+    }
+    if (currentBackup !== null) {
+      // The backup for the failing iteration hasn't been committed to
+      // writtenDrift yet — the target still holds its original bytes, so
+      // simply drop the backup without a restore.
+      try {
+        unlinkSync(currentBackup);
+      } catch {
+        /* best-effort */
+      }
+    }
+
     const survivors: string[] = [];
-    for (const f of [...writtenAbs].reverse()) {
+
+    // B1: restore each drift-overwrite target from its backup. A failed
+    // restore is a genuine "manual cleanup required" case — we report the
+    // target so the user knows which paths still hold canonical (not
+    // original) bytes; we also try to unlink the orphan backup so the
+    // tmp artefact does not linger under the user's Skills tree.
+    for (const [target, backup] of writtenDrift) {
+      try {
+        renameSync(backup, target);
+      } catch {
+        survivors.push(target);
+        try {
+          unlinkSync(backup);
+        } catch {
+          /* stranded — reported via survivors above */
+        }
+      }
+    }
+
+    // B1: fresh writes did not exist before this call, so rollback is a
+    // straight unlink. Reverse order matches the direction we created
+    // them in, mirroring the tracked-dir cleanup below.
+    for (const f of [...writtenFresh].reverse()) {
       try {
         unlinkSync(f);
       } catch {
-        // Best-effort: a permission error here means the file persists.
-        // Report it under `partiallyWritten` so the caller can surface a
-        // "manual cleanup required" hint.
         survivors.push(f);
       }
     }
+
+    // B5: every intermediate dir we created lands here, so rmdir'ing
+    // leaf-first drains the whole chain
+    // (`.claude/skills/artgraph-impact` → `.claude/skills` → `.claude`)
+    // instead of leaving orphan empty ancestors that would fool doctor's
+    // auto-detect.
     for (const d of [...dirsCreated].reverse()) {
       try {
         rmdirSync(d);
       } catch {
-        // best-effort: leave non-empty dirs (likely held user content)
+        // best-effort: a non-empty dir (likely holding user content) is
+        // legitimately left in place.
       }
     }
     throw new DistributionError(
@@ -307,4 +509,79 @@ export function distribute(
 function hashFile(abs: string): string {
   const buf = readFileSync(abs);
   return createHash("sha256").update(buf).digest("hex");
+}
+
+/** 8 hex chars — collision-safe suffix for tmp/backup sibling files. */
+function sha8(): string {
+  return randomBytes(4).toString("hex");
+}
+
+/**
+ * Walk from `dirname(dst)` up to (and including) `absRoot` and return the
+ * first ancestor that is a symlink, or `null` if the chain is clean (or
+ * every ancestor is ENOENT, which is fine — `ensureDirTracked` will create
+ * them). Non-ENOENT lstat errors are surfaced as DistributionError so we
+ * do not quietly write through a permission-denied ancestor.
+ *
+ * Returned path is the ancestor itself (not the target) so the error
+ * message can pinpoint the offending link, which is essential for A4's
+ * "refuse to write through" contract.
+ */
+function findSymlinkAncestor(
+  absRoot: string,
+  dstAbsPath: string,
+): string | null {
+  const leafDir = dirname(dstAbsPath);
+  const ancestors: string[] = [];
+  let current = leafDir;
+  while (true) {
+    ancestors.push(current);
+    if (current === absRoot) break;
+    const parent = dirname(current);
+    if (parent === current) break; // filesystem root reached (defensive)
+    current = parent;
+  }
+  // Iterate root-first so the reported offender is the topmost symlink
+  // (most informative for the operator).
+  for (const ancestor of ancestors.reverse()) {
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(ancestor);
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === "ENOENT") continue;
+      throw new DistributionError(
+        `Cannot inspect ancestor directory ${ancestor} (${err.code ?? "unknown errno"}): ${err.message}`,
+      );
+    }
+    if (stat.isSymbolicLink()) return ancestor;
+  }
+  return null;
+}
+
+/**
+ * Ensure `target` (a directory path) exists, tracking each newly-created
+ * segment in `tracked` in creation order (root-first). Callers that need
+ * leaf-first rollback should iterate `tracked.slice().reverse()`.
+ *
+ * This replaces `mkdirSync(target, {recursive: true})`, which creates every
+ * missing ancestor in one syscall but reports only the leaf — insufficient
+ * for rollback (B5). We walk upward first to find the deepest existing
+ * ancestor, then `mkdirSync` each missing segment in order.
+ */
+function ensureDirTracked(target: string, tracked: string[]): void {
+  const ancestors: string[] = [];
+  let current = target;
+  while (!existsSync(current)) {
+    ancestors.push(current);
+    const parent = dirname(current);
+    if (parent === current) break; // filesystem root — never happens for our targets
+    current = parent;
+  }
+  // Ancestors were pushed leaf-first; reverse to create root-first so
+  // each mkdirSync (non-recursive) sees an existing parent.
+  for (const dir of ancestors.reverse()) {
+    mkdirSync(dir);
+    tracked.push(dir);
+  }
 }

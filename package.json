@@ -27,6 +27,7 @@
     "typecheck": "tsc --noEmit",
     "knip": "knip",
     "check-versions": "node scripts/check-extension-version.mjs",
+    "prepare": "test -f dist/cli.js || tsc",
     "prepublishOnly": "rm -rf dist && tsc && pnpm check-versions && pnpm test:unit && pnpm test:e2e"
   },
   "repository": {

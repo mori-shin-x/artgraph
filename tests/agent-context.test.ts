@@ -12,20 +12,30 @@
 
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
   MARKER_BEGIN,
   MARKER_END,
+  MarkerBlockCorruptError,
   applyMarkerBlock,
   buildAgentsMdBody,
   buildClaudeWrapperBody,
   buildCopilotWrapperBody,
   inspectMarkerBlock,
   writeAgentsMd,
+  writeGitAttributes,
   writeWrapper,
 } from "../src/agents/agent-context.js";
+import { AGENT_DESCRIPTORS, findDescriptor } from "../src/agents/descriptors.js";
 import { createFreshProject } from "./agents/helpers.js";
 
 function sha256(filePath: string): string {
@@ -86,15 +96,108 @@ describe("applyMarkerBlock (T018)", () => {
     expect(second.newContent).toBe(first.newContent);
   });
 
-  it("only replaces the first block when (somehow) two are present", () => {
+  it("collapses duplicate blocks to a single canonical block (A2)", () => {
     const dup =
-      `${MARKER_BEGIN}\nfirst\n${MARKER_END}\n` +
+      `${MARKER_BEGIN}\nfirst\n${MARKER_END}\n\n` +
       `${MARKER_BEGIN}\nsecond\n${MARKER_END}\n`;
     const res = applyMarkerBlock(dup, "replaced");
     expect(res.found).toBe(true);
-    // Second block stays intact — doctor will flag the duplicate later.
+    // The first block is rewritten canonically; every subsequent duplicate
+    // is removed so we end up with a single artgraph block on disk.
     expect(res.newContent).toContain(`${MARKER_BEGIN}\nreplaced\n${MARKER_END}`);
-    expect(res.newContent).toContain(`${MARKER_BEGIN}\nsecond\n${MARKER_END}`);
+    expect(res.newContent).not.toContain("second");
+    const beginCount = (res.newContent.match(/<!--\s*artgraph:begin\s*-->/gi) || []).length;
+    const endCount = (res.newContent.match(/<!--\s*artgraph:end\s*-->/gi) || []).length;
+    expect(beginCount).toBe(1);
+    expect(endCount).toBe(1);
+  });
+
+  it("preserves user prose between duplicate blocks when collapsing (A2)", () => {
+    const dup =
+      `${MARKER_BEGIN}\nfirst\n${MARKER_END}\n\n` +
+      "user prose between blocks\n\n" +
+      `${MARKER_BEGIN}\nsecond\n${MARKER_END}\n`;
+    const res = applyMarkerBlock(dup, "replaced");
+    expect(res.found).toBe(true);
+    expect(res.newContent).toContain("user prose between blocks");
+    expect(res.newContent).toContain(`${MARKER_BEGIN}\nreplaced\n${MARKER_END}`);
+    expect(res.newContent).not.toContain("second");
+  });
+
+  it("does not treat inline (non-line-anchored) marker text as a real block (A1)", () => {
+    // Marker string appears mid-line in prose. The line-anchored regex must
+    // NOT match, so the writer falls through to the append path — no user
+    // text is silently absorbed between the pseudo-marker and any later
+    // real marker.
+    const existing =
+      "Docs: the literal `<!-- artgraph:begin -->` marker is used " +
+      "and `<!-- artgraph:end -->` closes it. Do not touch.\n";
+    const res = applyMarkerBlock(existing, "body");
+    expect(res.found).toBe(false);
+    // Original prose survives byte-identical at the head.
+    expect(res.newContent.startsWith(existing)).toBe(true);
+    // Canonical block appended at EOF.
+    expect(res.newContent).toContain(`${MARKER_BEGIN}\nbody\n${MARKER_END}`);
+  });
+
+  it("does not treat indented marker text (e.g. inside a nested list) as a real block (A1)", () => {
+    const existing = "- item\n    <!-- artgraph:begin --> inside a list\n";
+    const res = applyMarkerBlock(existing, "body");
+    // Indented marker is not line-anchored → not detected. Nor is it a bare
+    // stray marker per BEGIN_RE, so append succeeds.
+    expect(res.found).toBe(false);
+    expect(res.newContent).toContain(`${MARKER_BEGIN}\nbody\n${MARKER_END}`);
+  });
+
+  it("throws MarkerBlockCorruptError on stray begin without matching end (A3)", () => {
+    const stray = `# heading\n${MARKER_BEGIN}\nno closer here\n`;
+    expect(() => applyMarkerBlock(stray, "body")).toThrow(MarkerBlockCorruptError);
+    expect(() => applyMarkerBlock(stray, "body")).toThrow(/marker block is corrupt/i);
+  });
+
+  it("throws MarkerBlockCorruptError on stray end without matching begin (A3)", () => {
+    const stray = `# heading\n${MARKER_END}\ntrailing prose\n`;
+    expect(() => applyMarkerBlock(stray, "body")).toThrow(MarkerBlockCorruptError);
+  });
+
+  it("throws MarkerBlockCorruptError on reversed-order markers (A3)", () => {
+    const reversed = `${MARKER_END}\nstuff\n${MARKER_BEGIN}\n`;
+    expect(() => applyMarkerBlock(reversed, "body")).toThrow(MarkerBlockCorruptError);
+  });
+
+  it("self-heals mixed-case marker input via the case-insensitive regex (OPS-9)", () => {
+    // IDE autocorrect (Grammarly, macOS "smart capitalization") title-cases
+    // the marker string. The `i` flag on MARKER_RE / BEGIN_RE / END_RE keeps
+    // the block detectable, and the writer normalizes it back to lowercase.
+    const shouted =
+      "<!-- artgraph:Begin -->\nold body\n<!-- artgraph:END -->\n";
+    const res = applyMarkerBlock(shouted, "canonical body");
+    expect(res.found).toBe(true);
+    expect(res.newContent).toContain(`${MARKER_BEGIN}\ncanonical body\n${MARKER_END}`);
+    // The uppercase / title-case variants are gone after normalization.
+    expect(res.newContent).not.toContain("artgraph:Begin");
+    expect(res.newContent).not.toContain("artgraph:END");
+  });
+
+  it("treats whitespace-only existing content as empty (BND-6)", () => {
+    const res = applyMarkerBlock("\n", "body");
+    expect(res.found).toBe(false);
+    // No leading blank lines; the file starts with the canonical block.
+    expect(res.newContent).toBe(`${MARKER_BEGIN}\nbody\n${MARKER_END}\n`);
+    // Sanity: check the multi-whitespace variant, too.
+    const res2 = applyMarkerBlock("   \n \t\n", "body");
+    expect(res2.newContent).toBe(`${MARKER_BEGIN}\nbody\n${MARKER_END}\n`);
+  });
+
+  it("round-trips CRLF-quoted markers on read → same body extraction (BND-5)", () => {
+    // Simulated Windows checkout: the marker file uses CRLF line endings.
+    const crlf =
+      "<!-- artgraph:begin -->\r\nbody line 1\r\nbody line 2\r\n<!-- artgraph:end -->\r\n";
+    const health = inspectMarkerBlock(crlf);
+    expect(health.hasMatchedPair).toBe(true);
+    // No stray `\r` at head/tail of the extracted body.
+    expect(health.bodyText).toBe("body line 1\r\nbody line 2");
+    expect(health.bodyText?.startsWith("\r")).toBe(false);
   });
 });
 
@@ -389,5 +492,131 @@ describe("writeWrapper(copilot) (T020)", () => {
     } finally {
       project.cleanup();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// writeMarkerFile error surface (A-adj-3)
+// ---------------------------------------------------------------------------
+
+describe("writeMarkerFile error surface (A-adj-3)", () => {
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+
+  it.skipIf(isRoot)(
+    "surfaces EACCES from readFileSync with the target path and errno reason",
+    () => {
+      const project = createFreshProject();
+      const target = resolve(project.dir, "AGENTS.md");
+      writeFileSync(target, "hi\n", "utf-8");
+      chmodSync(target, 0o000);
+      try {
+        expect(() => writeAgentsMd(project.dir)).toThrow(/cannot read existing file/);
+        expect(() => writeAgentsMd(project.dir)).toThrow(target);
+      } finally {
+        try {
+          chmodSync(target, 0o644);
+        } catch {
+          /* ignore */
+        }
+        project.cleanup();
+      }
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// writeGitAttributes (OPS-2 partial mitigation)
+// ---------------------------------------------------------------------------
+
+describe("writeGitAttributes (OPS-2)", () => {
+  const CLAUDE_DESCRIPTOR = findDescriptor("claude")!;
+
+  it("writes `** text eol=lf` (+ trailing newline) into <skillsPath>/.gitattributes", () => {
+    const project = createFreshProject();
+    try {
+      const res = writeGitAttributes(project.dir, CLAUDE_DESCRIPTOR);
+      expect(res.written).toBe(true);
+      expect(res.path).toBe(
+        resolve(project.dir, CLAUDE_DESCRIPTOR.skillsPath, ".gitattributes"),
+      );
+      expect(existsSync(res.path)).toBe(true);
+      const onDisk = readFileSync(res.path, "utf-8");
+      expect(onDisk).toBe("** text eol=lf\n");
+    } finally {
+      project.cleanup();
+    }
+  });
+
+  it("creates the parent skillsPath directory when missing", () => {
+    const project = createFreshProject();
+    try {
+      const skillsAbs = resolve(project.dir, CLAUDE_DESCRIPTOR.skillsPath);
+      expect(existsSync(skillsAbs)).toBe(false);
+      const res = writeGitAttributes(project.dir, CLAUDE_DESCRIPTOR);
+      expect(res.written).toBe(true);
+      expect(statSync(skillsAbs).isDirectory()).toBe(true);
+    } finally {
+      project.cleanup();
+    }
+  });
+
+  it("is idempotent on the second call (no rewrite when contents match)", () => {
+    const project = createFreshProject();
+    try {
+      const first = writeGitAttributes(project.dir, CLAUDE_DESCRIPTOR);
+      expect(first.written).toBe(true);
+      const hash1 = sha256(first.path);
+
+      const second = writeGitAttributes(project.dir, CLAUDE_DESCRIPTOR);
+      expect(second.written).toBe(false);
+      expect(sha256(second.path)).toBe(hash1);
+    } finally {
+      project.cleanup();
+    }
+  });
+
+  it("rewrites when the existing .gitattributes contains stale content", () => {
+    const project = createFreshProject();
+    try {
+      const skillsAbs = resolve(project.dir, CLAUDE_DESCRIPTOR.skillsPath);
+      mkdirSync(skillsAbs, { recursive: true });
+      const gaPath = join(skillsAbs, ".gitattributes");
+      writeFileSync(gaPath, "# stale user config\n* text=auto\n", "utf-8");
+
+      const res = writeGitAttributes(project.dir, CLAUDE_DESCRIPTOR);
+      expect(res.written).toBe(true);
+      expect(readFileSync(gaPath, "utf-8")).toBe("** text eol=lf\n");
+    } finally {
+      project.cleanup();
+    }
+  });
+
+  it("works for every Tier 1 descriptor's skillsPath", () => {
+    for (const descriptor of AGENT_DESCRIPTORS) {
+      const project = createFreshProject();
+      try {
+        const res = writeGitAttributes(project.dir, descriptor);
+        expect(res.written).toBe(true);
+        expect(res.path).toBe(
+          resolve(project.dir, descriptor.skillsPath, ".gitattributes"),
+        );
+        expect(readFileSync(res.path, "utf-8")).toBe("** text eol=lf\n");
+      } finally {
+        project.cleanup();
+      }
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MarkerBlockCorruptError export sanity
+// ---------------------------------------------------------------------------
+
+describe("MarkerBlockCorruptError", () => {
+  it("has a stable `.name` for downstream instanceof / error-code checks", () => {
+    const err = new MarkerBlockCorruptError("test");
+    expect(err.name).toBe("MarkerBlockCorruptError");
+    expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(MarkerBlockCorruptError);
   });
 });
