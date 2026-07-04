@@ -24,9 +24,9 @@ specs, no `@impl` tags, no config required**:
 </p>
 
 ```bash
-npx artgraph init             # brownfield-safe; no specs required
+pnpm dlx artgraph init             # brownfield-safe; no specs required
 # ... edit a file ...
-npx artgraph impact --diff    # → files affected via your TS import graph
+pnpm dlx artgraph impact --diff    # → files affected via your TS import graph
 ```
 
 That's the entire onboarding. `impact --diff` walks the deterministic

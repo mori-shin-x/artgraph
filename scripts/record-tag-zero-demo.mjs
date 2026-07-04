@@ -145,7 +145,7 @@ try {
 
   // ---- Scene 2: artgraph init ----
   typePrompt();
-  typeCommand("npx artgraph init");
+  typeCommand("pnpm dlx artgraph init");
   dumpOutput(initOut);
   // Let the "Zero-tag ready" tail sit on screen for a beat.
   pause(1800);
@@ -155,7 +155,7 @@ try {
 
   // ---- Scene 4: artgraph impact --diff ----
   typePrompt();
-  typeCommand("npx artgraph impact --diff");
+  typeCommand("pnpm dlx artgraph impact --diff");
   dumpOutput(impactOut, 130);
   pause(2500);
 
