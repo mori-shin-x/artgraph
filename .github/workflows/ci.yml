@@ -20,10 +20,12 @@ jobs:
       fail-fast: false
       matrix:
         node: ['22']
-        # Windows was included briefly (PR #114 OPS-3) but 80+ pre-existing
-        # tests fail on Windows (path-sep / EPERM / package-manager detection).
-        # Tracked in follow-up issue #137; restore `windows-latest` here once
-        # those are fixed.
+        # Native Windows is explicitly OUT OF SCOPE for v0.x (#137 decision;
+        # see README "Windows note"): the CLI / hooks / tests assume POSIX,
+        # and WSL2 is the supported path on Windows. windows-latest was
+        # trialled in PR #114 (OPS-3) — 80+ tests fail on path-sep / EPERM /
+        # package-manager detection. Re-add only if native support becomes a
+        # goal.
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
