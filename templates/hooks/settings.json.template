@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "{{ARTGRAPH_EXEC}} check --gate --diff --mode symbol" } ] }
+    ]
+  }
+}
