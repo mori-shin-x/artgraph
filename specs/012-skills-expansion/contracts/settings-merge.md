@@ -18,7 +18,7 @@
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "npx artgraph check --gate --diff" }
+          { "type": "command", "command": "npx artgraph check --gate --diff --mode symbol" }
         ]
       }
     ]
@@ -60,7 +60,7 @@ To add artgraph's gate, manually merge the following into hooks.Stop:
 
   {
     "hooks": [
-      { "type": "command", "command": "npx artgraph check --gate --diff" }
+      { "type": "command", "command": "npx artgraph check --gate --diff --mode symbol" }
     ]
   }
 ```

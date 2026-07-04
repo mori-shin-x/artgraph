@@ -129,6 +129,13 @@ program
   .action((opts) => {
     const rootDir = process.cwd();
 
+    // Parse --integrations first so the M24 conflict check below can also
+    // flag `--no-integrate` combined with a non-empty `--integrations=<list>`
+    // (or `--integrations=all`). Without this pre-parse, that pair silently
+    // dropped in default mode and reversed meaning under `--minimal`
+    // (explicit list acts as an integrate opt-in — see computeStageGates).
+    const integrations = parseInitIntegrations(opts.integrations);
+
     // M24: detect mutually-exclusive --no-X + --with-X combinations before
     // doing any work. commander otherwise silently lets --with-X "win"
     // (last flag), which has bitten users in PR #103 review.
@@ -137,6 +144,16 @@ program
     if (opts.integrate === false && opts.withIntegrate === true) conflicts.push("--no-integrate / --with-integrate");
     if (opts.hooks === false && opts.withHooks === true) conflicts.push("--no-hooks / --with-hooks");
     if (opts.agentContext === false && opts.withAgentContext === true) conflicts.push("--no-agent-context / --with-agent-context");
+    // E2-2: `--no-integrate` is only really an opt-out if we also reject the
+    // silent-conflict pair `--no-integrate --integrations=<...>`. An empty
+    // list (`parseInitIntegrations` collapses to undefined) is a no-op and
+    // must NOT trigger the check.
+    if (opts.integrate === false && Array.isArray(integrations) && integrations.length > 0) {
+      conflicts.push("--no-integrate / --integrations=<non-empty>");
+    }
+    if (opts.integrate === false && integrations === "all") {
+      conflicts.push("--no-integrate / --integrations=all");
+    }
     if (conflicts.length > 0) {
       console.error(`Error: mutually exclusive flag combinations: ${conflicts.join("; ")}`);
       process.exit(1);
@@ -149,11 +166,8 @@ program
       console.error("WARNING: --with-agent-context is a P1 deliverable; the flag has no effect in this release.");
     }
 
-    // Parse --integrations: "all" stays as the literal sentinel; otherwise
-    // it's a comma-separated provider id list. Empty/undefined leaves
-    // integrations unspecified so runInit's auto-detect kicks in.
-    const integrations = parseInitIntegrations(opts.integrations);
-
+    // `integrations` is already resolved above (needed by the M24 check).
+    //
     // M12: surface valid provider ids when the user fat-fingers an
     // --integrations value. runInit's own warning also fires later, but
     // showing the valid set here gives the user the hint *before* init runs.
@@ -295,8 +309,14 @@ program
               console.log("\nAdded artgraph Stop hook (other hooks preserved)");
               break;
             case "conflict":
+              // A2: `.artgraph.json` has already been (re-)written by the
+              // time we hit this branch, so a bare re-run of `artgraph init`
+              // now trips the "already exists" guard. Point the user at
+              // `--force` (with `--no-hooks` as the escape hatch) so they
+              // know how to complete setup after resolving the Stop
+              // conflict — that guidance was missing.
               console.error(
-                `\n[WARN] .claude/settings.json already has a Stop hook configured.\nartgraph did NOT modify this file to avoid clobbering your setup.\n\nTo add artgraph's gate, manually merge the following into hooks.Stop:\n\n  {\n    "hooks": [\n      { "type": "command", "command": "${result.hooksInstall.reason}" }\n    ]\n  }\n\n(artgraph's config and Skills were installed successfully; only the Stop hook was skipped.)\n`,
+                `\n[WARN] .claude/settings.json already has a Stop hook configured.\nartgraph did NOT modify this file to avoid clobbering your setup.\n\nTo add artgraph's gate, manually merge the following into hooks.Stop:\n\n  {\n    "hooks": [\n      { "type": "command", "command": "${result.hooksInstall.reason}" }\n    ]\n  }\n\n(artgraph's config and Skills were installed successfully; only the Stop hook was skipped.)\n\nAfter you have merged the snippet above, re-run \`artgraph init --force\` to\ncomplete setup (or run with \`--no-hooks\` if you prefer to keep the current\nStop hook and skip artgraph's gate).\n`,
               );
               break;
             case "invalid-json":
@@ -312,6 +332,13 @@ program
                 "\nWARNING: Cannot detect package manager; skipping Stop hook install (config saved to .artgraph.json).",
               );
               break;
+            default: {
+              // E3: exhaustiveness guard — a new `hooksInstall.action`
+              // variant will fail `tsc` here instead of silently skipping
+              // the CLI-level formatting. Mirrors `printWarnings`.
+              const _exhaustive: never = result.hooksInstall.action;
+              void _exhaustive;
+            }
           }
         }
 

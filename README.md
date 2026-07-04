@@ -28,7 +28,22 @@ npm install -D artgraph && npx artgraph init       # default: full agent-native 
 # deno add npm:artgraph && deno run -A npm:artgraph/cli init
 ```
 
-`artgraph init` runs the full setup by default: `.artgraph.json` config + initial scan + Claude Code Skills + auto-integrate detected SDD tools (Spec Kit / Kiro) + Stop hook + CLAUDE.md / AGENTS.md snippet. Pass `--minimal` for bare config only, or any of `--no-skills` / `--no-integrate` / `--no-hooks` / `--no-agent-context` to skip specific stages. Commit `.claude/settings.json` to share the Stop hook with teammates, or add it to `.gitignore` if you want per-developer hooks.
+`artgraph init` runs the full setup by default: `.artgraph.json` config + initial scan + Claude Code Skills + auto-integrate detected SDD tools (Spec Kit / Kiro) + Stop hook. Pass `--minimal` for bare config only, or any of `--no-skills` / `--no-integrate` / `--no-hooks` to skip specific stages. Commit `.claude/settings.json` to share the Stop hook with teammates, or add it to `.gitignore` if you want per-developer hooks.
+
+> **Note:** The generated Stop hook `command` string is package-manager-specific
+> (e.g., `pnpm exec artgraph …` under pnpm, `bunx artgraph …` under bun,
+> `npx artgraph …` under npm, `deno run -A npm:artgraph/cli …` under Deno). If
+> team members use different package managers, either standardize on a single
+> package manager for the repo, or add `.claude/settings.json` to `.gitignore`
+> so each developer runs `artgraph init` locally to get their PM-appropriate
+> command.
+
+### Disabling the Stop hook (troubleshooting)
+
+If `artgraph check` blocks Claude Code unexpectedly (e.g., after an artgraph
+upgrade regression), you can temporarily disable the Stop hook by editing
+`.claude/settings.json` and removing the `Stop` entry from `hooks`. Re-run
+`artgraph init --force` (once the issue is resolved) to reinstall it.
 
 If you use Claude Code, you can skip the manual install entirely — type `/artgraph-setup` and the Skill detects the package manager, installs artgraph, and runs `init` for you in one turn.
 

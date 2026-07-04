@@ -132,7 +132,8 @@ Single project (per [plan.md](./plan.md) Project Structure):
 
 - [x] T026 [US4] Implement `installHooks(targetDir)` in `src/init.ts` per [contracts/settings-merge.md](./contracts/settings-merge.md) implementation guide. Case A/B/C は merge して exit 0、Case D は警告 + exit 1。 `--force` 不問 (settings.json merge は常に fail-on-conflict、R4)
 - [ ] T027 [US4] Implement `installAgentContext(targetDir)` in `src/init.ts` — CLAUDE.md / AGENTS.md のターゲットファイル走査、HTML マーカー検出、idempotent 注入。両ファイル無ければ CLAUDE.md を新規作成 (FR-015, R3)
-- [x] T028 [US4] Wire `installHooks()` and `installAgentContext()` into the default `runInit()` flow from T009. Verify both are called by default and skipped by `--no-hooks` / `--no-agent-context` / `--minimal`
+- [x] T028a [US4] Wire `installHooks()` into the default `runInit()` flow from T009. Verify it is called by default and skipped by `--no-hooks` / `--minimal` (本 PR で完了)
+- [ ] T028b [US4] Wire `installAgentContext()` into the default `runInit()` flow from T009. Verify it is called by default and skipped by `--no-agent-context` / `--minimal` (T027 と同時に PR-B で完了)
 
 #### Kiro steering 改修 (US5)
 
@@ -353,7 +354,7 @@ Task: "Create artgraph-detect SKILL.md" (T017)
 | US1 (setup) | T006, T008, T009, T015, T019 = 5 |
 | US2 (integrate existing) | T007, T016, T017 = 3 |
 | US3 (skill refactor + impact rename + English) | T005, T010, T011, T012, T013, T014, T018 = 7 |
-| US4 (hooks + agent context) | T020, T021, T022, T023, T024, T025, T026, T027, T028 = 9 |
+| US4 (hooks + agent context) | T020, T021, T022, T023, T024, T025, T026, T027, T028a, T028b = 10 |
 | US5 (Kiro inclusion auto) | T030, T031 = 2 |
 | US6 (Plugin) | T032, T033, T034, T035, T036, T037 = 6 |
 | US7 (Spec Kit hook) | T038, T041, T042, T043 = 4 |
