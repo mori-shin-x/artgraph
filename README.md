@@ -6,12 +6,45 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-Typed artifact graph for TS/JS — trace specs, docs, code, and tests bidirectionally.
+Deterministic spec-to-code context for AI coding agents — one graph linking requirements, docs, code, and tests.
 
 artgraph builds a graph that links requirement IDs in your specs to the code that
 implements them (`@impl` tags) and the tests that verify them (`[ID]` / `req:` tags),
 then detects **drift** (spec changed but code/tests didn't), **orphans**, and
-**uncovered** requirements.
+**uncovered** requirements. The same graph powers `artgraph impact`, so an agent
+gets only the specs, docs, and tests a change touches — not your entire `CLAUDE.md`.
+
+## Why artgraph
+
+Your repo probably already has a code-graph MCP. It knows your code. It doesn't know your spec.
+
+Code-graph MCPs — codegraph, GitNexus, Sourcegraph MCP, and dozens more — give AI
+coding agents a symbol-level map of your codebase. Useful, but the map stops at the
+code. When an agent rewrites `signIn`, nothing tells it that `REQ-001` in
+`specs/auth.md` said "email and password", that `docs/auth.md` is now stale, or
+that a test still asserts the old contract.
+
+artgraph adds the layer *above* the code:
+
+- **One typed graph over requirements, docs, code, and tests** — not four
+  disconnected artifact stores. Every edge is deterministic and sourced from
+  AST-visible tags (`@impl`, `[REQ-ID]`, `req:`), markdown links, YAML
+  frontmatter, SDD-tool file conventions, or TypeScript imports. No LLM in
+  the graph, no embedding retrieval, no RAG.
+- **Per-change context routing** — `artgraph impact --diff` returns only the
+  specs, docs, and tests a given change touches. Feed *that* to the agent
+  instead of the whole context file.
+- **Drift as a CI gate** — `artgraph check --gate` fails the build when a spec
+  changed but the code/tests didn't, when code claims to implement a
+  nonexistent requirement, or when a requirement has zero verifying tests.
+  Byte-identical output on every run.
+- **Requirement IDs are the primary key** — the same `REQ-001` string is what
+  the spec lists, what the agent puts in `@impl`, and what the test brackets.
+  That single key is what makes the 4-layer graph joinable at all — and what
+  lets `artgraph rename` refactor a requirement everywhere in one pass.
+
+Code-graph MCPs answer *"where is this used?"*. artgraph answers *"which
+requirement does this satisfy, and does it still?"*.
 
 ## Quickstart
 
