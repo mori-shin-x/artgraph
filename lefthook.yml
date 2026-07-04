@@ -13,10 +13,10 @@ pre-push:
   parallel: false
   commands:
     typecheck:
-      run: pnpm typecheck
+      run: bash scripts/hook-run.sh pnpm typecheck
     knip:
-      run: pnpm knip
+      run: bash scripts/hook-run.sh pnpm knip
     test-unit:
-      run: pnpm test:unit
+      run: bash scripts/hook-run.sh pnpm test:unit
     test-e2e:
-      run: pnpm test:e2e
+      run: bash scripts/hook-run.sh pnpm test:e2e
