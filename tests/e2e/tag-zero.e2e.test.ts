@@ -145,8 +145,6 @@ describe("e2e: tag-zero brownfield (issue #122)", () => {
     const parsed = JSON.parse(r.stdout) as { affectedFiles?: string[] };
     expect(Array.isArray(parsed.affectedFiles)).toBe(true);
     // Order-independent assertion — impact() has no documented file ordering.
-    expect(parsed.affectedFiles).toEqual(
-      expect.arrayContaining(["src/a.ts", "src/b.ts"]),
-    );
+    expect(parsed.affectedFiles).toEqual(expect.arrayContaining(["src/a.ts", "src/b.ts"]));
   });
 });

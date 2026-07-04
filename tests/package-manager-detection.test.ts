@@ -1,12 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -138,9 +132,7 @@ describe("detectPackageManager — truth table (SC-001)", () => {
 describe("buildExecCommand (SC-003, contracts §2)", () => {
   it("maps each PM to its exec prefix", () => {
     expect(buildExecCommand("npm", "check --diff")).toBe("npx artgraph check --diff");
-    expect(buildExecCommand("pnpm", "check --diff")).toBe(
-      "pnpm exec artgraph check --diff",
-    );
+    expect(buildExecCommand("pnpm", "check --diff")).toBe("pnpm exec artgraph check --diff");
     expect(buildExecCommand("bun", "check --diff")).toBe("bunx artgraph check --diff");
     expect(buildExecCommand("deno", "check --diff")).toBe(
       "deno run -A npm:artgraph/cli check --diff",
@@ -155,9 +147,7 @@ describe("buildExecCommand (SC-003, contracts §2)", () => {
   });
 
   it("trims surrounding whitespace around the subcommand", () => {
-    expect(buildExecCommand("npm", "  check --diff  ")).toBe(
-      "npx artgraph check --diff",
-    );
+    expect(buildExecCommand("npm", "  check --diff  ")).toBe("npx artgraph check --diff");
   });
 });
 
@@ -182,9 +172,7 @@ describe("detectPackageManager — packageManager field edge cases", () => {
       expect(detectPackageManager(dir)).toBe("pnpm");
       // Yarn fallthrough must NOT log the yarn warning — the field is
       // malformed, not a recognized yarn signal.
-      expect(errSpy).not.toHaveBeenCalledWith(
-        expect.stringMatching(/yarn is not supported/i),
-      );
+      expect(errSpy).not.toHaveBeenCalledWith(expect.stringMatching(/yarn is not supported/i));
     });
   }
 

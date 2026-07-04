@@ -21,9 +21,11 @@ import { join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const CLI = resolve(REPO_ROOT, "dist/cli.js");
-const PKG_VERSION = (JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf-8")) as {
-  version: string;
-}).version;
+const PKG_VERSION = (
+  JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf-8")) as {
+    version: string;
+  }
+).version;
 
 describe("e2e: real bin invocation", () => {
   it("direct-path `node dist/cli.js --version` prints the version", () => {
@@ -92,11 +94,11 @@ describe.skipIf(!RUN_PACK)("e2e: npm pack + install", () => {
     workDir = mkdtempSync(join(tmpdir(), "artgraph-pack-"));
     // `pnpm pack` writes a tarball into workDir; npm install --no-save
     // unpacks it into a sibling node_modules layout.
-    const pack = spawnSync(
-      "pnpm",
-      ["pack", "--pack-destination", workDir],
-      { encoding: "utf-8", cwd: REPO_ROOT, timeout: 120000 },
-    );
+    const pack = spawnSync("pnpm", ["pack", "--pack-destination", workDir], {
+      encoding: "utf-8",
+      cwd: REPO_ROOT,
+      timeout: 120000,
+    });
     if (pack.status !== 0) {
       throw new Error(`pnpm pack failed: ${pack.stderr}`);
     }
@@ -107,11 +109,11 @@ describe.skipIf(!RUN_PACK)("e2e: npm pack + install", () => {
     pkgDir = join(workDir, "consumer");
     const install = spawnSync("npm", ["init", "-y"], { cwd: workDir, encoding: "utf-8" });
     if (install.status !== 0) throw new Error(`npm init failed: ${install.stderr}`);
-    const add = spawnSync(
-      "npm",
-      ["install", "--no-save", "--no-package-lock", tgz],
-      { cwd: workDir, encoding: "utf-8", timeout: 180000 },
-    );
+    const add = spawnSync("npm", ["install", "--no-save", "--no-package-lock", tgz], {
+      cwd: workDir,
+      encoding: "utf-8",
+      timeout: 180000,
+    });
     if (add.status !== 0) throw new Error(`npm install failed: ${add.stderr}`);
     pkgDir = workDir;
   });

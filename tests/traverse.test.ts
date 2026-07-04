@@ -206,9 +206,24 @@ describe("impact: cyclic doc-to-doc graph", () => {
         ["doc:C", { id: "doc:C", kind: "doc" as const, filePath: "c.md", contentHash: "h3" }],
       ]),
       edges: [
-        { source: "doc:A", target: "doc:B", kind: "derives_from" as const, provenances: ["convention"] as const },
-        { source: "doc:B", target: "doc:C", kind: "derives_from" as const, provenances: ["convention"] as const },
-        { source: "doc:C", target: "doc:A", kind: "derives_from" as const, provenances: ["convention"] as const },
+        {
+          source: "doc:A",
+          target: "doc:B",
+          kind: "derives_from" as const,
+          provenances: ["convention"] as const,
+        },
+        {
+          source: "doc:B",
+          target: "doc:C",
+          kind: "derives_from" as const,
+          provenances: ["convention"] as const,
+        },
+        {
+          source: "doc:C",
+          target: "doc:A",
+          kind: "derives_from" as const,
+          provenances: ["convention"] as const,
+        },
       ],
     };
     const result = impact(cyclicGraph, ["doc:A"], {});
@@ -228,9 +243,24 @@ describe("impact: cyclic doc-to-doc graph", () => {
         ["doc:D", { id: "doc:D", kind: "doc" as const, filePath: "d.md", contentHash: "h4" }],
       ]),
       edges: [
-        { source: "doc:B", target: "doc:A", kind: "derives_from" as const, provenances: ["convention"] as const },
-        { source: "doc:C", target: "doc:B", kind: "derives_from" as const, provenances: ["convention"] as const },
-        { source: "doc:D", target: "doc:C", kind: "derives_from" as const, provenances: ["convention"] as const },
+        {
+          source: "doc:B",
+          target: "doc:A",
+          kind: "derives_from" as const,
+          provenances: ["convention"] as const,
+        },
+        {
+          source: "doc:C",
+          target: "doc:B",
+          kind: "derives_from" as const,
+          provenances: ["convention"] as const,
+        },
+        {
+          source: "doc:D",
+          target: "doc:C",
+          kind: "derives_from" as const,
+          provenances: ["convention"] as const,
+        },
       ],
     };
     // From B with depth=1: reaches A (backward via B->A) and C (forward via C->B)
@@ -279,10 +309,20 @@ describe("task-source edge semantics (meta-review remediation)", () => {
         ["T001", { id: "T001", kind: "task", filePath: "specs/auth-tasks.md", contentHash: "h2" }],
       ] as const),
       edges: [
-        { source: "T001", target: "FR-001", kind: "implements" as const, provenances: ["task-tag"] as const },
+        {
+          source: "T001",
+          target: "FR-001",
+          kind: "implements" as const,
+          provenances: ["task-tag"] as const,
+        },
         // verifies edge pointing at a Kiro-style numeric ID that is NOT in the
         // node map — the task-source filter must keep this from being reported.
-        { source: "T001", target: "1.1", kind: "verifies" as const, provenances: ["task-tag"] as const },
+        {
+          source: "T001",
+          target: "1.1",
+          kind: "verifies" as const,
+          provenances: ["task-tag"] as const,
+        },
       ],
     };
   }
@@ -444,9 +484,7 @@ describe("resolveStartIds (spec 016)", () => {
 describe("resolveOriginReqs (spec 016)", () => {
   it("returns the REQ ids claimed by each startId via `implements`", () => {
     const graph = buildSymbolGraph();
-    const reqs = resolveOriginReqs(graph, [
-      "symbol:src/auth.ts#validateToken",
-    ]);
+    const reqs = resolveOriginReqs(graph, ["symbol:src/auth.ts#validateToken"]);
     expect(reqs).toEqual(["REQ-001"]);
   });
 
@@ -497,9 +535,7 @@ describe("resolveOriginReqs (spec 016)", () => {
       kind: "depends_on",
       provenances: ["convention"],
     });
-    const reqs = resolveOriginReqs(graph, [
-      "symbol:src/auth.ts#validateToken",
-    ]);
+    const reqs = resolveOriginReqs(graph, ["symbol:src/auth.ts#validateToken"]);
     // REQ-009 must NOT appear — `depends_on` is not the `implements` axis.
     expect(reqs).toEqual(["REQ-001"]);
   });

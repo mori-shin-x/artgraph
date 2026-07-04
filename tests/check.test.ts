@@ -4,12 +4,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { buildGraph } from "../src/graph/builder.js";
 import { buildLockFromGraph } from "../src/lock.js";
 import { check } from "../src/check.js";
-import type {
-  ArtgraphConfig,
-  LockFile,
-  TestResultMap,
-  ArtifactGraph,
-} from "../src/types.js";
+import type { ArtgraphConfig, LockFile, TestResultMap, ArtifactGraph } from "../src/types.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
 
@@ -123,17 +118,13 @@ describe("check", () => {
 
     // Passing results: gate clean.
     const { graph, lock } = coveredGraph(reqId);
-    const passing: TestResultMap = new Map([
-      [reqId, [{ reqId, testName: "t", passed: true }]],
-    ]);
+    const passing: TestResultMap = new Map([[reqId, [{ reqId, testName: "t", passed: true }]]]);
     const passed = check(graph, lock, undefined, passing);
     expect(passed.pass).toBe(true);
     expect(passed.testFailures).toEqual([]);
 
     // Failing results: gate fails and the REQ is listed under testFailures.
-    const failing: TestResultMap = new Map([
-      [reqId, [{ reqId, testName: "t", passed: false }]],
-    ]);
+    const failing: TestResultMap = new Map([[reqId, [{ reqId, testName: "t", passed: false }]]]);
     const failed = check(graph, lock, undefined, failing);
     expect(failed.pass).toBe(false);
     expect(failed.testFailures).toContain(reqId);
@@ -179,13 +170,7 @@ describe("check", () => {
             "- REQ-200: feature (depends_on: REQ-201)",
             "",
           ].join("\n")
-        : [
-            "# Spec",
-            "",
-            "- REQ-201: dependency target",
-            "- REQ-200: feature",
-            "",
-          ].join("\n");
+        : ["# Spec", "", "- REQ-201: dependency target", "- REQ-200: feature", ""].join("\n");
       writeFileSync(resolve(TMP, "specs/x.md"), body, "utf-8");
     }
 

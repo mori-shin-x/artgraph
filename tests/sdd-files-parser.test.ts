@@ -168,9 +168,7 @@ describe("extractFiles — Stage A path:symbol syntax (spec 016)", () => {
     const text = "Files: src/auth.ts:validateToken\n";
     const result = extractFiles(text, { graph, repoRoot: root });
     expect(result.stage).toBe("files-section");
-    expect(result.entries).toEqual([
-      { path: "src/auth.ts", symbol: "validateToken", line: 1 },
-    ]);
+    expect(result.entries).toEqual([{ path: "src/auth.ts", symbol: "validateToken", line: 1 }]);
     expect(result.diagnostics).toEqual([]);
   });
 
@@ -194,9 +192,7 @@ describe("extractFiles — Stage A path:symbol syntax (spec 016)", () => {
     const graph = makeGraph(["src/a.ts"], [{ path: "src/a.ts", symbol: "fn:sub" }]);
     const text = "Files: src/a.ts:fn:sub\n";
     const result = extractFiles(text, { graph, repoRoot: root });
-    expect(result.entries).toEqual([
-      { path: "src/a.ts", symbol: "fn:sub", line: 1 },
-    ]);
+    expect(result.entries).toEqual([{ path: "src/a.ts", symbol: "fn:sub", line: 1 }]);
   });
 
   // Case 4: trailing `(new)` annotation stripped before symbol split
@@ -204,9 +200,7 @@ describe("extractFiles — Stage A path:symbol syntax (spec 016)", () => {
     const graph = makeGraph(["src/a.ts"], [{ path: "src/a.ts", symbol: "fn" }]);
     const text = "Files: src/a.ts:fn (new)\n";
     const result = extractFiles(text, { graph, repoRoot: root });
-    expect(result.entries).toEqual([
-      { path: "src/a.ts", symbol: "fn", line: 1 },
-    ]);
+    expect(result.entries).toEqual([{ path: "src/a.ts", symbol: "fn", line: 1 }]);
   });
 
   // Case 5: path also missing — only unresolvedFilePath fires (INV-S1)
@@ -215,9 +209,7 @@ describe("extractFiles — Stage A path:symbol syntax (spec 016)", () => {
     const text = "Files: src/missing.ts:doesNotExist\n";
     const result = extractFiles(text, { graph, repoRoot: root });
     // Entry is kept (Stage A trusts the author) but only the path miss is reported.
-    expect(result.entries).toEqual([
-      { path: "src/missing.ts", symbol: "doesNotExist", line: 1 },
-    ]);
+    expect(result.entries).toEqual([{ path: "src/missing.ts", symbol: "doesNotExist", line: 1 }]);
     expect(result.diagnostics).toEqual([
       { kind: "unresolvedFilePath", path: "src/missing.ts", line: 1 },
     ]);
@@ -230,9 +222,7 @@ describe("extractFiles — Stage A path:symbol syntax (spec 016)", () => {
     const graph = makeGraph(["src/auth.ts"]); // file registered, no symbol nodes
     const text = "Files: src/auth.ts:doesNotExist\n";
     const result = extractFiles(text, { graph, repoRoot: root });
-    expect(result.entries).toEqual([
-      { path: "src/auth.ts", symbol: "doesNotExist", line: 1 },
-    ]);
+    expect(result.entries).toEqual([{ path: "src/auth.ts", symbol: "doesNotExist", line: 1 }]);
     expect(result.diagnostics).toEqual([
       {
         kind: "unresolvedSymbol",
@@ -245,10 +235,7 @@ describe("extractFiles — Stage A path:symbol syntax (spec 016)", () => {
 
   // Case 7: both registered → no diagnostics
   it("case 7: registered path + registered symbol → no diagnostics", () => {
-    const graph = makeGraph(
-      ["src/auth.ts"],
-      [{ path: "src/auth.ts", symbol: "validateToken" }],
-    );
+    const graph = makeGraph(["src/auth.ts"], [{ path: "src/auth.ts", symbol: "validateToken" }]);
     const text = "Files: src/auth.ts:validateToken\n";
     const result = extractFiles(text, { graph, repoRoot: root });
     expect(result.diagnostics).toEqual([]);
@@ -268,15 +255,10 @@ describe("extractFiles — Stage A path:symbol syntax (spec 016)", () => {
 
   // Additional: line numbers point at bullet positions for symbol entries
   it("symbol entry line number reflects bullet position", () => {
-    const graph = makeGraph(
-      ["src/auth.ts"],
-      [{ path: "src/auth.ts", symbol: "validateToken" }],
-    );
+    const graph = makeGraph(["src/auth.ts"], [{ path: "src/auth.ts", symbol: "validateToken" }]);
     const text = ["Files:", "- src/auth.ts:validateToken"].join("\n");
     const result = extractFiles(text, { graph, repoRoot: root });
-    expect(result.entries).toEqual([
-      { path: "src/auth.ts", symbol: "validateToken", line: 2 },
-    ]);
+    expect(result.entries).toEqual([{ path: "src/auth.ts", symbol: "validateToken", line: 2 }]);
   });
 
   // Additional: same path with two different symbols → two entries
@@ -302,9 +284,7 @@ describe("extractFiles — Stage A path:symbol syntax (spec 016)", () => {
     const text = "Files: REQ-003:something\n";
     const result = extractFiles(text, { graph, repoRoot: root });
     // The whole token is treated as a path (raw) which fails fs/graph lookup.
-    expect(result.entries).toEqual([
-      { path: "REQ-003:something", symbol: undefined, line: 1 },
-    ]);
+    expect(result.entries).toEqual([{ path: "REQ-003:something", symbol: undefined, line: 1 }]);
     expect(result.diagnostics).toEqual([
       { kind: "unresolvedFilePath", path: "REQ-003:something", line: 1 },
     ]);

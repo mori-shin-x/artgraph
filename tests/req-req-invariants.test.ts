@@ -53,8 +53,7 @@ describe("req-req invariants (meta-review remediation)", () => {
 
   it("C1-parser: inline code 内の `(depends_on: X)` は edge を生成しない", () => {
     setupTmp({
-      "specs/010-a/spec.md":
-        "- INLN-001: foo `(depends_on: AUTH-001)` baz\n- AUTH-001: x\n",
+      "specs/010-a/spec.md": "- INLN-001: foo `(depends_on: AUTH-001)` baz\n- AUTH-001: x\n",
     });
     const { graph } = buildGraph(TMP_BASE, baseConfig);
     const edges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
@@ -63,8 +62,7 @@ describe("req-req invariants (meta-review remediation)", () => {
 
   it("C1-parser: HTML コメント内の `(depends_on: X)` は edge を生成しない", () => {
     setupTmp({
-      "specs/010-a/spec.md":
-        "- HTML-001: foo <!-- (depends_on: AUTH-001) --> baz\n- AUTH-001: x\n",
+      "specs/010-a/spec.md": "- HTML-001: foo <!-- (depends_on: AUTH-001) --> baz\n- AUTH-001: x\n",
     });
     const { graph } = buildGraph(TMP_BASE, baseConfig);
     const edges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
@@ -73,8 +71,7 @@ describe("req-req invariants (meta-review remediation)", () => {
 
   it("C1-parser: blockquote 内の list-item 注釈は edge を生成しない", () => {
     setupTmp({
-      "specs/010-a/spec.md":
-        "> - BQ-001: y (depends_on: AUTH-001)\n\n- AUTH-001: x\n",
+      "specs/010-a/spec.md": "> - BQ-001: y (depends_on: AUTH-001)\n\n- AUTH-001: x\n",
     });
     const { graph } = buildGraph(TMP_BASE, baseConfig);
     const edges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
@@ -82,11 +79,7 @@ describe("req-req invariants (meta-review remediation)", () => {
   });
 
   it("C1-rewriter: inline code / HTML コメント / blockquote 内は書換しない", () => {
-    const r1 = rewriteAnnotationIds(
-      "- X: y `(depends_on: AUTH-001)` z",
-      "AUTH-001",
-      "AUTH-100",
-    );
+    const r1 = rewriteAnnotationIds("- X: y `(depends_on: AUTH-001)` z", "AUTH-001", "AUTH-100");
     expect(r1.content).toBe("- X: y `(depends_on: AUTH-001)` z");
     expect(r1.changes).toHaveLength(0);
 
@@ -98,11 +91,7 @@ describe("req-req invariants (meta-review remediation)", () => {
     expect(r2.content).toBe("- X: y <!-- (depends_on: AUTH-001) --> z");
     expect(r2.changes).toHaveLength(0);
 
-    const r3 = rewriteAnnotationIds(
-      "> - X: y (depends_on: AUTH-001)",
-      "AUTH-001",
-      "AUTH-100",
-    );
+    const r3 = rewriteAnnotationIds("> - X: y (depends_on: AUTH-001)", "AUTH-001", "AUTH-100");
     expect(r3.content).toBe("> - X: y (depends_on: AUTH-001)");
     expect(r3.changes).toHaveLength(0);
   });
@@ -118,29 +107,22 @@ describe("req-req invariants (meta-review remediation)", () => {
     const annEdges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
     expect(annEdges).toHaveLength(0);
 
-    const ambig = warnings.filter(
-      (w) => w.type === "ambiguous-id" && w.id === "AUTH-001",
-    );
-    const orphan = warnings.filter(
-      (w) => w.type === "orphan-edge" && w.id === "AUTH-001",
-    );
+    const ambig = warnings.filter((w) => w.type === "ambiguous-id" && w.id === "AUTH-001");
+    const orphan = warnings.filter((w) => w.type === "orphan-edge" && w.id === "AUTH-001");
     expect(ambig).toHaveLength(1);
     expect(orphan).toHaveLength(0);
   });
 
   it("C4: 空トークンがカンマで紛れても invalid-annotation-id key=`` 警告は出ない", () => {
     setupTmp({
-      "specs/010-a/spec.md":
-        "- X-001: y (depends_on: ,A-1,,B-2,)\n- A-1: a\n- B-2: b\n",
+      "specs/010-a/spec.md": "- X-001: y (depends_on: ,A-1,,B-2,)\n- A-1: a\n- B-2: b\n",
     });
     const { graph, warnings } = buildGraph(TMP_BASE, baseConfig);
 
     const annEdges = graph.edges.filter((e) => e.provenances?.includes("annotation"));
     expect(annEdges.map((e) => e.target).sort()).toEqual(["A-1", "B-2"]);
 
-    const emptyKey = warnings.filter(
-      (w) => w.type === "invalid-annotation-id" && w.id === "",
-    );
+    const emptyKey = warnings.filter((w) => w.type === "invalid-annotation-id" && w.id === "");
     expect(emptyKey).toHaveLength(0);
   });
 
@@ -167,8 +149,7 @@ describe("req-req invariants (meta-review remediation)", () => {
   it("hash-F3: 注釈の括弧前後の空白の有無で hash drift しない", () => {
     const filePath = "specs/010-a/spec.md";
     setupTmp({
-      [filePath]:
-        "- AUTH-002:(depends_on: AUTH-001) actual content\n- AUTH-001: x\n",
+      [filePath]: "- AUTH-002:(depends_on: AUTH-001) actual content\n- AUTH-001: x\n",
     });
     const { graph: g1 } = buildGraph(TMP_BASE, baseConfig);
     const h1 = g1.nodes.get("AUTH-002")!.contentHash;
@@ -204,12 +185,9 @@ describe("req-req invariants (meta-review remediation)", () => {
   });
 
   it("C5: rewriter は reqPatterns.codeId にマッチしない oldId を no-op で扱う", () => {
-    const result = rewriteAnnotationIds(
-      "- X-1: y (depends_on: foo-bar)\n",
-      "foo-bar",
-      "foo-baz",
-      { reqPatterns: { codeId: "^AUTH-\\d+$" } },
-    );
+    const result = rewriteAnnotationIds("- X-1: y (depends_on: foo-bar)\n", "foo-bar", "foo-baz", {
+      reqPatterns: { codeId: "^AUTH-\\d+$" },
+    });
     expect(result.content).toBe("- X-1: y (depends_on: foo-bar)\n");
     expect(result.changes).toHaveLength(0);
   });
@@ -229,9 +207,7 @@ describe("req-req invariants (meta-review remediation)", () => {
     });
     const { graph } = buildGraph(TMP_BASE, baseConfig);
     const lock = buildLockFromGraph(graph);
-    expect(lock["A-1"]?.dependsOn).toEqual([
-      { id: "A-2", provenances: ["annotation"] },
-    ]);
+    expect(lock["A-1"]?.dependsOn).toEqual([{ id: "A-2", provenances: ["annotation"] }]);
   });
 
   it("追加F6 (issue #35): 不正な provenance 値は要素単位で除外され、全要素 invalid なら edge ごと drop", () => {
@@ -324,8 +300,7 @@ describe("req-req invariants (meta-review remediation)", () => {
   it("rename round-trip: 注釈 edge 集合が rename 前後で同型", () => {
     const filePath = "specs/010-a/spec.md";
     setupTmp({
-      [filePath]:
-        "- A-2: foo (depends_on: A-1, A-3)\n- A-1: bar\n- A-3: baz\n",
+      [filePath]: "- A-2: foo (depends_on: A-1, A-3)\n- A-1: bar\n- A-3: baz\n",
     });
     const { graph: g1 } = buildGraph(TMP_BASE, baseConfig);
     const set1 = g1.edges
@@ -364,9 +339,7 @@ describe("req-req invariants (meta-review remediation)", () => {
       "specs/010-b/spec.md": "- AUTH-001: b\n",
     });
     const { warnings } = buildGraph(TMP_BASE, baseConfig);
-    const ambig = warnings.find(
-      (w) => w.type === "ambiguous-id" && w.id === "AUTH-001",
-    );
+    const ambig = warnings.find((w) => w.type === "ambiguous-id" && w.id === "AUTH-001");
     // sort 済みで決定的
     expect(ambig?.files).toEqual([...(ambig?.files ?? [])].sort());
   });

@@ -182,8 +182,7 @@ function runStageA(lines: string[], options: ExtractOptions): StageAExtraction {
   // (path, symbol ?? null) dedup key to honor spec 016 R-001: same entry
   // declared multiple times yields a single SymbolEntry.
   const seenKeys = new Set<string>();
-  const dedupKey = (path: string, symbol: string | undefined): string =>
-    `${path} ${symbol ?? ""}`;
+  const dedupKey = (path: string, symbol: string | undefined): string => `${path} ${symbol ?? ""}`;
 
   let i = 0;
   while (i < lines.length) {

@@ -2,7 +2,12 @@ import type { ArtifactGraph, LockFile, CheckResult, DriftEntry, TestResultMap } 
 import { findOrphans, findUncovered } from "./graph/traverse.js";
 import { computeCoverage } from "./coverage.js";
 
-export function check(graph: ArtifactGraph, lock: LockFile, scope?: Set<string>, testResults?: TestResultMap): CheckResult {
+export function check(
+  graph: ArtifactGraph,
+  lock: LockFile,
+  scope?: Set<string>,
+  testResults?: TestResultMap,
+): CheckResult {
   const drifted: DriftEntry[] = [];
 
   for (const [id, entry] of Object.entries(lock)) {
@@ -39,9 +44,7 @@ export function check(graph: ArtifactGraph, lock: LockFile, scope?: Set<string>,
   // a regression the gate must catch, not just display. Without test results
   // this set is always empty, preserving the legacy gate behavior.
   const testFailures = testResults
-    ? filtered
-        .filter((c) => c.status === "impl-only" && c.testFiles.length > 0)
-        .map((c) => c.reqId)
+    ? filtered.filter((c) => c.status === "impl-only" && c.testFiles.length > 0).map((c) => c.reqId)
     : [];
 
   const pass =

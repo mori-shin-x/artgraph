@@ -60,11 +60,7 @@ function tryReadFeatureJson(repoRoot: string): string | undefined {
     // a clear "pass --spec" message than to crash with a parse error.
     return undefined;
   }
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("feature_directory" in parsed)
-  ) {
+  if (typeof parsed !== "object" || parsed === null || !("feature_directory" in parsed)) {
     return undefined;
   }
   const value = (parsed as { feature_directory: unknown }).feature_directory;

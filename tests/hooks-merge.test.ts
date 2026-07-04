@@ -121,10 +121,7 @@ describe("installHooks (Stop-hook merge)", () => {
   it("Case B: pre-seeded {} with other top-level fields → Stop added, fields preserved", () => {
     seedPm(tmp, "pnpm");
     mkdirSync(join(tmp, ".claude"), { recursive: true });
-    writeFileSync(
-      settingsPath(tmp),
-      JSON.stringify({ permissions: { allow: ["Bash"] } }),
-    );
+    writeFileSync(settingsPath(tmp), JSON.stringify({ permissions: { allow: ["Bash"] } }));
 
     const result = runInit(tmp, { noScan: true });
 
@@ -143,10 +140,7 @@ describe("installHooks (Stop-hook merge)", () => {
     seedPm(tmp, "pnpm");
     mkdirSync(join(tmp, ".claude"), { recursive: true });
     const preToolUse = [{ hooks: [{ type: "command", command: "echo pre" }] }];
-    writeFileSync(
-      settingsPath(tmp),
-      JSON.stringify({ hooks: { PreToolUse: preToolUse } }),
-    );
+    writeFileSync(settingsPath(tmp), JSON.stringify({ hooks: { PreToolUse: preToolUse } }));
 
     const result = runInit(tmp, { noScan: true });
 
@@ -306,10 +300,7 @@ describe("installHooks (Stop-hook merge)", () => {
     // were about to overwrite.
     seedPm(tmp, "pnpm");
     mkdirSync(join(tmp, ".claude"), { recursive: true });
-    writeFileSync(
-      settingsPath(tmp),
-      JSON.stringify({ hooks: { Stop: [] } }),
-    );
+    writeFileSync(settingsPath(tmp), JSON.stringify({ hooks: { Stop: [] } }));
 
     const result = runInit(tmp, { noScan: true, force: true });
 
@@ -377,9 +368,9 @@ describe("installHooks (Stop-hook merge)", () => {
     // First run: live pnpm-lock.yaml → .artgraph.json records packageManager: "pnpm",
     // and the Stop hook is installed (Case A).
     runInit(tmp, { noScan: true });
-    expect(
-      JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8")).packageManager,
-    ).toBe("pnpm");
+    expect(JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8")).packageManager).toBe(
+      "pnpm",
+    );
     expect(existsSync(settingsPath(tmp))).toBe(true);
 
     // Remove every live PM signal AND the previously-installed settings.json
@@ -476,10 +467,7 @@ describe("installHooks (Stop-hook merge)", () => {
       // of B1+B2 (previously only Case A cleaned up).
       seedPm(tmp, "pnpm");
       mkdirSync(join(tmp, ".claude"), { recursive: true });
-      writeFileSync(
-        settingsPath(tmp),
-        JSON.stringify({ permissions: { allow: ["Bash"] } }),
-      );
+      writeFileSync(settingsPath(tmp), JSON.stringify({ permissions: { allow: ["Bash"] } }));
 
       renameControl.shouldThrow = true;
       let result;
@@ -590,10 +578,7 @@ describe("init CLI: --no-integrate + --integrations conflict (E2-2)", () => {
     // Before E2-2, this pair silently dropped `--integrations` in default
     // mode and *reversed* into an opt-in under `--minimal`. Both surfaces
     // must now be flagged as a hard error before any fs writes occur.
-    const r = await runCli(
-      ["init", "--no-integrate", "--integrations", "speckit"],
-      { cwd: tmp },
-    );
+    const r = await runCli(["init", "--no-integrate", "--integrations", "speckit"], { cwd: tmp });
 
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toMatch(/mutually exclusive/);
@@ -602,10 +587,7 @@ describe("init CLI: --no-integrate + --integrations conflict (E2-2)", () => {
   });
 
   it("--no-integrate --integrations=all → exit 1 with 'mutually exclusive'", async () => {
-    const r = await runCli(
-      ["init", "--no-integrate", "--integrations", "all"],
-      { cwd: tmp },
-    );
+    const r = await runCli(["init", "--no-integrate", "--integrations", "all"], { cwd: tmp });
 
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toMatch(/mutually exclusive/);
@@ -616,10 +598,9 @@ describe("init CLI: --no-integrate + --integrations conflict (E2-2)", () => {
     // Empty / whitespace / ",,," inputs collapse to undefined, which is
     // semantically "no provider chosen" — indistinguishable from omitting
     // the flag. Must not trigger the mutual-exclusion check.
-    const r = await runCli(
-      ["init", "--no-integrate", "--integrations", "", "--minimal"],
-      { cwd: tmp },
-    );
+    const r = await runCli(["init", "--no-integrate", "--integrations", "", "--minimal"], {
+      cwd: tmp,
+    });
 
     expect(r.exitCode).toBe(0);
     expect(r.stderr).not.toMatch(/mutually exclusive/);

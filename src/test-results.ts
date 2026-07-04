@@ -175,9 +175,7 @@ export function parseTestResults(content: string): TestResultRecord[] {
 /**
  * Group TestResultRecords by reqId into a Map.
  */
-export function buildTestResultMap(
-  records: TestResultRecord[],
-): TestResultMap {
+export function buildTestResultMap(records: TestResultRecord[]): TestResultMap {
   const map: TestResultMap = new Map();
 
   for (const record of records) {
