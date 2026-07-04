@@ -111,7 +111,7 @@ function registerCommands(program: Command): void {
   program
     .command("init")
     .description(
-      "Initialize artgraph for this project (default: config + scan + Skills + auto-integrate detected SDD tools + AGENTS.md / wrapper injection; Stop hook lands in PR-B). Use --minimal for bare config only.",
+      "Initialize artgraph for this project (default: config + scan + Skills + auto-integrate detected SDD tools + Stop hook + AGENTS.md / wrapper injection). Use --minimal for bare config only.",
     )
     .option(
       "--force",
@@ -125,7 +125,7 @@ function registerCommands(program: Command): void {
       "Skip Skills distribution to the selected --agents (default mode only — already off under --minimal)",
     )
     .option("--no-integrate", "Skip SDD-tool auto-integration (default mode only)")
-    .option("--no-hooks", "Skip Stop hook installation (default mode only; P1 deliverable)")
+    .option("--no-hooks", "Skip Stop hook installation (default mode only)")
     .option("--no-agent-context", "Skip AGENTS.md / wrapper injection (default mode only)")
     // Stage opt-ins (used with --minimal)
     .option(
@@ -133,7 +133,7 @@ function registerCommands(program: Command): void {
       "Distribute Skills to the selected --agents canonical paths (use with --minimal)",
     )
     .option("--with-integrate", "Auto-integrate detected SDD tools (use with --minimal)")
-    .option("--with-hooks", "Install Stop hook (use with --minimal; P1 deliverable, no effect yet)")
+    .option("--with-hooks", "Install Stop hook into .claude/settings.json (use with --minimal)")
     .option(
       "--with-agent-context",
       "Inject AGENTS.md + wrapper(s) for the selected --agents (use with --minimal)",
@@ -200,10 +200,10 @@ function registerCommands(program: Command): void {
       // `agentsRequired` is false under `--minimal`, so the missing-`--agents`
       // gate below never fired, and the distribution stage skipped itself
       // with zero agents and zero warning. That's the same "no-op combination"
-      // family the mutex-conflict detector above already guards against, and
-      // it's asymmetric with `--with-hooks`, which at least WARNs about being
-      // a no-op. Treat it as a hard error, consistent with the
-      // AGENTS_REQUIRED_ERROR path used everywhere else --agents is missing.
+      // family the mutex-conflict detector above already guards against.
+      // Treat it as a hard error, consistent with the AGENTS_REQUIRED_ERROR
+      // path used everywhere else --agents is missing. (`--with-hooks` is
+      // exempt: the hooks stage needs no --agents to land real output.)
       if (
         opts.minimal === true &&
         (opts.withSkills === true || opts.withAgentContext === true) &&
@@ -213,16 +213,6 @@ function registerCommands(program: Command): void {
           "ERROR: --with-skills / --with-agent-context under --minimal requires --agents=<list>; otherwise this is a no-op.",
         );
         process.exit(1);
-      }
-
-      // C1: --with-hooks is accepted (so the flag surface is stable for PR-B)
-      // but currently no-op. Warn so the user doesn't think they got hooks
-      // without checking output. --with-agent-context now lands real output
-      // (AGENTS.md + wrappers, spec 013 T021); the warning was removed.
-      if (opts.withHooks === true) {
-        console.error(
-          "WARNING: --with-hooks is a P1 deliverable; the flag has no effect in this release.",
-        );
       }
 
       // M12: surface valid provider ids when the user fat-fingers an
