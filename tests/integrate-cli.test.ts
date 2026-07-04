@@ -492,7 +492,10 @@ describe("E2E: artgraph init --integrations — one-shot integration (Scenario 4
 
   it("propagates --integrate-gate to the speckit provider", async () => {
     seedSpecKitRepo(tmp);
-    const r = await runCli(["init", "--no-scan", "--integrations", "speckit", "--integrate-gate"], tmp);
+    const r = await runCli(
+      ["init", "--no-scan", "--integrations", "speckit", "--integrate-gate"],
+      tmp,
+    );
     expect(r.exitCode).toBe(0);
     const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
     expect(yml).toMatch(/before_implement:/);
@@ -501,7 +504,10 @@ describe("E2E: artgraph init --integrations — one-shot integration (Scenario 4
 
   it("ignores --integrate-gate for non-speckit providers without warning or error", async () => {
     mkdirSync(join(tmp, ".kiro"));
-    const r = await runCli(["init", "--no-scan", "--integrations", "kiro", "--integrate-gate"], tmp);
+    const r = await runCli(
+      ["init", "--no-scan", "--integrations", "kiro", "--integrate-gate"],
+      tmp,
+    );
     expect(r.exitCode).toBe(0);
     // kiro still installed normally
     expect(existsSync(join(tmp, ".kiro/steering/artgraph.md"))).toBe(true);

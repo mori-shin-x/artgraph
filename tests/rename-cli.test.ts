@@ -1,13 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import {
-  mkdtempSync,
-  cpSync,
-  rmSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, cpSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { runAt, type RunResult } from "./helpers.js";
 
@@ -116,18 +110,22 @@ describe("CLI: rename --from/--to", () => {
     expect(spec).toContain("REQ-001 は認証基盤の中核要件として");
   });
 
-  it("leaves the lock drift-free so `check` passes afterwards (F1)", { timeout: 30000 }, async () => {
-    const tmp = await prepareTempDir();
-    const before = await runCheck(tmp);
-    expect(before.pass).toBe(true);
+  it(
+    "leaves the lock drift-free so `check` passes afterwards (F1)",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareTempDir();
+      const before = await runCheck(tmp);
+      expect(before.pass).toBe(true);
 
-    const { exitCode } = await runCli(["rename", "--from", "REQ-001", "--to", "REQ-100"], tmp);
-    expect(exitCode).toBe(0);
+      const { exitCode } = await runCli(["rename", "--from", "REQ-001", "--to", "REQ-100"], tmp);
+      expect(exitCode).toBe(0);
 
-    const after = await runCheck(tmp);
-    expect(after.drifted).toEqual([]);
-    expect(after.pass).toBe(true);
-  });
+      const after = await runCheck(tmp);
+      expect(after.drifted).toEqual([]);
+      expect(after.pass).toBe(true);
+    },
+  );
 
   it("should not modify files when --dry-run is used", { timeout: 30000 }, async () => {
     const tmp = await prepareTempDir();
@@ -175,28 +173,40 @@ describe("CLI: rename --from/--to", () => {
 
   it("should fail when source ID does not exist", { timeout: 30000 }, async () => {
     const tmp = await prepareTempDir();
-    const { exitCode, stderr } = await runCli(["rename", "--from", "NONEXISTENT", "--to", "REQ-100"], tmp);
+    const { exitCode, stderr } = await runCli(
+      ["rename", "--from", "NONEXISTENT", "--to", "REQ-100"],
+      tmp,
+    );
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("NONEXISTENT");
   });
 
   it("should fail when target ID already exists", { timeout: 30000 }, async () => {
     const tmp = await prepareTempDir();
-    const { exitCode, stderr } = await runCli(["rename", "--from", "REQ-001", "--to", "REQ-002"], tmp);
+    const { exitCode, stderr } = await runCli(
+      ["rename", "--from", "REQ-001", "--to", "REQ-002"],
+      tmp,
+    );
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain("REQ-002");
   });
 
   it("rejects an invalid target ID (F2)", { timeout: 30000 }, async () => {
     const tmp = await prepareTempDir();
-    const { exitCode, stderr } = await runCli(["rename", "--from", "REQ-001", "--to", "REQ-001a"], tmp);
+    const { exitCode, stderr } = await runCli(
+      ["rename", "--from", "REQ-001", "--to", "REQ-001a"],
+      tmp,
+    );
     expect(exitCode).not.toBe(0);
     expect(stderr).toMatch(/invalid target id/i);
   });
 
   it("rejects a self-rename (F9)", { timeout: 30000 }, async () => {
     const tmp = await prepareTempDir();
-    const { exitCode, stderr } = await runCli(["rename", "--from", "REQ-001", "--to", "REQ-001"], tmp);
+    const { exitCode, stderr } = await runCli(
+      ["rename", "--from", "REQ-001", "--to", "REQ-001"],
+      tmp,
+    );
     expect(exitCode).not.toBe(0);
     expect(stderr).toMatch(/identical/i);
   });
@@ -231,22 +241,26 @@ describe("CLI: rename --split/--into", () => {
     expect(lock["REQ-102"]).toBeDefined();
   });
 
-  it("leaves no drift after split (new IDs are uncovered, not drifted)", { timeout: 30000 }, async () => {
-    const tmp = await prepareTempDir();
-    const { exitCode } = await runCli(
-      ["rename", "--split", "REQ-001", "--into", "REQ-101", "REQ-102"],
-      tmp,
-    );
-    expect(exitCode).toBe(0);
+  it(
+    "leaves no drift after split (new IDs are uncovered, not drifted)",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareTempDir();
+      const { exitCode } = await runCli(
+        ["rename", "--split", "REQ-001", "--into", "REQ-101", "REQ-102"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
 
-    const after = await runCheck(tmp);
-    // contentHash drift must be gone …
-    expect(after.drifted).toEqual([]);
-    // … but the freshly-scaffolded IDs are legitimately uncovered until @impl
-    // tags are assigned manually.
-    expect(after.uncovered).toContain("REQ-101");
-    expect(after.uncovered).toContain("REQ-102");
-  });
+      const after = await runCheck(tmp);
+      // contentHash drift must be gone …
+      expect(after.drifted).toEqual([]);
+      // … but the freshly-scaffolded IDs are legitimately uncovered until @impl
+      // tags are assigned manually.
+      expect(after.uncovered).toContain("REQ-101");
+      expect(after.uncovered).toContain("REQ-102");
+    },
+  );
 
   it("does not modify files with --dry-run", { timeout: 30000 }, async () => {
     const tmp = await prepareTempDir();
@@ -286,49 +300,57 @@ describe("CLI: rename --split/--into", () => {
 // merge
 // ---------------------------------------------------------------------------
 describe("CLI: rename --merge/--into", () => {
-  it("should merge REQ-001 and REQ-002 into REQ-100 without duplicating it (C1)", { timeout: 30000 }, async () => {
-    const tmp = await prepareTempDir();
+  it(
+    "should merge REQ-001 and REQ-002 into REQ-100 without duplicating it (C1)",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareTempDir();
 
-    const { exitCode } = await runCli(
-      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100"],
-      tmp,
-    );
-    expect(exitCode).toBe(0);
+      const { exitCode } = await runCli(
+        ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
 
-    const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
-    const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
-    const test = readFileSync(resolve(tmp, "tests/feature.test.ts"), "utf-8");
+      const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
+      const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
+      const test = readFileSync(resolve(tmp, "tests/feature.test.ts"), "utf-8");
 
-    expect(src).toContain("@impl REQ-100");
-    expect(test).toContain("[REQ-100]");
-    expect(src).not.toContain("@impl REQ-001");
-    expect(src).not.toContain("@impl REQ-002");
+      expect(src).toContain("@impl REQ-100");
+      expect(test).toContain("[REQ-100]");
+      expect(src).not.toContain("@impl REQ-001");
+      expect(src).not.toContain("@impl REQ-002");
 
-    // C1: the merge target must appear exactly once as a definition list item.
-    const defLines = spec.split("\n").filter((l) => /^- REQ-100:/.test(l));
-    expect(defLines).toHaveLength(1);
-    // Old definitions are gone.
-    expect(spec).not.toMatch(/^- REQ-001:/m);
-    expect(spec).not.toMatch(/^- REQ-002:/m);
+      // C1: the merge target must appear exactly once as a definition list item.
+      const defLines = spec.split("\n").filter((l) => /^- REQ-100:/.test(l));
+      expect(defLines).toHaveLength(1);
+      // Old definitions are gone.
+      expect(spec).not.toMatch(/^- REQ-001:/m);
+      expect(spec).not.toMatch(/^- REQ-002:/m);
 
-    const lock = JSON.parse(readFileSync(resolve(tmp, ".trace.lock"), "utf-8"));
-    expect(lock["REQ-001"]).toBeUndefined();
-    expect(lock["REQ-002"]).toBeUndefined();
-    expect(lock["REQ-100"]).toBeDefined();
-  });
+      const lock = JSON.parse(readFileSync(resolve(tmp, ".trace.lock"), "utf-8"));
+      expect(lock["REQ-001"]).toBeUndefined();
+      expect(lock["REQ-002"]).toBeUndefined();
+      expect(lock["REQ-100"]).toBeDefined();
+    },
+  );
 
-  it("leaves the lock drift-free so `check` passes after merge (F1/C2/H5)", { timeout: 30000 }, async () => {
-    const tmp = await prepareTempDir();
-    const { exitCode } = await runCli(
-      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100"],
-      tmp,
-    );
-    expect(exitCode).toBe(0);
+  it(
+    "leaves the lock drift-free so `check` passes after merge (F1/C2/H5)",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareTempDir();
+      const { exitCode } = await runCli(
+        ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
 
-    const after = await runCheck(tmp);
-    expect(after.drifted).toEqual([]);
-    expect(after.pass).toBe(true);
-  });
+      const after = await runCheck(tmp);
+      expect(after.drifted).toEqual([]);
+      expect(after.pass).toBe(true);
+    },
+  );
 
   it("does not modify files with --dry-run", { timeout: 30000 }, async () => {
     const tmp = await prepareTempDir();

@@ -8,12 +8,7 @@ import { parse as parseYaml } from "yaml";
 // Catches drift between the spec contract (012-skills-expansion /
 // FR-008..FR-011 / FR-029) and the actual SKILL.md files.
 
-const TEMPLATES_SKILLS_DIR = resolve(
-  import.meta.dirname,
-  "..",
-  "templates",
-  "skills",
-);
+const TEMPLATES_SKILLS_DIR = resolve(import.meta.dirname, "..", "templates", "skills");
 
 // Discover Skill directories dynamically so that newly added Skills are
 // automatically validated by this metatest (M6 hardening).
@@ -44,8 +39,7 @@ const SKILLS_LINKING_INSTALL_CHECK = [
 //   U+30A0-U+30FF  Katakana
 //   U+4E00-U+9FFF  CJK Unified Ideographs
 //   U+FF00-U+FFEF  Halfwidth and Fullwidth Forms (full-width latin, half-width katakana)
-const CJK_REGEX =
-  /[\u3000-\u30ff\u4e00-\u9fff\uff00-\uffef]/;
+const CJK_REGEX = /[\u3000-\u30ff\u4e00-\u9fff\uff00-\uffef]/;
 
 type SkillFile = {
   raw: string;
@@ -81,10 +75,7 @@ describe("templates/skills metatest", () => {
   describe.each(EXPECTED_SKILL_DIRS)("Skill: %s", (dirName) => {
     it("every expected Skill directory exists", () => {
       const filePath = resolve(TEMPLATES_SKILLS_DIR, dirName, "SKILL.md");
-      expect(
-        existsSync(filePath),
-        `Expected SKILL.md at ${filePath}`,
-      ).toBe(true);
+      expect(existsSync(filePath), `Expected SKILL.md at ${filePath}`).toBe(true);
     });
 
     it("frontmatter parses and has required fields", () => {
@@ -130,10 +121,9 @@ describe("templates/skills metatest", () => {
       if (allowedTools === undefined) {
         return;
       }
-      expect(
-        Array.isArray(allowedTools),
-        `allowed-tools in ${dirName} must be an array`,
-      ).toBe(true);
+      expect(Array.isArray(allowedTools), `allowed-tools in ${dirName} must be an array`).toBe(
+        true,
+      );
       const pattern = /^[A-Z][A-Za-z]+\(.+\)$/;
       for (const entry of allowedTools as unknown[]) {
         expect(
@@ -146,26 +136,20 @@ describe("templates/skills metatest", () => {
     it("SKILL.md is English (no CJK characters)", () => {
       const skill = readSkill(dirName);
       const match = skill.raw.match(CJK_REGEX);
-      expect(
-        match,
-        `CJK character "${match?.[0]}" found in ${dirName}/SKILL.md`,
-      ).toBeNull();
+      expect(match, `CJK character "${match?.[0]}" found in ${dirName}/SKILL.md`).toBeNull();
     });
   });
 
-  describe.each(SKILLS_LINKING_INSTALL_CHECK)(
-    "Skill linking install-check: %s",
-    (dirName) => {
-      it("body links to _shared/install-check.md", () => {
-        const skill = readSkill(dirName);
-        const linkPattern = /\[.+\]\(\.\.\/_shared\/install-check\.md\)/;
-        expect(
-          linkPattern.test(skill.body),
-          `${dirName}/SKILL.md body must link to ../_shared/install-check.md`,
-        ).toBe(true);
-      });
-    },
-  );
+  describe.each(SKILLS_LINKING_INSTALL_CHECK)("Skill linking install-check: %s", (dirName) => {
+    it("body links to _shared/install-check.md", () => {
+      const skill = readSkill(dirName);
+      const linkPattern = /\[.+\]\(\.\.\/_shared\/install-check\.md\)/;
+      expect(
+        linkPattern.test(skill.body),
+        `${dirName}/SKILL.md body must link to ../_shared/install-check.md`,
+      ).toBe(true);
+    });
+  });
 
   it("at least 8 Skill directories are present (regression guard)", () => {
     // Pairs with the dynamic discoverSkillDirs() — if someone accidentally
@@ -199,12 +183,8 @@ describe("templates/skills metatest", () => {
     it("declares plan-coverage subcommand in allowed-tools", () => {
       const skill = readSkill("artgraph-plan-coverage");
       const allowed = (skill.frontmatter["allowed-tools"] ?? []) as string[];
-      const hasNpx = allowed.some((t) =>
-        /^Bash\(npx artgraph plan-coverage\b/.test(t),
-      );
-      const hasDirect = allowed.some((t) =>
-        /^Bash\(artgraph plan-coverage\b/.test(t),
-      );
+      const hasNpx = allowed.some((t) => /^Bash\(npx artgraph plan-coverage\b/.test(t));
+      const hasDirect = allowed.some((t) => /^Bash\(artgraph plan-coverage\b/.test(t));
       expect(
         hasNpx,
         `artgraph-plan-coverage allowed-tools must include "Bash(npx artgraph plan-coverage *)"`,
@@ -232,8 +212,8 @@ describe("templates/skills metatest", () => {
   });
 
   it("every _shared/*.md fragment is referenced by at least one Skill", () => {
-    const sharedFiles = readdirSync(join(TEMPLATES_SKILLS_DIR, "_shared")).filter(
-      (n) => n.endsWith(".md"),
+    const sharedFiles = readdirSync(join(TEMPLATES_SKILLS_DIR, "_shared")).filter((n) =>
+      n.endsWith(".md"),
     );
     expect(sharedFiles.length).toBeGreaterThan(0);
 
@@ -244,9 +224,7 @@ describe("templates/skills metatest", () => {
 
     for (const shared of sharedFiles) {
       const linkPattern = new RegExp(`_shared/${shared.replace(".", "\\.")}`);
-      const referencingSkills = allSkillBodies.filter((body) =>
-        linkPattern.test(body),
-      );
+      const referencingSkills = allSkillBodies.filter((body) => linkPattern.test(body));
       expect(
         referencingSkills.length,
         `_shared/${shared} is orphaned (no Skill references it)`,
@@ -341,8 +319,7 @@ describe("templates/skills metatest", () => {
           return;
         }
         const skill = readSkill(dirName);
-        const subcommands =
-          /(coverage|impact|check|plan-coverage|rename|integrate|reconcile|init)/;
+        const subcommands = /(coverage|impact|check|plan-coverage|rename|integrate|reconcile|init)/;
         const offenders = skill.body
           .split("\n")
           .filter((line) => !line.trimStart().startsWith("|"))
@@ -350,9 +327,7 @@ describe("templates/skills metatest", () => {
           // Strip inline-code spans (`...`) so prose mentions don't count.
           .map((line) => line.replace(/`[^`]*`/g, ""))
           .filter((line) => {
-            const re = new RegExp(
-              `(^|\\s)artgraph\\s+${subcommands.source}\\b`,
-            );
+            const re = new RegExp(`(^|\\s)artgraph\\s+${subcommands.source}\\b`);
             return re.test(line);
           });
         expect(
@@ -457,12 +432,7 @@ describe("templates/skills metatest", () => {
 
     it("docs/skills-guide.md documents symbol mode, scan --mode symbol, and dual-axis", () => {
       // AS#3: "scan --mode symbol を実行しないと無効" + "impactReqs / originReqs の二軸"
-      const docPath = resolve(
-        import.meta.dirname,
-        "..",
-        "docs",
-        "skills-guide.md",
-      );
+      const docPath = resolve(import.meta.dirname, "..", "docs", "skills-guide.md");
       expect(existsSync(docPath), `Expected ${docPath} to exist`).toBe(true);
       const content = readFileSync(docPath, "utf8");
       expect(content).toMatch(/symbol mode/i);
@@ -476,9 +446,7 @@ describe("templates/skills metatest", () => {
     it("README.md Skills table carries an input-mode column / annotation", () => {
       // AS#4: each Skill's supported mode (file / symbol / both) is readable
       const readmePath = resolve(import.meta.dirname, "..", "README.md");
-      expect(existsSync(readmePath), `Expected ${readmePath} to exist`).toBe(
-        true,
-      );
+      expect(existsSync(readmePath), `Expected ${readmePath} to exist`).toBe(true);
       const content = readFileSync(readmePath, "utf8");
       expect(content).toMatch(/Input mode/);
       expect(content).toMatch(/file \+ symbol/);
@@ -486,21 +454,14 @@ describe("templates/skills metatest", () => {
   });
 
   describe("_shared files", () => {
-    const SHARED_FILES = [
-      "install-check.md",
-      "output-schema.md",
-      "package-manager.md",
-    ] as const;
+    const SHARED_FILES = ["install-check.md", "output-schema.md", "package-manager.md"] as const;
 
     it.each(SHARED_FILES)("%s is English (no CJK characters)", (name) => {
       const filePath = resolve(TEMPLATES_SKILLS_DIR, "_shared", name);
       expect(existsSync(filePath), `Expected ${filePath} to exist`).toBe(true);
       const content = readFileSync(filePath, "utf8");
       const match = content.match(CJK_REGEX);
-      expect(
-        match,
-        `CJK character "${match?.[0]}" found in _shared/${name}`,
-      ).toBeNull();
+      expect(match, `CJK character "${match?.[0]}" found in _shared/${name}`).toBeNull();
     });
   });
 });

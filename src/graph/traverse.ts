@@ -39,7 +39,11 @@ export function impact(
     const node = graph.nodes.get(id);
     if (node && node.kind === "file") {
       for (const [symId, symNode] of graph.nodes) {
-        if (symNode.kind === "symbol" && symNode.filePath === node.filePath && !visited.has(symId)) {
+        if (
+          symNode.kind === "symbol" &&
+          symNode.filePath === node.filePath &&
+          !visited.has(symId)
+        ) {
           queue.push({ id: symId, depth: depth + 1 });
         }
       }
@@ -145,9 +149,7 @@ export function findUncovered(graph: ArtifactGraph): string[] {
     // で req を "覆われた" と誤判定するとゲートが空振りする。
     const hasImpl = graph.edges.some(
       (e) =>
-        e.kind === "implements" &&
-        e.target === id &&
-        graph.nodes.get(e.source)?.kind !== "task",
+        e.kind === "implements" && e.target === id && graph.nodes.get(e.source)?.kind !== "task",
     );
     if (!hasImpl) {
       uncovered.push(id);

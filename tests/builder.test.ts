@@ -426,10 +426,7 @@ describe("buildGraph: inline markdown links (issue #11)", () => {
     const tmpDocs = resolve(tmpRoot, "docs");
     mkdirSync(tmpSpecs, { recursive: true });
     mkdirSync(tmpDocs, { recursive: true });
-    writeFileSync(
-      resolve(tmpSpecs, "foo.md"),
-      `# Foo\n\nSee [notes](../docs/notes.md).\n`,
-    );
+    writeFileSync(resolve(tmpSpecs, "foo.md"), `# Foo\n\nSee [notes](../docs/notes.md).\n`);
     writeFileSync(resolve(tmpDocs, "notes.md"), `# Notes\n`);
 
     try {
@@ -512,22 +509,19 @@ describe("buildGraph: convention inference (C-3)", () => {
     lockFile: ".trace.lock",
   };
 
-  const derivesFrom = (source: string, target: string) => (graph: {
-    edges: { source: string; target: string; kind: string }[];
-  }) =>
-    graph.edges.some(
-      (e) => e.kind === "derives_from" && e.source === source && e.target === target,
-    );
+  const derivesFrom =
+    (source: string, target: string) =>
+    (graph: { edges: { source: string; target: string; kind: string }[] }) =>
+      graph.edges.some(
+        (e) => e.kind === "derives_from" && e.source === source && e.target === target,
+      );
 
   // Helper: derives_from edges originating from a given dir (by source-id prefix
   // for auto-generated doc ids; pure prefix check on `source` is enough since
   // the fixtures don't reuse stem names across dirs in a way that overlaps).
-  const derivesFromDir = (dirPrefix: string) => (graph: {
-    edges: { source: string; target: string; kind: string }[];
-  }) =>
-    graph.edges.filter(
-      (e) => e.kind === "derives_from" && e.source.startsWith(dirPrefix),
-    );
+  const derivesFromDir =
+    (dirPrefix: string) => (graph: { edges: { source: string; target: string; kind: string }[] }) =>
+      graph.edges.filter((e) => e.kind === "derives_from" && e.source.startsWith(dirPrefix));
 
   it("infers kiro chain (design→requirements, tasks→design)", () => {
     const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
@@ -535,9 +529,9 @@ describe("buildGraph: convention inference (C-3)", () => {
     expect(
       derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(graph),
     ).toBe(true);
-    expect(
-      derivesFrom("doc:kiro-feature/tasks.md", "doc:kiro-feature/design.md")(graph),
-    ).toBe(true);
+    expect(derivesFrom("doc:kiro-feature/tasks.md", "doc:kiro-feature/design.md")(graph)).toBe(
+      true,
+    );
     // Lock in *exactly* two edges out of this dir — catches accidental
     // over-generation (e.g. spec-kit pairs firing in a kiro dir).
     expect(derivesFromDir("doc:kiro-feature/")(graph)).toHaveLength(2);
@@ -546,12 +540,12 @@ describe("buildGraph: convention inference (C-3)", () => {
   it("infers spec-kit chain (plan→spec, tasks→plan, research→spec)", () => {
     const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
 
-    expect(
-      derivesFrom("doc:speckit-feature/plan.md", "doc:speckit-feature/spec.md")(graph),
-    ).toBe(true);
-    expect(
-      derivesFrom("doc:speckit-feature/tasks.md", "doc:speckit-feature/plan.md")(graph),
-    ).toBe(true);
+    expect(derivesFrom("doc:speckit-feature/plan.md", "doc:speckit-feature/spec.md")(graph)).toBe(
+      true,
+    );
+    expect(derivesFrom("doc:speckit-feature/tasks.md", "doc:speckit-feature/plan.md")(graph)).toBe(
+      true,
+    );
     expect(
       derivesFrom("doc:speckit-feature/research.md", "doc:speckit-feature/spec.md")(graph),
     ).toBe(true);
@@ -583,9 +577,7 @@ describe("buildGraph: convention inference (C-3)", () => {
     // Both convention inference and frontmatter declare wf-design → wf-requirements.
     const matching = graph.edges.filter(
       (e) =>
-        e.kind === "derives_from" &&
-        e.source === "wf-design" &&
-        e.target === "wf-requirements",
+        e.kind === "derives_from" && e.source === "wf-design" && e.target === "wf-requirements",
     );
     expect(matching).toHaveLength(1);
   });
@@ -595,9 +587,7 @@ describe("buildGraph: convention inference (C-3)", () => {
 
     // other-dir has only requirements.md; it must not connect to any design elsewhere.
     const crossDir = graph.edges.filter(
-      (e) =>
-        e.kind === "derives_from" &&
-        e.target === "doc:other-dir/requirements.md",
+      (e) => e.kind === "derives_from" && e.target === "doc:other-dir/requirements.md",
     );
     expect(crossDir).toHaveLength(0);
   });
@@ -612,12 +602,8 @@ describe("buildGraph: convention inference (C-3)", () => {
     // README "Doc graph" section together.
     const { graph } = buildGraph(CONV_FIXTURE_DIR, convConfig);
 
-    expect(
-      derivesFrom("doc:mixed-tools/tasks.md", "doc:mixed-tools/design.md")(graph),
-    ).toBe(true);
-    expect(
-      derivesFrom("doc:mixed-tools/tasks.md", "doc:mixed-tools/plan.md")(graph),
-    ).toBe(true);
+    expect(derivesFrom("doc:mixed-tools/tasks.md", "doc:mixed-tools/design.md")(graph)).toBe(true);
+    expect(derivesFrom("doc:mixed-tools/tasks.md", "doc:mixed-tools/plan.md")(graph)).toBe(true);
     // 3 edges total in this dir: design→(no requirements here), plan→(no spec
     // here), so only the two `tasks→…` edges fire — locking in the exact count
     // catches accidental over-generation in this overlap case too.
@@ -637,9 +623,9 @@ describe("buildGraph: convention inference (C-3)", () => {
       ...convConfig,
       docGraph: {},
     });
-    expect(
-      derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(g2),
-    ).toBe(true);
+    expect(derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(g2)).toBe(
+      true,
+    );
   });
 
   it("strips only known markdown extensions for multi-dot file names", () => {
@@ -677,9 +663,9 @@ describe("buildGraph: convention inference (C-3)", () => {
     expect(
       derivesFrom("doc:kiro-feature/design.md", "doc:kiro-feature/requirements.md")(graph),
     ).toBe(false);
-    expect(
-      derivesFrom("doc:speckit-feature/plan.md", "doc:speckit-feature/spec.md")(graph),
-    ).toBe(false);
+    expect(derivesFrom("doc:speckit-feature/plan.md", "doc:speckit-feature/spec.md")(graph)).toBe(
+      false,
+    );
 
     // Total derives_from across the fixture: only the frontmatter-declared
     // `wf-design → wf-requirements` survives. Locking in the count proves no
@@ -712,10 +698,7 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
   });
 
   it("qualifies task IDs with specDir on collision", () => {
-    const { graph } = buildGraph(
-      resolve(tasksRoot, "namespace-collision"),
-      tasksConfig,
-    );
+    const { graph } = buildGraph(resolve(tasksRoot, "namespace-collision"), tasksConfig);
     expect(graph.nodes.has("auth/T001")).toBe(true);
     expect(graph.nodes.has("export/T001")).toBe(true);
     expect(graph.nodes.has("T001")).toBe(false);
@@ -725,7 +708,12 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
       .sort((a, b) => a.source.localeCompare(b.source));
     expect(implements_).toEqual([
       { source: "auth/T001", target: "auth-login", kind: "implements", provenances: ["task-tag"] },
-      { source: "export/T001", target: "csv-writer", kind: "implements", provenances: ["task-tag"] },
+      {
+        source: "export/T001",
+        target: "csv-writer",
+        kind: "implements",
+        provenances: ["task-tag"],
+      },
     ]);
   });
 
@@ -751,7 +739,12 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
     expect(tasks.map((n) => n.id)).toEqual(["OS-100"]);
     const impl = graph.edges.filter((e) => e.kind === "implements");
     expect(impl).toEqual([
-      { source: "OS-100", target: "openspec-target", kind: "implements", provenances: ["task-tag"] },
+      {
+        source: "OS-100",
+        target: "openspec-target",
+        kind: "implements",
+        provenances: ["task-tag"],
+      },
     ]);
   });
 
@@ -835,9 +828,7 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
     );
     try {
       const { graph } = buildGraph(tmpRoot, tasksConfig);
-      const implEdge = graph.edges.find(
-        (e) => e.kind === "implements" && e.source === "T010",
-      );
+      const implEdge = graph.edges.find((e) => e.kind === "implements" && e.source === "T010");
       expect(implEdge).toBeDefined();
       // The collision rewrite must rebind the target to the qualified ID that
       // lives in the same spec dir as the emitting task.
@@ -857,13 +848,7 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
     const taskFile = resolve(specsDir, "tasks.md");
     writeFileSync(
       taskFile,
-      [
-        "# Tasks",
-        "",
-        "- [x] 1. set up auth",
-        "  - _Requirements: 7.1, 7.2_",
-        "",
-      ].join("\n"),
+      ["# Tasks", "", "- [x] 1. set up auth", "  - _Requirements: 7.1, 7.2_", ""].join("\n"),
       "utf-8",
     );
     try {
@@ -871,13 +856,7 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
       const h1 = g1.nodes.get("1")!.contentHash;
       writeFileSync(
         taskFile,
-        [
-          "# Tasks",
-          "",
-          "- [x] 1. set up auth",
-          "  - _Requirements: 7.1, 7.2, 7.3_",
-          "",
-        ].join("\n"),
+        ["# Tasks", "", "- [x] 1. set up auth", "  - _Requirements: 7.1, 7.2, 7.3_", ""].join("\n"),
         "utf-8",
       );
       const { graph: g2 } = buildGraph(tmpDir, tasksConfig);
@@ -901,9 +880,7 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
     const verifies = graph.edges
       .filter((e) => e.kind === "verifies")
       .sort((a, b) =>
-        a.source === b.source
-          ? a.target.localeCompare(b.target)
-          : a.source.localeCompare(b.source),
+        a.source === b.source ? a.target.localeCompare(b.target) : a.source.localeCompare(b.source),
       );
     expect(verifies).toEqual([
       { source: "1", target: "7.1", kind: "verifies", provenances: ["task-tag"] },
@@ -920,10 +897,7 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
 // req→req annotation edges (specs/010-req-req-dependency) — US1 / T011
 // ---------------------------------------------------------------------------
 
-const ANN_FIXTURE_DIR = resolve(
-  import.meta.dirname,
-  "fixtures/req-req-annotations/collision",
-);
+const ANN_FIXTURE_DIR = resolve(import.meta.dirname, "fixtures/req-req-annotations/collision");
 
 const annConfig: ArtgraphConfig = {
   include: ["src/**/*.ts"],
@@ -962,19 +936,14 @@ describe("buildGraph: req→req annotation edges", () => {
     const specDir = resolve(tmpDir, "010-c");
     mkdirSync(specDir, { recursive: true });
     const specFile = resolve(specDir, "spec.md");
-    writeFileSync(
-      specFile,
-      "# orphan test\n\n- AUTH-100: 何か (depends_on: GHOST-999)\n",
-    );
+    writeFileSync(specFile, "# orphan test\n\n- AUTH-100: 何か (depends_on: GHOST-999)\n");
 
     try {
       const { warnings } = buildGraph(tmpDir, {
         ...annConfig,
         specDirs: ["010-c"],
       });
-      const orphan = warnings.find(
-        (w) => w.type === "orphan-edge" && w.id === "GHOST-999",
-      );
+      const orphan = warnings.find((w) => w.type === "orphan-edge" && w.id === "GHOST-999");
       expect(orphan).toBeDefined();
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -1056,10 +1025,7 @@ describe("buildGraph: provenance tagging (issue #35)", () => {
     const { graph } = buildGraph(ALL_EIGHT, allEightConfig);
     // `specs/design.md` body has `[spec](./spec.md)` — inline link → depends_on.
     const link = graph.edges.find(
-      (e) =>
-        e.kind === "depends_on" &&
-        e.source === "doc:design.md" &&
-        e.target === "doc:spec.md",
+      (e) => e.kind === "depends_on" && e.source === "doc:design.md" && e.target === "doc:spec.md",
     );
     expect(link).toBeDefined();
     expect(link?.provenances).toEqual(["inline-link"]);
@@ -1070,9 +1036,7 @@ describe("buildGraph: provenance tagging (issue #35)", () => {
     // `tasks → design` from the kiro preset has no frontmatter counterpart.
     const tasksDesign = graph.edges.find(
       (e) =>
-        e.kind === "derives_from" &&
-        e.source === "doc:tasks.md" &&
-        e.target === "doc:design.md",
+        e.kind === "derives_from" && e.source === "doc:tasks.md" && e.target === "doc:design.md",
     );
     expect(tasksDesign).toBeDefined();
     expect(tasksDesign?.provenances).toEqual(["convention"]);
@@ -1105,11 +1069,7 @@ describe("buildGraph: dedup union (issue #35 US2)", () => {
     rmSync(tmpRoot, { recursive: true, force: true });
     mkdirSync(resolve(tmpRoot, "specs"), { recursive: true });
     mkdirSync(resolve(tmpRoot, "src"), { recursive: true });
-    writeFileSync(
-      resolve(tmpRoot, "specs/spec.md"),
-      "# Spec\n\n- FR-001: do\n",
-      "utf-8",
-    );
+    writeFileSync(resolve(tmpRoot, "specs/spec.md"), "# Spec\n\n- FR-001: do\n", "utf-8");
     writeFileSync(
       resolve(tmpRoot, "src/dup.ts"),
       "// @impl FR-001\n// @impl FR-001\nexport const x = 1;\n",
@@ -1121,10 +1081,7 @@ describe("buildGraph: dedup union (issue #35 US2)", () => {
         include: ["src/**/*.ts"],
       });
       const impl = graph.edges.filter(
-        (e) =>
-          e.kind === "implements" &&
-          e.source === "file:src/dup.ts" &&
-          e.target === "FR-001",
+        (e) => e.kind === "implements" && e.source === "file:src/dup.ts" && e.target === "FR-001",
       );
       expect(impl).toHaveLength(1);
       expect(impl[0].provenances).toEqual(["code-tag"]);
@@ -1227,9 +1184,7 @@ describe("buildGraph: dedup union (issue #35 US2)", () => {
         ...config,
         include: ["src/**/*.ts"],
       });
-      const implEdges = graph.edges.filter(
-        (e) => e.kind === "implements" && e.target === "FR-001",
-      );
+      const implEdges = graph.edges.filter((e) => e.kind === "implements" && e.target === "FR-001");
       expect(implEdges).toHaveLength(2);
       // Use toContainEqual so the assertion is independent of the codeunit
       // ordering between `T001` and `file:src/foo.ts` (uppercase vs lowercase
@@ -1257,29 +1212,21 @@ describe("buildGraph: dedup union (issue #35 US2)", () => {
       // edge never reaches the dedup map. Locking this behaviour in here so
       // a future "merge instead of suppress" tweak gets caught.
       setup({
-        "specs/source.md":
-          [
-            "---",
-            "artgraph:",
-            "  depends_on:",
-            "    - tgt",
-            "---",
-            "",
-            "# Source",
-            "",
-            "See [target](./target.md).",
-            "",
-          ].join("\n"),
-        "specs/target.md":
-          [
-            "---",
-            "artgraph:",
-            "  node_id: tgt",
-            "---",
-            "",
-            "# Target",
-            "",
-          ].join("\n"),
+        "specs/source.md": [
+          "---",
+          "artgraph:",
+          "  depends_on:",
+          "    - tgt",
+          "---",
+          "",
+          "# Source",
+          "",
+          "See [target](./target.md).",
+          "",
+        ].join("\n"),
+        "specs/target.md": ["---", "artgraph:", "  node_id: tgt", "---", "", "# Target", ""].join(
+          "\n",
+        ),
       });
       const { graph } = buildGraph(DEDUP_TMP, config);
       const edges = graph.edges.filter(
@@ -1310,26 +1257,23 @@ describe("buildGraph: dedup union (issue #35 US2)", () => {
       // two edges. This pins the dedup-key contract for the annotation case so
       // a future "kind-agnostic dedup" regression would surface.
       setup({
-        "specs/a.md":
-          [
-            "---",
-            "artgraph:",
-            "  node_id: req-a",
-            "  derives_from:",
-            "    - req-b",
-            "---",
-            "",
-            "# A doc with one req inside",
-            "",
-            "- REQ-1: feature (depends_on: REQ-2)",
-            "- REQ-2: dep",
-            "",
-          ].join("\n"),
+        "specs/a.md": [
+          "---",
+          "artgraph:",
+          "  node_id: req-a",
+          "  derives_from:",
+          "    - req-b",
+          "---",
+          "",
+          "# A doc with one req inside",
+          "",
+          "- REQ-1: feature (depends_on: REQ-2)",
+          "- REQ-2: dep",
+          "",
+        ].join("\n"),
       });
       const { graph } = buildGraph(DEDUP_TMP, config);
-      const derives = graph.edges.filter(
-        (e) => e.kind === "derives_from" && e.source === "req-a",
-      );
+      const derives = graph.edges.filter((e) => e.kind === "derives_from" && e.source === "req-a");
       // The doc-level frontmatter edge is intact with provenance frontmatter.
       expect(derives).toEqual([
         {
@@ -1343,10 +1287,7 @@ describe("buildGraph: dedup union (issue #35 US2)", () => {
       // depends_on, annotation) edge — proving annotation and frontmatter
       // never share a dedup key in any current code path.
       const annotation = graph.edges.find(
-        (e) =>
-          e.kind === "depends_on" &&
-          e.source === "REQ-1" &&
-          e.target === "REQ-2",
+        (e) => e.kind === "depends_on" && e.source === "REQ-1" && e.target === "REQ-2",
       );
       expect(annotation?.provenances).toEqual(["annotation"]);
     });
@@ -1437,10 +1378,7 @@ describe("buildGraph: SC-004 edge-set baseline invariance (all fixtures)", () =>
 
   // Lazy-load the whole baseline once; throw a hard error early if missing so
   // every per-fixture `it` gets the same actionable message.
-  const baselinePath = resolve(
-    import.meta.dirname,
-    "__snapshots__/edge-set-baseline.json",
-  );
+  const baselinePath = resolve(import.meta.dirname, "__snapshots__/edge-set-baseline.json");
 
   // Driver: one `it` per fixture so the failure message names the offender.
   for (const [name, { root, config }] of Object.entries(FIXTURES)) {

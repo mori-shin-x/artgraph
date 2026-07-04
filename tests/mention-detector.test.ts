@@ -94,9 +94,7 @@ describe("detectMentions — optional source files (戦略 5)", () => {
   it("missing plan / spec does NOT throw — tasks-only search proceeds", () => {
     // Per contract: plan / spec are optional. `undefined` is fine; the
     // detector should treat the source set as just `tasks`.
-    expect(() =>
-      detectMentions(["REQ-1"], { tasks: "REQ-1" }),
-    ).not.toThrow();
+    expect(() => detectMentions(["REQ-1"], { tasks: "REQ-1" })).not.toThrow();
   });
 
   it("undefined optional sources are ignored", () => {

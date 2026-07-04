@@ -13,11 +13,7 @@ import {
 } from "../src/rename.js";
 import { buildGraph } from "../src/graph/builder.js";
 import type { ArtgraphConfig } from "../src/types.js";
-import {
-  renameLockKey,
-  splitLockKey,
-  mergeLockKeys,
-} from "../src/rename-lock.js";
+import { renameLockKey, splitLockKey, mergeLockKeys } from "../src/rename-lock.js";
 import { isValidTargetId } from "../src/id.js";
 import type { LockFile } from "../src/types.js";
 
@@ -47,18 +43,12 @@ describe("rewriteSpecListItem", () => {
   });
 
   it("rewrites multiple occurrences in the same file", () => {
-    const input = [
-      "- REQ-001: first item",
-      "Some text in between",
-      "- REQ-001: second item",
-    ].join("\n");
+    const input = ["- REQ-001: first item", "Some text in between", "- REQ-001: second item"].join(
+      "\n",
+    );
     const { content, changes } = rewriteSpecListItem(input, "REQ-001", "REQ-100");
     expect(content).toBe(
-      [
-        "- REQ-100: first item",
-        "Some text in between",
-        "- REQ-100: second item",
-      ].join("\n"),
+      ["- REQ-100: first item", "Some text in between", "- REQ-100: second item"].join("\n"),
     );
     expect(changes).toHaveLength(2);
   });
@@ -75,11 +65,7 @@ describe("rewriteSpecListItem", () => {
     // namespace-qualified token in a list item is not a tracked req and must
     // not be rewritten (rewriter/parser parity).
     const input = "- 001-auth/FR-001: auth feature";
-    const { content, changes } = rewriteSpecListItem(
-      input,
-      "001-auth/FR-001",
-      "001-auth/FR-010",
-    );
+    const { content, changes } = rewriteSpecListItem(input, "001-auth/FR-001", "001-auth/FR-010");
     expect(content).toBe(input);
     expect(changes).toHaveLength(0);
   });
@@ -108,11 +94,7 @@ describe("rewriteSpecListItem", () => {
 describe("rewriteSpecHeading", () => {
   it("rewrites Requirement N heading", () => {
     const input = "### Requirement 1: Login must use OAuth";
-    const { content, changes } = rewriteSpecHeading(
-      input,
-      "Requirement-1",
-      "Requirement-10",
-    );
+    const { content, changes } = rewriteSpecHeading(input, "Requirement-1", "Requirement-10");
     expect(content).toBe("### Requirement 10: Login must use OAuth");
     expect(changes).toHaveLength(1);
     expect(changes[0].kind).toBe("spec-heading");
@@ -188,12 +170,10 @@ describe("rewriteTestTags", () => {
     // The parser's TEST_ANNOTATION_RE tracks `req:` exclusively and
     // case-sensitively, so `Req:`/`requirement:`/`spec:` must be left alone to
     // avoid rewriting text the tooling never treated as a reference (M1).
-    expect(rewriteTestTags('Req: "REQ-001"', "REQ-001", "REQ-100").content).toBe(
-      'Req: "REQ-001"',
+    expect(rewriteTestTags('Req: "REQ-001"', "REQ-001", "REQ-100").content).toBe('Req: "REQ-001"');
+    expect(rewriteTestTags('requirement: "REQ-001"', "REQ-001", "REQ-100").content).toBe(
+      'requirement: "REQ-001"',
     );
-    expect(
-      rewriteTestTags('requirement: "REQ-001"', "REQ-001", "REQ-100").content,
-    ).toBe('requirement: "REQ-001"');
     expect(rewriteTestTags('spec: "REQ-001"', "REQ-001", "REQ-100").content).toBe(
       'spec: "REQ-001"',
     );
@@ -204,53 +184,22 @@ describe("rewriteTestTags", () => {
 
 describe("rewriteFrontmatter", () => {
   it("rewrites node_id inside frontmatter", () => {
-    const input = [
-      "---",
-      'node_id: "doc:old"',
-      "---",
-      "# Body content",
-    ].join("\n");
+    const input = ["---", 'node_id: "doc:old"', "---", "# Body content"].join("\n");
     const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
-    expect(content).toBe(
-      [
-        "---",
-        'node_id: "doc:new"',
-        "---",
-        "# Body content",
-      ].join("\n"),
-    );
+    expect(content).toBe(["---", 'node_id: "doc:new"', "---", "# Body content"].join("\n"));
     expect(changes).toHaveLength(1);
     expect(changes[0].kind).toBe("frontmatter-depends-on");
   });
 
   it("rewrites id inside depends_on in frontmatter", () => {
-    const input = [
-      "---",
-      "depends_on:",
-      '  - id: "REQ-001"',
-      "---",
-      "# Body",
-    ].join("\n");
+    const input = ["---", "depends_on:", '  - id: "REQ-001"', "---", "# Body"].join("\n");
     const { content, changes } = rewriteFrontmatter(input, "REQ-001", "REQ-100");
-    expect(content).toBe(
-      [
-        "---",
-        "depends_on:",
-        '  - id: "REQ-100"',
-        "---",
-        "# Body",
-      ].join("\n"),
-    );
+    expect(content).toBe(["---", "depends_on:", '  - id: "REQ-100"', "---", "# Body"].join("\n"));
     expect(changes).toHaveLength(1);
   });
 
   it("does NOT modify content outside frontmatter delimiters", () => {
-    const input = [
-      "---",
-      'node_id: "doc:keep"',
-      "---",
-      'node_id: "doc:old"',
-    ].join("\n");
+    const input = ["---", 'node_id: "doc:keep"', "---", 'node_id: "doc:old"'].join("\n");
     const { content } = rewriteFrontmatter(input, "doc:old", "doc:new");
     // Only the body line has doc:old, and it should remain untouched
     expect(content).toBe(input);
@@ -303,24 +252,14 @@ describe("rewriteFrontmatter", () => {
   });
 
   it("does NOT treat an indented `   ---` as the opening fence (issue #44)", () => {
-    const input = [
-      "   ---",
-      'node_id: "doc:old"',
-      "---",
-      "# Body",
-    ].join("\n");
+    const input = ["   ---", 'node_id: "doc:old"', "---", "# Body"].join("\n");
     const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
     expect(content).toBe(input);
     expect(changes).toHaveLength(0);
   });
 
   it("still accepts trailing whitespace on fences (gray-matter parity)", () => {
-    const input = [
-      "--- ",
-      'node_id: "doc:old"',
-      "---\t",
-      "# Body",
-    ].join("\n");
+    const input = ["--- ", 'node_id: "doc:old"', "---\t", "# Body"].join("\n");
     const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
     expect(content).toContain('node_id: "doc:new"');
     expect(changes).toHaveLength(1);
@@ -331,13 +270,7 @@ describe("rewriteFrontmatter", () => {
 
 describe("expandFrontmatterDependsOn", () => {
   it("expands a single dependency into one item per new ID", () => {
-    const input = [
-      "---",
-      "depends_on:",
-      '  - "REQ-001"',
-      '  - "REQ-009"',
-      "---",
-    ].join("\n");
+    const input = ["---", "depends_on:", '  - "REQ-001"', '  - "REQ-009"', "---"].join("\n");
     const { content, changes } = expandFrontmatterDependsOn(input, "REQ-001", [
       "REQ-101",
       "REQ-102",
@@ -379,13 +312,7 @@ describe("expandFrontmatterDependsOn", () => {
   });
 
   it("does NOT treat an indented `   ---` as the opening fence (issue #44)", () => {
-    const input = [
-      "   ---",
-      "depends_on:",
-      '  - "REQ-001"',
-      "---",
-      "# Body",
-    ].join("\n");
+    const input = ["   ---", "depends_on:", '  - "REQ-001"', "---", "# Body"].join("\n");
     const { content, changes } = expandFrontmatterDependsOn(input, "REQ-001", [
       "REQ-101",
       "REQ-102",
@@ -395,13 +322,7 @@ describe("expandFrontmatterDependsOn", () => {
   });
 
   it("still accepts trailing whitespace on fences (gray-matter parity)", () => {
-    const input = [
-      "--- ",
-      "depends_on:",
-      '  - "REQ-001"',
-      "---\t",
-      "# Body",
-    ].join("\n");
+    const input = ["--- ", "depends_on:", '  - "REQ-001"', "---\t", "# Body"].join("\n");
     const { content, changes } = expandFrontmatterDependsOn(input, "REQ-001", [
       "REQ-101",
       "REQ-102",
@@ -425,12 +346,7 @@ describe("rewriteFile", () => {
       "- REQ-001: some requirement",
     ].join("\n");
 
-    const { content, changes } = rewriteFile(
-      "specs/auth.md",
-      input,
-      "REQ-001",
-      "REQ-100",
-    );
+    const { content, changes } = rewriteFile("specs/auth.md", input, "REQ-001", "REQ-100");
 
     // List item should be rewritten
     expect(content).toContain("- REQ-100: some requirement");
@@ -441,17 +357,9 @@ describe("rewriteFile", () => {
   });
 
   it("applies impl + test tag rewriters for .ts files", () => {
-    const input = [
-      "// @impl REQ-001",
-      'it("[REQ-001] test", () => {});',
-    ].join("\n");
+    const input = ["// @impl REQ-001", 'it("[REQ-001] test", () => {});'].join("\n");
 
-    const { content, changes } = rewriteFile(
-      "src/auth.ts",
-      input,
-      "REQ-001",
-      "REQ-100",
-    );
+    const { content, changes } = rewriteFile("src/auth.ts", input, "REQ-001", "REQ-100");
 
     expect(content).toContain("// @impl REQ-100");
     expect(content).toContain("[REQ-100]");
@@ -476,12 +384,7 @@ describe("rewriteFile", () => {
 
   it("returns unchanged content for unknown extensions", () => {
     const input = "REQ-001 appears here";
-    const { content, changes } = rewriteFile(
-      "data/config.yaml",
-      input,
-      "REQ-001",
-      "REQ-100",
-    );
+    const { content, changes } = rewriteFile("data/config.yaml", input, "REQ-001", "REQ-100");
     expect(content).toBe(input);
     expect(changes).toHaveLength(0);
   });
@@ -525,9 +428,7 @@ describe("renameLockKey", () => {
     };
 
     const { lock: result } = renameLockKey(lock, "REQ-001", "REQ-100");
-    expect(result["REQ-002"].dependsOn).toEqual([
-      { id: "REQ-100", provenances: ["frontmatter"] },
-    ]);
+    expect(result["REQ-002"].dependsOn).toEqual([{ id: "REQ-100", provenances: ["frontmatter"] }]);
   });
 
   it("returns unchanged lock when oldId does not exist", () => {
@@ -560,9 +461,7 @@ describe("renameLockKey", () => {
 
     const { lock: result } = renameLockKey(lock, "REQ-001", "REQ-100");
     // symbol: keys are skipped during reference updates
-    expect(result["symbol:auth"].dependsOn).toEqual([
-      { id: "REQ-001", provenances: ["code-tag"] },
-    ]);
+    expect(result["symbol:auth"].dependsOn).toEqual([{ id: "REQ-001", provenances: ["code-tag"] }]);
   });
 
   // Issue #35 / SC-005: rename must rewrite the `id` field only — the
@@ -631,10 +530,7 @@ describe("splitLockKey", () => {
       },
     };
 
-    const { lock: result, changes } = splitLockKey(lock, "REQ-001", [
-      "REQ-001a",
-      "REQ-001b",
-    ]);
+    const { lock: result, changes } = splitLockKey(lock, "REQ-001", ["REQ-001a", "REQ-001b"]);
 
     expect(result["REQ-001"]).toBeUndefined();
     expect(result["REQ-001a"]).toBeDefined();
@@ -649,10 +545,7 @@ describe("splitLockKey", () => {
   it("creates new entries even if old key does not exist", () => {
     const lock: LockFile = {};
 
-    const { lock: result, changes } = splitLockKey(lock, "REQ-999", [
-      "REQ-100",
-      "REQ-101",
-    ]);
+    const { lock: result, changes } = splitLockKey(lock, "REQ-999", ["REQ-100", "REQ-101"]);
 
     expect(result["REQ-100"]).toBeDefined();
     expect(result["REQ-101"]).toBeDefined();
@@ -715,15 +608,8 @@ describe("mergeLockKeys", () => {
     const { lock: result } = mergeLockKeys(lock, ["REQ-001", "REQ-002"], "REQ-MERGED");
 
     expect(result["REQ-MERGED"]).toBeDefined();
-    expect(result["REQ-MERGED"].impl).toEqual([
-      "src/a.ts",
-      "src/shared.ts",
-      "src/b.ts",
-    ]);
-    expect(result["REQ-MERGED"].tests).toEqual([
-      "tests/a.test.ts",
-      "tests/b.test.ts",
-    ]);
+    expect(result["REQ-MERGED"].impl).toEqual(["src/a.ts", "src/shared.ts", "src/b.ts"]);
+    expect(result["REQ-MERGED"].tests).toEqual(["tests/a.test.ts", "tests/b.test.ts"]);
   });
 
   it("deletes all source keys and creates new key", () => {
@@ -744,11 +630,7 @@ describe("mergeLockKeys", () => {
       },
     };
 
-    const { lock: result, changes } = mergeLockKeys(
-      lock,
-      ["REQ-001", "REQ-002"],
-      "REQ-MERGED",
-    );
+    const { lock: result, changes } = mergeLockKeys(lock, ["REQ-001", "REQ-002"], "REQ-MERGED");
 
     expect(result["REQ-001"]).toBeUndefined();
     expect(result["REQ-002"]).toBeUndefined();
@@ -769,11 +651,7 @@ describe("mergeLockKeys", () => {
       },
     };
 
-    const { lock: result } = mergeLockKeys(
-      lock,
-      ["REQ-001", "REQ-002"],
-      "REQ-MERGED",
-    );
+    const { lock: result } = mergeLockKeys(lock, ["REQ-001", "REQ-002"], "REQ-MERGED");
 
     expect(result["REQ-MERGED"].contentHash).toBe("first-hash");
   });
@@ -959,8 +837,7 @@ describe("rewriteAnnotationIds", () => {
 // heading / frontmatter rewriters in a single pass.
 describe("rewriteFile (.md) — annotation target rewriting (T024)", () => {
   it("rewrites BOTH the list-item ID definition AND its uses in annotations", () => {
-    const input =
-      "# spec\n\n- AUTH-001: 認証\n- AUTH-002: セッション (depends_on: AUTH-001)\n";
+    const input = "# spec\n\n- AUTH-001: 認証\n- AUTH-002: セッション (depends_on: AUTH-001)\n";
     const { content, changes } = rewriteFile("spec.md", input, "AUTH-001", "AUTH-100");
     expect(content).toBe(
       "# spec\n\n- AUTH-100: 認証\n- AUTH-002: セッション (depends_on: AUTH-100)\n",
@@ -971,10 +848,7 @@ describe("rewriteFile (.md) — annotation target rewriting (T024)", () => {
   });
 
   it("multi-id fixture: full file rename rewrites all annotation occurrences and preserves fenced", () => {
-    const fixturePath = resolve(
-      import.meta.dirname,
-      "fixtures/req-req-annotations/multi-id.md",
-    );
+    const fixturePath = resolve(import.meta.dirname, "fixtures/req-req-annotations/multi-id.md");
     const original = readFileSync(fixturePath, "utf-8");
     const { content } = rewriteFile(fixturePath, original, "AUTH-001", "AUTH-100");
 
@@ -992,10 +866,7 @@ describe("rewriteFile (.md) — annotation target rewriting (T024)", () => {
 
   // SC-004 invariants — rename does not change the dependency graph shape.
   it("SC-004: edge count is unchanged and orphan-edge does not grow after rename", () => {
-    const tmpRoot = resolve(
-      import.meta.dirname,
-      "fixtures/req-req-annotations/_tmp-sc004",
-    );
+    const tmpRoot = resolve(import.meta.dirname, "fixtures/req-req-annotations/_tmp-sc004");
     const specDir = resolve(tmpRoot, "specs");
     const specFile = resolve(specDir, "spec.md");
     mkdirSync(specDir, { recursive: true });
@@ -1037,8 +908,12 @@ describe("rewriteFile (.md) — annotation target rewriting (T024)", () => {
 
       // Targeted: the AUTH-002 / AUTH-004 annotation edges now point at AUTH-100.
       const annAfter = after.graph.edges.filter((e) => e.provenances?.includes("annotation"));
-      expect(annAfter.find((e) => e.source === "AUTH-002" && e.target === "AUTH-100")).toBeDefined();
-      expect(annAfter.find((e) => e.source === "AUTH-004" && e.target === "AUTH-100")).toBeDefined();
+      expect(
+        annAfter.find((e) => e.source === "AUTH-002" && e.target === "AUTH-100"),
+      ).toBeDefined();
+      expect(
+        annAfter.find((e) => e.source === "AUTH-004" && e.target === "AUTH-100"),
+      ).toBeDefined();
     } finally {
       rmSync(tmpRoot, { recursive: true, force: true });
     }

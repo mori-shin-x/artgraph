@@ -33,7 +33,10 @@ import { renderTemplate } from "./template.js";
 
 const SKILLS_TEMPLATE_DIR = resolve(import.meta.dirname, "../templates/skills");
 const SKILLS_DEST_SUBDIR = join(".claude", "skills");
-const HOOKS_TEMPLATE_PATH = resolve(import.meta.dirname, "../templates/hooks/settings.json.template");
+const HOOKS_TEMPLATE_PATH = resolve(
+  import.meta.dirname,
+  "../templates/hooks/settings.json.template",
+);
 
 export class SkillsInstallError extends Error {
   readonly partiallyInstalled: string[];
@@ -627,9 +630,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   // `packageManager` field is refreshed below. Initial inits (no existing
   // config) keep the generateConfig path so detection-derived defaults
   // (include, specDirs) are still applied.
-  const config: ArtgraphConfig = hasExistingConfig
-    ? loadConfig(abs)
-    : generateConfig(detection);
+  const config: ArtgraphConfig = hasExistingConfig ? loadConfig(abs) : generateConfig(detection);
 
   // Record the detected package manager so downstream tooling (hooks /
   // agent-context / plugin templating in #109/#110/#111) can build exec
@@ -655,9 +656,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   //   3. scan + reconcile (writes .trace.lock)
   //   4. write .artgraph.json (final, only reached if everything above
   //      succeeded)
-  const skillsInstalled = stages.skills
-    ? installSkills(abs, { force: options.force })
-    : undefined;
+  const skillsInstalled = stages.skills ? installSkills(abs, { force: options.force }) : undefined;
 
   let scanSummary: ScanSummary | undefined;
   let warnings: BuildWarning[] = [];

@@ -308,9 +308,7 @@ describe("runInit", () => {
       docGraph: { autoNodes: false },
       mode: "symbol",
       testResultPaths: ["junit/results.xml"],
-      taskConventions: [
-        { name: "openspec", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" },
-      ],
+      taskConventions: [{ name: "openspec", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" }],
       planCoverage: { requireFilesSection: true },
     };
     writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify(userConfig));
@@ -367,9 +365,9 @@ describe("runInit", () => {
       "user content\n",
     );
 
-    expect(() =>
-      runInit(tmp, { force: true, noScan: true, withSkills: true }),
-    ).toThrow(SkillsInstallError);
+    expect(() => runInit(tmp, { force: true, noScan: true, withSkills: true })).toThrow(
+      SkillsInstallError,
+    );
 
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
     expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
@@ -439,10 +437,7 @@ describe("runInit Skills installation (directory format)", () => {
 
   it("throws when a skill file already exists and --force is not set", () => {
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
-    writeFileSync(
-      join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"),
-      "user content\n",
-    );
+    writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "user content\n");
 
     expect(() => runInit(tmp, { noScan: true, withSkills: true })).toThrow(
       /artgraph-impact[/\\]SKILL\.md.*--force/,
@@ -456,10 +451,7 @@ describe("runInit Skills installation (directory format)", () => {
 
   it("overwrites existing skill files when --force is set", () => {
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
-    writeFileSync(
-      join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"),
-      "user content\n",
-    );
+    writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "user content\n");
 
     const result = runInit(tmp, { noScan: true, withSkills: true, force: true });
 
@@ -506,10 +498,7 @@ describe("runInit Skills installation (directory format)", () => {
 
   it("does not write .artgraph.json when skills pre-flight validation fails", () => {
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
-    writeFileSync(
-      join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"),
-      "preexisting\n",
-    );
+    writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "preexisting\n");
 
     expect(() => runInit(tmp, { noScan: true, withSkills: true })).toThrow(SkillsInstallError);
 
@@ -561,13 +550,7 @@ describe("runInit default behavior (P0)", () => {
   // workflow works out of the box.
   it("deploys artgraph-plan-coverage Skill in default mode (spec 014 SC-007)", () => {
     const result = runInit(tmp);
-    const installedPath = join(
-      tmp,
-      ".claude",
-      "skills",
-      "artgraph-plan-coverage",
-      "SKILL.md",
-    );
+    const installedPath = join(tmp, ".claude", "skills", "artgraph-plan-coverage", "SKILL.md");
     expect(existsSync(installedPath)).toBe(true);
     const body = readFileSync(installedPath, "utf-8");
     expect(body.startsWith("---")).toBe(true);
@@ -622,9 +605,7 @@ describe("runInit default behavior (P0)", () => {
   it("integrate-auto runs speckit when only .specify/ is detected", () => {
     mkdirSync(join(tmp, ".specify"));
     const result = runInit(tmp);
-    const speckitResult = (result.integrationResults ?? []).find(
-      (r) => r.providerId === "speckit",
-    );
+    const speckitResult = (result.integrationResults ?? []).find((r) => r.providerId === "speckit");
     expect(speckitResult).toBeDefined();
   });
 
@@ -821,9 +802,7 @@ describe("skill template <-> dogfood sync", () => {
       const rel = tPath.substring(templateDir.length + 1);
       const dPath = join(dogfoodDir, rel);
       expect(existsSync(dPath), `dogfood file missing: ${dPath}`).toBe(true);
-      expect(readNormalized(dPath), `content drift in ${rel}`).toBe(
-        readNormalized(tPath),
-      );
+      expect(readNormalized(dPath), `content drift in ${rel}`).toBe(readNormalized(tPath));
     }
 
     // Reverse direction: every dogfood file must have a matching template (no stale files)
