@@ -402,8 +402,8 @@ const GITATTRIBUTES_CONTENT = "** text eol=lf\n";
  * every subsequent `git add` / `git checkout` in a Windows repo re-encodes
  * the files as CRLF and doctor reports every SKILL.md as `skill-file-drift`.
  *
- * NOT wired into `runInit` — exposed as a helper so a follow-up patch can
- * enable it once the doctor CRLF-normalization landing plan is settled.
+ * Wired into `runInit` after every successful `distribute()` so each selected
+ * agent's Skill dist tree carries a `.gitattributes` pinning `** text eol=lf`.
  * Writes atomically via `atomicWriteFile`.
  */
 export function writeGitAttributes(

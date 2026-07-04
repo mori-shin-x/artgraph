@@ -1,15 +1,12 @@
 // spec 013 T002 — test fixture helpers shared by tests/agents/*.test.ts.
-// Provides three primitives that every cross-agent test needs:
+// Provides two primitives that every cross-agent test needs:
 //   1. createFreshProject() — disposable empty tmp dir
 //   2. readDistributedTree() — recursive walk that returns relPath + sha256 hex
-//   3. injectMarkerBlock() — append an artgraph-managed block to a file (for
-//      marker-aware tests that need a pre-populated fixture)
 //
 // These helpers stay framework-agnostic on purpose (no vitest imports) so they
 // can also be used from e2e or perf suites later.
 
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -17,7 +14,6 @@ import {
   readdirSync,
   rmSync,
   statSync,
-  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -84,27 +80,6 @@ export function readDistributedTree(dir: string): DistributedTreeSnapshot {
     paths: collected.map((abs) => toPosix(relative(dir, abs))),
     sha256,
   };
-}
-
-/**
- * Append an artgraph-managed block (HTML-comment marker pair) to `file`,
- * creating the file (and parent dirs) when needed. Used by tests that need
- * a pre-existing wrapper file to assert idempotent replacement behavior.
- *
- * The marker format mirrors R2 (`<!-- artgraph:begin -->` / `<!-- artgraph:end -->`)
- * so production code and test fixtures stay in sync.
- */
-export function injectMarkerBlock(file: string, body: string): void {
-  const parent = file.includes("/") ? file.substring(0, file.lastIndexOf("/")) : "";
-  if (parent && !existsSync(parent)) {
-    mkdirSync(parent, { recursive: true });
-  }
-  const block = `\n<!-- artgraph:begin -->\n${body}\n<!-- artgraph:end -->\n`;
-  if (existsSync(file)) {
-    appendFileSync(file, block, "utf-8");
-  } else {
-    writeFileSync(file, block, "utf-8");
-  }
 }
 
 // ---------------------------------------------------------------------------
