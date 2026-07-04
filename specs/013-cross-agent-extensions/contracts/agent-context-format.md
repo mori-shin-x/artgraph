@@ -22,12 +22,26 @@ AGENTS.md (canonical) と CLAUDE.md / `.github/copilot-instructions.md` (wrapper
 
 ## AGENTS.md (canonical, FR-005)
 
+### 本文のレンダリング (#110)
+
+block 本文は `templates/agent-context/agents-md-snippet.md` から `renderTemplate` (src/template.ts) でレンダリングする。テンプレート変数は 2 つ:
+
+| 変数 | 値 |
+|---|---|
+| `{{ARTGRAPH_EXEC}}` | init 時に検出した PM の `execPrefix()` (`npx artgraph` / `pnpm exec artgraph` / `bunx artgraph` / `deno run -A npm:artgraph/cli`)。PM 未検出時は bare `artgraph` にフォールバック (hooks と異なり stage skip しない — prose ガイドは global install 前提でも有用なため) |
+| `{{PM_NOTICE}}` | block 先頭の HTML コメント。「packageManager=X 前提で生成。PM 切替時は `<exec> init --force` で再生成」の passive notice (Default-Drift 気付き用)。PM 未検出時は global install 前提である旨の文言に切り替わる |
+
+PM 解決優先度は hooks stage と共有: (1) live detection → (2) `.artgraph.json#packageManager` → (3) null。
+
+以下のサンプルは **PM 未検出時 (bare `artgraph`) のレンダリング結果**。notice コメント行はレンダリングごとに PM に応じて変化する。
+
 ### 既存 AGENTS.md が無い場合
 
 新規作成:
 
 ```markdown
 <!-- artgraph:begin -->
+<!-- artgraph: no package manager was detected at init time; commands below assume a globally installed `artgraph`. After adding a lockfile, re-run `artgraph init --force` to regenerate this block. -->
 ## artgraph — Cross-agent traceability
 
 artgraph manages the trace lock and provides 8 Skills for spec ↔ code ↔ test traceability.
@@ -54,8 +68,8 @@ See `<agent_skills_path>/<skill-name>/SKILL.md` for each Skill's full descriptio
 ### Quickstart
 
 \`\`\`bash
-artgraph init --agents=<list>          # provision Skills + agent-context
-artgraph doctor                        # diagnose distribution health
+artgraph init --agents=<list>   # provision Skills + agent-context
+artgraph doctor                 # diagnose distribution health
 \`\`\`
 
 For full CLI reference, run `artgraph --help` or see https://github.com/ShintaroMorimoto/artgraph.
