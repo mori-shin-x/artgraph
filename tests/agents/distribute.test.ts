@@ -26,25 +26,12 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
-import {
-  AGENT_DESCRIPTORS,
-  type AgentDescriptor,
-} from "../../src/agents/descriptors.js";
+import { AGENT_DESCRIPTORS, type AgentDescriptor } from "../../src/agents/descriptors.js";
 import { readSkillSource } from "../../src/agents/source.js";
-import {
-  DistributionError,
-  distribute,
-  planDistribution,
-} from "../../src/agents/distribute.js";
+import { DistributionError, distribute, planDistribution } from "../../src/agents/distribute.js";
 import { createFreshProject, readDistributedTree } from "./helpers.js";
 
-const REPO_TEMPLATES_DIR = resolve(
-  import.meta.dirname,
-  "..",
-  "..",
-  "templates",
-  "skills",
-);
+const REPO_TEMPLATES_DIR = resolve(import.meta.dirname, "..", "..", "templates", "skills");
 
 // Sha256 of a file in the source tree (for direct expected-value assertions
 // independent of `readSkillSource`'s own implementation).
@@ -65,9 +52,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           const result = distribute(descriptor, source, { rootDir: dir });
 
           // Every file in the canonical source has a matching destination.
-          const expectedRelPaths = source.entries
-            .flatMap((e) => e.files)
-            .map((f) => f.relPath);
+          const expectedRelPaths = source.entries.flatMap((e) => e.files).map((f) => f.relPath);
           expect(result.targets.length).toBe(expectedRelPaths.length);
           expect(result.writtenPaths.length).toBe(expectedRelPaths.length);
           expect(result.noopPaths.length).toBe(0);
@@ -118,9 +103,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           expect(snapshot.paths).toEqual(expectedPaths);
 
           for (const rel of expectedPaths) {
-            const file = source.entries
-              .flatMap((e) => e.files)
-              .find((f) => f.relPath === rel)!;
+            const file = source.entries.flatMap((e) => e.files).find((f) => f.relPath === rel)!;
             expect(snapshot.sha256[rel], `sha mismatch ${rel}`).toBe(file.sha256);
           }
         } finally {
@@ -162,12 +145,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           distribute(descriptor, source, { rootDir: dir });
 
           // Tamper with one SKILL.md so the second call sees drift.
-          const tampered = join(
-            dir,
-            descriptor.skillsPath,
-            "artgraph-impact",
-            "SKILL.md",
-          );
+          const tampered = join(dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
           writeFileSync(tampered, "user edit\n", "utf-8");
 
           let caught: unknown;
@@ -197,12 +175,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           const source = readSkillSource(REPO_TEMPLATES_DIR);
           distribute(descriptor, source, { rootDir: dir });
 
-          const tampered = join(
-            dir,
-            descriptor.skillsPath,
-            "artgraph-impact",
-            "SKILL.md",
-          );
+          const tampered = join(dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
           writeFileSync(tampered, "user edit\n", "utf-8");
 
           const result = distribute(descriptor, source, {
@@ -286,12 +259,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
         try {
           const source = readSkillSource(REPO_TEMPLATES_DIR);
           // Plant a symlink at one of the destinations BEFORE distributing.
-          const dstSkillMd = join(
-            dir,
-            descriptor.skillsPath,
-            "artgraph-impact",
-            "SKILL.md",
-          );
+          const dstSkillMd = join(dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
           mkdirSync(dirname(dstSkillMd), { recursive: true });
           // Point at a harmless file the test owns. The point is that
           // distribute() must not follow the symlink and overwrite it.
@@ -307,9 +275,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           }
           expect(caught).toBeInstanceOf(DistributionError);
           if (caught instanceof DistributionError) {
-            expect(caught.conflictPaths.some((p) => p.includes("symlink"))).toBe(
-              true,
-            );
+            expect(caught.conflictPaths.some((p) => p.includes("symlink"))).toBe(true);
           }
           // The decoy target was NOT clobbered.
           expect(readFileSync(decoyTarget, "utf-8")).toBe("decoy\n");
@@ -330,14 +296,19 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
 // `templates/skills/` tree — otherwise a template change would break
 // unrelated safety assertions.
 //
-// Filesystem-permission-based tests (B1, B5, B9) only make sense on POSIX
-// where `chmod` and `lstat` return standard errno codes. They are gated
-// with `it.skipIf(process.platform === "win32")` so Windows CI skips them
-// rather than reports flakes.
+// Filesystem-permission-based tests (B1, B5, B9, OUT-4) only make sense on
+// POSIX where `chmod` and `lstat` return standard errno codes, AND as a
+// non-root user — root bypasses mode bits entirely, so the chmod-induced
+// EACCES these tests rely on never fires (#147). They are gated with
+// `it.skipIf(IS_WIN || IS_ROOT)` so Windows CI and root-run containers skip
+// them rather than report flakes. Same convention as tests/doctor.test.ts /
+// tests/integrate/atomic-write.test.ts / tests/hooks-merge.test.ts, surfaced
+// as an honest "skipped" instead of an early-return false pass.
 // ===========================================================================
 
 const CLAUDE = AGENT_DESCRIPTORS.find((d) => d.id === "claude")!;
 const IS_WIN = process.platform === "win32";
+const IS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
 
 /**
  * Build a self-contained skills-source under `sourceDir` and return the
@@ -391,12 +362,8 @@ describe("distribute() — PR #114 cluster B regressions", () => {
         if (caught instanceof DistributionError) {
           // Message pinpoints the offending ancestor (.claude), not the leaf.
           expect(caught.message).toMatch(/symlink/);
-          expect(caught.conflictPaths.some((p) => p.includes("symlink ancestor"))).toBe(
-            true,
-          );
-          expect(
-            caught.conflictPaths.some((p) => p.includes(".claude")),
-          ).toBe(true);
+          expect(caught.conflictPaths.some((p) => p.includes("symlink ancestor"))).toBe(true);
+          expect(caught.conflictPaths.some((p) => p.includes(".claude"))).toBe(true);
         }
         // No skills bytes leaked into the outside/ landing dir.
         expect(existsSync(join(outside, "skills"))).toBe(false);
@@ -418,12 +385,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
     try {
       const source = readSkillSource(REPO_TEMPLATES_DIR);
       // Pre-create a directory where `artgraph-impact/SKILL.md` should land.
-      const badLeaf = join(
-        dir,
-        CLAUDE.skillsPath,
-        "artgraph-impact",
-        "SKILL.md",
-      );
+      const badLeaf = join(dir, CLAUDE.skillsPath, "artgraph-impact", "SKILL.md");
       mkdirSync(badLeaf, { recursive: true });
       // Sanity: the leaf really is a directory.
       expect(statSync(badLeaf).isDirectory()).toBe(true);
@@ -440,9 +402,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
         expect(caught.message.toLowerCase()).not.toMatch(/symlink/);
         expect(caught.message).toMatch(/non-regular/);
         // conflictPaths call out the offending SKILL.md relpath, non-symlink kind.
-        expect(
-          caught.conflictPaths.some((p) => p.includes("artgraph-impact/SKILL.md")),
-        ).toBe(true);
+        expect(caught.conflictPaths.some((p) => p.includes("artgraph-impact/SKILL.md"))).toBe(true);
         for (const p of caught.conflictPaths) {
           expect(p.toLowerCase()).not.toMatch(/symlink/);
         }
@@ -465,7 +425,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
   // so the write for B fails at copyFileSync-to-tmp. A's backup MUST be
   // rename'd back over A so A retains "USER BYTES A".
   // -------------------------------------------------------------------------
-  it.skipIf(IS_WIN)(
+  it.skipIf(IS_WIN || IS_ROOT)(
     "B1: mid-loop --force failure restores the user's pre-call bytes for succeeded drift-overwrites",
     () => {
       const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
@@ -489,18 +449,8 @@ describe("distribute() — PR #114 cluster B regressions", () => {
 
         // (1) Baseline distribute lands canonical bytes at both targets.
         distribute(CLAUDE, source, { rootDir: projectDir });
-        const targetA = join(
-          projectDir,
-          CLAUDE.skillsPath,
-          "artgraph-a",
-          "SKILL.md",
-        );
-        const targetB = join(
-          projectDir,
-          CLAUDE.skillsPath,
-          "artgraph-b",
-          "SKILL.md",
-        );
+        const targetA = join(projectDir, CLAUDE.skillsPath, "artgraph-a", "SKILL.md");
+        const targetB = join(projectDir, CLAUDE.skillsPath, "artgraph-b", "SKILL.md");
         expect(existsSync(targetA)).toBe(true);
         expect(existsSync(targetB)).toBe(true);
 
@@ -545,9 +495,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
         expect(readFileSync(targetB, "utf-8")).toBe(userBytesB);
 
         // No orphan backup/tmp files linger under A's parent.
-        const aDirEntries = readdirSync(
-          join(projectDir, CLAUDE.skillsPath, "artgraph-a"),
-        );
+        const aDirEntries = readdirSync(join(projectDir, CLAUDE.skillsPath, "artgraph-a"));
         for (const name of aDirEntries) {
           expect(name.includes(".artgraph-backup-")).toBe(false);
           expect(name.includes(".artgraph-tmp-")).toBe(false);
@@ -562,10 +510,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
           // Also restore the read-only target so vitest's recursive
           // cleanup can unlink it.
           try {
-            chmodSync(
-              join(projectDir, CLAUDE.skillsPath, "artgraph-b", "SKILL.md"),
-              0o644,
-            );
+            chmodSync(join(projectDir, CLAUDE.skillsPath, "artgraph-b", "SKILL.md"), 0o644);
           } catch {
             /* best-effort */
           }
@@ -587,7 +532,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
   // 0500 so its write fails. The rollback must rmdir the whole a/…/deep
   // chain.
   // -------------------------------------------------------------------------
-  it.skipIf(IS_WIN)(
+  it.skipIf(IS_WIN || IS_ROOT)(
     "B5: rollback removes every intermediate directory tracked during the aborted call",
     () => {
       const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
@@ -665,7 +610,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
   // opaque `copyfile EACCES` with no hint that the real cause was a
   // permission-denied lstat on the leaf's parent.
   // -------------------------------------------------------------------------
-  it.skipIf(IS_WIN)(
+  it.skipIf(IS_WIN || IS_ROOT)(
     "B9: non-ENOENT lstat errors (EACCES) surface as DistributionError, not silent freshWrite",
     () => {
       const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
@@ -827,7 +772,7 @@ describe("distribute() — PR #114 OUT-4", () => {
     }
   });
 
-  it.skipIf(IS_WIN)(
+  it.skipIf(IS_WIN || IS_ROOT)(
     "partiallyWritten: a rollback unlinkSync failure for an already-succeeded fresh write is reported as a survivor",
     () => {
       const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
@@ -848,12 +793,7 @@ describe("distribute() — PR #114 OUT-4", () => {
           },
         ]);
 
-        const targetA = join(
-          projectDir,
-          CLAUDE.skillsPath,
-          "artgraph-a",
-          "SKILL.md",
-        );
+        const targetA = join(projectDir, CLAUDE.skillsPath, "artgraph-a", "SKILL.md");
 
         // Pre-create + lock B's directory (real chmod, same technique as
         // the B1/B5 tests above) so B's write — the SECOND target in the
