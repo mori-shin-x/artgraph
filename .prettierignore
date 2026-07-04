@@ -1,0 +1,13 @@
+# oxfmt reads .gitignore + .prettierignore by default. This file
+# excludes non-source content that must NOT be reformatted:
+#
+# - Test fixtures (byte-for-byte compared by tests)
+# - Snapshot baselines (assertion targets, not source code)
+# - Generated / vendored output
+
+tests/fixtures/
+tests/__snapshots__/
+dist/
+coverage/
+node_modules/
+pnpm-lock.yaml

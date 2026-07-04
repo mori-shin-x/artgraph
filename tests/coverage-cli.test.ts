@@ -153,7 +153,11 @@ describe("CLI: coverage (all verified)", () => {
     "should show all items as verified when every req has impl and test",
     { timeout: 30000 },
     async () => {
-      const { stdout, exitCode } = await runAt(ALL_VERIFIED_FIXTURE, ["coverage", "--format", "json"]);
+      const { stdout, exitCode } = await runAt(ALL_VERIFIED_FIXTURE, [
+        "coverage",
+        "--format",
+        "json",
+      ]);
       expect(exitCode).toBe(0);
 
       const result = JSON.parse(stdout);
@@ -170,7 +174,11 @@ describe("CLI: coverage (all verified)", () => {
   );
 
   it("should show all verified in text output", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await runAt(ALL_VERIFIED_FIXTURE, ["coverage", "--format", "text"]);
+    const { stdout, exitCode } = await runAt(ALL_VERIFIED_FIXTURE, [
+      "coverage",
+      "--format",
+      "text",
+    ]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("COVERAGE:");
     expect(stdout).toMatch(/VER-001:\s*verified/);

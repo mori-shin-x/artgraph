@@ -109,10 +109,7 @@ describe("resolveSpecDir — .specify/feature.json fallback", () => {
     const dir = join(root, ".specify/specs/from-file");
     mkdirSync(dir, { recursive: true });
     mkdirSync(join(root, ".specify"), { recursive: true });
-    writeFileSync(
-      join(root, ".specify/feature.json"),
-      JSON.stringify({ feature_directory: dir }),
-    );
+    writeFileSync(join(root, ".specify/feature.json"), JSON.stringify({ feature_directory: dir }));
     const result = resolveSpecDir({ env: {}, repoRoot: root });
     expect("dir" in result).toBe(true);
     if ("dir" in result) expect(result.dir).toBe(dir);
@@ -122,10 +119,7 @@ describe("resolveSpecDir — .specify/feature.json fallback", () => {
     const rel = ".specify/specs/014";
     mkdirSync(join(root, rel), { recursive: true });
     mkdirSync(join(root, ".specify"), { recursive: true });
-    writeFileSync(
-      join(root, ".specify/feature.json"),
-      JSON.stringify({ feature_directory: rel }),
-    );
+    writeFileSync(join(root, ".specify/feature.json"), JSON.stringify({ feature_directory: rel }));
     const result = resolveSpecDir({ env: {}, repoRoot: root });
     expect("dir" in result).toBe(true);
     if ("dir" in result) expect(result.dir).toBe(resolvePath(root, rel));
@@ -142,10 +136,7 @@ describe("resolveSpecDir — .specify/feature.json fallback", () => {
 
   it("returns error when feature.json lacks feature_directory key", () => {
     mkdirSync(join(root, ".specify"), { recursive: true });
-    writeFileSync(
-      join(root, ".specify/feature.json"),
-      JSON.stringify({ some_other_key: "value" }),
-    );
+    writeFileSync(join(root, ".specify/feature.json"), JSON.stringify({ some_other_key: "value" }));
     const result = resolveSpecDir({ env: {}, repoRoot: root });
     expect("error" in result).toBe(true);
   });
@@ -247,10 +238,7 @@ describe("resolveSpecDir — feature.json malformed input fallthroughs", () => {
     // "empty env var" rule. Confirm the file-tier fallthrough produces a
     // Kiro-aware error rather than an empty-path `{ dir: "" }`.
     mkdirSync(join(root, ".specify"), { recursive: true });
-    writeFileSync(
-      join(root, ".specify/feature.json"),
-      JSON.stringify({ feature_directory: "" }),
-    );
+    writeFileSync(join(root, ".specify/feature.json"), JSON.stringify({ feature_directory: "" }));
     const result = resolveSpecDir({ env: {}, repoRoot: root });
     expect("error" in result).toBe(true);
     if ("error" in result) expect(result.error).toMatch(/--spec/);
@@ -261,10 +249,7 @@ describe("resolveSpecDir — feature.json malformed input fallthroughs", () => {
     // reject non-string values rather than coercing them. Guards against
     // a future `{feature_directory: 1}` shape silently passing through.
     mkdirSync(join(root, ".specify"), { recursive: true });
-    writeFileSync(
-      join(root, ".specify/feature.json"),
-      JSON.stringify({ feature_directory: 42 }),
-    );
+    writeFileSync(join(root, ".specify/feature.json"), JSON.stringify({ feature_directory: 42 }));
     const result = resolveSpecDir({ env: {}, repoRoot: root });
     expect("error" in result).toBe(true);
   });

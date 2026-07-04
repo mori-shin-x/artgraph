@@ -41,7 +41,17 @@ function makeGraph(
   // unit-test fixtures the value is informational only (coverage logic ignores
   // it), so pick a kind-appropriate default per the mapping in
   // contracts/edge-provenance-type.md.
-  const provDefault: Record<EdgeKind, "annotation" | "frontmatter" | "convention" | "code-tag" | "task-tag" | "inline-link" | "ts-import" | "structural"> = {
+  const provDefault: Record<
+    EdgeKind,
+    | "annotation"
+    | "frontmatter"
+    | "convention"
+    | "code-tag"
+    | "task-tag"
+    | "inline-link"
+    | "ts-import"
+    | "structural"
+  > = {
     depends_on: "annotation",
     derives_from: "frontmatter",
     implements: "code-tag",
@@ -249,10 +259,7 @@ describe("computeCoverage with testResults", () => {
   });
 
   it("no implements edge → untagged regardless of testResults", () => {
-    const graph = makeGraph(
-      [{ id: "REQ-1", kind: "req" }],
-      [],
-    );
+    const graph = makeGraph([{ id: "REQ-1", kind: "req" }], []);
 
     const testResults: TestResultMap = new Map([
       ["REQ-1", [{ reqId: "REQ-1", testName: "test A", passed: true }]],
@@ -363,8 +370,6 @@ describe("computeCoverage — task sources are excluded (Issue #28 / data-model 
     const cov = computeCoverage(graph);
     expect(cov.find((c) => c.reqId === "REQ-3")?.status).toBe("verified");
     // testFiles must list the real test only, not the task.
-    expect(cov.find((c) => c.reqId === "REQ-3")?.testFiles).toEqual([
-      "file:tests/foo.test.ts",
-    ]);
+    expect(cov.find((c) => c.reqId === "REQ-3")?.testFiles).toEqual(["file:tests/foo.test.ts"]);
   });
 });

@@ -35,9 +35,7 @@ describe("renderTemplate", () => {
   });
 
   it("substitutes multiple distinct keys in one template", () => {
-    expect(
-      renderTemplate("{{a}}-{{b}}-{{a}}", { a: "1", b: "2" }),
-    ).toBe("1-2-1");
+    expect(renderTemplate("{{a}}-{{b}}-{{a}}", { a: "1", b: "2" })).toBe("1-2-1");
   });
 
   it("returns content unchanged when there are no placeholders", () => {

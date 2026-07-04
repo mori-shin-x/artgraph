@@ -1,12 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { resolve } from "node:path";
-import {
-  mkdirSync,
-  rmSync,
-  symlinkSync,
-  existsSync,
-  readFileSync,
-} from "node:fs";
+import { mkdirSync, rmSync, symlinkSync, existsSync, readFileSync } from "node:fs";
 import { writeLock, readLock, buildLockFromGraph } from "../src/lock.js";
 import type { ArtifactGraph, GraphNode, GraphEdge } from "../src/types.js";
 
@@ -46,13 +40,14 @@ describe("buildLockFromGraph — task sources are excluded (Issue #28 / data-mod
 
   it("excludes task → verifies sources from entry.tests", () => {
     const g = graph(
+      [node("REQ-1", "req"), node("file:tests/foo.test.ts", "test"), node("T001", "task")],
       [
-        node("REQ-1", "req"),
-        node("file:tests/foo.test.ts", "test"),
-        node("T001", "task"),
-      ],
-      [
-        { source: "file:tests/foo.test.ts", target: "REQ-1", kind: "verifies", provenances: ["code-tag"] },
+        {
+          source: "file:tests/foo.test.ts",
+          target: "REQ-1",
+          kind: "verifies",
+          provenances: ["code-tag"],
+        },
         { source: "T001", target: "REQ-1", kind: "verifies", provenances: ["task-tag"] },
       ],
     );
@@ -71,13 +66,14 @@ describe("buildLockFromGraph — task sources are excluded (Issue #28 / data-mod
 
   it("excludes task → implements sources from entry.impl", () => {
     const g = graph(
+      [node("REQ-3", "req"), node("file:src/foo.ts", "file"), node("T003", "task")],
       [
-        node("REQ-3", "req"),
-        node("file:src/foo.ts", "file"),
-        node("T003", "task"),
-      ],
-      [
-        { source: "file:src/foo.ts", target: "REQ-3", kind: "implements", provenances: ["code-tag"] },
+        {
+          source: "file:src/foo.ts",
+          target: "REQ-3",
+          kind: "implements",
+          provenances: ["code-tag"],
+        },
         { source: "T003", target: "REQ-3", kind: "implements", provenances: ["task-tag"] },
       ],
     );
@@ -86,10 +82,7 @@ describe("buildLockFromGraph — task sources are excluded (Issue #28 / data-mod
   });
 
   it("does not write a lock entry for a task node", () => {
-    const g = graph(
-      [node("T100", "task")],
-      [],
-    );
+    const g = graph([node("T100", "task")], []);
     const lock = buildLockFromGraph(g);
     expect(lock["T100"]).toBeUndefined();
   });
@@ -109,14 +102,10 @@ describe("buildLockFromGraph — schema v2 dependsOn", () => {
   it("INV-L3: dependsOn elements use {id, provenances} shape with provenances.length >= 1", () => {
     const g = graph(
       [node("REQ-1", "req"), node("REQ-2", "req")],
-      [
-        { source: "REQ-1", target: "REQ-2", kind: "depends_on", provenances: ["frontmatter"] },
-      ],
+      [{ source: "REQ-1", target: "REQ-2", kind: "depends_on", provenances: ["frontmatter"] }],
     );
     const lock = buildLockFromGraph(g);
-    expect(lock["REQ-1"].dependsOn).toEqual([
-      { id: "REQ-2", provenances: ["frontmatter"] },
-    ]);
+    expect(lock["REQ-1"].dependsOn).toEqual([{ id: "REQ-2", provenances: ["frontmatter"] }]);
   });
 
   it("INV-L1/L2: dependsOn array sorts by id, provenances sorts internally", () => {
@@ -124,7 +113,12 @@ describe("buildLockFromGraph — schema v2 dependsOn", () => {
       [node("A", "req"), node("B", "req"), node("C", "req"), node("D", "req")],
       [
         { source: "A", target: "D", kind: "depends_on", provenances: ["frontmatter"] },
-        { source: "A", target: "B", kind: "depends_on", provenances: ["inline-link", "annotation"] },
+        {
+          source: "A",
+          target: "B",
+          kind: "depends_on",
+          provenances: ["inline-link", "annotation"],
+        },
         { source: "A", target: "C", kind: "derives_from", provenances: ["convention"] },
       ],
     );
@@ -225,21 +219,22 @@ describe("buildLockFromGraph — schema v2 dependsOn", () => {
   it("includes annotation-derived dependsOn (issue #35: no provenance filter)", () => {
     const g = graph(
       [node("REQ-A", "req"), node("REQ-B", "req")],
-      [
-        { source: "REQ-A", target: "REQ-B", kind: "depends_on", provenances: ["annotation"] },
-      ],
+      [{ source: "REQ-A", target: "REQ-B", kind: "depends_on", provenances: ["annotation"] }],
     );
     const lock = buildLockFromGraph(g);
-    expect(lock["REQ-A"].dependsOn).toEqual([
-      { id: "REQ-B", provenances: ["annotation"] },
-    ]);
+    expect(lock["REQ-A"].dependsOn).toEqual([{ id: "REQ-B", provenances: ["annotation"] }]);
   });
 
   it("INV-L4 / SC-003: byte-identical JSON output on round-trip rebuild", () => {
     const g = graph(
       [node("X", "req"), node("Y", "req"), node("Z", "req")],
       [
-        { source: "X", target: "Y", kind: "depends_on", provenances: ["frontmatter", "convention"] },
+        {
+          source: "X",
+          target: "Y",
+          kind: "depends_on",
+          provenances: ["frontmatter", "convention"],
+        },
         { source: "X", target: "Z", kind: "derives_from", provenances: ["annotation"] },
       ],
     );
@@ -291,7 +286,12 @@ describe("INV-L4 / SC-003 round-trip via fs (PR#94 E1)", () => {
     const g = graph(
       [node("X", "req"), node("Y", "req"), node("Z", "req")],
       [
-        { source: "X", target: "Y", kind: "depends_on", provenances: ["frontmatter", "convention"] },
+        {
+          source: "X",
+          target: "Y",
+          kind: "depends_on",
+          provenances: ["frontmatter", "convention"],
+        },
         { source: "X", target: "Z", kind: "derives_from", provenances: ["annotation"] },
       ],
     );
@@ -323,8 +323,6 @@ describe("INV-L4 / SC-003 round-trip via fs (PR#94 E1)", () => {
     // Belt-and-suspenders: the same property at the parsed-object level.
     // If this passed but the buffer compare failed we'd know the difference
     // is whitespace / formatting and not structure.
-    expect(JSON.parse(bufA.toString("utf-8"))).toEqual(
-      JSON.parse(bufB.toString("utf-8")),
-    );
+    expect(JSON.parse(bufA.toString("utf-8"))).toEqual(JSON.parse(bufB.toString("utf-8")));
   });
 });

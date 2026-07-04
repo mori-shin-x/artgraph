@@ -48,9 +48,7 @@ export function detectPackageManager(
       case "npm":
         return field;
       case "yarn":
-        warn(
-          'packageManager=yarn but Yarn is not supported; falling back to pnpm',
-        );
+        warn("packageManager=yarn but Yarn is not supported; falling back to pnpm");
         return "pnpm";
       // Unknown / malformed value: fall through to lockfile sniffing.
     }
@@ -58,10 +56,7 @@ export function detectPackageManager(
 
   // (2) Lockfile / config sniffing (first match wins).
   if (hasFile("bun.lockb") || hasFile("bun.lock")) return "bun";
-  if (
-    !hasPkgJson &&
-    (hasFile("deno.lock") || hasFile("deno.json") || hasFile("deno.jsonc"))
-  ) {
+  if (!hasPkgJson && (hasFile("deno.lock") || hasFile("deno.json") || hasFile("deno.jsonc"))) {
     return "deno";
   }
   if (hasFile("pnpm-lock.yaml")) return "pnpm";

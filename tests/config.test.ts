@@ -204,9 +204,7 @@ describe("loadConfig", () => {
       writeFileSync(
         CONFIG_PATH,
         JSON.stringify({
-          taskConventions: [
-            { name: "openspec", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" },
-          ],
+          taskConventions: [{ name: "openspec", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" }],
         }),
       );
       const config = loadConfig(TMP_DIR);
@@ -237,9 +235,7 @@ describe("loadConfig", () => {
       writeFileSync(
         CONFIG_PATH,
         JSON.stringify({
-          taskConventions: [
-            { name: "spec-kit", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" },
-          ],
+          taskConventions: [{ name: "spec-kit", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" }],
         }),
       );
       expect(() => loadConfig(TMP_DIR)).toThrow("collides with a built-in preset");
@@ -251,9 +247,7 @@ describe("loadConfig", () => {
         CONFIG_PATH,
         JSON.stringify({
           disableBuiltinTaskConventions: ["kiro"],
-          taskConventions: [
-            { name: "kiro", fileStems: ["tasks"], taskIdRe: "^(K-\\d+)" },
-          ],
+          taskConventions: [{ name: "kiro", fileStems: ["tasks"], taskIdRe: "^(K-\\d+)" }],
         }),
       );
       const config = loadConfig(TMP_DIR);
@@ -265,10 +259,7 @@ describe("loadConfig", () => {
 
     it("should reject disableBuiltinTaskConventions naming a non-builtin", () => {
       mkdirSync(TMP_DIR, { recursive: true });
-      writeFileSync(
-        CONFIG_PATH,
-        JSON.stringify({ disableBuiltinTaskConventions: ["openspec"] }),
-      );
+      writeFileSync(CONFIG_PATH, JSON.stringify({ disableBuiltinTaskConventions: ["openspec"] }));
       expect(() => loadConfig(TMP_DIR)).toThrow('"openspec" is not a built-in');
     });
 
@@ -291,9 +282,7 @@ describe("loadConfig", () => {
       writeFileSync(
         CONFIG_PATH,
         JSON.stringify({
-          taskConventions: [
-            { name: "openspec", fileStems: [], taskIdRe: "^(OS-\\d+)" },
-          ],
+          taskConventions: [{ name: "openspec", fileStems: [], taskIdRe: "^(OS-\\d+)" }],
         }),
       );
       expect(() => loadConfig(TMP_DIR)).toThrow("fileStems: must not be empty");
@@ -304,9 +293,7 @@ describe("loadConfig", () => {
       writeFileSync(
         CONFIG_PATH,
         JSON.stringify({
-          taskConventions: [
-            { name: "openspec", fileStems: ["tasks"], taskIdRe: "" },
-          ],
+          taskConventions: [{ name: "openspec", fileStems: ["tasks"], taskIdRe: "" }],
         }),
       );
       expect(() => loadConfig(TMP_DIR)).toThrow("taskIdRe: must not be empty");
@@ -318,9 +305,7 @@ describe("loadConfig", () => {
       writeFileSync(
         CONFIG_PATH,
         JSON.stringify({
-          taskConventions: [
-            { name: "openspec", fileStems: ["tasks"], taskIdRe: longPattern },
-          ],
+          taskConventions: [{ name: "openspec", fileStems: ["tasks"], taskIdRe: longPattern }],
         }),
       );
       expect(() => loadConfig(TMP_DIR)).toThrow("must not exceed");
@@ -331,9 +316,7 @@ describe("loadConfig", () => {
       writeFileSync(
         CONFIG_PATH,
         JSON.stringify({
-          taskConventions: [
-            { name: "openspec", fileStems: ["tasks"], taskIdRe: "^(([a-z]+)+)$" },
-          ],
+          taskConventions: [{ name: "openspec", fileStems: ["tasks"], taskIdRe: "^(([a-z]+)+)$" }],
         }),
       );
       expect(() => loadConfig(TMP_DIR)).toThrow("nested quantifiers");
@@ -344,9 +327,7 @@ describe("loadConfig", () => {
       writeFileSync(
         CONFIG_PATH,
         JSON.stringify({
-          taskConventions: [
-            { name: "openspec", fileStems: ["tasks"], taskIdRe: "[invalid(" },
-          ],
+          taskConventions: [{ name: "openspec", fileStems: ["tasks"], taskIdRe: "[invalid(" }],
         }),
       );
       expect(() => loadConfig(TMP_DIR)).toThrow("invalid regular expression");
@@ -357,9 +338,7 @@ describe("loadConfig", () => {
       writeFileSync(
         CONFIG_PATH,
         JSON.stringify({
-          taskConventions: [
-            { name: "openspec", fileStems: ["tasks"], taskIdRe: "^OS-\\d+" },
-          ],
+          taskConventions: [{ name: "openspec", fileStems: ["tasks"], taskIdRe: "^OS-\\d+" }],
         }),
       );
       expect(() => loadConfig(TMP_DIR)).toThrow("at least one capture group");
@@ -382,12 +361,8 @@ describe("loadConfig", () => {
         }),
       );
       const config = loadConfig(TMP_DIR);
-      expect(config.taskConventions?.[0].implementsTagRe).toBe(
-        "@impl\\(([^)]+)\\)",
-      );
-      expect(config.taskConventions?.[0].verifiesTagRe).toBe(
-        "\\[(REQ-[\\w-]+)\\]",
-      );
+      expect(config.taskConventions?.[0].implementsTagRe).toBe("@impl\\(([^)]+)\\)");
+      expect(config.taskConventions?.[0].verifiesTagRe).toBe("\\[(REQ-[\\w-]+)\\]");
     });
 
     it("should reject invalid implementsTagRe regex", () => {
@@ -405,9 +380,7 @@ describe("loadConfig", () => {
           ],
         }),
       );
-      expect(() => loadConfig(TMP_DIR)).toThrow(
-        "implementsTagRe: invalid regular expression",
-      );
+      expect(() => loadConfig(TMP_DIR)).toThrow("implementsTagRe: invalid regular expression");
     });
 
     it("should reject implementsTagRe without capture group", () => {
@@ -463,9 +436,7 @@ describe("loadConfig", () => {
           ],
         }),
       );
-      expect(() => loadConfig(TMP_DIR)).toThrow(
-        "implementsTagRe: must not be empty",
-      );
+      expect(() => loadConfig(TMP_DIR)).toThrow("implementsTagRe: must not be empty");
     });
   });
 
@@ -481,20 +452,14 @@ describe("loadConfig", () => {
 
     it("loads requireFilesSection: true", () => {
       mkdirSync(TMP_DIR, { recursive: true });
-      writeFileSync(
-        CONFIG_PATH,
-        JSON.stringify({ planCoverage: { requireFilesSection: true } }),
-      );
+      writeFileSync(CONFIG_PATH, JSON.stringify({ planCoverage: { requireFilesSection: true } }));
       const config = loadConfig(TMP_DIR);
       expect(config.planCoverage?.requireFilesSection).toBe(true);
     });
 
     it("loads requireFilesSection: false", () => {
       mkdirSync(TMP_DIR, { recursive: true });
-      writeFileSync(
-        CONFIG_PATH,
-        JSON.stringify({ planCoverage: { requireFilesSection: false } }),
-      );
+      writeFileSync(CONFIG_PATH, JSON.stringify({ planCoverage: { requireFilesSection: false } }));
       const config = loadConfig(TMP_DIR);
       expect(config.planCoverage?.requireFilesSection).toBe(false);
     });
@@ -507,10 +472,7 @@ describe("loadConfig", () => {
 
     it("rejects requireFilesSection if not a boolean", () => {
       mkdirSync(TMP_DIR, { recursive: true });
-      writeFileSync(
-        CONFIG_PATH,
-        JSON.stringify({ planCoverage: { requireFilesSection: "yes" } }),
-      );
+      writeFileSync(CONFIG_PATH, JSON.stringify({ planCoverage: { requireFilesSection: "yes" } }));
       expect(() => loadConfig(TMP_DIR)).toThrow("must be a boolean");
     });
 
@@ -563,13 +525,10 @@ describe("loadConfig", () => {
       writeFileSync(CONFIG_PATH, JSON.stringify(obj));
     };
 
-    it.each(["npm", "pnpm", "bun", "deno"] as const)(
-      "accepts the valid value %s",
-      (pm) => {
-        writeConfig({ packageManager: pm });
-        expect(loadConfig(TMP_DIR).packageManager).toBe(pm);
-      },
-    );
+    it.each(["npm", "pnpm", "bun", "deno"] as const)("accepts the valid value %s", (pm) => {
+      writeConfig({ packageManager: pm });
+      expect(loadConfig(TMP_DIR).packageManager).toBe(pm);
+    });
 
     it("drops yarn to undefined AND warns to stderr (yarn is the one ex-supported PM)", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

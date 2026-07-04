@@ -99,7 +99,9 @@ describe("parseMarkdown", () => {
 
   describe("T014: frontmatter flat format", () => {
     it("should generate derives_from edge from flat frontmatter", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/doc-chain/design.md"), { rootDir: FIXTURE_DIR });
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/doc-chain/design.md"), {
+        rootDir: FIXTURE_DIR,
+      });
       const edges = result.edges.filter((e) => e.kind === "derives_from");
 
       expect(edges).toHaveLength(1);
@@ -110,7 +112,10 @@ describe("parseMarkdown", () => {
 
   describe("T020: doc node auto-generation", () => {
     it("should generate doc node for prose-only markdown (no frontmatter)", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), { rootDir: FIXTURE_DIR, specDirPrefix: "specs" });
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), {
+        rootDir: FIXTURE_DIR,
+        specDirPrefix: "specs",
+      });
       const docNodes = result.nodes.filter((n) => n.kind === "doc");
 
       expect(docNodes).toHaveLength(1);
@@ -119,7 +124,9 @@ describe("parseMarkdown", () => {
     });
 
     it("should use rootDir-relative path when specDirPrefix is not provided", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), { rootDir: FIXTURE_DIR });
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), {
+        rootDir: FIXTURE_DIR,
+      });
       const docNodes = result.nodes.filter((n) => n.kind === "doc");
       expect(docNodes[0].id).toBe("doc:specs/prose-only.md");
     });
@@ -127,10 +134,9 @@ describe("parseMarkdown", () => {
 
   describe("T021: frontmatter node_id override", () => {
     it("should use node_id from frontmatter when specified", () => {
-      const result = parseMarkdown(
-        resolve(FIXTURE_DIR, "specs/doc-chain/requirements.md"),
-        { rootDir: FIXTURE_DIR },
-      );
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/doc-chain/requirements.md"), {
+        rootDir: FIXTURE_DIR,
+      });
       const docNodes = result.nodes.filter((n) => n.kind === "doc");
 
       expect(docNodes).toHaveLength(1);
@@ -140,7 +146,9 @@ describe("parseMarkdown", () => {
 
   describe("T022: doc node contentHash", () => {
     it("should compute contentHash from entire file content", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), { rootDir: FIXTURE_DIR });
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), {
+        rootDir: FIXTURE_DIR,
+      });
       const doc = result.nodes.find((n) => n.kind === "doc");
 
       expect(doc?.contentHash).toBeDefined();
@@ -150,7 +158,9 @@ describe("parseMarkdown", () => {
 
   describe("T023: doc + req coexistence", () => {
     it("should generate both doc and req nodes for md with requirement IDs", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/doc-with-reqs.md"), { rootDir: FIXTURE_DIR });
+      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/doc-with-reqs.md"), {
+        rootDir: FIXTURE_DIR,
+      });
       const docNodes = result.nodes.filter((n) => n.kind === "doc");
       const reqNodes = result.nodes.filter((n) => n.kind === "req");
 
@@ -200,10 +210,7 @@ artgraph:
       mkdirSync(tmpSpecs, { recursive: true });
       const tmpPath = resolve(tmpSpecs, "fence.md");
       // `---` followed by one space then `\t`, then a normal closing fence.
-      writeFileSync(
-        tmpPath,
-        "--- \t\nartgraph:\n  node_id: \"doc:fence-trailing\"\n---\n# Body\n",
-      );
+      writeFileSync(tmpPath, '--- \t\nartgraph:\n  node_id: "doc:fence-trailing"\n---\n# Body\n');
       try {
         const result = parseMarkdown(tmpPath, { rootDir: tmpRoot });
         const doc = result.nodes.find((n) => n.kind === "doc");
@@ -580,10 +587,7 @@ artgraph:
 
   describe("US3: spec-kit task extraction (FR-009 / FR-010)", () => {
     it("extracts T### task nodes from plan.md", () => {
-      const file = resolve(
-        FIXTURE_DIR,
-        "tasks/speckit-plan/specs/auth/plan.md",
-      );
+      const file = resolve(FIXTURE_DIR, "tasks/speckit-plan/specs/auth/plan.md");
       const result = parseMarkdown(file);
       const taskNodes = result.nodes.filter((n) => n.kind === "task");
       const ids = taskNodes.map((n) => n.id).sort();
@@ -594,10 +598,7 @@ artgraph:
     });
 
     it("generates implements edges from plan.md @impl(target)", () => {
-      const file = resolve(
-        FIXTURE_DIR,
-        "tasks/speckit-plan/specs/auth/plan.md",
-      );
+      const file = resolve(FIXTURE_DIR, "tasks/speckit-plan/specs/auth/plan.md");
       const result = parseMarkdown(file);
       const implEdges = result.edges
         .filter((e) => e.kind === "implements")
@@ -609,10 +610,7 @@ artgraph:
     });
 
     it("generates verifies edges from tasks.md [REQ-FR-xxx] preserving prefix", () => {
-      const file = resolve(
-        FIXTURE_DIR,
-        "tasks/speckit-tasks/specs/auth/tasks.md",
-      );
+      const file = resolve(FIXTURE_DIR, "tasks/speckit-tasks/specs/auth/tasks.md");
       const result = parseMarkdown(file);
       const verifies = result.edges
         .filter((e) => e.kind === "verifies")
@@ -627,10 +625,7 @@ artgraph:
 
   describe("US3: kiro hierarchical task extraction (FR-012)", () => {
     it("extracts hierarchical numeric IDs as independent task nodes", () => {
-      const file = resolve(
-        FIXTURE_DIR,
-        "tasks/kiro-tasks/specs/billing/tasks.md",
-      );
+      const file = resolve(FIXTURE_DIR, "tasks/kiro-tasks/specs/billing/tasks.md");
       const result = parseMarkdown(file);
       const taskNodes = result.nodes.filter((n) => n.kind === "task");
       const ids = taskNodes.map((n) => n.id).sort();
@@ -638,19 +633,13 @@ artgraph:
     });
 
     it("emits no implements edges (kiro has no @impl tag convention)", () => {
-      const file = resolve(
-        FIXTURE_DIR,
-        "tasks/kiro-tasks/specs/billing/tasks.md",
-      );
+      const file = resolve(FIXTURE_DIR, "tasks/kiro-tasks/specs/billing/tasks.md");
       const result = parseMarkdown(file);
       expect(result.edges.filter((e) => e.kind === "implements")).toEqual([]);
     });
 
     it("extracts verifies edges from `_Requirements: X, Y_` italic lists", () => {
-      const file = resolve(
-        FIXTURE_DIR,
-        "tasks/kiro-tasks/specs/billing/tasks.md",
-      );
+      const file = resolve(FIXTURE_DIR, "tasks/kiro-tasks/specs/billing/tasks.md");
       const result = parseMarkdown(file);
       const verifies = result.edges
         .filter((e) => e.kind === "verifies")
@@ -674,10 +663,7 @@ artgraph:
       // `1.1` (indented under `1`) has its own `_Requirements: 7.3_`. The
       // parent must NOT pick up `7.3` — otherwise a 3-deep Kiro plan would
       // bubble every leaf requirement to the root task and pollute traversals.
-      const file = resolve(
-        FIXTURE_DIR,
-        "tasks/kiro-tasks/specs/billing/tasks.md",
-      );
+      const file = resolve(FIXTURE_DIR, "tasks/kiro-tasks/specs/billing/tasks.md");
       const result = parseMarkdown(file);
       const task1Targets = result.edges
         .filter((e) => e.kind === "verifies" && e.source === "1")
@@ -718,14 +704,9 @@ artgraph:
     });
 
     it("emits multiple verifies edges when one task carries multiple [REQ-] tags", () => {
-      const file = resolve(
-        FIXTURE_DIR,
-        "tasks/speckit-tasks/specs/auth/tasks.md",
-      );
+      const file = resolve(FIXTURE_DIR, "tasks/speckit-tasks/specs/auth/tasks.md");
       const result = parseMarkdown(file);
-      const t011 = result.edges.filter(
-        (e) => e.kind === "verifies" && e.source === "T011",
-      );
+      const t011 = result.edges.filter((e) => e.kind === "verifies" && e.source === "T011");
       expect(t011).toHaveLength(2);
       expect(t011.map((e) => e.target).sort()).toEqual(["REQ-FR-002", "REQ-FR-003"]);
     });
@@ -734,10 +715,7 @@ artgraph:
       const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-empty");
       mkdirSync(tmpDir, { recursive: true });
       const file = resolve(tmpDir, "tasks.md");
-      writeFileSync(
-        file,
-        ["# Tasks", "", "- [X] T200 no target @impl()", ""].join("\n"),
-      );
+      writeFileSync(file, ["# Tasks", "", "- [X] T200 no target @impl()", ""].join("\n"));
       try {
         const result = parseMarkdown(file);
         const impl = result.edges.filter((e) => e.kind === "implements");
@@ -768,18 +746,12 @@ artgraph:
         const tasksResult = parseMarkdown(tasksFile);
         expect(
           planResult.edges.some(
-            (e) =>
-              e.kind === "verifies" &&
-              e.source === "T300" &&
-              e.target === "REQ-FR-100",
+            (e) => e.kind === "verifies" && e.source === "T300" && e.target === "REQ-FR-100",
           ),
         ).toBe(true);
         expect(
           tasksResult.edges.some(
-            (e) =>
-              e.kind === "implements" &&
-              e.source === "T301" &&
-              e.target === "login-handler",
+            (e) => e.kind === "implements" && e.source === "T301" && e.target === "login-handler",
           ),
         ).toBe(true);
       } finally {
@@ -808,15 +780,11 @@ artgraph:
       );
       try {
         const result = parseMarkdown(file);
-        const taskIds = result.nodes
-          .filter((n) => n.kind === "task")
-          .map((n) => n.id);
+        const taskIds = result.nodes.filter((n) => n.kind === "task").map((n) => n.id);
         // Only the checkbox-prefixed entry should be a task.
         expect(taskIds).toEqual(["4"]);
         // And its _Requirements: must reach via kiro's verifiesTagRe.
-        const verifies = result.edges.find(
-          (e) => e.kind === "verifies" && e.source === "4",
-        );
+        const verifies = result.edges.find((e) => e.kind === "verifies" && e.source === "4");
         expect(verifies?.target).toBe("1.2");
       } finally {
         unlinkSync(file);
@@ -1043,12 +1011,7 @@ describe("extractAnnotations", () => {
 
   // Case 2: multiple IDs
   it("extracts multiple IDs from one annotation", () => {
-    const { extracts, warnings } = extractAnnotations(
-      "(depends_on: A, B, C)",
-      "X",
-      2,
-      opts,
-    );
+    const { extracts, warnings } = extractAnnotations("(depends_on: A, B, C)", "X", 2, opts);
     expect(warnings).toEqual([]);
     expect(extracts).toEqual([
       { reqId: "X", kind: "depends_on", targets: ["A", "B", "C"], sourceLine: 2 },
@@ -1069,35 +1032,20 @@ describe("extractAnnotations", () => {
 
   // Case 5: whitespace variations
   it("tolerates whitespace around colon and commas", () => {
-    const { extracts } = extractAnnotations(
-      "( depends_on : A , B )",
-      "X",
-      1,
-      opts,
-    );
+    const { extracts } = extractAnnotations("( depends_on : A , B )", "X", 1, opts);
     expect(extracts[0].targets).toEqual(["A", "B"]);
   });
 
   // Case 6: same-keyword duplicated on one line → 2 extracts
   it("treats `(depends_on: A)(depends_on: B)` as two separate extracts", () => {
-    const { extracts } = extractAnnotations(
-      "(depends_on: A)(depends_on: B)",
-      "X",
-      1,
-      opts,
-    );
+    const { extracts } = extractAnnotations("(depends_on: A)(depends_on: B)", "X", 1, opts);
     expect(extracts).toHaveLength(2);
     expect(extracts.map((e) => e.targets)).toEqual([["A"], ["B"]]);
   });
 
   // Case 7: mixed keywords on one line
   it("treats mixed-keyword annotations as separate extracts", () => {
-    const { extracts } = extractAnnotations(
-      "(depends_on: A)(derives_from: B)",
-      "X",
-      1,
-      opts,
-    );
+    const { extracts } = extractAnnotations("(depends_on: A)(derives_from: B)", "X", 1, opts);
     expect(extracts).toHaveLength(2);
     expect(extracts[0].kind).toBe("depends_on");
     expect(extracts[1].kind).toBe("derives_from");
@@ -1105,12 +1053,7 @@ describe("extractAnnotations", () => {
 
   // Case 11: duplicate same-kind same-target produces 2 extracts (dedup is builder's job)
   it("does not dedup same source/target/kind at extract time (builder handles it)", () => {
-    const { extracts } = extractAnnotations(
-      "(depends_on: A)(depends_on: A)",
-      "X",
-      1,
-      opts,
-    );
+    const { extracts } = extractAnnotations("(depends_on: A)(depends_on: A)", "X", 1, opts);
     expect(extracts).toHaveLength(2);
     expect(extracts.every((e) => e.targets[0] === "A")).toBe(true);
   });
@@ -1149,24 +1092,15 @@ describe("extractAnnotations", () => {
   it("emits invalid-annotation-id warning when ID does not match codeId pattern", () => {
     const { extracts, warnings } = extractAnnotations("(depends_on: foo)", "X", 1, opts);
     expect(extracts).toEqual([]);
-    expect(warnings).toEqual([
-      { type: "invalid-annotation-id", key: "foo", filePath: "spec.md" },
-    ]);
+    expect(warnings).toEqual([{ type: "invalid-annotation-id", key: "foo", filePath: "spec.md" }]);
   });
 
   it("keeps valid IDs alongside warnings for invalid siblings", () => {
-    const { extracts, warnings } = extractAnnotations(
-      "(depends_on: A, foo, B)",
-      "X",
-      1,
-      opts,
-    );
+    const { extracts, warnings } = extractAnnotations("(depends_on: A, foo, B)", "X", 1, opts);
     expect(extracts).toEqual([
       { reqId: "X", kind: "depends_on", targets: ["A", "B"], sourceLine: 1 },
     ]);
-    expect(warnings).toEqual([
-      { type: "invalid-annotation-id", key: "foo", filePath: "spec.md" },
-    ]);
+    expect(warnings).toEqual([{ type: "invalid-annotation-id", key: "foo", filePath: "spec.md" }]);
   });
 });
 
@@ -1340,14 +1274,42 @@ describe("parseFrontmatter / findFrontmatterBounds parity (#44)", () => {
     { name: "immediate close (empty body)", input: "---\n---\nbody\n", hasFrontmatter: true },
     { name: "BOM-prefixed valid", input: "﻿---\ntitle: x\n---\nbody\n", hasFrontmatter: true },
     { name: "CRLF valid", input: "---\r\ntitle: x\r\n---\r\nbody\r\n", hasFrontmatter: true },
-    { name: "trailing space on both fences", input: "--- \ntitle: x\n--- \nbody\n", hasFrontmatter: true },
-    { name: "trailing tab on both fences", input: "---\t\ntitle: x\n---\t\nbody\n", hasFrontmatter: true },
-    { name: "indented opening fence (rejected)", input: "   ---\ntitle: x\n---\nbody\n", hasFrontmatter: false },
-    { name: "indented closing fence skipped, second close accepted", input: "---\ntitle: x\n   ---\nmore\n---\nbody\n", hasFrontmatter: true },
-    { name: "mid-document `---` pair only (no opening fence)", input: "# Title\n\n---\nnode_id: x\n---\nbody\n", hasFrontmatter: false },
-    { name: "fence at EOF with no trailing newline", input: "---\ntitle: x\n---", hasFrontmatter: true },
+    {
+      name: "trailing space on both fences",
+      input: "--- \ntitle: x\n--- \nbody\n",
+      hasFrontmatter: true,
+    },
+    {
+      name: "trailing tab on both fences",
+      input: "---\t\ntitle: x\n---\t\nbody\n",
+      hasFrontmatter: true,
+    },
+    {
+      name: "indented opening fence (rejected)",
+      input: "   ---\ntitle: x\n---\nbody\n",
+      hasFrontmatter: false,
+    },
+    {
+      name: "indented closing fence skipped, second close accepted",
+      input: "---\ntitle: x\n   ---\nmore\n---\nbody\n",
+      hasFrontmatter: true,
+    },
+    {
+      name: "mid-document `---` pair only (no opening fence)",
+      input: "# Title\n\n---\nnode_id: x\n---\nbody\n",
+      hasFrontmatter: false,
+    },
+    {
+      name: "fence at EOF with no trailing newline",
+      input: "---\ntitle: x\n---",
+      hasFrontmatter: true,
+    },
     { name: "fence with stray CR at EOF", input: "---\ntitle: x\n---\r", hasFrontmatter: true },
-    { name: "four-dash fence rejected", input: "----\ntitle: x\n----\nbody\n", hasFrontmatter: false },
+    {
+      name: "four-dash fence rejected",
+      input: "----\ntitle: x\n----\nbody\n",
+      hasFrontmatter: false,
+    },
   ];
 
   // parseFrontmatter signals "no frontmatter" by returning the raw input verbatim
@@ -1364,13 +1326,16 @@ describe("parseFrontmatter / findFrontmatterBounds parity (#44)", () => {
     }
   };
 
-  it.each(cases)("$name → both agree (hasFrontmatter=$hasFrontmatter)", ({ input, hasFrontmatter }) => {
-    const fb = findFrontmatterBounds(input);
-    expect({ fb: fb !== null, pf: pfHasFrontmatter(input) }).toEqual({
-      fb: hasFrontmatter,
-      pf: hasFrontmatter,
-    });
-  });
+  it.each(cases)(
+    "$name → both agree (hasFrontmatter=$hasFrontmatter)",
+    ({ input, hasFrontmatter }) => {
+      const fb = findFrontmatterBounds(input);
+      expect({ fb: fb !== null, pf: pfHasFrontmatter(input) }).toEqual({
+        fb: hasFrontmatter,
+        pf: hasFrontmatter,
+      });
+    },
+  );
 
   // Beyond bool parity: when parseFrontmatter parses cleanly, the closing-fence
   // line index reported by findFrontmatterBounds must point at the same physical
@@ -1388,13 +1353,16 @@ describe("parseFrontmatter / findFrontmatterBounds parity (#44)", () => {
       return false;
     }
   });
-  it.each(alignmentCases)("$name → bounds.end aligns with parseFrontmatter content split", ({ input }) => {
-    const fb = findFrontmatterBounds(input);
-    const pf = parseFrontmatter(input);
-    if (!fb) throw new Error("expected frontmatter");
-    const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
-    const lines = text.split("\n");
-    expect(lines[fb.end].replace(/\r$/, "")).toMatch(/^---[ \t]*$/);
-    expect(lines.slice(fb.end + 1).join("\n")).toBe(pf.content);
-  });
+  it.each(alignmentCases)(
+    "$name → bounds.end aligns with parseFrontmatter content split",
+    ({ input }) => {
+      const fb = findFrontmatterBounds(input);
+      const pf = parseFrontmatter(input);
+      if (!fb) throw new Error("expected frontmatter");
+      const text = input.charCodeAt(0) === 0xfeff ? input.slice(1) : input;
+      const lines = text.split("\n");
+      expect(lines[fb.end].replace(/\r$/, "")).toMatch(/^---[ \t]*$/);
+      expect(lines.slice(fb.end + 1).join("\n")).toBe(pf.content);
+    },
+  );
 });

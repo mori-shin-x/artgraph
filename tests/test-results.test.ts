@@ -10,10 +10,7 @@ import {
   loadTestResults,
 } from "../src/test-results.js";
 
-const FIXTURE_DIR = resolve(
-  import.meta.dirname,
-  "fixtures/test-results",
-);
+const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures/test-results");
 
 function fixture(name: string): string {
   return readFileSync(resolve(FIXTURE_DIR, name), "utf-8");
@@ -21,21 +18,15 @@ function fixture(name: string): string {
 
 describe("extractReqTags", () => {
   it("should extract a single REQ tag", () => {
-    expect(extractReqTags("[REQ-001] should do something")).toEqual([
-      "REQ-001",
-    ]);
+    expect(extractReqTags("[REQ-001] should do something")).toEqual(["REQ-001"]);
   });
 
   it("should extract multiple REQ tags", () => {
-    expect(
-      extractReqTags("[REQ-001][REQ-002] should do both"),
-    ).toEqual(["REQ-001", "REQ-002"]);
+    expect(extractReqTags("[REQ-001][REQ-002] should do both")).toEqual(["REQ-001", "REQ-002"]);
   });
 
   it("should extract namespaced REQ tag", () => {
-    expect(extractReqTags("[001-auth/FR-001] auth test")).toEqual([
-      "001-auth/FR-001",
-    ]);
+    expect(extractReqTags("[001-auth/FR-001] auth test")).toEqual(["001-auth/FR-001"]);
   });
 
   it("should return empty array when no tags", () => {
@@ -43,17 +34,13 @@ describe("extractReqTags", () => {
   });
 
   it("should deduplicate tags", () => {
-    expect(
-      extractReqTags("[REQ-001] and [REQ-001] duplicate"),
-    ).toEqual(["REQ-001"]);
+    expect(extractReqTags("[REQ-001] and [REQ-001] duplicate")).toEqual(["REQ-001"]);
   });
 
   // Regression: the previous `[A-Z]+-\d+` token dropped mixed-case IDs, which
   // made Kiro's `Requirement-N` reqs and IDs like `Auth-1` impossible to match.
   it("should extract a Kiro-style Requirement-N tag", () => {
-    expect(extractReqTags("[Requirement-001] kiro req")).toEqual([
-      "Requirement-001",
-    ]);
+    expect(extractReqTags("[Requirement-001] kiro req")).toEqual(["Requirement-001"]);
   });
 
   it("should extract a mixed-case prefixed ID", () => {
@@ -88,18 +75,14 @@ describe("parseVitestJson", () => {
   });
 
   it("should inherit REQ tag from ancestorTitles", () => {
-    const records = parseVitestJson(
-      fixture("vitest-describe-inherit.json"),
-    );
+    const records = parseVitestJson(fixture("vitest-describe-inherit.json"));
     expect(records).toHaveLength(2);
     expect(records[0]!.reqId).toBe("REQ-001");
     expect(records[1]!.reqId).toBe("REQ-001");
   });
 
   it("should create records for multiple REQ tags", () => {
-    const records = parseVitestJson(
-      fixture("vitest-multi-req.json"),
-    );
+    const records = parseVitestJson(fixture("vitest-multi-req.json"));
     expect(records).toHaveLength(2);
     const reqIds = records.map((r) => r.reqId).sort();
     expect(reqIds).toEqual(["REQ-001", "REQ-002"]);
@@ -116,9 +99,7 @@ describe("parseVitestJson", () => {
   });
 
   it("should parse namespaced REQ tag", () => {
-    const records = parseVitestJson(
-      fixture("vitest-namespaced.json"),
-    );
+    const records = parseVitestJson(fixture("vitest-namespaced.json"));
     expect(records).toHaveLength(1);
     expect(records[0]!.reqId).toBe("001-auth/FR-001");
   });
@@ -174,9 +155,7 @@ describe("parseJUnitXml", () => {
   });
 
   it("should inherit REQ tag from testsuite name", () => {
-    const records = parseJUnitXml(
-      fixture("junit-suite-inherit.xml"),
-    );
+    const records = parseJUnitXml(fixture("junit-suite-inherit.xml"));
     expect(records).toHaveLength(2);
     expect(records[0]!.reqId).toBe("REQ-002");
     expect(records[1]!.reqId).toBe("REQ-002");
@@ -209,9 +188,7 @@ describe("parseJUnitXml", () => {
     const xml =
       '<testsuite tests="1"><testcase time="0.01" classname="C" name="[REQ-009] ordered"/></testsuite>';
     const records = parseJUnitXml(xml);
-    expect(records).toEqual([
-      { reqId: "REQ-009", testName: "[REQ-009] ordered", passed: true },
-    ]);
+    expect(records).toEqual([{ reqId: "REQ-009", testName: "[REQ-009] ordered", passed: true }]);
   });
 
   it("should return empty array for invalid XML", () => {
@@ -347,9 +324,7 @@ describe("loadTestResults", () => {
     const filePath = resolve(FIXTURE_DIR, "malformed.json");
     const map = loadTestResults([filePath], FIXTURE_DIR);
     expect(map.size).toBe(0);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining("failed to parse JSON"),
-    );
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("failed to parse JSON"));
     consoleSpy.mockRestore();
   });
 });
