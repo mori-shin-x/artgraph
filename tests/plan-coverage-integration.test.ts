@@ -29,14 +29,7 @@
 //   (m) unresolvedFilePath from Stage A surfaces in top-level diagnostics[]
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import {
-  cpSync,
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-  rmSync,
-} from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";
 import { runCli } from "../src/cli.js";
@@ -82,12 +75,14 @@ function setupFixture(opts: FixtureOptions = {}): Fixture {
 
   // spec.md inside the current spec dir — by default carries no REQ mentions
   // so the mention detector starts clean. Override via opts.specBody.
-  const specBody = opts.specBody ?? [
-    "# Auth Feature (test fixture)",
-    "",
-    "This spec dir is the analysis target for plan-coverage.",
-    "",
-  ].join("\n");
+  const specBody =
+    opts.specBody ??
+    [
+      "# Auth Feature (test fixture)",
+      "",
+      "This spec dir is the analysis target for plan-coverage.",
+      "",
+    ].join("\n");
   writeFileSync(join(specDir, "spec.md"), specBody);
 
   // External spec that owns the REQ definitions so the graph builder picks
@@ -100,7 +95,7 @@ function setupFixture(opts: FixtureOptions = {}): Fixture {
     [
       "---",
       "artgraph:",
-      "  node_id: \"doc:auth-design\"",
+      '  node_id: "doc:auth-design"',
       "---",
       "",
       "# Auth Design",
@@ -116,10 +111,7 @@ function setupFixture(opts: FixtureOptions = {}): Fixture {
 
   // Source files with @impl tags so the graph has implements edges.
   mkdirSync(join(root, "src/auth"), { recursive: true });
-  writeFileSync(
-    join(root, "src/auth/login.ts"),
-    "// @impl INT-001\nexport function login() {}\n",
-  );
+  writeFileSync(join(root, "src/auth/login.ts"), "// @impl INT-001\nexport function login() {}\n");
   writeFileSync(
     join(root, "src/auth/session.ts"),
     "// @impl INT-001 INT-002\nexport function session() {}\n",
@@ -151,23 +143,13 @@ function setupFixture(opts: FixtureOptions = {}): Fixture {
     );
   }
 
-  const tasksBody = opts.tasksBody ?? [
-    "# Tasks",
-    "",
-    "### T001: tweak login",
-    "",
-    "Files: src/auth/login.ts",
-    "",
-  ].join("\n");
+  const tasksBody =
+    opts.tasksBody ??
+    ["# Tasks", "", "### T001: tweak login", "", "Files: src/auth/login.ts", ""].join("\n");
   const tasksPath = join(specDir, "tasks.md");
   writeFileSync(tasksPath, tasksBody);
 
-  const planBody = opts.planBody ?? [
-    "# Plan",
-    "",
-    "Mostly the login flow.",
-    "",
-  ].join("\n");
+  const planBody = opts.planBody ?? ["# Plan", "", "Mostly the login flow.", ""].join("\n");
   const planPath = join(specDir, "plan.md");
   writeFileSync(planPath, planBody);
 
@@ -209,16 +191,13 @@ describe("plan-coverage E2E — (a) SPECIFY_FEATURE_DIRECTORY auto-detect", () =
     const { exitCode, stdout } = await withEnv(
       "SPECIFY_FEATURE_DIRECTORY",
       fx.specDirAbsolute,
-      () =>
-        runCli(["plan-coverage", "--format", "json"], { cwd: fx.root }),
+      () => runCli(["plan-coverage", "--format", "json"], { cwd: fx.root }),
     );
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
     // login.ts @impl INT-001 → at least one implicit (INT-001 not mentioned).
     expect(result.implicitImpactsByReq.length).toBeGreaterThanOrEqual(1);
-    expect(result.implicitImpactsByReq.map((r: { reqId: string }) => r.reqId)).toContain(
-      "INT-001",
-    );
+    expect(result.implicitImpactsByReq.map((r: { reqId: string }) => r.reqId)).toContain("INT-001");
   });
 });
 
@@ -234,11 +213,8 @@ describe("plan-coverage E2E — (b) .specify/feature.json auto-detect", () => {
 
   it("reads feature_directory when env var is unset", async () => {
     fx = setupFixture();
-    const { exitCode, stdout } = await withEnv(
-      "SPECIFY_FEATURE_DIRECTORY",
-      undefined,
-      () =>
-        runCli(["plan-coverage", "--format", "json"], { cwd: fx.root }),
+    const { exitCode, stdout } = await withEnv("SPECIFY_FEATURE_DIRECTORY", undefined, () =>
+      runCli(["plan-coverage", "--format", "json"], { cwd: fx.root }),
     );
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
@@ -258,14 +234,8 @@ describe("plan-coverage E2E — (c) --spec explicit", () => {
 
   it("Spec Kit path shape works with --spec", async () => {
     fx = setupFixture({ omitFeatureJson: true });
-    const { exitCode, stdout } = await withEnv(
-      "SPECIFY_FEATURE_DIRECTORY",
-      undefined,
-      () =>
-        runCli(
-          ["plan-coverage", "--spec", fx.specDirAbsolute, "--format", "json"],
-          { cwd: fx.root },
-        ),
+    const { exitCode, stdout } = await withEnv("SPECIFY_FEATURE_DIRECTORY", undefined, () =>
+      runCli(["plan-coverage", "--spec", fx.specDirAbsolute, "--format", "json"], { cwd: fx.root }),
     );
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
@@ -274,21 +244,13 @@ describe("plan-coverage E2E — (c) --spec explicit", () => {
 
   it("Kiro path shape works with --spec (Kiro has no canonical auto-detect)", async () => {
     fx = setupFixture({ kiroStyle: true });
-    const { exitCode, stdout } = await withEnv(
-      "SPECIFY_FEATURE_DIRECTORY",
-      undefined,
-      () =>
-        runCli(
-          ["plan-coverage", "--spec", fx.specDirAbsolute, "--format", "json"],
-          { cwd: fx.root },
-        ),
+    const { exitCode, stdout } = await withEnv("SPECIFY_FEATURE_DIRECTORY", undefined, () =>
+      runCli(["plan-coverage", "--spec", fx.specDirAbsolute, "--format", "json"], { cwd: fx.root }),
     );
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
     // Kiro fixture still resolves INT-001 from login.ts.
-    expect(result.implicitImpactsByReq.map((r: { reqId: string }) => r.reqId)).toContain(
-      "INT-001",
-    );
+    expect(result.implicitImpactsByReq.map((r: { reqId: string }) => r.reqId)).toContain("INT-001");
   });
 });
 
@@ -305,10 +267,8 @@ describe("plan-coverage E2E — (d) Kiro auto-detect failure", () => {
   it("errors with Kiro-aware guidance when nothing auto-resolves", async () => {
     // Kiro fixture: no .specify/feature.json, no SPECIFY_FEATURE_DIRECTORY.
     fx = setupFixture({ kiroStyle: true });
-    const { exitCode, stderr } = await withEnv(
-      "SPECIFY_FEATURE_DIRECTORY",
-      undefined,
-      () => runCli(["plan-coverage", "--format", "json"], { cwd: fx.root }),
+    const { exitCode, stderr } = await withEnv("SPECIFY_FEATURE_DIRECTORY", undefined, () =>
+      runCli(["plan-coverage", "--format", "json"], { cwd: fx.root }),
     );
     expect(exitCode).toBe(1);
     // Contract requires guidance pointing to both Spec Kit and Kiro paths.
@@ -421,9 +381,9 @@ describe("plan-coverage E2E — (i/j) --require-files-section toggle", () => {
       { cwd: fx.root },
     );
     const result = JSON.parse(stdout);
-    const missing = (
-      result.diagnostics as Array<{ kind: string }>
-    ).filter((d) => d.kind === "missingFilesSection");
+    const missing = (result.diagnostics as Array<{ kind: string }>).filter(
+      (d) => d.kind === "missingFilesSection",
+    );
     expect(missing).toEqual([]);
   });
 
@@ -458,9 +418,7 @@ describe("plan-coverage E2E — (i/j) --require-files-section toggle", () => {
       { cwd: fx.root },
     );
     const result = JSON.parse(stdout);
-    const missingIds = (
-      result.diagnostics as Array<{ kind: string; taskId?: string }>
-    )
+    const missingIds = (result.diagnostics as Array<{ kind: string; taskId?: string }>)
       .filter((d) => d.kind === "missingFilesSection")
       .map((d) => d.taskId);
     expect(missingIds).toEqual(expect.arrayContaining(["T002", "T003"]));
@@ -543,10 +501,9 @@ describe("plan-coverage E2E — (l) text output dual view", () => {
 
   it("contains both 'By source file:' and 'By requirement:' sections when implicit > 0", async () => {
     fx = setupFixture();
-    const { stdout, exitCode } = await runCli(
-      ["plan-coverage", "--spec", fx.specDirAbsolute],
-      { cwd: fx.root },
-    );
+    const { stdout, exitCode } = await runCli(["plan-coverage", "--spec", fx.specDirAbsolute], {
+      cwd: fx.root,
+    });
     expect(exitCode).toBe(0);
     expect(stdout).toContain("By source file:");
     expect(stdout).toContain("By requirement:");
@@ -588,14 +545,10 @@ describe("plan-coverage E2E — (m) unresolvedFilePath diagnostic flattening", (
       ignore: [],
       requireFilesSection: false,
     });
-    const unresolved = result.json.diagnostics.filter(
-      (d) => d.kind === "unresolvedFilePath",
-    );
+    const unresolved = result.json.diagnostics.filter((d) => d.kind === "unresolvedFilePath");
     expect(unresolved.length).toBeGreaterThan(0);
     // The sourceFile field must carry the original Stage A path verbatim.
-    expect(
-      (unresolved[0] as { sourceFile: string }).sourceFile,
-    ).toBe("src/auth/no-such-file.ts");
+    expect((unresolved[0] as { sourceFile: string }).sourceFile).toBe("src/auth/no-such-file.ts");
   });
 });
 
@@ -619,15 +572,7 @@ describe("plan-coverage E2E — --plan with non-existent path (CORR-1)", () => {
     fx = setupFixture();
     const bogusPlan = join(fx.root, "does-not-exist-plan.md");
     const { exitCode, stderr } = await runCli(
-      [
-        "plan-coverage",
-        "--spec",
-        fx.specDirAbsolute,
-        "--plan",
-        bogusPlan,
-        "--format",
-        "json",
-      ],
+      ["plan-coverage", "--spec", fx.specDirAbsolute, "--plan", bogusPlan, "--format", "json"],
       { cwd: fx.root },
     );
     expect(exitCode).toBe(1);
@@ -647,15 +592,7 @@ describe("plan-coverage E2E — --tasks with non-existent path", () => {
     fx = setupFixture();
     const bogusTasks = join(fx.root, "does-not-exist-tasks.md");
     const { exitCode, stderr } = await runCli(
-      [
-        "plan-coverage",
-        "--spec",
-        fx.specDirAbsolute,
-        "--tasks",
-        bogusTasks,
-        "--format",
-        "json",
-      ],
+      ["plan-coverage", "--spec", fx.specDirAbsolute, "--tasks", bogusTasks, "--format", "json"],
       { cwd: fx.root },
     );
     expect(exitCode).toBe(1);
@@ -679,15 +616,7 @@ describe("plan-coverage E2E — --ignore tolerates unknown REQ-IDs", () => {
     // `ignored[]` for transparency but contribute 0 to summary.ignored.
     fx = setupFixture();
     const { exitCode, stdout } = await runCli(
-      [
-        "plan-coverage",
-        "--spec",
-        fx.specDirAbsolute,
-        "--ignore",
-        "NOSUCH-999",
-        "--format",
-        "json",
-      ],
+      ["plan-coverage", "--spec", fx.specDirAbsolute, "--ignore", "NOSUCH-999", "--format", "json"],
       { cwd: fx.root },
     );
     expect(exitCode).toBe(0);
@@ -723,9 +652,7 @@ describe("plan-coverage E2E — BOM + CRLF tasks.md", () => {
     const result = JSON.parse(stdout);
     // login.ts @impl INT-001 → INT-001 must surface as implicit (no
     // mention of INT-001 in the spec trio of this fixture).
-    const reqIds = (
-      result.implicitImpactsByReq as Array<{ reqId: string }>
-    ).map((r) => r.reqId);
+    const reqIds = (result.implicitImpactsByReq as Array<{ reqId: string }>).map((r) => r.reqId);
     expect(reqIds).toContain("INT-001");
   });
 });
@@ -748,11 +675,8 @@ describe("plan-coverage E2E — feature.json pointing at missing dir", () => {
       join(fx.root, ".specify/feature.json"),
       JSON.stringify({ feature_directory: ".specify/specs/no-such-dir" }),
     );
-    const { exitCode, stderr } = await withEnv(
-      "SPECIFY_FEATURE_DIRECTORY",
-      undefined,
-      () =>
-        runCli(["plan-coverage", "--format", "json"], { cwd: fx.root }),
+    const { exitCode, stderr } = await withEnv("SPECIFY_FEATURE_DIRECTORY", undefined, () =>
+      runCli(["plan-coverage", "--format", "json"], { cwd: fx.root }),
     );
     expect(exitCode).toBe(1);
     // The tasks.md path inside the bogus spec dir should appear in the error.
@@ -767,47 +691,43 @@ describe("plan-coverage E2E — large tasks.md (perf scale)", () => {
     if (fx) rmSync(fx.root, { recursive: true, force: true });
   });
 
-  it(
-    "handles a tasks.md with 1000 task blocks within a reasonable time budget",
-    () => {
-      // Build a 1000-block tasks.md that points every block at login.ts so
-      // the impact graph stays small (one source file → INT-001) while the
-      // parser is forced to walk 1000 heading scopes. Programmatic invocation
-      // via runPlanCoverage is enough — we don't need the runCli env mock.
-      const blocks: string[] = ["# Tasks", ""];
-      for (let i = 1; i <= 1000; i++) {
-        const id = `T${String(i).padStart(4, "0")}`;
-        blocks.push(`### ${id}: bulk task`);
-        blocks.push("");
-        blocks.push("Files: src/auth/login.ts");
-        blocks.push("");
-      }
-      fx = setupFixture({ tasksBody: blocks.join("\n") });
+  it("handles a tasks.md with 1000 task blocks within a reasonable time budget", () => {
+    // Build a 1000-block tasks.md that points every block at login.ts so
+    // the impact graph stays small (one source file → INT-001) while the
+    // parser is forced to walk 1000 heading scopes. Programmatic invocation
+    // via runPlanCoverage is enough — we don't need the runCli env mock.
+    const blocks: string[] = ["# Tasks", ""];
+    for (let i = 1; i <= 1000; i++) {
+      const id = `T${String(i).padStart(4, "0")}`;
+      blocks.push(`### ${id}: bulk task`);
+      blocks.push("");
+      blocks.push("Files: src/auth/login.ts");
+      blocks.push("");
+    }
+    fx = setupFixture({ tasksBody: blocks.join("\n") });
 
-      const start = Date.now();
-      const result = runPlanCoverage({
-        repoRoot: fx.root,
-        specDir: fx.specDirAbsolute,
-        tasksPath: fx.tasksPath,
-        planPath: fx.planPath,
-        format: "json",
-        gate: false,
-        ignore: [],
-        requireFilesSection: false,
-      });
-      const elapsed = Date.now() - start;
+    const start = Date.now();
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDirAbsolute,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    const elapsed = Date.now() - start;
 
-      // INT-001 implements login.ts, no mention in spec trio → at least
-      // one implicit impact must surface.
-      expect(result.json.summary.totalAffected).toBeGreaterThan(0);
-      // Loose perf budget. Node + ts-morph scan dominates; the 1000-block
-      // parse should add tens of ms, not seconds. Tuned generously so the
-      // assertion catches accidental O(n^2) regressions without flaking
-      // under CI load.
-      expect(elapsed).toBeLessThan(5000);
-    },
-    10000,
-  );
+    // INT-001 implements login.ts, no mention in spec trio → at least
+    // one implicit impact must surface.
+    expect(result.json.summary.totalAffected).toBeGreaterThan(0);
+    // Loose perf budget. Node + ts-morph scan dominates; the 1000-block
+    // parse should add tens of ms, not seconds. Tuned generously so the
+    // assertion catches accidental O(n^2) regressions without flaking
+    // under CI load.
+    expect(elapsed).toBeLessThan(5000);
+  }, 10000);
 });
 
 // ---------------------------------------------------------------------------
@@ -828,10 +748,7 @@ describe("plan-coverage E2E — large tasks.md (perf scale)", () => {
 //                surfaces as `impactReqs \ originReqs`.
 // ---------------------------------------------------------------------------
 
-const STATIC_SYMBOL_FIXTURE = resolvePath(
-  import.meta.dirname,
-  "fixtures/symbol-mode",
-);
+const STATIC_SYMBOL_FIXTURE = resolvePath(import.meta.dirname, "fixtures/symbol-mode");
 
 describe("plan-coverage symbol-mode E2E — static fixture (T024 / SC-001)", () => {
   it("symbol-unit entry yields exactly 1 impact REQ; file-unit entry yields 3 — ≥50% reduction (SC-001)", () => {
@@ -853,9 +770,7 @@ describe("plan-coverage symbol-mode E2E — static fixture (T024 / SC-001)", () 
     // The two surface as two distinct ImpactGroups under the same sourceFile.
     expect(result.json.implicitImpacts.length).toBeGreaterThanOrEqual(2);
 
-    const symbolGroup = result.json.implicitImpacts.find(
-      (g) => g.sourceSymbol === "validateToken",
-    );
+    const symbolGroup = result.json.implicitImpacts.find((g) => g.sourceSymbol === "validateToken");
     const fileGroup = result.json.implicitImpacts.find(
       (g) => g.sourceFile === "src/auth.ts" && g.sourceSymbol === undefined,
     );

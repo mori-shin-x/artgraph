@@ -179,9 +179,7 @@ function validateReqPatterns(patterns: ReqPatternConfig): void {
       new RegExp(pattern);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      throw new Error(
-        `Invalid reqPatterns.${field}: invalid regular expression — ${msg}`,
-      );
+      throw new Error(`Invalid reqPatterns.${field}: invalid regular expression — ${msg}`);
     }
 
     // listItem/heading extract the ID from capture group 1, so they must have
@@ -245,14 +243,9 @@ function validateTaskConventions(value: unknown, disabled: Set<string>): void {
     }
 
     if (seenNames.has(name)) {
-      throw new Error(
-        `Invalid taskConventions: duplicate name "${name}" in user list`,
-      );
+      throw new Error(`Invalid taskConventions: duplicate name "${name}" in user list`);
     }
-    if (
-      (BUILTIN_TASK_PRESET_NAMES as readonly string[]).includes(name) &&
-      !disabled.has(name)
-    ) {
+    if ((BUILTIN_TASK_PRESET_NAMES as readonly string[]).includes(name) && !disabled.has(name)) {
       throw new Error(
         `Invalid taskConventions: name "${name}" collides with a built-in preset. ` +
           `Add "${name}" to "disableBuiltinTaskConventions" to override it, or choose a different name.`,
@@ -261,9 +254,7 @@ function validateTaskConventions(value: unknown, disabled: Set<string>): void {
     seenNames.add(name);
 
     if (!Array.isArray(fileStems) || fileStems.length === 0) {
-      throw new Error(
-        `Invalid taskConventions[${idx}].fileStems: must not be empty`,
-      );
+      throw new Error(`Invalid taskConventions[${idx}].fileStems: must not be empty`);
     }
     for (const stem of fileStems) {
       if (typeof stem !== "string" || stem === "") {
@@ -350,9 +341,7 @@ function validatePackageManager(value: unknown): PackageManager | undefined {
   // Other unknown values (typos like "npmm") stay silent — warning on every
   // typo would be noise.
   if (value === "yarn") {
-    console.warn(
-      "WARNING: Yarn is not supported; ignoring `.artgraph.json` packageManager field",
-    );
+    console.warn("WARNING: Yarn is not supported; ignoring `.artgraph.json` packageManager field");
     return undefined;
   }
   return undefined;
@@ -426,9 +415,7 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
   const resolvedLock = resolve(rootDir, lockFile);
   const relFromRoot = relative(rootDir, resolvedLock);
   if (relFromRoot.startsWith("..") || isAbsolute(relFromRoot)) {
-    throw new Error(
-      `Invalid lockFile path "${lockFile}": must resolve within the project root`,
-    );
+    throw new Error(`Invalid lockFile path "${lockFile}": must resolve within the project root`);
   }
 
   return {

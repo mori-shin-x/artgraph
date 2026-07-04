@@ -55,7 +55,11 @@ export function unionDeps(deps: DepRef[]): DepRef[] {
  * Replace each `oldId` element of `arr` with every entry of `newIds`
  * (one-to-many expansion), preserving order and de-duplicating.
  */
-function expandRef(arr: string[] | undefined, oldId: string, newIds: string[]): string[] | undefined {
+function expandRef(
+  arr: string[] | undefined,
+  oldId: string,
+  newIds: string[],
+): string[] | undefined {
   if (!arr) return arr;
   const out: string[] = [];
   for (const ref of arr) {

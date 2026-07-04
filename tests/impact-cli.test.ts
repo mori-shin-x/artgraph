@@ -61,8 +61,7 @@ function addSessionExport(root: string): void {
   if (!orig.includes("REQ-003")) {
     writeFileSync(
       specPath,
-      orig.trimEnd() +
-        "\n- REQ-003: createSession must mint a fresh session record for a user.\n",
+      orig.trimEnd() + "\n- REQ-003: createSession must mint a fresh session record for a user.\n",
     );
   }
 }
@@ -139,10 +138,7 @@ describe("CLI: impact symbol-mode direct input (US2 / FR-008 / FR-014)", () => {
   });
 
   it("Case 2: missing symbol → exit 1, stderr quotes the path:symbol that missed", async () => {
-    const { exitCode, stderr } = await runAt(root, [
-      "impact",
-      "src/auth.ts:doesNotExist",
-    ]);
+    const { exitCode, stderr } = await runAt(root, ["impact", "src/auth.ts:doesNotExist"]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("No matching symbol found");
     expect(stderr).toContain("src/auth.ts:doesNotExist");
@@ -177,10 +173,7 @@ describe("CLI: impact scan-mode mismatch (US2 / FR-013 / R-010)", () => {
   });
 
   it("Case 3: file-mode graph + symbol input → exit 1, stderr asks for scan --mode symbol", async () => {
-    const { exitCode, stderr } = await runAt(root, [
-      "impact",
-      "src/auth/login.ts:doesNotMatter",
-    ]);
+    const { exitCode, stderr } = await runAt(root, ["impact", "src/auth/login.ts:doesNotMatter"]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("symbol-level input requires");
     expect(stderr).toContain("scan --mode symbol");
@@ -331,10 +324,7 @@ describe("CLI: impact text Drift candidates section (US2 / FR-015)", () => {
 
   it("Case 7: `REQ-001 depends_on REQ-007` → text shows `Drift candidates: REQ-007`", async () => {
     addDependsOnReq007(root);
-    const { stdout, exitCode } = await runAt(root, [
-      "impact",
-      "src/auth.ts:validateToken",
-    ]);
+    const { stdout, exitCode } = await runAt(root, ["impact", "src/auth.ts:validateToken"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Impact reqs:");
     expect(stdout).toMatch(/REQ-001\s+\(req\)/);
@@ -365,10 +355,7 @@ describe("CLI: impact text Drift candidates section (US2 / FR-015)", () => {
   });
 
   it("Case 8: `impactReqs == originReqs` (no depends_on) → `Drift candidates` section omitted", async () => {
-    const { stdout, exitCode } = await runAt(root, [
-      "impact",
-      "src/auth.ts:validateToken",
-    ]);
+    const { stdout, exitCode } = await runAt(root, ["impact", "src/auth.ts:validateToken"]);
     expect(exitCode).toBe(0);
     // Three REQ sections become two: Impact + Origin only.
     expect(stdout).toContain("Impact reqs:");
@@ -570,9 +557,14 @@ describe("CLI: impact --from-tasks (spec 014 regression)", () => {
     const tasksPath = join(root, "tasks.md");
     writeFileSync(
       tasksPath,
-      ["# Tasks", "", "### T001: tweak login (depth-bounded)", "", "Files: src/auth/login.ts", ""].join(
-        "\n",
-      ),
+      [
+        "# Tasks",
+        "",
+        "### T001: tweak login (depth-bounded)",
+        "",
+        "Files: src/auth/login.ts",
+        "",
+      ].join("\n"),
     );
 
     const { stdout, exitCode } = await runAt(root, [
@@ -752,13 +744,7 @@ describe("CLI: impact --from-tasks emits diagnostics as warnings (SPEC-2)", () =
       ].join("\n"),
     );
 
-    const { stderr } = await runAt(root, [
-      "impact",
-      "--from-tasks",
-      tasksPath,
-      "--format",
-      "json",
-    ]);
+    const { stderr } = await runAt(root, ["impact", "--from-tasks", tasksPath, "--format", "json"]);
     expect(stderr).toMatch(/line \d+/);
     expect(stderr).toContain("src/auht.ts");
   });

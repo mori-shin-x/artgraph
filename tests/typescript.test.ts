@@ -139,9 +139,7 @@ describe("createTSParser (custom codeId — M1)", () => {
       "file",
       "\\d+",
     ).parse();
-    const verifyTargets = result.edges
-      .filter((e) => e.kind === "verifies")
-      .map((e) => e.target);
+    const verifyTargets = result.edges.filter((e) => e.kind === "verifies").map((e) => e.target);
     expect(verifyTargets).toContain("123");
   });
 });

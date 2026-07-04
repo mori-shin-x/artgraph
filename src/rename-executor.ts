@@ -129,9 +129,7 @@ function applyWrites(
 
 // ── executeRename ───────────────────────────────────────────────────
 
-export function executeRename(
-  options: RenameOptions & { from: string; to: string },
-): RenameResult {
+export function executeRename(options: RenameOptions & { from: string; to: string }): RenameResult {
   const { rootDir, dryRun, from, to } = options;
   const { config, existingIds, rewriteOpts } = loadScanContext(rootDir);
 

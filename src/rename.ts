@@ -70,10 +70,7 @@ export function extOf(filePath: string): string {
  */
 function idBoundaryRegex(id: string, flags: string = "g"): RegExp {
   const escaped = escapeRegExp(id);
-  return new RegExp(
-    `(?<![A-Za-z0-9_/:-])${escaped}(?![A-Za-z0-9_/:-])`,
-    flags,
-  );
+  return new RegExp(`(?<![A-Za-z0-9_/:-])${escaped}(?![A-Za-z0-9_/:-])`, flags);
 }
 
 /**
@@ -104,9 +101,7 @@ function fencedLineSet(lines: string[]): Set<number> {
 }
 
 function listItemRegex(opts?: RewriteOptions): RegExp {
-  return opts?.reqPatterns?.listItem
-    ? new RegExp(opts.reqPatterns.listItem)
-    : DEFAULT_LIST_ITEM_RE;
+  return opts?.reqPatterns?.listItem ? new RegExp(opts.reqPatterns.listItem) : DEFAULT_LIST_ITEM_RE;
 }
 
 // Every active task preset's `taskIdRe`, with built-ins filtered by the disable
@@ -261,8 +256,7 @@ export function rewriteSpecHeading(
       const match = lines[i].match(re);
       if (!match) continue;
       const before = lines[i];
-      lines[i] =
-        match[1] + "Requirement " + newNum + match[2] + lines[i].slice(match[0].length);
+      lines[i] = match[1] + "Requirement " + newNum + match[2] + lines[i].slice(match[0].length);
       changes.push({
         filePath: "",
         line: i + 1,
@@ -303,11 +297,7 @@ export function rewriteSpecHeading(
  * Rewrite `// @impl REQ-001` and multi-ID variants like
  * `// @impl REQ-001 REQ-002`. Only the target `oldId` is replaced.
  */
-export function rewriteImplTags(
-  content: string,
-  oldId: string,
-  newId: string,
-): RewriteResult {
+export function rewriteImplTags(content: string, oldId: string, newId: string): RewriteResult {
   const lines = content.split("\n");
   const changes: RewriteChange[] = [];
 
@@ -345,11 +335,7 @@ export function rewriteImplTags(
  * case-insensitively), so the rewriter matches the same to avoid touching text
  * the tooling does not treat as a reference (M1).
  */
-export function rewriteTestTags(
-  content: string,
-  oldId: string,
-  newId: string,
-): RewriteResult {
+export function rewriteTestTags(content: string, oldId: string, newId: string): RewriteResult {
   const lines = content.split("\n");
   const changes: RewriteChange[] = [];
 
@@ -410,11 +396,7 @@ function isBlockItemLine(line: string): boolean {
  *
  * Body content outside the frontmatter delimiters is never touched.
  */
-export function rewriteFrontmatter(
-  content: string,
-  oldId: string,
-  newId: string,
-): RewriteResult {
+export function rewriteFrontmatter(content: string, oldId: string, newId: string): RewriteResult {
   const lines = content.split("\n");
   const changes: RewriteChange[] = [];
 
@@ -434,7 +416,13 @@ export function rewriteFrontmatter(
     if (nm && nm[2] === oldId) {
       const before = line;
       lines[i] = nm[1] + newId + nm[3];
-      changes.push({ filePath: "", line: i + 1, kind: "frontmatter-depends-on", before, after: lines[i] });
+      changes.push({
+        filePath: "",
+        line: i + 1,
+        kind: "frontmatter-depends-on",
+        before,
+        after: lines[i],
+      });
       inBlock = false;
       continue;
     }
@@ -449,7 +437,13 @@ export function rewriteFrontmatter(
           const before = line;
           idRe.lastIndex = 0;
           lines[i] = line.replace(idRe, newId);
-          changes.push({ filePath: "", line: i + 1, kind: "frontmatter-depends-on", before, after: lines[i] });
+          changes.push({
+            filePath: "",
+            line: i + 1,
+            kind: "frontmatter-depends-on",
+            before,
+            after: lines[i],
+          });
         }
       }
       continue;
@@ -465,7 +459,13 @@ export function rewriteFrontmatter(
         const before = line;
         idRe.lastIndex = 0;
         lines[i] = line.replace(idRe, newId);
-        changes.push({ filePath: "", line: i + 1, kind: "frontmatter-depends-on", before, after: lines[i] });
+        changes.push({
+          filePath: "",
+          line: i + 1,
+          kind: "frontmatter-depends-on",
+          before,
+          after: lines[i],
+        });
       }
     }
   }
@@ -571,10 +571,7 @@ export function rewriteAnnotationIds(
   // optional (the parser strips them as a pair); a degenerate `**OLD` with no
   // matching close bold is left as-is by also requiring the boldness to be
   // symmetrical via a backreference.
-  const idTokenRE = new RegExp(
-    `(^|,)(\\s*)(\\*\\*)?(${escapedOld})(\\*\\*)?(\\s*)(?=,|$)`,
-    "g",
-  );
+  const idTokenRE = new RegExp(`(^|,)(\\s*)(\\*\\*)?(${escapedOld})(\\*\\*)?(\\s*)(?=,|$)`, "g");
   // When provided, validate that `oldId` looks like a real ID under the
   // user's reqPatterns.codeId. If not, the rewriter is a no-op — this keeps
   // parser/rewriter parity (parser would reject the token via
@@ -605,8 +602,15 @@ export function rewriteAnnotationIds(
       if (slice.replace(/\s/g, "") === "") return match;
       const newBody = body.replace(
         idTokenRE,
-        (_m: string, sep: string, leadWS: string, bold1: string | undefined, _id: string, bold2: string | undefined, trailWS: string) =>
-          `${sep}${leadWS}${bold1 ?? ""}${newId}${bold2 ?? ""}${trailWS}`,
+        (
+          _m: string,
+          sep: string,
+          leadWS: string,
+          bold1: string | undefined,
+          _id: string,
+          bold2: string | undefined,
+          trailWS: string,
+        ) => `${sep}${leadWS}${bold1 ?? ""}${newId}${bold2 ?? ""}${trailWS}`,
       );
       return head + newBody + tail;
     });

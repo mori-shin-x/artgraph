@@ -1,3 +1,8 @@
+# lefthook は install 時に .git/hooks/ に stub を書き込むため、
+# postinstall スクリプトの実行を許可する必要がある。
+allowBuilds:
+  lefthook: true
+
 # pnpm 10.16+ ではこのファイルが pnpm 設定の正規ファイル。
 # 本リポジトリは単一パッケージなので `packages:` フィールドは持たず、
 # pnpm 設定のみを記述する (workspace 宣言ではない)。

@@ -30,6 +30,7 @@
     "demo:record": "node scripts/record-tag-zero-demo.mjs",
     "demo:svg": "svg-term --in docs/demo/tag-zero.cast --out docs/demo/tag-zero.svg --window --width 96 --height 45 --padding 12",
     "demo": "pnpm build && pnpm demo:record && pnpm demo:svg",
+    "prepare": "lefthook install > /dev/null 2>&1 || true",
     "prepublishOnly": "rm -rf dist && tsc && pnpm check-versions && pnpm test:unit && pnpm test:e2e"
   },
   "repository": {
@@ -69,6 +70,7 @@
     "@types/node": "^22.15.0",
     "@vitest/coverage-v8": "^4.1.9",
     "knip": "^6.17.1",
+    "lefthook": "^2.1.9",
     "oxfmt": "^0.55.0",
     "oxlint": "^1.70.0",
     "svg-term-cli": "^2.1.1",
