@@ -105,15 +105,11 @@ describe("e2e: tag-zero brownfield (issue #122)", () => {
     // spec 013 requires --agents when Skills / agent-context stages run.
     // The zero-tag hint is orthogonal to those stages, so opt out
     // explicitly to keep the test focused on the onboarding message.
-    const r = spawnSync(
-      "node",
-      [CLI, "init", "--force", "--no-skills", "--no-agent-context"],
-      {
-        encoding: "utf-8",
-        cwd: workDir,
-        timeout: 30000,
-      },
-    );
+    const r = spawnSync("node", [CLI, "init", "--force", "--no-skills", "--no-agent-context"], {
+      encoding: "utf-8",
+      cwd: workDir,
+      timeout: 30000,
+    });
     // Zero specs must not fatal. The whole DoD is "init completes without
     // warning when there are no tags to find".
     expect(r.status, cliFailureMessage(r)).toBe(0);
@@ -152,8 +148,6 @@ describe("e2e: tag-zero brownfield (issue #122)", () => {
     const parsed = JSON.parse(r.stdout) as { affectedFiles?: string[] };
     expect(Array.isArray(parsed.affectedFiles)).toBe(true);
     // Order-independent assertion — impact() has no documented file ordering.
-    expect(parsed.affectedFiles).toEqual(
-      expect.arrayContaining(["src/a.ts", "src/b.ts"]),
-    );
+    expect(parsed.affectedFiles).toEqual(expect.arrayContaining(["src/a.ts", "src/b.ts"]));
   });
 });

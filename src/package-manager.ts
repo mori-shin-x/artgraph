@@ -16,10 +16,18 @@ export type { PackageManager } from "./types.js";
  * downstream fallback all resolve to pnpm. Only an explicit npm signal
  * (`package-lock.json` / `packageManager: npm@x`) returns npm.
  *
+ * @param options.quiet When true, suppress the final "cannot detect" error
+ *   message. Callers that emit their own user-facing warning should set this
+ *   to avoid redundant stderr output. `warn()` calls (yarn signals) are
+ *   still emitted — those are informational notices about the detected PM,
+ *   distinct from a silent-skip decision by the caller.
  * @returns the detected PM, or `null` when nothing can be detected (no
  *          package.json, no lockfile, no deno marker).
  */
-export function detectPackageManager(rootDir: string): PackageManager | null {
+export function detectPackageManager(
+  rootDir: string,
+  options?: { quiet?: boolean },
+): PackageManager | null {
   // Use isFile() (not existsSync) so a directory or symlink named like a
   // lockfile (e.g. `mkdir bun.lockb`) does not get mistaken for the real
   // lockfile. Mirrors `[ -f <name> ]` in the bash snippet.
@@ -40,9 +48,7 @@ export function detectPackageManager(rootDir: string): PackageManager | null {
       case "npm":
         return field;
       case "yarn":
-        warn(
-          'packageManager=yarn but Yarn is not supported; falling back to pnpm',
-        );
+        warn("packageManager=yarn but Yarn is not supported; falling back to pnpm");
         return "pnpm";
       // Unknown / malformed value: fall through to lockfile sniffing.
     }
@@ -50,10 +56,7 @@ export function detectPackageManager(rootDir: string): PackageManager | null {
 
   // (2) Lockfile / config sniffing (first match wins).
   if (hasFile("bun.lockb") || hasFile("bun.lock")) return "bun";
-  if (
-    !hasPkgJson &&
-    (hasFile("deno.lock") || hasFile("deno.json") || hasFile("deno.jsonc"))
-  ) {
+  if (!hasPkgJson && (hasFile("deno.lock") || hasFile("deno.json") || hasFile("deno.jsonc"))) {
     return "deno";
   }
   if (hasFile("pnpm-lock.yaml")) return "pnpm";
@@ -68,7 +71,13 @@ export function detectPackageManager(rootDir: string): PackageManager | null {
 
   // (4) Nothing detectable. Match the bash snippet's stderr prefix exactly
   // ("ERROR:") so SSOT scripts and the TS detector emit identical text.
-  error("Cannot detect package manager; ask the user which to use");
+  // When the caller opts into `quiet`, it takes over user-facing messaging
+  // (see src/cli.ts install-hooks flow) — suppressing this avoids a
+  // redundant `ERROR:` + `WARNING:` pair for the same event that would
+  // otherwise trip CI log grep for hard failures.
+  if (!options?.quiet) {
+    error("Cannot detect package manager; ask the user which to use");
+  }
   return null;
 }
 
@@ -112,7 +121,7 @@ export function buildExecCommand(pm: PackageManager, subcommand = ""): string {
   return sub ? `${prefix} ${sub}` : prefix;
 }
 
-function execPrefix(pm: PackageManager): string {
+export function execPrefix(pm: PackageManager): string {
   switch (pm) {
     case "npm":
       return "npx artgraph";

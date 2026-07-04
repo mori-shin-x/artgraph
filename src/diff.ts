@@ -22,14 +22,10 @@ export function getGitTrackedFiles(rootDir: string): string[] {
     // is a belt-and-braces guard so non-ASCII paths (e.g. specs/日本語.md)
     // are never octal-escaped — otherwise `existsSync` on the escaped name
     // fails and the file is silently skipped.
-    const output = execFileSync(
-      "git",
-      ["-c", "core.quotePath=false", "ls-files", "-z"],
-      {
-        cwd: rootDir,
-        encoding: "utf-8",
-      },
-    );
+    const output = execFileSync("git", ["-c", "core.quotePath=false", "ls-files", "-z"], {
+      cwd: rootDir,
+      encoding: "utf-8",
+    });
     return parseNulSeparated(output);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

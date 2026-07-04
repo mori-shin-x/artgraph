@@ -146,8 +146,7 @@ export function buildLockFromGraph(graph: ArtifactGraph, prevLock?: LockFile): L
     // implementation file/symbol sources and `entry.tests` for test sources.
     // `task → implements/verifies` is a planning artefact (data-model.md §7 / U2)
     // — including task IDs here would pollute drift checks and reconcile output.
-    const isTaskSource = (source: string) =>
-      graph.nodes.get(source)?.kind === "task";
+    const isTaskSource = (source: string) => graph.nodes.get(source)?.kind === "task";
 
     const implEdges = graph.edges.filter(
       (e) => e.kind === "implements" && e.target === id && !isTaskSource(e.source),

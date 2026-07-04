@@ -309,9 +309,7 @@ describe("runInit", () => {
       docGraph: { autoNodes: false },
       mode: "symbol",
       testResultPaths: ["junit/results.xml"],
-      taskConventions: [
-        { name: "openspec", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" },
-      ],
+      taskConventions: [{ name: "openspec", fileStems: ["tasks"], taskIdRe: "^(OS-\\d+)" }],
       planCoverage: { requireFilesSection: true },
     };
     writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify(userConfig));
@@ -437,10 +435,7 @@ describe("runInit Skills installation (directory format)", () => {
 
   it("throws when a skill file already exists and --force is not set", () => {
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
-    writeFileSync(
-      join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"),
-      "user content\n",
-    );
+    writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "user content\n");
 
     expect(() => runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] })).toThrow(
       /artgraph-impact[/\\]SKILL\.md.*--force/,
@@ -454,12 +449,14 @@ describe("runInit Skills installation (directory format)", () => {
 
   it("overwrites existing skill files when --force is set", () => {
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
-    writeFileSync(
-      join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"),
-      "user content\n",
-    );
+    writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "user content\n");
 
-    const result = runInit(tmp, { noScan: true, withSkills: true, force: true, agents: ["claude"] });
+    const result = runInit(tmp, {
+      noScan: true,
+      withSkills: true,
+      force: true,
+      agents: ["claude"],
+    });
 
     expect(result.skillsInstalled!.length).toBeGreaterThan(0);
     const body = readFileSync(
@@ -504,12 +501,11 @@ describe("runInit Skills installation (directory format)", () => {
 
   it("does not write .artgraph.json when skills pre-flight validation fails", () => {
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
-    writeFileSync(
-      join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"),
-      "preexisting\n",
-    );
+    writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "preexisting\n");
 
-    expect(() => runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] })).toThrow(DistributionError);
+    expect(() => runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] })).toThrow(
+      DistributionError,
+    );
 
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
     expect(
@@ -552,9 +548,7 @@ describe("runInit Skills installation (directory format)", () => {
     // Critically: agent 1 (claude) MUST NOT have any Skill files on disk.
     // Prior to the B2 fix, agent 1's distribute() ran to completion before
     // agent 2's failed, leaving `.claude/skills/artgraph-impact/SKILL.md`.
-    expect(
-      existsSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md")),
-    ).toBe(false);
+    expect(existsSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"))).toBe(false);
 
     // Agent 2's pre-existing user content is preserved unchanged.
     expect(
@@ -625,13 +619,7 @@ describe("runInit default behavior (P0)", () => {
   // workflow works out of the box.
   it("deploys artgraph-plan-coverage Skill in default mode (spec 014 SC-007)", () => {
     const result = runInit(tmp, { agents: ["claude"] });
-    const installedPath = join(
-      tmp,
-      ".claude",
-      "skills",
-      "artgraph-plan-coverage",
-      "SKILL.md",
-    );
+    const installedPath = join(tmp, ".claude", "skills", "artgraph-plan-coverage", "SKILL.md");
     expect(existsSync(installedPath)).toBe(true);
     const body = readFileSync(installedPath, "utf-8");
     expect(body.startsWith("---")).toBe(true);
@@ -691,9 +679,7 @@ describe("runInit default behavior (P0)", () => {
   it("integrate-auto runs speckit when only .specify/ is detected", () => {
     mkdirSync(join(tmp, ".specify"));
     const result = runInit(tmp);
-    const speckitResult = (result.integrationResults ?? []).find(
-      (r) => r.providerId === "speckit",
-    );
+    const speckitResult = (result.integrationResults ?? []).find((r) => r.providerId === "speckit");
     expect(speckitResult).toBeDefined();
   });
 
@@ -705,9 +691,16 @@ describe("runInit default behavior (P0)", () => {
     expect(ids).toEqual(["kiro", "speckit"]);
   });
 
-  it("default mode does NOT create .claude/settings.json (hooks stub no-op in P0)", () => {
+  it("default mode creates .claude/settings.json with the Stop hook", () => {
+    writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "t", type: "module" }));
+    writeFileSync(join(tmp, "pnpm-lock.yaml"), "");
+
     runInit(tmp);
-    expect(existsSync(join(tmp, ".claude", "settings.json"))).toBe(false);
+
+    const settingsPath = join(tmp, ".claude", "settings.json");
+    expect(existsSync(settingsPath)).toBe(true);
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    expect(settings.hooks.Stop[0].hooks[0].command).toMatch(/^pnpm exec artgraph /);
   });
 
   it("default mode without --agents does NOT create or modify CLAUDE.md (agent-context stage requires --agents)", () => {
@@ -716,7 +709,9 @@ describe("runInit default behavior (P0)", () => {
   });
 
   it("--no-hooks is accepted without error in default mode", () => {
-    expect(() => runInit(tmp, { noHooks: true })).not.toThrow();
+    const result = runInit(tmp, { noHooks: true });
+    expect(existsSync(join(tmp, ".claude", "settings.json"))).toBe(false);
+    expect(result.hooksInstall).toBeUndefined();
   });
 
   it("--no-agent-context is accepted without error in default mode", () => {
@@ -847,9 +842,7 @@ describe("readSkillSource (packaging-fault surface)", () => {
     const missingDir = join(tmp, "does-not-exist");
 
     expect(() => readSkillSource(missingDir)).toThrow(SkillsInstallError);
-    expect(() => readSkillSource(missingDir)).toThrow(
-      /template directory not found.*packaging/i,
-    );
+    expect(() => readSkillSource(missingDir)).toThrow(/template directory not found.*packaging/i);
   });
 
   it("throws SkillsInstallError when the templates directory has no Skill directories", () => {
@@ -875,9 +868,7 @@ describe("readSkillSource (packaging-fault surface)", () => {
     writeFileSync(join(customTemplates, "artgraph-broken", "README.md"), "no SKILL.md here\n");
 
     try {
-      expect(() => readSkillSource(customTemplates)).toThrow(
-        /artgraph-broken.*missing SKILL\.md/,
-      );
+      expect(() => readSkillSource(customTemplates)).toThrow(/artgraph-broken.*missing SKILL\.md/);
     } finally {
       rmSync(customTemplates, { recursive: true, force: true });
     }
@@ -891,9 +882,7 @@ describe("readSkillSource (packaging-fault surface)", () => {
 
     try {
       expect(() => readSkillSource(sharedOnly)).toThrow(SkillsInstallError);
-      expect(() => readSkillSource(sharedOnly)).toThrow(
-        /Only _shared.*no distributable Skills/i,
-      );
+      expect(() => readSkillSource(sharedOnly)).toThrow(/Only _shared.*no distributable Skills/i);
     } finally {
       rmSync(sharedOnly, { recursive: true, force: true });
     }
@@ -951,9 +940,7 @@ describe("skill template <-> dogfood sync", () => {
       const rel = tPath.substring(templateDir.length + 1);
       const dPath = join(dogfoodDir, rel);
       expect(existsSync(dPath), `dogfood file missing: ${dPath}`).toBe(true);
-      expect(readNormalized(dPath), `content drift in ${rel}`).toBe(
-        readNormalized(tPath),
-      );
+      expect(readNormalized(dPath), `content drift in ${rel}`).toBe(readNormalized(tPath));
     }
 
     // Reverse direction: every dogfood file must have a matching template (no stale files)

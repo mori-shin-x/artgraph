@@ -27,10 +27,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import {
-  runPlanCoverage,
-  type PlanCoverageRunResult,
-} from "../src/plan-coverage/index.js";
+import { runPlanCoverage, type PlanCoverageRunResult } from "../src/plan-coverage/index.js";
 
 // ---------------------------------------------------------------------------
 // Fixture helper
@@ -161,14 +158,7 @@ describe("[contract] plan-coverage JSON — ImpactGroup symbol entry shape (T035
 
   it("[contract] symbol entry exposes exactly { sourceFile, sourceSymbol, impactReqs, originReqs } and omits the spec-014 `reqs` key", () => {
     fx = setupContractFixture(
-      [
-        "# Tasks",
-        "",
-        "### T001",
-        "",
-        "Files: src/auth.ts:validateToken",
-        "",
-      ].join("\n"),
+      ["# Tasks", "", "### T001", "", "Files: src/auth.ts:validateToken", ""].join("\n"),
     );
     const result = runJson(fx);
     expect(result.json.implicitImpacts).toHaveLength(1);
@@ -209,9 +199,7 @@ describe("[contract] plan-coverage JSON — ImpactGroup file-unit shape (T036 / 
   });
 
   it("[contract] file-unit entry omits the `sourceSymbol` JSON key entirely and reports originReqs:[] when file-top has no @impl tag", () => {
-    fx = setupContractFixture(
-      ["# Tasks", "", "### T001", "", "Files: src/auth.ts", ""].join("\n"),
-    );
+    fx = setupContractFixture(["# Tasks", "", "### T001", "", "Files: src/auth.ts", ""].join("\n"));
     const result = runJson(fx);
     expect(result.json.implicitImpacts).toHaveLength(1);
     const g = result.json.implicitImpacts[0];
@@ -221,9 +209,7 @@ describe("[contract] plan-coverage JSON — ImpactGroup file-unit shape (T036 / 
     expectKeyAbsent(g, "sourceSymbol");
 
     // Field set is exactly the file-unit triple.
-    expect(new Set(Object.keys(g))).toEqual(
-      new Set(["sourceFile", "impactReqs", "originReqs"]),
-    );
+    expect(new Set(Object.keys(g))).toEqual(new Set(["sourceFile", "impactReqs", "originReqs"]));
 
     // originReqs MUST be the empty array, NOT omitted: the contract makes
     // an explicit distinction ("空配列を必ず populate、key 省略はしない").
@@ -234,11 +220,7 @@ describe("[contract] plan-coverage JSON — ImpactGroup file-unit shape (T036 / 
     // the behavioural side of US3 AS#2 (no over/under detection while the
     // schema is being pinned).
     expect(g.sourceFile).toBe("src/auth.ts");
-    expect(g.impactReqs.map((r) => r.reqId).sort()).toEqual([
-      "REQ-001",
-      "REQ-005",
-      "REQ-009",
-    ]);
+    expect(g.impactReqs.map((r) => r.reqId).sort()).toEqual(["REQ-001", "REQ-005", "REQ-009"]);
   });
 });
 
@@ -287,9 +269,7 @@ describe("[contract] plan-coverage JSON — 1 file × 2 symbols (T037 / US3 AS#3
     const validateGroup = result.json.implicitImpacts.find(
       (g) => g.sourceSymbol === "validateToken",
     )!;
-    const issueGroup = result.json.implicitImpacts.find(
-      (g) => g.sourceSymbol === "issueToken",
-    )!;
+    const issueGroup = result.json.implicitImpacts.find((g) => g.sourceSymbol === "issueToken")!;
     expect(validateGroup.originReqs.map((r) => r.reqId)).toEqual(["REQ-001"]);
     expect(issueGroup.originReqs.map((r) => r.reqId)).toEqual(["REQ-005"]);
     expect(validateGroup.impactReqs.map((r) => r.reqId)).toEqual(["REQ-001"]);
@@ -327,9 +307,7 @@ describe("[contract] plan-coverage JSON — ImplicitImpactByReq shape (T038 / US
 
     for (const r of result.json.implicitImpactsByReq) {
       // Field set is EXACTLY the two-field canonical shape — no surprises.
-      expect(new Set(Object.keys(r))).toEqual(
-        new Set(["reqId", "sourceLocations"]),
-      );
+      expect(new Set(Object.keys(r))).toEqual(new Set(["reqId", "sourceLocations"]));
       // Spec-014's `sourceFiles: string[]` field MUST NOT reappear.
       expectKeyAbsent(r, "sourceFiles");
 
@@ -346,12 +324,8 @@ describe("[contract] plan-coverage JSON — ImplicitImpactByReq shape (T038 / US
     // Cross-check value: each REQ resolves to its expected symbol location.
     const req1 = result.json.implicitImpactsByReq.find((r) => r.reqId === "REQ-001")!;
     const req5 = result.json.implicitImpactsByReq.find((r) => r.reqId === "REQ-005")!;
-    expect(req1.sourceLocations).toEqual([
-      { file: "src/auth.ts", symbol: "validateToken" },
-    ]);
-    expect(req5.sourceLocations).toEqual([
-      { file: "src/auth.ts", symbol: "issueToken" },
-    ]);
+    expect(req1.sourceLocations).toEqual([{ file: "src/auth.ts", symbol: "validateToken" }]);
+    expect(req5.sourceLocations).toEqual([{ file: "src/auth.ts", symbol: "issueToken" }]);
   });
 });
 
@@ -368,11 +342,11 @@ describe("[contract] plan-coverage JSON — unresolvedSymbol diagnostic shape (T
   it("[contract] unknown symbol surfaces as a { kind:'unresolvedSymbol', sourceFile, symbol, line } diagnostic and the entry is excluded from implicitImpacts", () => {
     fx = setupContractFixture(
       [
-        "# Tasks",                                  // line 1
-        "",                                         // line 2
-        "### T001",                                 // line 3
-        "",                                         // line 4
-        "Files: src/auth.ts:doesNotExist",          // line 5
+        "# Tasks", // line 1
+        "", // line 2
+        "### T001", // line 3
+        "", // line 4
+        "Files: src/auth.ts:doesNotExist", // line 5
         "",
       ].join("\n"),
     );
@@ -384,16 +358,12 @@ describe("[contract] plan-coverage JSON — unresolvedSymbol diagnostic shape (T
     expect(result.json.implicitImpactsByReq).toEqual([]);
 
     // Exactly one unresolvedSymbol diagnostic surfaces.
-    const unresolved = result.json.diagnostics.filter(
-      (d) => d.kind === "unresolvedSymbol",
-    );
+    const unresolved = result.json.diagnostics.filter((d) => d.kind === "unresolvedSymbol");
     expect(unresolved).toHaveLength(1);
     const d = unresolved[0];
 
     // Field set: { kind, sourceFile, symbol, line } — no extras.
-    expect(new Set(Object.keys(d))).toEqual(
-      new Set(["kind", "sourceFile", "symbol", "line"]),
-    );
+    expect(new Set(Object.keys(d))).toEqual(new Set(["kind", "sourceFile", "symbol", "line"]));
 
     // Value pinning per contract §4.
     expect(d).toEqual({

@@ -17,6 +17,12 @@ pnpm install --frozen-lockfile
 
 The repository name is `artgraph`, matching the npm package and the CLI binary.
 
+`pnpm install` also installs [lefthook](https://github.com/evilmartians/lefthook) git hooks (`pre-commit`, `pre-push`) via the `prepare` script. See [Git hooks](#git-hooks) below.
+
+### Non-pnpm package managers
+
+If you install with Bun, Deno, or another manager that does not honor npm's `prepare` lifecycle, run `pnpm exec lefthook install` (or the equivalent) manually once after install.
+
 ## Common commands
 
 | Command           | Purpose                                         |
@@ -27,7 +33,27 @@ The repository name is `artgraph`, matching the npm package and the CLI binary.
 | `pnpm knip`       | Detect unused exports / files / dependencies    |
 | `pnpm artgraph …` | Invoke the locally built CLI (after `pnpm build`) |
 
-Before opening a pull request, run `pnpm build && pnpm test && pnpm knip` locally — CI gates on the same three commands.
+Before opening a pull request, run `pnpm build && pnpm test && pnpm knip` locally — CI gates on the same three commands. The `pre-push` git hook runs `typecheck`, `knip`, `test:unit`, and `test:e2e` automatically; if you `git push` and everything passes, CI will almost certainly pass too.
+
+## Git hooks
+
+Enforced locally via [lefthook](https://github.com/evilmartians/lefthook). Installed automatically by `pnpm install` (`prepare` script). Config: [`lefthook.yml`](./lefthook.yml).
+
+**`pre-commit`** — runs on staged `.ts` / `.tsx` / `.mts` / `.cts` / `.js` / `.mjs` / `.cjs` files, in parallel:
+
+- `oxfmt --write` on staged files. Formatted files are re-staged automatically (`stage_fixed: true`), so the commit reflects the formatted output.
+- `oxlint` on staged files. Commit fails on any lint error.
+
+**`pre-push`** — runs project-wide, serially, before push:
+
+1. `pnpm typecheck` (`tsc --noEmit`)
+2. `pnpm knip`
+3. `pnpm test:unit`
+4. `pnpm test:e2e`
+
+Perf tests are excluded from `pre-push` — they are wall-clock sensitive and would produce flaky failures locally. CI still runs them (with `continue-on-error: true`) for signal.
+
+**Bypassing hooks** — use `git commit --no-verify` or `git push --no-verify` sparingly (e.g. work-in-progress branches, emergency reverts). CI will still enforce all checks on the PR, so bypassing locally just defers the failure.
 
 ## Commit messages
 

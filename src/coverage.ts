@@ -7,7 +7,10 @@ export interface CoverageEntry {
   testFiles: string[];
 }
 
-export function computeCoverage(graph: ArtifactGraph, testResults?: TestResultMap): CoverageEntry[] {
+export function computeCoverage(
+  graph: ArtifactGraph,
+  testResults?: TestResultMap,
+): CoverageEntry[] {
   const entries: CoverageEntry[] = [];
 
   // Index edges by target once (O(edges)) rather than re-scanning every edge for

@@ -105,9 +105,7 @@ describe("plan-coverage self-dogfood — spec 014 has zero implicit impacts (T02
       requireFilesSection: true,
     });
 
-    const missing = result.json.diagnostics.filter(
-      (d) => d.kind === "missingFilesSection",
-    );
+    const missing = result.json.diagnostics.filter((d) => d.kind === "missingFilesSection");
     if (missing.length > 0) {
       console.error(
         "[dogfood/strict] tasks.md task blocks missing `Files:` section:\n  " +

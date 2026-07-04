@@ -6,12 +6,7 @@ import remarkParse from "remark-parse";
 import { visit } from "unist-util-visit";
 import { toString } from "mdast-util-to-string";
 import { createHash } from "node:crypto";
-import type {
-  GraphNode,
-  GraphEdge,
-  ReqPatternConfig,
-  TaskConventionPreset,
-} from "../types.js";
+import type { GraphNode, GraphEdge, ReqPatternConfig, TaskConventionPreset } from "../types.js";
 import { NAMESPACED_ID_TOKEN } from "../req-id.js";
 
 export interface ParseMarkdownOptions {
@@ -91,11 +86,7 @@ const METADATA_FIELDS = ["title", "status", "priority", "owner"] as const;
 const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]+:/i;
 
 export interface ParseWarning {
-  type:
-    | "invalid-relation"
-    | "reserved-prefix"
-    | "invalid-annotation-id"
-    | "empty-annotation";
+  type: "invalid-relation" | "reserved-prefix" | "invalid-annotation-id" | "empty-annotation";
   key: string;
   filePath: string;
 }

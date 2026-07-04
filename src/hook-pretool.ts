@@ -99,4 +99,3 @@ export function buildHookOutput(additionalContext: string): HookOutput {
     },
   };
 }
-

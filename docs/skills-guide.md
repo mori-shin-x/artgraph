@@ -46,7 +46,7 @@ deno run -A npm:artgraph/cli init
 - scan (初回 spec/impl/test 索引化)
 - Skills install (`.claude/skills/<name>/SKILL.md` 配置)
 - integrate-auto (検出された SDD ツール: Spec Kit / Kiro)
-- Stop hook (P1)
+- Stop hook
 - agent context snippet 注入 (P1)
 
 | フラグ | 挙動 |

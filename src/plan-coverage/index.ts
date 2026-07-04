@@ -232,16 +232,12 @@ function buildImpactGroups(
   for (const d of sorted) {
     // `impactReqs` view: subtract BOTH mentioned (the implicit semantics)
     // and --ignore (one-shot suppression, FR-022).
-    const visibleImpact = sortStrings(
-      [...d.impactReqs].filter((r) => !excludedFromImpact.has(r)),
-    );
+    const visibleImpact = sortStrings([...d.impactReqs].filter((r) => !excludedFromImpact.has(r)));
     // `originReqs` view: raw authorship — only --ignore strips entries
     // here (FR-022 says ignore applies to BOTH axes, but mention is the
     // implicit-impact axis only; per data-model §3.2 originReqs is the
     // unfiltered claim set).
-    const visibleOrigin = sortStrings(
-      [...d.originReqs].filter((r) => !ignoreSet.has(r)),
-    );
+    const visibleOrigin = sortStrings([...d.originReqs].filter((r) => !ignoreSet.has(r)));
     // Group inclusion follows the implicit-impact axis: a group surfaces
     // ONLY when `impactReqs` (post mention + ignore subtraction) is
     // non-empty — that is the user-attention axis. `originReqs` rides
@@ -410,16 +406,8 @@ function formatText(
 // ---------------------------------------------------------------------------
 
 export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunResult {
-  const {
-    repoRoot,
-    tasksPath,
-    planPath,
-    specDir,
-    format,
-    gate,
-    ignore,
-    requireFilesSection,
-  } = options;
+  const { repoRoot, tasksPath, planPath, specDir, format, gate, ignore, requireFilesSection } =
+    options;
 
   // Load graph + lock once.
   const config = loadConfig(repoRoot);
@@ -454,9 +442,8 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
   // Stage A/B extraction. tasks.md is the structured source; plan.md
   // contributes additional file seeds when present.
   const tasksExtract = extractFiles(tasksContent, { graph, repoRoot });
-  const planExtract = planContent !== undefined
-    ? extractFiles(planContent, { graph, repoRoot })
-    : undefined;
+  const planExtract =
+    planContent !== undefined ? extractFiles(planContent, { graph, repoRoot }) : undefined;
 
   // Dedup entries across (tasks, plan) preserving first-seen order so
   // groups appear in the order the author declared them (before the

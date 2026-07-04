@@ -59,12 +59,14 @@ function setupFixture(opts?: {
   // defined elsewhere so the mention detector for plan-coverage starts
   // from a clean slate (mirrors real flow: tasks.md for spec 014 may
   // touch a file that @impl REQs defined in spec 005).
-  const specBody = opts?.specBody ?? [
-    "# Spec 014 (test fixture)",
-    "",
-    "This is the spec being analysed; no REQ references on purpose.",
-    "",
-  ].join("\n");
+  const specBody =
+    opts?.specBody ??
+    [
+      "# Spec 014 (test fixture)",
+      "",
+      "This is the spec being analysed; no REQ references on purpose.",
+      "",
+    ].join("\n");
   writeFileSync(join(specDir, "spec.md"), specBody);
 
   // External spec that owns the REQ definitions. The graph builder picks
@@ -78,7 +80,7 @@ function setupFixture(opts?: {
     [
       "---",
       "artgraph:",
-      "  node_id: \"doc:auth-design\"",
+      '  node_id: "doc:auth-design"',
       "---",
       "",
       "# Auth Design",
@@ -94,10 +96,7 @@ function setupFixture(opts?: {
 
   // Source files with @impl tags so the graph has implements edges.
   mkdirSync(join(root, "src/auth"), { recursive: true });
-  writeFileSync(
-    join(root, "src/auth/login.ts"),
-    "// @impl AUTH-001\nexport function login() {}\n",
-  );
+  writeFileSync(join(root, "src/auth/login.ts"), "// @impl AUTH-001\nexport function login() {}\n");
   writeFileSync(
     join(root, "src/auth/session.ts"),
     "// @impl AUTH-001 AUTH-002\nexport function session() {}\n",
@@ -117,23 +116,13 @@ function setupFixture(opts?: {
     }),
   );
 
-  const tasksBody = opts?.tasksBody ?? [
-    "# Tasks",
-    "",
-    "### T001: tweak login",
-    "",
-    "Files: src/auth/login.ts",
-    "",
-  ].join("\n");
+  const tasksBody =
+    opts?.tasksBody ??
+    ["# Tasks", "", "### T001: tweak login", "", "Files: src/auth/login.ts", ""].join("\n");
   const tasksPath = join(specDir, "tasks.md");
   writeFileSync(tasksPath, tasksBody);
 
-  const planBody = opts?.planBody ?? [
-    "# Plan",
-    "",
-    "Mostly the login flow.",
-    "",
-  ].join("\n");
+  const planBody = opts?.planBody ?? ["# Plan", "", "Mostly the login flow.", ""].join("\n");
   const planPath = join(specDir, "plan.md");
   writeFileSync(planPath, planBody);
 
@@ -208,9 +197,7 @@ describe("runPlanCoverage — by-sourceFile + by-FR dual axis", () => {
     // AUTH-001 should show up under at least both login.ts and session.ts
     // (both files @impl AUTH-001). Verify the by-REQ axis reflects that
     // via the new `sourceLocations: Array<{file, symbol?}>` shape.
-    const auth1Group = result.json.implicitImpactsByReq.find(
-      (g) => g.reqId === "AUTH-001",
-    );
+    const auth1Group = result.json.implicitImpactsByReq.find((g) => g.reqId === "AUTH-001");
     expect(auth1Group).toBeDefined();
     const auth1Files = auth1Group!.sourceLocations.map((l) => l.file);
     expect(auth1Files).toEqual(
@@ -416,9 +403,7 @@ describe("runPlanCoverage — --require-files-section diagnostics", () => {
       ignore: [],
       requireFilesSection: false,
     });
-    const missing = result.json.diagnostics.filter(
-      (d) => d.kind === "missingFilesSection",
-    );
+    const missing = result.json.diagnostics.filter((d) => d.kind === "missingFilesSection");
     expect(missing).toEqual([]);
   });
 
@@ -451,9 +436,7 @@ describe("runPlanCoverage — --require-files-section diagnostics", () => {
       ignore: [],
       requireFilesSection: true,
     });
-    const missing = result.json.diagnostics.filter(
-      (d) => d.kind === "missingFilesSection",
-    );
+    const missing = result.json.diagnostics.filter((d) => d.kind === "missingFilesSection");
     const missingIds = missing.map((d) => (d as { taskId: string }).taskId);
     expect(missingIds).toEqual(expect.arrayContaining(["T002", "T003"]));
     expect(missingIds).not.toContain("T001");
@@ -519,9 +502,7 @@ describe("runPlanCoverage — empty extraction", () => {
     });
     expect(result.json.implicitImpacts).toEqual([]);
     expect(result.json.implicitImpactsByReq).toEqual([]);
-    expect(
-      result.json.diagnostics.find((d) => d.kind === "emptyExtraction"),
-    ).toBeDefined();
+    expect(result.json.diagnostics.find((d) => d.kind === "emptyExtraction")).toBeDefined();
     expect(result.json.summary.totalAffected).toBe(0);
   });
 });
@@ -586,11 +567,11 @@ describe("runPlanCoverage — unresolvedFilePath diagnostics carry line numbers 
   it("propagates 1-based `line` from the parser onto unresolvedFilePath", () => {
     fx = setupFixture({
       tasksBody: [
-        "# Tasks",                                  // line 1
-        "",                                         // line 2
-        "### T001: typo task",                      // line 3
-        "",                                         // line 4
-        "Files: src/typo-does-not-exist.ts",        // line 5
+        "# Tasks", // line 1
+        "", // line 2
+        "### T001: typo task", // line 3
+        "", // line 4
+        "Files: src/typo-does-not-exist.ts", // line 5
         "",
       ].join("\n"),
     });
@@ -604,16 +585,12 @@ describe("runPlanCoverage — unresolvedFilePath diagnostics carry line numbers 
       ignore: [],
       requireFilesSection: false,
     });
-    const unresolved = result.json.diagnostics.filter(
-      (d) => d.kind === "unresolvedFilePath",
-    );
+    const unresolved = result.json.diagnostics.filter((d) => d.kind === "unresolvedFilePath");
     expect(unresolved.length).toBeGreaterThan(0);
     // The header carrying the typo lives at line 5 of tasks.md (1-based).
     expect(
       unresolved.find(
-        (d) =>
-          d.kind === "unresolvedFilePath" &&
-          d.sourceFile === "src/typo-does-not-exist.ts",
+        (d) => d.kind === "unresolvedFilePath" && d.sourceFile === "src/typo-does-not-exist.ts",
       ),
     ).toEqual({
       kind: "unresolvedFilePath",
@@ -837,14 +814,9 @@ function setupSymbolFixture(opts?: {
     }),
   );
 
-  const tasksBody = opts?.tasksBody ?? [
-    "# Tasks",
-    "",
-    "### T001",
-    "",
-    "Files: src/auth.ts:validateToken",
-    "",
-  ].join("\n");
+  const tasksBody =
+    opts?.tasksBody ??
+    ["# Tasks", "", "### T001", "", "Files: src/auth.ts:validateToken", ""].join("\n");
   const tasksPath = join(specDir, "tasks.md");
   writeFileSync(tasksPath, tasksBody);
 
@@ -904,11 +876,7 @@ describe("runPlanCoverage — symbol-mode US1 (Phase 3)", () => {
     expect(g.sourceFile).toBe("src/auth.ts");
     // JSON key must be omitted, not present-as-undefined.
     expect("sourceSymbol" in g).toBe(false);
-    expect(g.impactReqs.map((r) => r.reqId).sort()).toEqual([
-      "REQ-001",
-      "REQ-005",
-      "REQ-009",
-    ]);
+    expect(g.impactReqs.map((r) => r.reqId).sort()).toEqual(["REQ-001", "REQ-005", "REQ-009"]);
     // file-top @impl is absent in the fixture → originReqs MUST be [].
     expect(g.originReqs).toEqual([]);
     // by-REQ sourceLocations: file-only entry must omit `symbol` key.
@@ -947,9 +915,7 @@ describe("runPlanCoverage — symbol-mode US1 (Phase 3)", () => {
     const validateGroup = result.json.implicitImpacts.find(
       (g) => g.sourceSymbol === "validateToken",
     )!;
-    const issueGroup = result.json.implicitImpacts.find(
-      (g) => g.sourceSymbol === "issueToken",
-    )!;
+    const issueGroup = result.json.implicitImpacts.find((g) => g.sourceSymbol === "issueToken")!;
     expect(validateGroup.originReqs.map((r) => r.reqId)).toEqual(["REQ-001"]);
     expect(issueGroup.originReqs.map((r) => r.reqId)).toEqual(["REQ-005"]);
     expect(validateGroup.impactReqs.map((r) => r.reqId)).toEqual(["REQ-001"]);
@@ -990,14 +956,7 @@ describe("runPlanCoverage — symbol-mode US1 (Phase 3)", () => {
 
   it("unresolvedSymbol entry: diagnostic emitted and entry excluded from implicitImpacts (contract §8 case 5)", () => {
     fx = setupSymbolFixture({
-      tasksBody: [
-        "# Tasks",
-        "",
-        "### T001",
-        "",
-        "Files: src/auth.ts:doesNotExist",
-        "",
-      ].join("\n"),
+      tasksBody: ["# Tasks", "", "### T001", "", "Files: src/auth.ts:doesNotExist", ""].join("\n"),
     });
     const result = runPlanCoverage({
       repoRoot: fx.root,
@@ -1011,9 +970,7 @@ describe("runPlanCoverage — symbol-mode US1 (Phase 3)", () => {
     });
     // entry was rejected → no implicitImpacts; diagnostic surfaces instead.
     expect(result.json.implicitImpacts).toEqual([]);
-    const unresolved = result.json.diagnostics.filter(
-      (d) => d.kind === "unresolvedSymbol",
-    );
+    const unresolved = result.json.diagnostics.filter((d) => d.kind === "unresolvedSymbol");
     expect(unresolved).toHaveLength(1);
     expect(unresolved[0]).toEqual({
       kind: "unresolvedSymbol",
@@ -1045,9 +1002,7 @@ describe("runPlanCoverage — symbol-mode US1 (Phase 3)", () => {
       requireFilesSection: false,
     });
     expect(result.json.implicitImpacts).toHaveLength(2);
-    const authGroup = result.json.implicitImpacts.find(
-      (g) => g.sourceFile === "src/auth.ts",
-    )!;
+    const authGroup = result.json.implicitImpacts.find((g) => g.sourceFile === "src/auth.ts")!;
     const sessionGroup = result.json.implicitImpacts.find(
       (g) => g.sourceFile === "src/session.ts",
     )!;
@@ -1057,14 +1012,7 @@ describe("runPlanCoverage — symbol-mode US1 (Phase 3)", () => {
 
   it("--gate trips on unresolvedSymbol-only run (contract §8 case 7)", () => {
     fx = setupSymbolFixture({
-      tasksBody: [
-        "# Tasks",
-        "",
-        "### T001",
-        "",
-        "Files: src/auth.ts:doesNotExist",
-        "",
-      ].join("\n"),
+      tasksBody: ["# Tasks", "", "### T001", "", "Files: src/auth.ts:doesNotExist", ""].join("\n"),
     });
     const result = runPlanCoverage({
       repoRoot: fx.root,
@@ -1142,14 +1090,7 @@ describe("runPlanCoverage — symbol-mode US1 (Phase 3)", () => {
 
   it("--ignore applies to BOTH impactReqs and originReqs (FR-022)", () => {
     fx = setupSymbolFixture({
-      tasksBody: [
-        "# Tasks",
-        "",
-        "### T001",
-        "",
-        "Files: src/auth.ts:validateToken",
-        "",
-      ].join("\n"),
+      tasksBody: ["# Tasks", "", "### T001", "", "Files: src/auth.ts:validateToken", ""].join("\n"),
     });
     const result = runPlanCoverage({
       repoRoot: fx.root,
