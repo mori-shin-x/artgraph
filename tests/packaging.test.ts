@@ -4,7 +4,10 @@ import { readdirSync, statSync, existsSync } from "node:fs";
 import { join, resolve, relative } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
-const TEMPLATES_DIR = join(REPO_ROOT, "templates", "skills");
+// Whole templates/ tree: skills/ + hooks/settings.json.template (#109) +
+// agent-context/agents-md-snippet.md (#110). All are read at runtime by
+// `artgraph init`, so a file missing from the tarball is a hard init failure.
+const TEMPLATES_DIR = join(REPO_ROOT, "templates");
 const CLI_ENTRY = join(REPO_ROOT, "dist", "cli.js");
 
 function listAllTemplateFiles(): string[] {
@@ -30,19 +33,20 @@ function getPackedFiles(): string[] {
 }
 
 describe("npm packaging", () => {
-  it.skipIf(!existsSync(TEMPLATES_DIR))(
-    "ships every templates/skills/** file in the tarball",
-    () => {
-      const expected = listAllTemplateFiles();
-      expect(expected.length).toBeGreaterThan(0);
+  it.skipIf(!existsSync(TEMPLATES_DIR))("ships every templates/** file in the tarball", () => {
+    const expected = listAllTemplateFiles();
+    expect(expected.length).toBeGreaterThan(0);
+    // Runtime-critical templates that must never silently drop out of the
+    // walk (e.g. via a stray .npmignore or a directory rename).
+    expect(expected).toContain("templates/agent-context/agents-md-snippet.md");
+    expect(expected).toContain("templates/hooks/settings.json.template");
 
-      const packed = getPackedFiles();
+    const packed = getPackedFiles();
 
-      for (const file of expected) {
-        expect(packed, `expected ${file} in tarball`).toContain(file);
-      }
-    },
-  );
+    for (const file of expected) {
+      expect(packed, `expected ${file} in tarball`).toContain(file);
+    }
+  });
 
   it.skipIf(!existsSync(CLI_ENTRY))("ships dist/cli.js (entry point)", () => {
     const packed = getPackedFiles();
