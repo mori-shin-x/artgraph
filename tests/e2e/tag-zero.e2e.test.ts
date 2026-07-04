@@ -19,13 +19,21 @@
 // the README's "Tag-zero 30s" claim is a lie — fail loudly.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const CLI = resolve(REPO_ROOT, "dist/cli.js");
+
+// `spawnSync` reports timeouts and spawn failures via `error`/`signal` with
+// `status: null` — printing only `stdout`/`stderr` in that case yields an
+// undiagnosable "exit null" failure message. Surface all four fields so a CI
+// timeout or ENOENT is distinguishable from a genuine non-zero exit.
+function cliFailureMessage(r: SpawnSyncReturns<string>): string {
+  return `CLI failed: exit ${r.status} signal=${r.signal ?? "none"} error=${r.error?.message ?? "none"}\nstderr:\n${r.stderr}\nstdout:\n${r.stdout}`;
+}
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync("git", args, {
@@ -88,14 +96,20 @@ describe("e2e: tag-zero brownfield (issue #122)", () => {
   });
 
   it("`artgraph init` succeeds without any specs/ or @impl tags", () => {
-    const r = spawnSync("node", [CLI, "init"], {
+    // `--force` makes this call idempotent. Without it, a vitest retry (see
+    // `retry: 1` in vitest.e2e.config.ts) re-runs only this `it` body — not
+    // `beforeAll` — so a second attempt would hit the pre-existing
+    // `.artgraph.json` written by attempt 1 and fail with an unrelated
+    // "already exists" error, masking whatever assertion actually triggered
+    // the retry.
+    const r = spawnSync("node", [CLI, "init", "--force"], {
       encoding: "utf-8",
       cwd: workDir,
       timeout: 30000,
     });
     // Zero specs must not fatal. The whole DoD is "init completes without
     // warning when there are no tags to find".
-    expect(r.status, `stderr:\n${r.stderr}\nstdout:\n${r.stdout}`).toBe(0);
+    expect(r.status, cliFailureMessage(r)).toBe(0);
     expect(existsSync(join(workDir, ".artgraph.json"))).toBe(true);
     // No `Error:` line and no stray stack trace on stderr.
     expect(r.stderr).not.toMatch(/^Error:/m);
@@ -112,7 +126,7 @@ describe("e2e: tag-zero brownfield (issue #122)", () => {
       cwd: workDir,
       timeout: 30000,
     });
-    expect(r.status, `stderr:\n${r.stderr}\nstdout:\n${r.stdout}`).toBe(0);
+    expect(r.status, cliFailureMessage(r)).toBe(0);
 
     // The BFS from `file:src/b.ts` follows the reverse `imports` edge back to
     // `file:src/a.ts` because a.ts imports "./b". If this line ever stops
@@ -127,7 +141,7 @@ describe("e2e: tag-zero brownfield (issue #122)", () => {
       cwd: workDir,
       timeout: 30000,
     });
-    expect(r.status, `stderr:\n${r.stderr}\nstdout:\n${r.stdout}`).toBe(0);
+    expect(r.status, cliFailureMessage(r)).toBe(0);
     const parsed = JSON.parse(r.stdout) as { affectedFiles?: string[] };
     expect(Array.isArray(parsed.affectedFiles)).toBe(true);
     // Order-independent assertion — impact() has no documented file ordering.

@@ -83,7 +83,10 @@ try {
   // Skills install output is verbose but honest — the Zero-tag ready
   // message lands at the tail as the payoff.
   const initOut = runCli(["init"]);
-  const impactOut = runCli(["impact", "--diff", "--depth", "3"]);
+  // Single source of truth for the impact command so the on-screen "typed"
+  // command and the args actually executed can never drift apart.
+  const IMPACT_ARGS = ["impact", "--diff"];
+  const impactOut = runCli(IMPACT_ARGS);
 
   // --- Compose an asciinema v2 cast ---
   //
@@ -125,6 +128,10 @@ try {
   // not typing.
   function dumpOutput(text, msPerLine = 90) {
     const lines = crlf(text).split("\r\n");
+    // `text` (console.log output) ends with "\n", so splitting on "\r\n"
+    // leaves one trailing empty element — drop it so we don't emit a
+    // silent, content-free line into the cast.
+    if (lines[lines.length - 1] === "") lines.pop();
     for (let i = 0; i < lines.length; i++) {
       const suffix = i === lines.length - 1 ? "" : "\r\n";
       emit(lines[i] + suffix);
@@ -155,15 +162,24 @@ try {
 
   // ---- Scene 4: artgraph impact --diff ----
   typePrompt();
-  typeCommand("pnpm dlx artgraph impact --diff");
+  typeCommand(`pnpm dlx artgraph ${IMPACT_ARGS.join(" ")}`);
   dumpOutput(impactOut, 130);
   pause(2500);
+  // `pause()` only advances the clock — it never emits. Without a trailing
+  // emit here, the cast's last event timestamp is whatever `dumpOutput` last
+  // wrote, so the 2.5s "let the payoff sit" pause is invisible to the SVG
+  // renderer and the final (most important) frame gets truncated out of the
+  // animation loop. Emit a no-op event to commit the elapsed time.
+  emit("");
 
   // ---- Finalise cast file ----
   const HEADER = {
     version: 2,
     width: 96,
-    height: 40,
+    // Must be >= the real output line count (41 lines as of writing) plus
+    // headroom, and must match `demo:svg`'s `--height` in package.json —
+    // otherwise the render window scrolls the early lines out of frame.
+    height: 45,
     title: "artgraph tag-zero 30-second start",
     env: { TERM: "xterm-256color", SHELL: "/bin/sh" },
   };
@@ -176,5 +192,9 @@ try {
   );
   console.log("Next: pnpm demo:svg");
 } finally {
-  rmSync(workDir, { recursive: true, force: true });
+  try {
+    rmSync(workDir, { recursive: true, force: true });
+  } catch {
+    // best-effort cleanup, don't mask the primary error
+  }
 }

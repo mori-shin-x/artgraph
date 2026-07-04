@@ -133,6 +133,20 @@ export interface ScanSummary {
   docCount: number;
   fileCount: number;
   testCount: number;
+  // Issue #122 follow-up (review A4): `scan()` already computes this via
+  // `ScanResult.taskCount`; without a field here `init`'s scanSummary
+  // silently dropped it, so a `docGraph.autoNodes:false` repo whose tasks.md
+  // was already decomposed into task nodes looked identical to one with zero
+  // task breakdown.
+  taskCount: number;
+  // Issue #122 follow-up (review A3): true when the graph contains at least
+  // one `implements`/`verifies` edge sourced from an inline `@impl`/`@verifies`
+  // code tag whose target REQ/doc node doesn't exist in the graph. The
+  // existing "orphan-edge" warning only covers `annotation` provenance, so a
+  // dangling code-tag edge is otherwise invisible to `init`'s closing hint —
+  // without this flag the brownfield "no @impl claims detected yet" message
+  // would contradict a codebase that already has (unmatched) `@impl` tags.
+  hasDanglingCodeTag: boolean;
 }
 
 export interface SddToolInfo {

@@ -18,7 +18,7 @@ then detects **drift** (spec changed but code/tests didn't), **orphans**, and
 Have an existing TypeScript repo? Get impact analysis in three commands — **no
 specs, no `@impl` tags, no config required**:
 
-<!-- Regenerate with: pnpm demo:record — see scripts/record-tag-zero-demo.mjs -->
+<!-- Regenerate with: pnpm demo (build + demo:record + demo:svg) — see scripts/record-tag-zero-demo.mjs -->
 <p align="center">
   <img src="./docs/demo/tag-zero.svg" alt="30-second tag-zero demo: artgraph init followed by artgraph impact --diff on a brownfield TS repo" />
 </p>
