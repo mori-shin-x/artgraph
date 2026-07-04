@@ -1,7 +1,7 @@
 {
   "name": "artgraph",
   "version": "0.1.0",
-  "description": "Typed artifact graph for TS/JS — trace specs, docs, code, and tests bidirectionally",
+  "description": "Deterministic spec-to-code context for AI coding agents — one graph linking requirements, docs, code, and tests.",
   "type": "module",
   "bin": {
     "artgraph": "./dist/cli.js"
@@ -28,6 +28,9 @@
     "knip": "knip",
     "check-versions": "node scripts/check-extension-version.mjs",
     "prepare": "test -f dist/cli.js || tsc",
+    "demo:record": "node scripts/record-tag-zero-demo.mjs",
+    "demo:svg": "svg-term --in docs/demo/tag-zero.cast --out docs/demo/tag-zero.svg --window --width 96 --height 45 --padding 12",
+    "demo": "pnpm build && pnpm demo:record && pnpm demo:svg",
     "prepublishOnly": "rm -rf dist && tsc && pnpm check-versions && pnpm test:unit && pnpm test:e2e"
   },
   "repository": {
@@ -39,16 +42,17 @@
   },
   "homepage": "https://github.com/ShintaroMorimoto/artgraph#readme",
   "keywords": [
-    "traceability",
+    "ai-agent-context",
+    "ai-coding-agents",
+    "claude-code",
     "spec-driven-development",
+    "deterministic",
+    "drift-detection",
     "impact-analysis",
+    "traceability",
     "spec-kit",
     "kiro",
-    "requirements",
-    "drift-detection",
-    "monorepo",
-    "typescript",
-    "cli"
+    "typescript"
   ],
   "author": "Shintaro Morimoto",
   "license": "MIT",
@@ -68,6 +72,7 @@
     "knip": "^6.17.1",
     "oxfmt": "^0.55.0",
     "oxlint": "^1.70.0",
+    "svg-term-cli": "^2.1.1",
     "typescript": "^5.8.3",
     "vitest": "^4.1.9"
   },

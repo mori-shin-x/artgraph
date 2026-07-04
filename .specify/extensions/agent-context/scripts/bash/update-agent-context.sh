@@ -232,6 +232,8 @@ trap 'rm -f "$TMP_SECTION"' EXIT
   if [[ -n "$PLAN_PATH" ]]; then
     echo "at $PLAN_PATH"
   fi
+  echo "Before implementing, apply the engineering hygiene checklist at"
+  echo "docs/review-patterns-checklist.md to preempt recurring review findings."
   echo "$MARKER_END"
 } > "$TMP_SECTION"
 

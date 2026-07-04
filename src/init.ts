@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import {
   DEFAULT_CONFIG,
   type ArtgraphConfig,
+  type ArtifactGraph,
   type IntegrateResult,
   type IntegrationProviderId,
   type ScanSummary,
@@ -209,6 +210,29 @@ export function computeStageGates(opts: InitOptions): {
 function installHooks(_rootDir: string, _options: { force?: boolean } = {}): void {
   // P1 (T026): merge templates/hooks/settings.json.template into
   // <rootDir>/.claude/settings.json with the 4-case strategy.
+}
+
+/**
+ * Review A3 (issue #122 follow-up): detect a dangling `@impl`/`@verifies`
+ * code tag — an `implements`/`verifies` edge sourced from an inline code tag
+ * (`provenances` includes `"code-tag"`) whose target REQ/doc node isn't in
+ * the graph. `buildGraph`'s existing "orphan-edge" warning only fires for
+ * `annotation` provenance (spec-authored `(implements: FR-001)` relations),
+ * so a stray `@impl FR-001` left in code with no matching spec is otherwise
+ * silent. `init`'s brownfield closing hint uses this to avoid claiming "no
+ * @impl claims detected yet" when the repo actually has one, just unmatched.
+ */
+function graphHasDanglingCodeTag(graph: ArtifactGraph): boolean {
+  for (const edge of graph.edges) {
+    if (
+      (edge.kind === "implements" || edge.kind === "verifies") &&
+      edge.provenances.includes("code-tag") &&
+      !graph.nodes.has(edge.target)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function runInit(rootDir: string, options: InitOptions = {}): InitResult {
@@ -425,6 +449,8 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
       docCount: scanResult.docCount,
       fileCount: scanResult.fileCount,
       testCount: scanResult.testCount,
+      taskCount: scanResult.taskCount,
+      hasDanglingCodeTag: graphHasDanglingCodeTag(scanResult.graph),
     };
     warnings = scanResult.warnings;
     lockPath = resolve(abs, config.lockFile);

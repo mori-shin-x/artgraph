@@ -1,6 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { resolve } from "node:path";
-import { existsSync, unlinkSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve, join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import {
+  existsSync,
+  unlinkSync,
+  readFileSync,
+  writeFileSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+} from "node:fs";
 import {
   run,
   runAt,
@@ -15,6 +25,26 @@ const HOOKS_DIR = resolve(import.meta.dirname, "fixtures/hooks");
 
 function runWithStdin(args: string[], stdin: string, cwd?: string): Promise<RunResult> {
   return runWithStdinHelper(args, stdin, cwd);
+}
+
+// E4 (issue #122 follow-up): build a temp repo with a fully-committed,
+// clean working tree so `getGitDiffFiles` deterministically returns `[]`.
+// The `--diff` smoke tests elsewhere in this file run against the enclosing
+// artgraph repo checkout, whose git state is whatever the sandbox happens to
+// have dirty — fine for "doesn't crash", useless for asserting the exact
+// empty-diff JSON shape.
+function makeCleanGitRepo(prefix: string): string {
+  const tmp = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(tmp, "src"), { recursive: true });
+  writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
+  execFileSync("git", ["init"], { cwd: tmp, stdio: "pipe" });
+  execFileSync("git", ["add", "-A"], { cwd: tmp, stdio: "pipe" });
+  execFileSync(
+    "git",
+    ["-c", "user.name=test", "-c", "user.email=test@test.com", "commit", "-m", "init"],
+    { cwd: tmp, stdio: "pipe" },
+  );
+  return tmp;
 }
 
 afterEach(cleanup);
@@ -129,6 +159,36 @@ describe("CLI: impact", () => {
     const { exitCode } = await run(["impact", "--diff"]);
     expect([0, 1]).toContain(exitCode);
   });
+
+  // E4: pre-existing bug (not introduced by this PR) — `impact --diff
+  // --format json` on a clean working tree used to always print the plain
+  // text "No changes detected in git diff." and exit 0, ignoring
+  // `--format json` entirely. A JSON consumer (e.g. a CI script piping into
+  // `jq`) would fail to parse that. Fixed to emit an all-empty
+  // `ImpactResult`-shaped payload plus a `message` field.
+  it(
+    "emits valid ImpactResult-shaped JSON for `impact --diff --format json` with an empty git diff (E4)",
+    { timeout: 30000 },
+    async () => {
+      const tmp = makeCleanGitRepo("artgraph-impact-diff-empty-");
+      try {
+        const { stdout, exitCode } = await runAt(tmp, [
+          "impact",
+          "--diff",
+          "--format",
+          "json",
+        ]);
+        expect(exitCode).toBe(0);
+        const result = JSON.parse(stdout);
+        expect(result.affectedFiles).toEqual([]);
+        expect(result.impactReqs).toEqual([]);
+        expect(result.summary).toEqual({ docs: 0, reqs: 0, files: 0, tasks: 0 });
+        expect(result.message).toContain("No changes detected in git diff.");
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -165,6 +225,37 @@ describe("CLI: check", () => {
     // Without --gate, check never calls process.exit(2).
     expect(exitCode).toBe(0);
   });
+
+  // E4: same pre-existing bug as `impact --diff --format json` (not
+  // introduced by this PR) — `check --diff --format json` on a clean
+  // working tree ignored `--format json` and always printed plain text.
+  // Fixed to emit an all-clear `CheckResult`-shaped payload plus `warnings`
+  // and a `message` field.
+  it(
+    "emits valid CheckResult-shaped JSON for `check --diff --format json` with an empty git diff (E4)",
+    { timeout: 30000 },
+    async () => {
+      const tmp = makeCleanGitRepo("artgraph-check-diff-empty-");
+      try {
+        const { stdout, exitCode } = await runAt(tmp, [
+          "check",
+          "--diff",
+          "--format",
+          "json",
+        ]);
+        expect(exitCode).toBe(0);
+        const result = JSON.parse(stdout);
+        expect(result.drifted).toEqual([]);
+        expect(result.orphans).toEqual([]);
+        expect(result.uncovered).toEqual([]);
+        expect(result.pass).toBe(true);
+        expect(Array.isArray(result.warnings)).toBe(true);
+        expect(result.message).toContain("No changes detected in git diff.");
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -550,6 +641,67 @@ describe("CLI: init", () => {
     expect(stdout).toContain("Created .artgraph.json");
     expect(stdout).toContain("Created .trace.lock");
     expect(stdout).toContain("Nodes:");
+  });
+
+  // Issue #122: on a brownfield repo (TS files, no specs, no @impl), the
+  // closing hint must NOT tell the user to run `artgraph check` — there's
+  // nothing to check yet. Instead it must announce that `impact --diff`
+  // already works off the import graph, and that tags are optional.
+  it("shows zero-tag onboarding hint when scan finds files but no reqs/docs (issue #122)", { timeout: 30000 }, async () => {
+    // spec 013: init requires --agents unless Skills/agent-context are opted
+    // out. The zero-tag hint is orthogonal to those stages, so disable them.
+    const { exitCode, stdout } = await runInit(["--no-skills", "--no-agent-context"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Zero-tag ready");
+    expect(stdout).toContain("artgraph impact --diff");
+    expect(stdout).toContain("Tags are optional");
+    // Regression guard: the classic "verify traceability" line must not
+    // fire in the brownfield case — it's the misleading message we
+    // replaced.
+    expect(stdout).not.toContain("verify traceability");
+  });
+
+  // Once req nodes exist the classic closing hint should come back — the
+  // zero-tag branch is opt-in on empty scan summaries, not blanket.
+  it("keeps the classic 'verify traceability' hint once reqs are present", { timeout: 30000 }, async () => {
+    const { mkdirSync, writeFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    mkdirSync(join(initTmp, "specs"), { recursive: true });
+    writeFileSync(
+      join(initTmp, "specs", "auth.md"),
+      "- REQ-001: users can sign in.\n",
+    );
+    const { exitCode, stdout } = await runInit(["--no-skills", "--no-agent-context"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("verify traceability");
+    expect(stdout).not.toContain("Zero-tag ready");
+  });
+
+  // D2 (issue #122 follow-up): state-transition guard. `scanSummary` is
+  // recomputed fresh on every `runInit` call — nothing is cached across a
+  // `--force` rerun — so once specs are added to a previously zero-tag repo,
+  // the closing hint must flip back to the classic one. This was a pure test
+  // gap (the implementation already behaves correctly); this test just
+  // closes it.
+  it("switches the closing hint from Zero-tag ready to classic once specs are added via init --force", { timeout: 30000 }, async () => {
+    const { mkdirSync, writeFileSync } = require("node:fs");
+    const { join } = require("node:path");
+
+    const first = await runInit(["--no-skills", "--no-agent-context"]);
+    expect(first.exitCode).toBe(0);
+    expect(first.stdout).toContain("Zero-tag ready");
+    expect(first.stdout).not.toContain("verify traceability");
+
+    mkdirSync(join(initTmp, "specs"), { recursive: true });
+    writeFileSync(
+      join(initTmp, "specs", "auth.md"),
+      "- REQ-001: users can sign in.\n",
+    );
+
+    const second = await runInit(["--force", "--no-skills", "--no-agent-context"]);
+    expect(second.exitCode).toBe(0);
+    expect(second.stdout).toContain("verify traceability");
+    expect(second.stdout).not.toContain("Zero-tag ready");
   });
 
   it("should output JSON with --format json", { timeout: 30000 }, async () => {

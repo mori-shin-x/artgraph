@@ -49,7 +49,35 @@ export function getProviderStatuses(rootDir: string): IntegrationStatus[] {
     providerId: p.id,
     displayName: p.displayName,
     marker: p.marker,
-    detected: p.detect(rootDir),
-    installed: p.isInstalled(rootDir),
+    detected: safeProviderCheck(p.id, "detect", () => p.detect(rootDir)),
+    installed: safeProviderCheck(p.id, "isInstalled", () => p.isInstalled(rootDir)),
   }));
+}
+
+/**
+ * Run a provider's `detect` / `isInstalled` guarded against exceptions.
+ *
+ * `IntegrationProvider.detect` / `.isInstalled` are documented as
+ * side-effect-free checks that shouldn't throw, and both built-in providers
+ * (`SpecKitProvider`, `KiroProvider`) honor that today — Spec Kit's YAML
+ * parsing failures are already caught internally and folded into `false`.
+ * This wrapper is a defense-in-depth backstop for third-party / future
+ * providers that don't uphold the contract: one misbehaving provider must
+ * not crash `artgraph init` / `integrate list` for everyone else, so we
+ * fall back to `false` and surface a warning instead of propagating.
+ */
+function safeProviderCheck(
+  providerId: string,
+  method: "detect" | "isInstalled",
+  fn: () => boolean,
+): boolean {
+  try {
+    return fn();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(
+      `WARNING: provider "${providerId}".${method}() threw and was treated as false: ${msg}`,
+    );
+    return false;
+  }
 }

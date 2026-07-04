@@ -48,6 +48,43 @@ jobs:
 
       - run: pnpm test:e2e
 
+      # Guard against README's embedded tag-zero demo (docs/demo/tag-zero.cast
+      # -> tag-zero.svg, see scripts/record-tag-zero-demo.mjs) silently going
+      # stale relative to what the built CLI actually outputs.
+      #
+      # A byte-for-byte `git diff --exit-code` on the regenerated .cast is
+      # NOT used here because it would be flaky: `impact()`'s affectedFiles
+      # ordering is explicitly undocumented/unguaranteed (see the
+      # "Order-independent assertion" comment in
+      # tests/e2e/tag-zero.e2e.test.ts), and re-running `pnpm demo:record`
+      # locally back-to-back was observed to also vary the recorded event
+      # count by one (an incidental blank flush event) independent of any
+      # real content change. Both would make an exact-match gate red on
+      # harmless noise, not just genuine drift.
+      #
+      # Instead: (1) hard-fail if the freshly regenerated cast is missing the
+      # load-bearing strings the demo promises (catches real CLI/output
+      # drift), and (2) soft-report (non-blocking) any diff against the
+      # committed file so a human notices a regen is due.
+      - run: pnpm demo:record
+
+      - name: Verify tag-zero demo cast still shows the promised output
+        run: |
+          for needle in "Zero-tag ready" "artgraph impact --diff" "src/a.ts" "Affected Files:"; do
+            grep -qF "$needle" docs/demo/tag-zero.cast || {
+              echo "::error::docs/demo/tag-zero.cast no longer contains '$needle' — CLI output has drifted; regenerate with 'pnpm demo' and commit docs/demo/tag-zero.{cast,svg}"
+              exit 1
+            }
+          done
+
+      # Advisory only (see rationale above): impact()'s file ordering isn't
+      # guaranteed, so this can go red on harmless reordering as well as real
+      # drift. Flip to a hard failure once the recorder's output is made
+      # fully deterministic.
+      - name: Check committed tag-zero.cast is up to date (advisory)
+        run: git diff --exit-code -- docs/demo/tag-zero.cast
+        continue-on-error: true
+
       # Perf budgets are wall-clock sensitive — run separately so a
       # CPU-contended runner spike fails the perf step without obscuring
       # unit/e2e signal, and so a perf flake doesn't block PR merges.
