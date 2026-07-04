@@ -79,10 +79,11 @@ try {
     return r.stdout;
   }
 
-  // Plain `init` matches the README command exactly. The Claude Code
-  // Skills install output is verbose but honest — the Zero-tag ready
-  // message lands at the tail as the payoff.
-  const initOut = runCli(["init"]);
+  // `init --agents=claude` matches the README command exactly. Spec 013
+  // makes --agents required whenever Skills / agent-context distribution
+  // runs. The Claude Code Skills install output is verbose but honest —
+  // the Zero-tag ready message lands at the tail as the payoff.
+  const initOut = runCli(["init", "--agents=claude"]);
   // Single source of truth for the impact command so the on-screen "typed"
   // command and the args actually executed can never drift apart.
   const IMPACT_ARGS = ["impact", "--diff"];
@@ -152,7 +153,7 @@ try {
 
   // ---- Scene 2: artgraph init ----
   typePrompt();
-  typeCommand("pnpm dlx artgraph init");
+  typeCommand("pnpm dlx artgraph init --agents=claude");
   dumpOutput(initOut);
   // Let the "Zero-tag ready" tail sit on screen for a beat.
   pause(1800);

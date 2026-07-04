@@ -13,7 +13,13 @@ vi.mock("node:fs", async (importOriginal) => {
     renameSync: (
       ...args: Parameters<typeof actual.renameSync>
     ): ReturnType<typeof actual.renameSync> => {
-      if (renameControl.shouldThrow) {
+      // Path-guarded so the mock only trips installHooks' writeAtomic on
+      // `settings.json.tmp` — NOT spec 013's `atomicWriteFile(.artgraph.json)`
+      // which uses the same renameSync at the end of runInit. Without this
+      // guard, the writeAtomic tests would blow up on the config write
+      // before ever asserting on hooksInstall.
+      const src = String(args[0] ?? "");
+      if (renameControl.shouldThrow && src.endsWith("settings.json.tmp")) {
         throw new Error("simulated rename failure");
       }
       return actual.renameSync(...args);
@@ -178,7 +184,7 @@ describe("installHooks (Stop-hook merge)", () => {
     });
     writeFileSync(settingsPath(tmp), before);
 
-    const r = await runCli(["init", "--force"], { cwd: tmp });
+    const r = await runCli(["init", "--force", "--agents=claude"], { cwd: tmp });
 
     expect(r.exitCode).toBe(1);
     expect(readFileSync(settingsPath(tmp), "utf-8")).toBe(before);

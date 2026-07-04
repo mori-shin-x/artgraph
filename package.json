@@ -27,6 +27,7 @@
     "typecheck": "tsc --noEmit",
     "knip": "knip",
     "check-versions": "node scripts/check-extension-version.mjs",
+    "prepare": "test -f dist/cli.js || tsc",
     "demo:record": "node scripts/record-tag-zero-demo.mjs",
     "demo:svg": "svg-term --in docs/demo/tag-zero.cast --out docs/demo/tag-zero.svg --window --width 96 --height 45 --padding 12",
     "demo": "pnpm build && pnpm demo:record && pnpm demo:svg",

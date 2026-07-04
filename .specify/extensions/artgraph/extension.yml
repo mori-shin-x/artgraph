@@ -1,0 +1,42 @@
+schema_version: "1.0"
+
+extension:
+  id: artgraph
+  name: "artgraph — SDD verification"
+  version: "0.1.0"
+  description: "Run artgraph scan/reconcile/check at Spec Kit workflow checkpoints."
+  author: artgraph
+  repository: https://github.com/ShintaroMorimoto/artgraph
+  license: MIT
+
+requires:
+  # CANONICAL: minimum Spec Kit version this integration officially supports.
+  # See specs/009-sdd-integration/contracts/speckit-extension-schema.md §1.
+  speckit_version: ">=0.11.0"
+
+provides:
+  commands:
+    - name: artgraph.scan-reconcile
+      file: commands/artgraph.scan-reconcile.md
+      description: "Refresh artgraph baseline (scan && reconcile)"
+    - name: artgraph.check-diff
+      file: commands/artgraph.check-diff.md
+      description: "Verify coverage/orphan/drift on the current diff"
+    - name: artgraph.check-gate
+      file: commands/artgraph.check-gate.md
+      description: "Gate implementation on artgraph check (--gate mode)"
+
+hooks:
+  after_tasks:
+    command: artgraph.scan-reconcile
+    optional: false
+    description: "Refresh artgraph baseline after tasks"
+  after_implement:
+    command: artgraph.check-diff
+    optional: false
+    description: "Verify artgraph traceability after implementation"
+
+tags:
+  - traceability
+  - verification
+  - artgraph
