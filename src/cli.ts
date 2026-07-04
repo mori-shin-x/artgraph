@@ -200,6 +200,13 @@ program
       });
 
       if (opts.format === "json") {
+        // A5 (issue #122 follow-up): the "Zero-tag ready" / classic closing
+        // hint below is text-path-only UX copy, not a machine-readable
+        // signal — this JSON branch intentionally does not add an
+        // `isBrownfieldZeroTag`-equivalent boolean. JSON consumers already
+        // get the raw `scanSummary` (including `reqCount`, `taskCount`,
+        // `hasDanglingCodeTag`) and are expected to derive their own
+        // brownfield/tag-zero classification from it if they need one.
         console.log(
           JSON.stringify({
             configPath: result.configPath,
@@ -277,9 +284,63 @@ program
         // Closing hints + integration Tips (FR-012/013). Tips appear *after*
         // the standard next-step lines so the user sees the actionable
         // discovery cue last.
+        //
+        // Issue #122: tag-zero brownfield onboarding. When the scan found TS
+        // files but zero req/task nodes and no dangling @impl code tag, the
+        // classic `check` message ("verify traceability") is misleading —
+        // there's nothing to trace yet. Swap to a message that tells the user
+        // impact analysis is ALREADY working off their imports and that
+        // tagging is optional / incremental.
+        //
+        // Review follow-ups tightened the original `fileCount > 0 &&
+        // reqCount === 0 && docCount === 0` heuristic:
+        //   A1 — `fileCount` alone missed repos where `generateConfig`'s
+        //        narrower `include` (no `src/`) left `fileCount === 0` while
+        //        `testPatterns` still matched files (`testCount > 0`); the
+        //        classic message's `impact --diff` would fail there too, so
+        //        either count is treated as "there's something to scan".
+        //   A2 — `docCount === 0` had nothing to do with "tagged": a plain
+        //        `docs/` folder (README-style, no req syntax) is common and
+        //        orthogonal to spec/@impl presence. Dropped.
+        //   A4 — `taskCount` wasn't threaded into `ScanSummary` at all, so a
+        //        `docGraph.autoNodes:false` repo whose tasks.md was already
+        //        decomposed into task nodes still looked tag-zero.
+        //   A3 — `hasDanglingCodeTag` catches an existing `@impl`/`@verifies`
+        //        code tag with no matching spec node; "no @impl claims
+        //        detected yet" would otherwise be factually wrong.
         if (result.scanSummary) {
-          console.log(`\nRun "artgraph check" to verify traceability.`);
-          console.log(`Run "artgraph impact --diff" to see impact of your changes.`);
+          const summary = result.scanSummary;
+          const hasFileSignal = summary.fileCount > 0 || summary.testCount > 0;
+          const isZeroTagShape =
+            hasFileSignal && summary.reqCount === 0 && summary.taskCount === 0;
+          const isBrownfieldZeroTag = isZeroTagShape && !summary.hasDanglingCodeTag;
+
+          if (isBrownfieldZeroTag) {
+            console.log(
+              `\nZero-tag ready: no specs or @impl claims detected yet.`,
+            );
+            console.log(
+              `Impact analysis works right now from your TS imports — try:`,
+            );
+            console.log(`  artgraph impact --diff`);
+            console.log(
+              `Tags are optional; add them incrementally as your specs grow.`,
+            );
+          } else if (isZeroTagShape && summary.hasDanglingCodeTag) {
+            // A3: soften rather than suppress entirely — there IS @impl
+            // signal in the code, it just doesn't resolve to a spec yet.
+            console.log(`\n@impl tags found, but no matching specs yet.`);
+            console.log(
+              `Impact analysis works right now from your TS imports — try:`,
+            );
+            console.log(`  artgraph impact --diff`);
+            console.log(
+              `Add the referenced specs so "artgraph check" can verify those @impl claims.`,
+            );
+          } else {
+            console.log(`\nRun "artgraph check" to verify traceability.`);
+            console.log(`Run "artgraph impact --diff" to see impact of your changes.`);
+          }
         }
 
         // Skip Tips entirely if the user already requested one-shot integration —
@@ -576,7 +637,29 @@ program
     } else if (opts.diff) {
       const diffFiles = getGitDiffFiles(rootDir);
       if (diffFiles.length === 0) {
-        console.log("No changes detected in git diff.");
+        // E4: this used to always print plain text + exit 0, ignoring
+        // `--format json`. A JSON consumer (e.g. a CI script piping into
+        // `jq`) would get invalid JSON on the common "no changes" case.
+        // Emit the same shape as the normal `impact` JSON output
+        // (`ImpactResult`), just all-empty, plus a `message` field so a
+        // JSON consumer can still tell the no-diff case apart from a real
+        // (but empty) blast radius.
+        if (opts.format === "json") {
+          console.log(
+            JSON.stringify({
+              affectedFiles: [],
+              affectedDocs: [],
+              impactReqs: [],
+              affectedTasks: [],
+              drifted: [],
+              originReqs: [],
+              summary: { docs: 0, reqs: 0, files: 0, tasks: 0 },
+              message: "No changes detected in git diff.",
+            }),
+          );
+        } else {
+          console.log("No changes detected in git diff.");
+        }
         process.exit(0);
       }
       entries = diffFiles.map((p) => ({ path: p, line: 1 }));
@@ -799,7 +882,26 @@ program
     if (opts.diff) {
       const diffFiles = getGitDiffFiles(rootDir);
       if (diffFiles.length === 0) {
-        console.log("No changes detected in git diff.");
+        // E4: same fix as `impact --diff` — don't ignore `--format json` on
+        // the "no changes" case. Shape matches the normal `check
+        // --format json` output (`CheckResult` + `warnings`), just all-clear,
+        // plus a `message` field flagging the no-diff short-circuit.
+        if (opts.format === "json") {
+          console.log(
+            JSON.stringify({
+              drifted: [],
+              orphans: [],
+              uncovered: [],
+              coverage: [],
+              testFailures: [],
+              pass: true,
+              warnings,
+              message: "No changes detected in git diff.",
+            }),
+          );
+        } else {
+          console.log("No changes detected in git diff.");
+        }
         process.exit(0);
       }
       const { startIds } = resolveStartIds(graph, pathsToEntries(diffFiles));
