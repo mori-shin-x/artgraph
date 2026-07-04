@@ -12,14 +12,7 @@
 
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
@@ -57,9 +50,7 @@ describe("applyMarkerBlock (T018)", () => {
     const existing = "# User content\n\nSome user prose.\n";
     const res = applyMarkerBlock(existing, "body");
     expect(res.found).toBe(false);
-    expect(res.newContent).toBe(
-      `${existing}\n\n${MARKER_BEGIN}\nbody\n${MARKER_END}\n`,
-    );
+    expect(res.newContent).toBe(`${existing}\n\n${MARKER_BEGIN}\nbody\n${MARKER_END}\n`);
     // User content survives byte-identical at the head.
     expect(res.newContent.startsWith(existing)).toBe(true);
   });
@@ -98,8 +89,7 @@ describe("applyMarkerBlock (T018)", () => {
 
   it("collapses duplicate blocks to a single canonical block (A2)", () => {
     const dup =
-      `${MARKER_BEGIN}\nfirst\n${MARKER_END}\n\n` +
-      `${MARKER_BEGIN}\nsecond\n${MARKER_END}\n`;
+      `${MARKER_BEGIN}\nfirst\n${MARKER_END}\n\n` + `${MARKER_BEGIN}\nsecond\n${MARKER_END}\n`;
     const res = applyMarkerBlock(dup, "replaced");
     expect(res.found).toBe(true);
     // The first block is rewritten canonically; every subsequent duplicate
@@ -169,8 +159,7 @@ describe("applyMarkerBlock (T018)", () => {
     // IDE autocorrect (Grammarly, macOS "smart capitalization") title-cases
     // the marker string. The `i` flag on MARKER_RE / BEGIN_RE / END_RE keeps
     // the block detectable, and the writer normalizes it back to lowercase.
-    const shouted =
-      "<!-- artgraph:Begin -->\nold body\n<!-- artgraph:END -->\n";
+    const shouted = "<!-- artgraph:Begin -->\nold body\n<!-- artgraph:END -->\n";
     const res = applyMarkerBlock(shouted, "canonical body");
     expect(res.found).toBe(true);
     expect(res.newContent).toContain(`${MARKER_BEGIN}\ncanonical body\n${MARKER_END}`);
@@ -258,7 +247,7 @@ describe("inspectMarkerBlock (T018)", () => {
 
 describe("buildAgentsMdBody (T019)", () => {
   it("contains all 8 Skill names from contracts/agent-context-format.md", () => {
-    const body = buildAgentsMdBody();
+    const body = buildAgentsMdBody("npm");
     for (const skill of [
       "artgraph-setup",
       "artgraph-detect",
@@ -274,7 +263,7 @@ describe("buildAgentsMdBody (T019)", () => {
   });
 
   it("contains common-workflows guidance and the quickstart code block", () => {
-    const body = buildAgentsMdBody();
+    const body = buildAgentsMdBody("npm");
     expect(body).toContain("Common workflows");
     expect(body).toContain("Quickstart");
     expect(body).toContain("```bash");
@@ -283,14 +272,69 @@ describe("buildAgentsMdBody (T019)", () => {
   });
 
   it("contains the canonical repository link for human readers", () => {
-    const body = buildAgentsMdBody();
+    const body = buildAgentsMdBody("npm");
     expect(body).toContain("https://github.com/ShintaroMorimoto/artgraph");
   });
 
   it("does not embed the marker literals (those are added by applyMarkerBlock)", () => {
-    const body = buildAgentsMdBody();
+    const body = buildAgentsMdBody("npm");
     expect(body).not.toContain(MARKER_BEGIN);
     expect(body).not.toContain(MARKER_END);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildAgentsMdBody — PM-independent command examples (#110)
+// ---------------------------------------------------------------------------
+
+describe("buildAgentsMdBody — PM exec-prefix substitution (#110)", () => {
+  // Keep in sync with execPrefix() in src/package-manager.ts (contracts/
+  // package-manager.md §2). The body must quote each PM's real invocation, not
+  // the bare `artgraph` binary that only exists under a global install.
+  const EXPECTED_PREFIX = {
+    npm: "npx artgraph",
+    pnpm: "pnpm exec artgraph",
+    bun: "bunx artgraph",
+    deno: "deno run -A npm:artgraph/cli",
+  } as const;
+
+  for (const [pm, prefix] of Object.entries(EXPECTED_PREFIX)) {
+    it(`renders every command example with the ${pm} exec prefix`, () => {
+      const body = buildAgentsMdBody(pm as keyof typeof EXPECTED_PREFIX);
+      expect(body).toContain(`${prefix} init --agents=`);
+      expect(body).toContain(`${prefix} doctor`);
+      expect(body).toContain(`${prefix} check --diff`);
+      expect(body).toContain(`${prefix} --help`);
+    });
+
+    it(`renders the ${pm} PM notice with the regenerate hint`, () => {
+      const body = buildAgentsMdBody(pm as keyof typeof EXPECTED_PREFIX);
+      expect(body).toContain(`packageManager=${pm}`);
+      expect(body).toContain(`${prefix} init --force`);
+    });
+  }
+
+  it("falls back to the bare `artgraph` binary when no PM was detected", () => {
+    const body = buildAgentsMdBody(null);
+    expect(body).toContain("artgraph init --agents=");
+    expect(body).toContain("no package manager was detected");
+    expect(body).not.toContain("npx");
+    expect(body).not.toContain("pnpm exec");
+  });
+
+  it("leaves no unrendered {{…}} placeholders for any PM", () => {
+    for (const pm of ["npm", "pnpm", "bun", "deno", null] as const) {
+      const body = buildAgentsMdBody(pm);
+      expect(body, `unrendered placeholder for pm=${String(pm)}`).not.toMatch(/\{\{\s*\w+\s*\}\}/);
+    }
+  });
+
+  it("opens with the PM notice as an HTML comment (invisible in rendered Markdown)", () => {
+    const body = buildAgentsMdBody("pnpm");
+    expect(body.startsWith("<!-- artgraph:")).toBe(true);
+    expect(body.split("\n")[0]).toMatch(
+      /^<!-- artgraph: generated for packageManager=pnpm\. .* -->$/,
+    );
   });
 });
 
@@ -302,7 +346,7 @@ describe("writeAgentsMd (T019)", () => {
   it("creates AGENTS.md on a fresh project and writes the canonical body", () => {
     const project = createFreshProject();
     try {
-      const res = writeAgentsMd(project.dir);
+      const res = writeAgentsMd(project.dir, "npm");
       expect(res.written).toBe(true);
       expect(res.path).toBe(resolve(project.dir, "AGENTS.md"));
       expect(existsSync(res.path)).toBe(true);
@@ -322,16 +366,34 @@ describe("writeAgentsMd (T019)", () => {
   it("is idempotent on the second call (no rewrite, sha256 unchanged)", () => {
     const project = createFreshProject();
     try {
-      const first = writeAgentsMd(project.dir);
+      const first = writeAgentsMd(project.dir, "npm");
       expect(first.written).toBe(true);
       const hash1 = sha256(first.path);
 
-      const second = writeAgentsMd(project.dir);
+      const second = writeAgentsMd(project.dir, "npm");
       expect(second.written).toBe(false);
       expect(second.path).toBe(first.path);
       const hash2 = sha256(second.path);
 
       expect(hash2).toBe(hash1);
+    } finally {
+      project.cleanup();
+    }
+  });
+
+  it("refreshes the block when the detected PM changes between runs (#110)", () => {
+    const project = createFreshProject();
+    try {
+      const first = writeAgentsMd(project.dir, "npm");
+      expect(first.written).toBe(true);
+      expect(readFileSync(first.path, "utf-8")).toContain("npx artgraph doctor");
+
+      const second = writeAgentsMd(project.dir, "pnpm");
+      expect(second.written).toBe(true);
+
+      const onDisk = readFileSync(second.path, "utf-8");
+      expect(onDisk).toContain("pnpm exec artgraph doctor");
+      expect(onDisk).not.toContain("npx artgraph");
     } finally {
       project.cleanup();
     }
@@ -344,7 +406,7 @@ describe("writeAgentsMd (T019)", () => {
       const userContent = "# My project rules\n\nUse pnpm, not yarn.\n";
       writeFileSync(target, userContent, "utf-8");
 
-      const res = writeAgentsMd(project.dir);
+      const res = writeAgentsMd(project.dir, "npm");
       expect(res.written).toBe(true);
 
       const onDisk = readFileSync(target, "utf-8");
@@ -382,7 +444,7 @@ describe("writeWrapper(claude) (T020)", () => {
 
   it("body length is far shorter than AGENTS.md body (SC-003: no content duplication)", () => {
     const wrapper = buildClaudeWrapperBody();
-    const canonical = buildAgentsMdBody();
+    const canonical = buildAgentsMdBody("npm");
     expect(wrapper.length).toBeLessThan(canonical.length / 4);
     // Sanity ceiling — wrapper is a few short lines, not a chapter.
     expect(wrapper.length).toBeLessThan(300);
@@ -438,9 +500,7 @@ describe("writeWrapper(copilot) (T020)", () => {
 
       const res = writeWrapper(project.dir, "copilot");
       expect(res.written).toBe(true);
-      expect(res.path).toBe(
-        resolve(project.dir, ".github/copilot-instructions.md"),
-      );
+      expect(res.path).toBe(resolve(project.dir, ".github/copilot-instructions.md"));
       expect(existsSync(res.path)).toBe(true);
       expect(statSync(join(project.dir, ".github")).isDirectory()).toBe(true);
 
@@ -456,7 +516,7 @@ describe("writeWrapper(copilot) (T020)", () => {
 
   it("body length is far shorter than AGENTS.md body (SC-003)", () => {
     const wrapper = buildCopilotWrapperBody();
-    const canonical = buildAgentsMdBody();
+    const canonical = buildAgentsMdBody("npm");
     expect(wrapper.length).toBeLessThan(canonical.length / 4);
     expect(wrapper.length).toBeLessThan(300);
   });
@@ -510,8 +570,8 @@ describe("writeMarkerFile error surface (A-adj-3)", () => {
       writeFileSync(target, "hi\n", "utf-8");
       chmodSync(target, 0o000);
       try {
-        expect(() => writeAgentsMd(project.dir)).toThrow(/cannot read existing file/);
-        expect(() => writeAgentsMd(project.dir)).toThrow(target);
+        expect(() => writeAgentsMd(project.dir, "npm")).toThrow(/cannot read existing file/);
+        expect(() => writeAgentsMd(project.dir, "npm")).toThrow(target);
       } finally {
         try {
           chmodSync(target, 0o644);
@@ -536,9 +596,7 @@ describe("writeGitAttributes (OPS-2)", () => {
     try {
       const res = writeGitAttributes(project.dir, CLAUDE_DESCRIPTOR);
       expect(res.written).toBe(true);
-      expect(res.path).toBe(
-        resolve(project.dir, CLAUDE_DESCRIPTOR.skillsPath, ".gitattributes"),
-      );
+      expect(res.path).toBe(resolve(project.dir, CLAUDE_DESCRIPTOR.skillsPath, ".gitattributes"));
       expect(existsSync(res.path)).toBe(true);
       const onDisk = readFileSync(res.path, "utf-8");
       expect(onDisk).toBe("** text eol=lf\n");
@@ -597,9 +655,7 @@ describe("writeGitAttributes (OPS-2)", () => {
       try {
         const res = writeGitAttributes(project.dir, descriptor);
         expect(res.written).toBe(true);
-        expect(res.path).toBe(
-          resolve(project.dir, descriptor.skillsPath, ".gitattributes"),
-        );
+        expect(res.path).toBe(resolve(project.dir, descriptor.skillsPath, ".gitattributes"));
         expect(readFileSync(res.path, "utf-8")).toBe("** text eol=lf\n");
       } finally {
         project.cleanup();
