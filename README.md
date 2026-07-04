@@ -31,6 +31,12 @@ artgraph adds the layer *above* the code:
   AST-visible tags (`@impl`, `[REQ-ID]`, `req:`), markdown links, YAML
   frontmatter, SDD-tool file conventions, or TypeScript imports. No LLM in
   the graph, no embedding retrieval, no RAG.
+- **Zero-tag warm start on brownfield repos** — `artgraph impact --diff`
+  returns a change's blast radius from the TypeScript import graph alone,
+  before you write a single `@impl` tag or a `.artgraph.json`. Tags,
+  requirement IDs, and `.trace.lock` progressively raise precision as
+  your team adopts them, but they are never the entry fee to first-day
+  value.
 - **Per-change context routing** — `artgraph impact --diff` returns only the
   specs, docs, and tests a given change touches. Feed *that* to the agent
   instead of the whole context file.
