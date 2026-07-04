@@ -103,7 +103,7 @@ function resolveTestResults(
 program
   .command("init")
   .description(
-    "Initialize artgraph for this project (default: config + scan + Skills + auto-integrate detected SDD tools; Stop hook and agent-context snippet land in PR-B). Use --minimal for bare config only.",
+    "Initialize artgraph for this project (default: config + scan + Skills + auto-integrate detected SDD tools + Stop hook; agent-context snippet lands in PR-B). Use --minimal for bare config only.",
   )
   .option("--force", "Overwrite existing .artgraph.json")
   .option("--minimal", "Bare config only — opt out of every extra setup stage")
@@ -111,12 +111,12 @@ program
   .option("--no-scan", "Skip initial scan + reconcile")
   .option("--no-skills", "Skip Claude Code Skills install (default mode only — already off under --minimal)")
   .option("--no-integrate", "Skip SDD-tool auto-integration (default mode only)")
-  .option("--no-hooks", "Skip Stop hook installation (default mode only; P1 deliverable)")
+  .option("--no-hooks", "Skip Stop hook installation (default mode only)")
   .option("--no-agent-context", "Skip CLAUDE.md / AGENTS.md snippet injection (default mode only; P1 deliverable)")
   // Stage opt-ins (used with --minimal)
   .option("--with-skills", "Install Claude Code Skills into .claude/skills/ (use with --minimal)")
   .option("--with-integrate", "Auto-integrate detected SDD tools (use with --minimal)")
-  .option("--with-hooks", "Install Stop hook (use with --minimal; P1 deliverable, no effect yet)")
+  .option("--with-hooks", "Install Stop hook (use with --minimal)")
   .option("--with-agent-context", "Inject CLAUDE.md / AGENTS.md snippet (use with --minimal; P1 deliverable, no effect yet)")
   // Explicit integrate list (overrides auto-detect)
   .option(
@@ -129,6 +129,13 @@ program
   .action((opts) => {
     const rootDir = process.cwd();
 
+    // Parse --integrations first so the M24 conflict check below can also
+    // flag `--no-integrate` combined with a non-empty `--integrations=<list>`
+    // (or `--integrations=all`). Without this pre-parse, that pair silently
+    // dropped in default mode and reversed meaning under `--minimal`
+    // (explicit list acts as an integrate opt-in — see computeStageGates).
+    const integrations = parseInitIntegrations(opts.integrations);
+
     // M24: detect mutually-exclusive --no-X + --with-X combinations before
     // doing any work. commander otherwise silently lets --with-X "win"
     // (last flag), which has bitten users in PR #103 review.
@@ -137,26 +144,30 @@ program
     if (opts.integrate === false && opts.withIntegrate === true) conflicts.push("--no-integrate / --with-integrate");
     if (opts.hooks === false && opts.withHooks === true) conflicts.push("--no-hooks / --with-hooks");
     if (opts.agentContext === false && opts.withAgentContext === true) conflicts.push("--no-agent-context / --with-agent-context");
+    // E2-2: `--no-integrate` is only really an opt-out if we also reject the
+    // silent-conflict pair `--no-integrate --integrations=<...>`. An empty
+    // list (`parseInitIntegrations` collapses to undefined) is a no-op and
+    // must NOT trigger the check.
+    if (opts.integrate === false && Array.isArray(integrations) && integrations.length > 0) {
+      conflicts.push("--no-integrate / --integrations=<non-empty>");
+    }
+    if (opts.integrate === false && integrations === "all") {
+      conflicts.push("--no-integrate / --integrations=all");
+    }
     if (conflicts.length > 0) {
       console.error(`Error: mutually exclusive flag combinations: ${conflicts.join("; ")}`);
       process.exit(1);
     }
 
-    // C1: --with-hooks / --with-agent-context are accepted (so the flag
-    // surface is stable for PR-B) but currently no-op. Warn so the user
-    // doesn't think they got hooks/snippet without checking output.
-    if (opts.withHooks === true) {
-      console.error("WARNING: --with-hooks is a P1 deliverable; the flag has no effect in this release.");
-    }
+    // C1: --with-agent-context is accepted (so the flag surface is stable
+    // for PR-B) but currently no-op. Warn so the user doesn't think they got
+    // the snippet without checking output.
     if (opts.withAgentContext === true) {
       console.error("WARNING: --with-agent-context is a P1 deliverable; the flag has no effect in this release.");
     }
 
-    // Parse --integrations: "all" stays as the literal sentinel; otherwise
-    // it's a comma-separated provider id list. Empty/undefined leaves
-    // integrations unspecified so runInit's auto-detect kicks in.
-    const integrations = parseInitIntegrations(opts.integrations);
-
+    // `integrations` is already resolved above (needed by the M24 check).
+    //
     // M12: surface valid provider ids when the user fat-fingers an
     // --integrations value. runInit's own warning also fires later, but
     // showing the valid set here gives the user the hint *before* init runs.
@@ -229,6 +240,7 @@ program
               : null,
             integrationResults: result.integrationResults ?? null,
             integrationWarnings: result.integrationWarnings ?? null,
+            hooksInstall: result.hooksInstall ?? null,
           }),
         );
       } else {
@@ -343,6 +355,54 @@ program
           }
         }
 
+        // Stop hook install result (issue #109). Structured data comes from
+        // `runInit`/`installHooks`; formatting is fully owned here so init.ts
+        // stays print-free.
+        if (result.hooksInstall) {
+          switch (result.hooksInstall.action) {
+            case "created":
+              console.log("\nCreated .claude/settings.json with artgraph Stop hook");
+              break;
+            case "merged-b":
+              console.log("\nAdded artgraph Stop hook to existing .claude/settings.json");
+              break;
+            case "merged-c":
+              console.log("\nAdded artgraph Stop hook (other hooks preserved)");
+              break;
+            case "conflict":
+              // A2: `.artgraph.json` has already been (re-)written by the
+              // time we hit this branch, so a bare re-run of `artgraph init`
+              // now trips the "already exists" guard. Point the user at
+              // `--force` (with `--no-hooks` as the escape hatch) so they
+              // know how to complete setup after resolving the Stop
+              // conflict — that guidance was missing.
+              console.error(
+                `\n[WARN] .claude/settings.json already has a Stop hook configured.\nartgraph did NOT modify this file to avoid clobbering your setup.\n\nTo add artgraph's gate, manually merge the following into hooks.Stop:\n\n  {\n    "hooks": [\n      { "type": "command", "command": "${result.hooksInstall.reason}" }\n    ]\n  }\n\n(artgraph's config and Skills were installed successfully; only the Stop hook was skipped.)\n\nAfter you have merged the snippet above, re-run \`artgraph init --force\` to\ncomplete setup (or run with \`--no-hooks\` if you prefer to keep the current\nStop hook and skip artgraph's gate).\n`,
+              );
+              break;
+            case "invalid-json":
+              console.error(
+                `\nERROR: .claude/settings.json is not valid JSON: ${result.hooksInstall.reason}. Not modifying.`,
+              );
+              break;
+            case "io-error":
+              console.error(`\nERROR: Stop hook install failed: ${result.hooksInstall.reason}`);
+              break;
+            case "skipped-no-pm":
+              console.error(
+                "\nWARNING: Cannot detect package manager; skipping Stop hook install (config saved to .artgraph.json).",
+              );
+              break;
+            default: {
+              // E3: exhaustiveness guard — a new `hooksInstall.action`
+              // variant will fail `tsc` here instead of silently skipping
+              // the CLI-level formatting. Mirrors `printWarnings`.
+              const _exhaustive: never = result.hooksInstall.action;
+              void _exhaustive;
+            }
+          }
+        }
+
         // Skip Tips entirely if the user already requested one-shot integration —
         // the per-tool sections above already cover discovery.
         if (!integrations) {
@@ -354,6 +414,9 @@ program
       // so CI / wrapper scripts catch it. We still emit the per-tool
       // sections above so the user has the full picture before exit.
       if (result.integrationFailureCount && result.integrationFailureCount > 0) {
+        process.exitCode = 1;
+      }
+      if (result.hooksInstall?.failure) {
         process.exitCode = 1;
       }
     } catch (e) {
@@ -1587,6 +1650,7 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
   const origStderrWrite = process.stderr.write.bind(process.stderr);
   const hadStdinOverride = _hookStdinOverride !== undefined;
   const prevStdinOverride = _hookStdinOverride;
+  const origProcessExitCode = process.exitCode;
 
   const pushStdout = (s: string) => stdoutChunks.push(s);
   const pushStderr = (s: string) => stderrChunks.push(s);
@@ -1596,6 +1660,9 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
   try {
     if (opts.cwd) process.chdir(opts.cwd);
     if (opts.stdin !== undefined) _hookStdinOverride = opts.stdin;
+    // Reset so a prior test's leftover `process.exitCode` doesn't leak into
+    // this invocation's captured return value.
+    process.exitCode = undefined;
 
     console.log = (...args: unknown[]) => {
       pushStdout(args.map(formatLogArg).join(" ") + "\n");
@@ -1624,6 +1691,12 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
 
     try {
       await program.parseAsync(argv, { from: "user" });
+      // Commands may signal failure by mutating `process.exitCode` instead of
+      // throwing (e.g. `init` on hooksInstall failure). Read it here so those
+      // exits are visible in RunCliResult.
+      if (typeof process.exitCode === "number" && process.exitCode !== 0) {
+        exitCode = process.exitCode;
+      }
     } catch (e) {
       if (e instanceof CliExitError) {
         exitCode = e.exitCode;
@@ -1647,6 +1720,9 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
     process.stdout.write = origStdoutWrite;
     process.stderr.write = origStderrWrite;
     _hookStdinOverride = hadStdinOverride ? prevStdinOverride : undefined;
+    // Restore prior `process.exitCode` so a runCli call doesn't leak its
+    // exit state into the surrounding test process.
+    process.exitCode = origProcessExitCode;
   }
 
   return {
