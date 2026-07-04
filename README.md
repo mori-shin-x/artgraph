@@ -83,6 +83,9 @@ Continue with **Quickstart** below.
 > `bun add -d github:ShintaroMorimoto/artgraph`). The plain `artgraph` registry name in the commands
 > below will start resolving once the first release is published.
 
+> **Platforms**: macOS and Linux — including **WSL2** on Windows. Native Windows
+> (PowerShell / cmd) is **not supported**; see the [Windows note](#windows-note).
+
 ```bash
 # Pick your package manager (npm / pnpm / Bun / Deno all supported; Yarn falls back to pnpm)
 npm install -D artgraph && npx artgraph init --agents=claude       # pick your agent(s)
@@ -124,7 +127,9 @@ If you use Claude Code, you can skip the manual install entirely — type `/artg
 
 ### Windows note
 
-On Windows, artgraph distributes a `.gitattributes` file into each `<agent-skills-path>/` that forces LF for the tracked files. Do NOT set `core.autocrlf=true` globally — if `.gitattributes` is not committed, `artgraph doctor` may report drift after checkout. Alternatively add `.claude/skills/** text eol=lf` (and equivalents for other agents) to your repo's `.gitattributes`.
+**Native Windows (PowerShell / cmd) is not a supported platform.** The artgraph CLI, the generated Stop hook, and the distributed Skills all assume a POSIX environment. On Windows, run artgraph inside **WSL2** (recommended) — all supported package managers and Tier 1 agents work there. Git Bash may handle basic commands but is untested and unsupported. This is a deliberate v0.x scope decision ([#137](https://github.com/ShintaroMorimoto/artgraph/issues/137)); native Windows support may be revisited if there is demand.
+
+Even when artgraph itself runs inside WSL2, teammates checking the repo out on native Windows still interact with the distributed files: artgraph distributes a `.gitattributes` file into each `<agent-skills-path>/` that forces LF for the tracked files. Do NOT set `core.autocrlf=true` globally — if `.gitattributes` is not committed, `artgraph doctor` may report drift after checkout. Alternatively add `.claude/skills/** text eol=lf` (and equivalents for other agents) to your repo's `.gitattributes`.
 
 Selecting `--agents=copilot` creates `.github/skills/` in your repo. If your project uses CODEOWNERS / branch protection for `.github/`, coordinate with your team before running `artgraph init --agents=copilot`.
 
