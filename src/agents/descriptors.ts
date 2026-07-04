@@ -79,7 +79,7 @@ export const AGENT_DESCRIPTORS: readonly AgentDescriptor[] = [
 
 /**
  * Frozen, alpha-stable ordering of the 5 Tier 1 ids. Useful for error
- * messages ("Supported values: claude, codex, cursor, copilot, kiro") and
+ * messages ("Supported values: claude, codex, copilot, cursor, kiro") and
  * for test fixtures that iterate the agents.
  */
 export const AGENT_IDS: readonly AgentId[] = AGENT_DESCRIPTORS.map((d) => d.id);

@@ -151,7 +151,7 @@ program
     // the single source of truth) instead of hardcoding it a second time —
     // a 6th agent id landing in descriptors.ts would otherwise leave this
     // help text silently stale.
-    `Comma-separated Tier 1 agent ids to target (${AGENT_IDS.join(", ")}). Required for Skills / agent-context distribution.`,
+    `Comma-separated Tier 1 agent ids to target (${[...AGENT_IDS].sort().join(", ")}). Required for Skills / agent-context distribution.`,
   )
   .option("--format <format>", "Output format: json | text", "text")
   .action((opts) => {
@@ -441,9 +441,7 @@ program
  * this try/catch byte-for-byte; centralizing it here means a future change
  * to the error-to-exit behavior only has to land once.
  *
- * `doctor`'s call site still inlines its own copy of this pattern — Cluster
- * D owns migrating it onto this helper alongside its own try/catch wrapping
- * of the doctor action.
+ * Both `init` and `doctor` route --agents parsing through this helper.
  */
 function parseAgentsFlag(raw: string): AgentId[] {
   try {
@@ -592,7 +590,7 @@ const AGENTS_REQUIRED_ERROR = [
   "",
   // E-adj-A9 / BND-7: derive from AGENT_IDS instead of a second hardcoded
   // literal (descriptors.ts is the single source of truth).
-  `Supported values: ${AGENT_IDS.join(", ")}`,
+  `Supported values: ${[...AGENT_IDS].sort().join(", ")}`,
   "",
   "To resolve, choose one:",
   "  1. Specify target agents:",
@@ -1051,18 +1049,12 @@ program
   )
   .action((opts) => {
     const rootDir = process.cwd();
-    let agents: AgentId[] | undefined;
-    if (opts.agents !== undefined) {
-      try {
-        agents = parseAgentsList(String(opts.agents));
-      } catch (e) {
-        if (e instanceof AgentsParseError) {
-          console.error(e.message);
-          process.exit(1);
-        }
-        throw e;
-      }
-    }
+    // E-adj-A5: parseAgentsFlag centralizes the parseAgentsList catch — same
+    // as init's --agents branch. `init` and `doctor` used to inline a byte-
+    // identical try/catch; migrating doctor onto the helper keeps them in
+    // sync when the error-to-exit behavior changes.
+    const agents: AgentId[] | undefined =
+      opts.agents !== undefined ? parseAgentsFlag(String(opts.agents)) : undefined;
     // C1 — mirror the `init` action's try/catch so `SkillsInstallError`,
     // `EACCES` reads, unknown-agent throws, etc. surface as a single
     // `Error: <msg>` line rather than a raw Node stack trace.

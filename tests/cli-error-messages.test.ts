@@ -50,7 +50,7 @@ describe("CLI: --agents error UX (spec 013 FR-001 / FR-002 / SC-006 / A1)", () =
     expect(stderr).toContain("--agents=<list> is required");
 
     // Required line: supported values enumeration in the canonical order.
-    expect(stderr).toContain("Supported values: claude, codex, cursor, copilot, kiro");
+    expect(stderr).toContain("Supported values: claude, codex, copilot, cursor, kiro");
 
     // Required line: example flag form (FR-002 §a).
     expect(stderr).toContain("--agents=<list>");
@@ -69,7 +69,7 @@ describe("CLI: --agents error UX (spec 013 FR-001 / FR-002 / SC-006 / A1)", () =
     const { exitCode, stderr } = await runAt(initTmp, ["init", "--agents=windsurf"]);
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain('Unknown agent identifier(s): "windsurf"');
-    expect(stderr).toContain("Supported values: claude, codex, cursor, copilot, kiro");
+    expect(stderr).toContain("Supported values: claude, codex, copilot, cursor, kiro");
   });
 
   // ---------------------------------------------------------------------
@@ -81,7 +81,7 @@ describe("CLI: --agents error UX (spec 013 FR-001 / FR-002 / SC-006 / A1)", () =
     expect(exitCode).not.toBe(0);
     expect(stderr).toContain('Unknown agent identifier(s): "Claude"');
     expect(stderr).toContain('Did you mean "claude"?');
-    expect(stderr).toContain("Supported values: claude, codex, cursor, copilot, kiro");
+    expect(stderr).toContain("Supported values: claude, codex, copilot, cursor, kiro");
   });
 
   // ---------------------------------------------------------------------

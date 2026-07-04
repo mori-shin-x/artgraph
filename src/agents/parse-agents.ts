@@ -27,7 +27,10 @@ export class AgentsParseError extends Error {
   }
 }
 
-const SUPPORTED_LIST = AGENT_IDS.join(", ");
+// OUT-6 — parseAgentsList() returns its result alpha-sorted (line ~121),
+// so keep the error-message list in the same order to avoid surprising the
+// user with two different orderings for the same agent set.
+const SUPPORTED_LIST = [...AGENT_IDS].sort().join(", ");
 
 // @impl 013-cross-agent-extensions/FR-001
 /**

@@ -97,7 +97,19 @@ export function readSkillSource(templatesDir: string): SkillSource {
     const isShared = topLevel === "_shared";
     const files = collectFiles(templatesDir, join(templatesDir, topLevel));
 
-    if (!isShared) {
+    if (isShared) {
+      // B12 — `_shared/` MUST NOT contain a SKILL.md. `_shared/` is a follower
+      // dir referenced by `../_shared/...` from real Skill directories; if a
+      // stray `_shared/SKILL.md` slips in, agents like Claude Code would
+      // register a phantom Skill named `_shared` in the distribution. Refuse
+      // to package so the typo surfaces before any bytes reach a user tree.
+      const strayIdx = files.findIndex((f) => f.relPath === "_shared/SKILL.md");
+      if (strayIdx !== -1) {
+        throw new SkillsInstallError(
+          `_shared/SKILL.md is not allowed — _shared/ is a shared-fragment tree, not a Skill. Remove templates/skills/_shared/SKILL.md.`,
+        );
+      }
+    } else {
       const expected = `${topLevel}/SKILL.md`;
       const hasSkillMd = files.some((f) => f.relPath === expected);
       if (!hasSkillMd) {

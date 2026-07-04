@@ -190,7 +190,7 @@ describe("e2e: artgraph init --agents validation errors", () => {
     const r = runInit(proj.dir, ["--no-scan"]);
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain("ERROR: --agents=<list> is required");
-    expect(r.stderr).toContain("Supported values: claude, codex, cursor, copilot, kiro");
+    expect(r.stderr).toContain("Supported values: claude, codex, copilot, cursor, kiro");
     expect(r.stderr).toMatch(/1\.\s+Specify target agents/);
     expect(r.stderr).toMatch(/2\.\s+Skip Skills and agent-context distribution/);
     expect(r.stderr).toMatch(/3\.\s+Skip every extra setup stage/);

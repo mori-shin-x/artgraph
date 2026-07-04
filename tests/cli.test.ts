@@ -597,7 +597,7 @@ describe("CLI: init", () => {
     const { exitCode, stderr } = await runInit([]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("ERROR: --agents=<list> is required");
-    expect(stderr).toContain("Supported values: claude, codex, cursor, copilot, kiro");
+    expect(stderr).toContain("Supported values: claude, codex, copilot, cursor, kiro");
     expect(stderr).toContain("1. Specify target agents:");
     expect(stderr).toContain("2. Skip Skills and agent-context distribution:");
     expect(stderr).toContain("3. Skip every extra setup stage:");
@@ -750,7 +750,7 @@ describe("CLI: init", () => {
     const { stdout, exitCode } = await runInit(["--help"]);
     expect(exitCode).toBe(0);
     const normalized = stdout.replace(/\s+/g, " ");
-    expect(normalized).toContain("claude, codex, cursor, copilot, kiro");
+    expect(normalized).toContain("claude, codex, copilot, cursor, kiro");
   });
 
   // -------------------------------------------------------------------------
