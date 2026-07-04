@@ -516,6 +516,70 @@ describe("runInit Skills installation (directory format)", () => {
       readFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "utf-8"),
     ).toBe("preexisting\n");
   });
+
+  // -------------------------------------------------------------------------
+  // spec 013 PR #114 [B2] — cross-agent all-or-nothing pre-flight.
+  // Multi-agent distribute previously had no outer try/catch: agent #3
+  // failing after agents #1-2 fully wrote their trees left a partial state
+  // (Skill files landed for the first two agents, but no `.artgraph.json`,
+  // `.trace.lock`, or AGENTS.md ever landed). The fix runs pre-flight
+  // classification for EVERY agent before any write, so a conflict on ANY
+  // agent aborts init before touching disk.
+  // -------------------------------------------------------------------------
+  it("[B2] pre-flights every selected agent before writing any of them", () => {
+    // Agent 1 (claude) has a clean tree. Agent 2 (codex) has a drift
+    // conflict at .agents/skills/artgraph-impact/SKILL.md — its content
+    // differs from the canonical bytes and --force is NOT set.
+    mkdirSync(join(tmp, ".agents", "skills", "artgraph-impact"), { recursive: true });
+    writeFileSync(
+      join(tmp, ".agents", "skills", "artgraph-impact", "SKILL.md"),
+      "codex user-edited content\n",
+    );
+
+    expect(() =>
+      runInit(tmp, {
+        noScan: true,
+        withSkills: true,
+        agents: ["claude", "codex"],
+      }),
+    ).toThrow(DistributionError);
+
+    // No config file. No trace lock. No AGENTS.md.
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
+    expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
+    expect(existsSync(join(tmp, "AGENTS.md"))).toBe(false);
+
+    // Critically: agent 1 (claude) MUST NOT have any Skill files on disk.
+    // Prior to the B2 fix, agent 1's distribute() ran to completion before
+    // agent 2's failed, leaving `.claude/skills/artgraph-impact/SKILL.md`.
+    expect(
+      existsSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md")),
+    ).toBe(false);
+
+    // Agent 2's pre-existing user content is preserved unchanged.
+    expect(
+      readFileSync(join(tmp, ".agents", "skills", "artgraph-impact", "SKILL.md"), "utf-8"),
+    ).toBe("codex user-edited content\n");
+  });
+
+  // -------------------------------------------------------------------------
+  // spec 013 PR #114 [OPS-2 wiring] — writeGitAttributes runs after every
+  // successful distribute() so the Skill dist tree is pinned to LF eol
+  // (Windows-safe hash comparison in doctor).
+  // -------------------------------------------------------------------------
+  it("writes .gitattributes into every selected agent's skillsPath", () => {
+    runInit(tmp, {
+      noScan: true,
+      withSkills: true,
+      agents: ["claude", "codex"],
+    });
+
+    for (const skillsPath of [".claude/skills", ".agents/skills"]) {
+      const attrPath = join(tmp, ...skillsPath.split("/"), ".gitattributes");
+      expect(existsSync(attrPath), `missing ${attrPath}`).toBe(true);
+      expect(readFileSync(attrPath, "utf-8")).toBe("** text eol=lf\n");
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -667,6 +731,100 @@ describe("runInit default behavior (P0)", () => {
     expect(ids).toEqual(["speckit"]);
     // Kiro should NOT have been integrated even though .kiro/ is present
     expect(existsSync(join(tmp, ".kiro", "steering", "artgraph.md"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spec 013 PR #114 review — Cluster C
+// (B3 atomic config write / B7 reorder / OPS-14 partial-state guard)
+// ---------------------------------------------------------------------------
+describe("runInit — PR #114 Cluster C (B3 / B7 / OPS-14)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(tmp);
+  });
+
+  // -------------------------------------------------------------------------
+  // [B3] `.artgraph.json` is now written via `atomicWriteFile` (tmp + rename)
+  // instead of a raw `writeFileSync`. Observable effects:
+  //   1. A successful init leaves no lingering `.artgraph-tmp-*` sibling.
+  //   2. The final on-disk file parses as complete JSON — never a truncated
+  //      body from a mid-write crash.
+  // -------------------------------------------------------------------------
+  it("[B3] writes .artgraph.json atomically (no tmp sibling lingers)", () => {
+    runInit(tmp, { minimal: true });
+
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
+
+    const siblings = readdirSync(tmp);
+    const stray = siblings.filter((n) => n.startsWith(".artgraph-tmp-"));
+    expect(stray).toEqual([]);
+
+    // Config must be fully-formed JSON (no truncation).
+    const parsed = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
+    expect(parsed).toHaveProperty("include");
+    expect(parsed).toHaveProperty("lockFile");
+  });
+
+  // -------------------------------------------------------------------------
+  // [B7] agent-context stage runs BEFORE the `.artgraph.json` write.
+  // If a wrapper / AGENTS.md write throws, no config file is left on disk —
+  // the user sees a clean failure instead of an inconsistent state where
+  // `.artgraph.json` claims a completed init but AGENTS.md is missing.
+  //
+  // Reproduction: place a DIRECTORY at `<rootDir>/AGENTS.md`. `writeAgentsMd`
+  // → `writeMarkerFile` → `readFileSync(AGENTS.md, "utf-8")` throws EISDIR.
+  // EISDIR is not the tolerated ENOENT branch, so the error propagates.
+  // -------------------------------------------------------------------------
+  it("[B7] agent-context failure leaves no .artgraph.json orphan", () => {
+    // Poison AGENTS.md: a directory here breaks readFileSync → propagates.
+    mkdirSync(join(tmp, "AGENTS.md"));
+
+    expect(() =>
+      runInit(tmp, {
+        noScan: true,
+        withSkills: true,
+        withAgentContext: true,
+        agents: ["claude"],
+      }),
+    ).toThrow();
+
+    // Config must NOT be written when a preceding stage throws (B7 reorder).
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // [OPS-14] The "recommended simpler approach" from the PR feedback: when
+  // agent-context succeeds but a later stage fails, we do NOT unwind the
+  // marker block writes. They are idempotent and get refreshed on the next
+  // successful init.
+  //
+  // With B7's reorder the last write IS `.artgraph.json` (via
+  // `atomicWriteFile`), so a real-world post-agent-context failure is rare
+  // — but we assert the invariant explicitly: successful init leaves
+  // both AGENTS.md and CLAUDE.md on disk with a matching config file.
+  // -------------------------------------------------------------------------
+  it("[OPS-14 / B7] successful init leaves AGENTS.md + CLAUDE.md + .artgraph.json all present", () => {
+    runInit(tmp, {
+      noScan: true,
+      withSkills: true,
+      withAgentContext: true,
+      agents: ["claude"],
+    });
+
+    expect(existsSync(join(tmp, "AGENTS.md"))).toBe(true);
+    expect(existsSync(join(tmp, "CLAUDE.md"))).toBe(true);
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
+
+    // AGENTS.md must contain the marker block bytes (proof it actually ran).
+    const agentsMd = readFileSync(join(tmp, "AGENTS.md"), "utf-8");
+    expect(agentsMd).toContain("<!-- artgraph:begin -->");
+    expect(agentsMd).toContain("<!-- artgraph:end -->");
   });
 });
 

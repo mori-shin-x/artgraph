@@ -178,6 +178,114 @@ export function planDistribution(
   return targets;
 }
 
+// @impl 013-cross-agent-extensions/FR-009 013-cross-agent-extensions/FR-010
+/**
+ * Cross-agent partial-state guard (B2). Runs the same conflict-detection
+ * pre-flight `distribute()` uses (symlink ancestors / symlink leaves /
+ * non-regular filesystem entries at the leaf / drifted content without
+ * `--force`) but performs NO writes.
+ *
+ * Intended caller: `runInit`, which iterates `preflightDistribution()` over
+ * every selected agent BEFORE invoking `distribute()` on any of them. This
+ * ensures a mid-loop conflict on agent #3 does not leave agents #1-2 fully
+ * written with no config / AGENTS.md to accompany them.
+ *
+ * Throws `DistributionError` with the same message shape as `distribute()`
+ * so downstream error handling (CLI catch block) sees identical output
+ * whether the failure surfaces during pre-flight or the actual write phase.
+ *
+ * Returns void on success. No return value is used to encode bucket
+ * classification because a downstream `distribute()` call re-runs the
+ * classification anyway (there is no way to safely reuse the pre-flight
+ * across a TOCTOU window — a symlink planted between calls must still be
+ * caught by `distribute()` itself).
+ */
+export function preflightDistribution(
+  descriptor: AgentDescriptor,
+  source: SkillSource,
+  opts: DistributeOptions,
+): void {
+  const force = opts.force === true;
+  const absRoot = resolve(opts.rootDir);
+  const targets = planDistribution(descriptor, source, opts.rootDir);
+
+  const driftConflicts: DistributionTarget[] = [];
+  const symlinkConflicts: Array<{
+    target: DistributionTarget;
+    symlinkPath: string;
+    kind: "leaf" | "ancestor";
+  }> = [];
+  const nonRegularConflicts: DistributionTarget[] = [];
+
+  for (const t of targets) {
+    const symlinkAncestor = findSymlinkAncestor(absRoot, t.dstAbsPath);
+    if (symlinkAncestor !== null) {
+      symlinkConflicts.push({
+        target: t,
+        symlinkPath: symlinkAncestor,
+        kind: "ancestor",
+      });
+      continue;
+    }
+
+    let stat: ReturnType<typeof lstatSync> | undefined;
+    try {
+      stat = lstatSync(t.dstAbsPath);
+    } catch (e) {
+      const err = e as NodeJS.ErrnoException;
+      if (err.code === "ENOENT") continue; // will be a fresh write
+      throw new DistributionError(
+        `Cannot inspect ${t.dstAbsPath} (${err.code ?? "unknown errno"}): ${err.message}`,
+      );
+    }
+    if (stat.isSymbolicLink()) {
+      symlinkConflicts.push({
+        target: t,
+        symlinkPath: t.dstAbsPath,
+        kind: "leaf",
+      });
+      continue;
+    }
+    if (!stat.isFile()) {
+      nonRegularConflicts.push(t);
+      continue;
+    }
+    const onDiskSha = hashFile(t.dstAbsPath);
+    if (onDiskSha === t.expectedSha256) continue; // noop
+    if (!force) driftConflicts.push(t);
+    // force + drift → OK, no throw (distribute() will overwrite)
+  }
+
+  if (symlinkConflicts.length > 0) {
+    const list = symlinkConflicts.map(({ target, symlinkPath, kind }) =>
+      kind === "leaf"
+        ? `${target.srcRelPath} (symlink at ${symlinkPath} — refusing to overwrite)`
+        : `${target.srcRelPath} (symlink ancestor ${symlinkPath} — refusing to write through)`,
+    );
+    throw new DistributionError(
+      `Refusing to write through symlink(s) in ${descriptor.skillsPath}: ${list.join(", ")}. Remove the entry/entries and rerun.`,
+      list,
+    );
+  }
+  if (nonRegularConflicts.length > 0) {
+    const list = nonRegularConflicts.map(
+      (t) =>
+        `${t.srcRelPath} (existing non-regular filesystem entry at ${t.dstAbsPath} — refusing to overwrite)`,
+    );
+    throw new DistributionError(
+      `Refusing to overwrite non-regular filesystem entry/entries in ${descriptor.skillsPath}: ${list.join(", ")}. Remove the entry/entries and rerun.`,
+      list,
+    );
+  }
+  if (driftConflicts.length > 0) {
+    const list = driftConflicts.map((t) => t.srcRelPath);
+    throw new DistributionError(
+      `Skill file(s) already exist in ${descriptor.skillsPath} with drifted content: ${list.join(", ")}. Use --force to overwrite.`,
+      list,
+    );
+  }
+}
+
 // @impl 013-cross-agent-extensions/FR-003 013-cross-agent-extensions/FR-004
 /**
  * Distribute one agent's Skills tree to its canonical path.

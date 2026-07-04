@@ -1,5 +1,5 @@
-import { existsSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, rmdirSync, unlinkSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import {
   DEFAULT_CONFIG,
   type ArtgraphConfig,
@@ -24,9 +24,16 @@ import { readSkillSource } from "./agents/source.js";
 import {
   distribute,
   DistributionError,
+  preflightDistribution,
   type DistributeResult,
 } from "./agents/distribute.js";
-import { writeAgentsMd, writeWrapper, type WriteResult } from "./agents/agent-context.js";
+import {
+  writeAgentsMd,
+  writeGitAttributes,
+  writeWrapper,
+  type WriteResult,
+} from "./agents/agent-context.js";
+import { atomicWriteFile } from "./integrate/atomic-write.js";
 
 // `templates/skills/` lives next to `dist/`, so resolve relative to the
 // compiled module path (works for both `dist/init.js` and `src/init.ts` via
@@ -270,42 +277,137 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   }
 
   // @impl 013-cross-agent-extensions/FR-008
-  // Partial-state guard: distribute Skills BEFORE writing `.artgraph.json`
-  // so a mid-loop copy failure (which `distribute()` already rolls back)
-  // never leaves an orphan config file on disk. The order is:
-  //   1. read canonical Skills source (no write)
-  //   2. distribute() per agent (writes to <agent.skillsPath>/, self-rollback)
+  // Partial-state guard: run every writeable stage BEFORE the final atomic
+  // `.artgraph.json` write so any mid-stage failure never leaves an orphan
+  // config file on disk. Post-B7 order is (Skills + gitattributes) →
+  // scan/reconcile → integrate → hooks → agent-context → config. If any
+  // step throws, the config is not written and the whole init exits 1 via
+  // the CLI catch block, matching what the user's next `artgraph init`
+  // will produce when they fix the conflict (idempotent re-run).
+  //
+  //   1. read canonical Skills source (no write) — done above pre-flight
+  //   2. multi-agent PRE-FLIGHT (B2) — every agent's target set is scanned
+  //      for conflicts (drift w/o --force, symlink ancestor / leaf, non-regular
+  //      leaf). If ANY agent would throw, we throw NOW, before any write.
+  //   3. distribute() per agent (writes to <agent.skillsPath>/, self-rollback)
+  //      + writeGitAttributes() per agent (`.gitattributes` pinning LF eol
+  //      inside the Skills dist tree — OPS-2 partial mitigation).
+  //      Cross-agent rollback (B2): if agent N fails after agents 1..N-1
+  //      succeeded, we unlink every file agents 1..N-1 wrote (and rmdir
+  //      newly-empty parents best-effort) before re-throwing.
   //      - FR-008: Kiro descriptor's `skillsPath` is `.kiro/skills/` only;
-  //        `.kiro/steering/artgraph.md` is the integrate stage (step 5) /
-  //        KiroProvider's responsibility, NOT this distribute() call.
-  //        The two stages stay orthogonal so `--agents=kiro` and
-  //        `--integrations=...,kiro,...` can be combined or used alone.
-  //   3. scan + reconcile (writes .trace.lock)
-  //   4. write .artgraph.json (final, only reached if everything above
-  //      succeeded)
+  //        `.kiro/steering/artgraph.md` is the integrate stage / KiroProvider's
+  //        responsibility, NOT this distribute() call.
+  //   4. scan + reconcile (writes .trace.lock)
   //   5. one-shot integrations (`--integrations=<list>` / auto-detect)
-  //   6. agent-context (AGENTS.md + wrappers)
+  //   6. hooks stub
+  //   7. agent-context (AGENTS.md + wrappers) — before config (B7), so a
+  //      wrapper write failure does NOT leave `.artgraph.json` on disk.
+  //      Note (OPS-14): agent-context writes are NOT rolled back on a
+  //      later failure — the writer is marker-bounded and idempotent, so
+  //      the block is refreshed on the next successful init. Any partial
+  //      state is reported to the user via
+  //      `DistributionError.partiallyWritten` when applicable.
+  //   8. write .artgraph.json (atomic via `atomicWriteFile`, B3) — the last
+  //      observable write, so its success signals the whole init succeeded.
   let agentDistributions: Record<string, { writtenPaths: string[]; noopPaths: string[] }> | undefined;
   let skillsInstalled: string[] | undefined;
   if (skillsStageActive && skillSource && skillDescriptors) {
-    agentDistributions = {};
+    // B2 pre-flight: every agent must classify cleanly before ANY write.
     for (const descriptor of skillDescriptors) {
-      const result: DistributeResult = distribute(descriptor, skillSource, {
+      preflightDistribution(descriptor, skillSource, {
         rootDir: abs,
         force: options.force ?? false,
       });
-      agentDistributions[descriptor.id] = {
-        writtenPaths: result.writtenPaths,
-        noopPaths: result.noopPaths,
-      };
-      // Backward-compat: surface the Claude paths as POSIX-relative entries so
-      // the legacy `skillsInstalled` field still works for existing CLI text
-      // / JSON consumers (cli.ts H6 split, `tests/cli.test.ts` assertions).
-      if (descriptor.id === "claude") {
-        skillsInstalled = result.targets.map((t) =>
-          toPosixRel(abs, t.dstAbsPath),
+    }
+
+    agentDistributions = {};
+    // Track files written across ALL agents (Skill copies + .gitattributes).
+    // Used ONLY by the cross-agent catch block below to undo prior-agent
+    // writes when a later agent throws. Empty on the success path.
+    const crossAgentWritten: string[] = [];
+
+    try {
+      for (const descriptor of skillDescriptors) {
+        const result: DistributeResult = distribute(descriptor, skillSource, {
+          rootDir: abs,
+          force: options.force ?? false,
+        });
+        // Bookkeep before writing .gitattributes so a gitattributes failure
+        // still rolls back the Skill files we just wrote for this agent.
+        crossAgentWritten.push(...result.writtenPaths);
+        agentDistributions[descriptor.id] = {
+          writtenPaths: result.writtenPaths,
+          noopPaths: result.noopPaths,
+        };
+
+        // OPS-2 partial mitigation — pin the Skills dist tree to LF so
+        // Windows `core.autocrlf=true` does not re-encode SKILL.md and
+        // silently `skill-file-drift` FAIL every doctor run.
+        const attrs = writeGitAttributes(abs, descriptor);
+        if (attrs.written) {
+          crossAgentWritten.push(attrs.path);
+        }
+
+        // Backward-compat: surface the Claude paths as POSIX-relative entries
+        // so the legacy `skillsInstalled` field still works for existing CLI
+        // text / JSON consumers (cli.ts H6 split, `tests/cli.test.ts`).
+        if (descriptor.id === "claude") {
+          skillsInstalled = result.targets.map((t) =>
+            toPosixRel(abs, t.dstAbsPath),
+          );
+        }
+      }
+    } catch (e) {
+      // B2 cross-agent rollback. `distribute()` already rolled back the
+      // failing agent's own writes (per-agent try/catch inside distribute).
+      // We only need to undo files that prior successful agents left on
+      // disk, plus any `.gitattributes` files we wrote after their
+      // distribute() calls succeeded.
+      const survivors: string[] = [];
+      // Unlink leaf files first so newly-empty parents become rmdir-able.
+      for (const p of [...crossAgentWritten].reverse()) {
+        try {
+          unlinkSync(p);
+        } catch (err) {
+          const errno = (err as NodeJS.ErrnoException).code;
+          if (errno !== "ENOENT") survivors.push(p);
+        }
+      }
+      // Best-effort leaf-first rmdir of every parent chain that held one
+      // of the unlinked files, bounded at the repo root. `rmdirSync` fails
+      // on non-empty dirs, which is exactly the right behaviour: any user
+      // content that shared the tree stays put.
+      const dirsSeen = new Set<string>();
+      for (const p of crossAgentWritten) {
+        let dir = dirname(p);
+        while (dir !== abs && dir.length > abs.length && !dirsSeen.has(dir)) {
+          dirsSeen.add(dir);
+          dir = dirname(dir);
+        }
+      }
+      // Deepest paths first so the whole chain collapses cleanly.
+      const dirsSorted = [...dirsSeen].sort((a, b) => b.length - a.length);
+      for (const d of dirsSorted) {
+        try {
+          rmdirSync(d);
+        } catch {
+          /* best-effort — leave non-empty dirs (user content) alone */
+        }
+      }
+
+      const msg = e instanceof Error ? e.message : String(e);
+      if (e instanceof DistributionError) {
+        // Preserve the failing agent's own partiallyWritten (per-agent
+        // rollback survivors) and merge with cross-agent survivors so the
+        // CLI can list every path that still needs manual cleanup (B6).
+        throw new DistributionError(
+          `distribution rolled back after failure: ${msg}`,
+          e.conflictPaths,
+          [...e.partiallyWritten, ...survivors],
         );
       }
+      throw e;
     }
   }
 
@@ -328,8 +430,6 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     lockPath = resolve(abs, config.lockFile);
   }
 
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf-8");
-
   const integration = stages.integrate
     ? runRequestedIntegrations(abs, detection, options)
     : { failureCount: 0 };
@@ -341,6 +441,10 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   // spec 013 T021 — agent-context stage. AGENTS.md is canonical (always
   // written when any agent is selected); wrappers are emitted only for the
   // agents that need one (claude / copilot per descriptor table).
+  //
+  // B7: this stage runs BEFORE the `.artgraph.json` write below so a
+  // wrapper failure (e.g. `.github/copilot-instructions.md` write EACCES)
+  // does not leave a config file on disk unaccompanied by its AGENTS.md.
   let agentContextWritten: { path: string; written: boolean }[] | undefined;
   if (agentContextStageActive) {
     agentContextWritten = [];
@@ -355,6 +459,14 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
       agentContextWritten.push({ path: w.path, written: w.written });
     }
   }
+
+  // B3 — atomic write. Previously a raw `writeFileSync` on `.artgraph.json`
+  // could leave a truncated/empty JSON on SIGKILL / ENOSPC mid-write, and
+  // the next `runInit` would throw on `loadConfig`. `atomicWriteFile` stages
+  // to a sibling tmp and renames onto the target so the on-disk config is
+  // either the previous bytes or the full new bytes — never a half-written
+  // string.
+  atomicWriteFile(configPath, JSON.stringify(config, null, 2) + "\n");
 
   return {
     configPath,
