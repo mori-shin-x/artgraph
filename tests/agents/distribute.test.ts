@@ -296,14 +296,19 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
 // `templates/skills/` tree — otherwise a template change would break
 // unrelated safety assertions.
 //
-// Filesystem-permission-based tests (B1, B5, B9) only make sense on POSIX
-// where `chmod` and `lstat` return standard errno codes. They are gated
-// with `it.skipIf(process.platform === "win32")` so Windows CI skips them
-// rather than reports flakes.
+// Filesystem-permission-based tests (B1, B5, B9, OUT-4) only make sense on
+// POSIX where `chmod` and `lstat` return standard errno codes, AND as a
+// non-root user — root bypasses mode bits entirely, so the chmod-induced
+// EACCES these tests rely on never fires (#147). They are gated with
+// `it.skipIf(IS_WIN || IS_ROOT)` so Windows CI and root-run containers skip
+// them rather than report flakes. Same convention as tests/doctor.test.ts /
+// tests/integrate/atomic-write.test.ts / tests/hooks-merge.test.ts, surfaced
+// as an honest "skipped" instead of an early-return false pass.
 // ===========================================================================
 
 const CLAUDE = AGENT_DESCRIPTORS.find((d) => d.id === "claude")!;
 const IS_WIN = process.platform === "win32";
+const IS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
 
 /**
  * Build a self-contained skills-source under `sourceDir` and return the
@@ -420,7 +425,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
   // so the write for B fails at copyFileSync-to-tmp. A's backup MUST be
   // rename'd back over A so A retains "USER BYTES A".
   // -------------------------------------------------------------------------
-  it.skipIf(IS_WIN)(
+  it.skipIf(IS_WIN || IS_ROOT)(
     "B1: mid-loop --force failure restores the user's pre-call bytes for succeeded drift-overwrites",
     () => {
       const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
@@ -527,7 +532,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
   // 0500 so its write fails. The rollback must rmdir the whole a/…/deep
   // chain.
   // -------------------------------------------------------------------------
-  it.skipIf(IS_WIN)(
+  it.skipIf(IS_WIN || IS_ROOT)(
     "B5: rollback removes every intermediate directory tracked during the aborted call",
     () => {
       const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
@@ -605,7 +610,7 @@ describe("distribute() — PR #114 cluster B regressions", () => {
   // opaque `copyfile EACCES` with no hint that the real cause was a
   // permission-denied lstat on the leaf's parent.
   // -------------------------------------------------------------------------
-  it.skipIf(IS_WIN)(
+  it.skipIf(IS_WIN || IS_ROOT)(
     "B9: non-ENOENT lstat errors (EACCES) surface as DistributionError, not silent freshWrite",
     () => {
       const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
@@ -767,7 +772,7 @@ describe("distribute() — PR #114 OUT-4", () => {
     }
   });
 
-  it.skipIf(IS_WIN)(
+  it.skipIf(IS_WIN || IS_ROOT)(
     "partiallyWritten: a rollback unlinkSync failure for an already-succeeded fresh write is reported as a survivor",
     () => {
       const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
