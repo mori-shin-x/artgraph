@@ -4,6 +4,8 @@
 
 この contract は `src/package-manager.ts` (TS) と `templates/skills/_shared/package-manager.md` (bash) の**共通正解 (SSOT)**。両実装はこの表に一致させ、`tests/package-manager-detection.test.ts` はこの表を検証する (SC-001 / SC-003 / SC-007)。
 
+> **Note (issue #141)**: template 側は実行可能な bash スニペットではなく、同じ規則を **prose のルール表** (`## Detection rules`) として保持する形に変更された。SC-007 の同期はルールレベル (prose ↔ TS: 同じ優先順位・同じ結果・同じ warning/error 文言) で維持し、`tests/package-manager-detection.test.ts` の prose↔TS meta-test が検証する。
+
 **デフォルト PM は pnpm** (未リリースのため後方互換は考慮しない)。シグナル無し時のデフォルト・Yarn fallback・真の検出不能時の後続フォールバックを**すべて pnpm に寄せる**。明示シグナル (`package-lock.json` / `packageManager: npm@x`) がある場合のみ npm を返す (= 検出結果として尊重)。
 
 ## 1. 検出真理値表 (`detectPackageManager(rootDir)`)
