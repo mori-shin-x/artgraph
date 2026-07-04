@@ -4,17 +4,20 @@ import {
   lstatSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
+  renameSync,
   rmdirSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import {
   DEFAULT_CONFIG,
   type ArtgraphConfig,
   type IntegrateResult,
   type IntegrationProviderId,
+  type PackageManager,
   type ScanSummary,
   type SddToolInfo,
   type DetectionResult,
@@ -23,11 +26,13 @@ import {
 import { scan, reconcile } from "./scan.js";
 import type { BuildWarning } from "./graph/builder.js";
 import { getProviderStatuses, runIntegrate } from "./integrate/index.js";
-import { detectPackageManager } from "./package-manager.js";
+import { detectPackageManager, execPrefix } from "./package-manager.js";
 import { loadConfig } from "./config.js";
+import { renderTemplate } from "./template.js";
 
 const SKILLS_TEMPLATE_DIR = resolve(import.meta.dirname, "../templates/skills");
 const SKILLS_DEST_SUBDIR = join(".claude", "skills");
+const HOOKS_TEMPLATE_PATH = resolve(import.meta.dirname, "../templates/hooks/settings.json.template");
 
 export class SkillsInstallError extends Error {
   readonly partiallyInstalled: string[];
@@ -72,6 +77,29 @@ export interface InitResult {
    * failure" must exit 1).
    */
   integrationFailureCount?: number;
+  /**
+   * Structured outcome of the Stop-hook install stage (FR-012/013,
+   * specs/012-skills-expansion/contracts/settings-merge.md). `installHooks`
+   * only returns this data — it never writes to stdout/stderr. Formatting
+   * the text/JSON output (success messages, the Case D warning block, exit
+   * code translation) is the CLI layer's job so init.ts stays print-free.
+   * Undefined when the hooks stage did not run (`--no-hooks` / `--minimal`
+   * without `--with-hooks`).
+   */
+  hooksInstall?: {
+    action:
+      | "created"
+      | "merged-b"
+      | "merged-c"
+      | "conflict"
+      | "invalid-json"
+      | "io-error"
+      | "skipped-no-pm";
+    /** Detail for conflict/error outcomes: rendered command or parse/IO error message. */
+    reason?: string;
+    /** true → CLI translates this into a non-zero exit code. */
+    failure?: boolean;
+  };
 }
 
 export function detectProject(rootDir: string): DetectionResult {
@@ -352,13 +380,133 @@ export function computeStageGates(opts: InitOptions): {
 }
 
 /**
- * Stop-hook installation. P1 will replace this stub with the real merger
- * defined in specs/012-skills-expansion/contracts/settings-merge.md (T026).
- * In P0 the stage is wired but does nothing observable.
+ * Merge the artgraph Stop hook into `<rootDir>/.claude/settings.json`
+ * following the 4-case strategy in
+ * specs/012-skills-expansion/contracts/settings-merge.md.
+ *
+ * Never throws: every fs / JSON / template failure is caught and converted
+ * into a structured `{ action, reason?, failure? }` result so a Stop-hook
+ * install problem never aborts the rest of `init` (config + Skills already
+ * landed by the time this runs).
+ *
+ * `options.force` is accepted for signature symmetry with the other stage
+ * installers but is deliberately ignored on the Case D (conflict) branch —
+ * see contract §--force フラグの扱い ("settings.json is the most sensitive
+ * user config; artgraph never overwrites a pre-existing Stop hook, even with
+ * --force").
  */
-function installHooks(_rootDir: string, _options: { force?: boolean } = {}): void {
-  // P1 (T026): merge templates/hooks/settings.json.template into
-  // <rootDir>/.claude/settings.json with the 4-case strategy.
+function installHooks(
+  rootDir: string,
+  detectedPm: PackageManager | null,
+  options: { force?: boolean; explicitOptIn?: boolean } = {},
+): NonNullable<InitResult["hooksInstall"]> {
+  if (detectedPm === null) {
+    return { action: "skipped-no-pm", failure: options.explicitOptIn === true };
+  }
+
+  let rendered: { hooks: { Stop: unknown[] } };
+  try {
+    const raw = readFileSync(HOOKS_TEMPLATE_PATH, "utf-8");
+    const substituted = renderTemplate(raw, { ARTGRAPH_EXEC: execPrefix(detectedPm) });
+    rendered = JSON.parse(substituted);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { action: "io-error", reason: msg, failure: true };
+  }
+
+  const settingsPath = resolve(rootDir, ".claude", "settings.json");
+
+  // Refuse to follow/overwrite anything that isn't a regular file (symlink,
+  // directory, socket, ...). Mirrors installSkills' symlink refusal — never
+  // override even with --force, since that could clobber a file outside the
+  // .claude/ tree via a malicious or accidental symlink.
+  const existingStat = lstatSync(settingsPath, { throwIfNoEntry: false });
+  if (existingStat && !existingStat.isFile()) {
+    return { action: "io-error", reason: "settings.json is not a regular file", failure: true };
+  }
+
+  const writeAtomic = (data: unknown): void => {
+    const tmpPath = `${settingsPath}.tmp`;
+    writeFileSync(tmpPath, JSON.stringify(data, null, 2) + "\n", "utf-8");
+    renameSync(tmpPath, settingsPath);
+  };
+
+  // Case A: no existing settings.json — write the template verbatim.
+  if (!existingStat) {
+    try {
+      mkdirSync(dirname(settingsPath), { recursive: true });
+      writeAtomic(rendered);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      // Best-effort cleanup of a partial .tmp file left by a failed rename.
+      try {
+        unlinkSync(`${settingsPath}.tmp`);
+      } catch {
+        // no tmp file to clean up, or cleanup itself failed — ignore
+      }
+      return { action: "io-error", reason: msg, failure: true };
+    }
+    return { action: "created", failure: false };
+  }
+
+  let raw: string;
+  try {
+    raw = readFileSync(settingsPath, "utf-8");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { action: "io-error", reason: msg, failure: true };
+  }
+  // Strip a leading UTF-8 BOM before parsing (same treatment as
+  // package-manager.ts's packageManager-field reader).
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
+
+  let existing: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("settings.json root must be a JSON object");
+    }
+    existing = parsed as Record<string, unknown>;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { action: "invalid-json", reason: msg, failure: true };
+  }
+
+  const existingHooks =
+    existing.hooks && typeof existing.hooks === "object"
+      ? (existing.hooks as Record<string, unknown>)
+      : undefined;
+
+  // Case D: a populated hooks.Stop array already exists — never overwrite,
+  // even with --force (contract §--force フラグの扱い). Non-array / empty-
+  // array / null hooks.Stop are NOT conflicts and fall through to Case B/C.
+  if (Array.isArray(existingHooks?.Stop) && existingHooks.Stop.length > 0) {
+    return {
+      action: "conflict",
+      reason: `${execPrefix(detectedPm)} check --gate --diff`,
+      failure: true,
+    };
+  }
+
+  // Case B/C: merge Stop into (possibly absent/non-object) hooks, preserving
+  // any other top-level fields and any other hook keys (e.g. PreToolUse).
+  // Extension point: if the template ever grows beyond Stop, spread
+  // rendered.hooks here instead of setting Stop alone.
+  const originalHooks =
+    existing.hooks && typeof existing.hooks === "object" && !Array.isArray(existing.hooks)
+      ? (existing.hooks as Record<string, unknown>)
+      : {};
+  const hadOtherHookKeys = Object.keys(originalHooks).length > 0;
+  existing.hooks = { ...originalHooks, Stop: rendered.hooks.Stop };
+
+  try {
+    writeAtomic(existing);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { action: "io-error", reason: msg, failure: true };
+  }
+
+  return { action: hadOtherHookKeys ? "merged-c" : "merged-b", failure: false };
 }
 
 /**
@@ -447,9 +595,18 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     ? runRequestedIntegrations(abs, detection, options)
     : { failureCount: 0 };
 
-  if (stages.hooks) {
-    installHooks(abs, { force: options.force });
-  }
+  // PM resolution priority for the hooks stage (contract §PM 検出優先度):
+  // (1) live detection this run, (2) the value already recorded in
+  // .artgraph.json (covers repos where lockfiles were removed/rotated after
+  // the initial init), (3) null → graceful skip.
+  const pmForHooks = detectedPm ?? config.packageManager ?? null;
+  const hooksInstall = stages.hooks
+    ? installHooks(abs, pmForHooks, {
+        force: options.force,
+        explicitOptIn: options.withHooks === true,
+      })
+    : undefined;
+
   if (stages.agentContext) {
     installAgentContext(abs, { force: options.force });
   }
@@ -465,6 +622,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     integrationResults: integration.results,
     integrationWarnings: integration.warnings,
     integrationFailureCount: integration.failureCount > 0 ? integration.failureCount : undefined,
+    hooksInstall,
   };
 }
 

@@ -28,7 +28,7 @@ npm install -D artgraph && npx artgraph init       # default: full agent-native 
 # deno add npm:artgraph && deno run -A npm:artgraph/cli init
 ```
 
-`artgraph init` runs the full setup by default: `.artgraph.json` config + initial scan + Claude Code Skills + auto-integrate detected SDD tools (Spec Kit / Kiro) + Stop hook + CLAUDE.md / AGENTS.md snippet. Pass `--minimal` for bare config only, or any of `--no-skills` / `--no-integrate` / `--no-hooks` / `--no-agent-context` to skip specific stages.
+`artgraph init` runs the full setup by default: `.artgraph.json` config + initial scan + Claude Code Skills + auto-integrate detected SDD tools (Spec Kit / Kiro) + Stop hook + CLAUDE.md / AGENTS.md snippet. Pass `--minimal` for bare config only, or any of `--no-skills` / `--no-integrate` / `--no-hooks` / `--no-agent-context` to skip specific stages. Commit `.claude/settings.json` to share the Stop hook with teammates, or add it to `.gitignore` if you want per-developer hooks.
 
 If you use Claude Code, you can skip the manual install entirely — type `/artgraph-setup` and the Skill detects the package manager, installs artgraph, and runs `init` for you in one turn.
 

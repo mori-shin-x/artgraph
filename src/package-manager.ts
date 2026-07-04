@@ -112,7 +112,7 @@ export function buildExecCommand(pm: PackageManager, subcommand = ""): string {
   return sub ? `${prefix} ${sub}` : prefix;
 }
 
-function execPrefix(pm: PackageManager): string {
+export function execPrefix(pm: PackageManager): string {
   switch (pm) {
     case "npm":
       return "npx artgraph";

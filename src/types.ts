@@ -166,7 +166,7 @@ export interface InitOptions {
    *   2. scan + reconcile (unless noScan)
    *   3. install Skills into .claude/skills/ (unless noSkills)
    *   4. auto-integrate detected SDD tools (unless noIntegrate)
-   *   5. install Stop hook into .claude/settings.json (unless noHooks)        [P1]
+   *   5. install Stop hook into .claude/settings.json (unless noHooks)
    *   6. inject CLAUDE.md / AGENTS.md snippet (unless noAgentContext)         [P1]
    *
    * `--minimal` short-circuits stages 2–6 to off; each can be re-enabled with

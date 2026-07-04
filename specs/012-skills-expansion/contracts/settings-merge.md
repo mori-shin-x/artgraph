@@ -138,3 +138,15 @@ async function installHooks(targetDir: string): Promise<HookInstallResult> {
 | 不正 JSON | `not a json` | JSON parse エラー、exit 1 |
 
 各 case で `.claude/settings.json` の前後の状態を fixture で比較する。
+
+---
+
+## 補足事項 (#109 実装で確定)
+
+- **Case D 判定式**: `Array.isArray(existing.hooks?.Stop) && existing.hooks.Stop.length > 0`。非配列 (`hooks.Stop = {}` / `42` 等) / 空配列 (`hooks.Stop = []`) / `null` はいずれも Case D ではなく Case B/C 扱い (上書き対象)。
+- **`.claude/settings.json` が directory / symlink の場合**: `lstatSync` で通常ファイルでないことを検出し、明示的に拒否する (`action: "io-error"`)。ファイルは生成・変更しない。
+- **BOM 対応**: 既存ファイル読み込み時、`JSON.parse` の前に UTF-8 BOM (`﻿` / `charCodeAt(0) === 0xfeff`) を strip する。`src/package-manager.ts:90` の既存ロジックと同水準の扱い。
+- **JSONC 非サポート**: `//` コメント付き JSON (JSONC) はサポート対象外。`JSON.parse` が失敗するため `action: "invalid-json"` として扱う (ファイル無変更)。
+- **PM 検出優先度**: `installHooks` に渡す PM は (1) 呼び出し元が明示する `detectedPm` 引数 → (2) `.artgraph.json#packageManager` → (3) `null` の順で解決する。`null` の場合は graceful skip (`action: "skipped-no-pm", failure: false`)。ただし `--minimal --with-hooks` のように hooks stage を明示 opt-in している場合は、PM 未検出を `failure: true` に昇格させる (ユーザーが明示的に要求した stage が実行できないため)。
+- **部分状態 (graceful degradation)**: Case D (衝突) や `skipped-no-pm` / `invalid-json` / `io-error` が発生しても、`.artgraph.json` の生成と Skills のインストールはそのまま残る。Stop hook のみがスキップされる。
+- **`InitResult` との連携**: `installHooks` は `InitResult.hooksInstall = { action, reason?, failure? }` を返す構造化データのみを扱い、stdout/stderr への出力は行わない。text/JSON 出力のフォーマットは `src/cli.ts` に集約し、`init.ts` の print-free な既存慣習を維持する。

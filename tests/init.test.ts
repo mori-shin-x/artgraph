@@ -636,9 +636,16 @@ describe("runInit default behavior (P0)", () => {
     expect(ids).toEqual(["kiro", "speckit"]);
   });
 
-  it("default mode does NOT create .claude/settings.json (hooks stub no-op in P0)", () => {
+  it("default mode creates .claude/settings.json with the Stop hook", () => {
+    writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "t", type: "module" }));
+    writeFileSync(join(tmp, "pnpm-lock.yaml"), "");
+
     runInit(tmp);
-    expect(existsSync(join(tmp, ".claude", "settings.json"))).toBe(false);
+
+    const settingsPath = join(tmp, ".claude", "settings.json");
+    expect(existsSync(settingsPath)).toBe(true);
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    expect(settings.hooks.Stop[0].hooks[0].command).toMatch(/^pnpm exec artgraph /);
   });
 
   it("default mode does NOT create or modify CLAUDE.md (agent-context stub no-op in P0)", () => {
@@ -647,7 +654,9 @@ describe("runInit default behavior (P0)", () => {
   });
 
   it("--no-hooks is accepted without error in default mode", () => {
-    expect(() => runInit(tmp, { noHooks: true })).not.toThrow();
+    const result = runInit(tmp, { noHooks: true });
+    expect(existsSync(join(tmp, ".claude", "settings.json"))).toBe(false);
+    expect(result.hooksInstall).toBeUndefined();
   });
 
   it("--no-agent-context is accepted without error in default mode", () => {

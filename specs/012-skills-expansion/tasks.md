@@ -116,23 +116,23 @@ Single project (per [plan.md](./plan.md) Project Structure):
 
 ### Tests for Phase 4 (TDD) ⚠️
 
-- [ ] T020 [P] [US4] Write `tests/hooks-merge.test.ts` — 4 cases per [contracts/settings-merge.md](./contracts/settings-merge.md): (A) settings.json なし、(B) `{}`、(C) 他 hook あり Stop なし、(D) Stop hook 衝突 (exit 1)。`--force` を渡しても Case D で上書きしないことを assert (FR-012, FR-013, FR-028 — --with-hooks, R4)
+- [x] T020 [P] [US4] Write `tests/hooks-merge.test.ts` — 4 cases per [contracts/settings-merge.md](./contracts/settings-merge.md): (A) settings.json なし、(B) `{}`、(C) 他 hook あり Stop なし、(D) Stop hook 衝突 (exit 1)。`--force` を渡しても Case D で上書きしないことを assert (FR-012, FR-013, FR-028 — --with-hooks, R4)
 - [ ] T021 [P] [US4] Write `tests/agent-context-injection.test.ts` — (a) CLAUDE.md なしで作成、(b) 既存 CLAUDE.md に追記、(c) マーカー既存で更新、(d) 2 回実行で idempotent (diff なし)、(e) AGENTS.md にも同等動作、(f) スニペットが 30 行以下 (FR-014, FR-015, FR-028 — --with-agent-context, R3)
 
 ### Implementation for Phase 4
 
 #### テンプレファイル (US4)
 
-- [ ] T022 [P] [US4] Create `templates/hooks/settings.json.template` — 内容は [data-model.md](./data-model.md) E3 + [contracts/settings-merge.md](./contracts/settings-merge.md) の入力ソース節通り (Stop hook で `npx artgraph check --gate --diff` を登録)。**(注: `npx` 表記は npm 環境前提。pkg mgr 検出による generic 化はフォローアップ issue)**
+- [x] T022 [P] [US4] Create `templates/hooks/settings.json.template` — 内容は [data-model.md](./data-model.md) E3 + [contracts/settings-merge.md](./contracts/settings-merge.md) の入力ソース節通り (Stop hook で `npx artgraph check --gate --diff` を登録)。**(注: `npx` 表記は npm 環境前提。pkg mgr 検出による generic 化はフォローアップ issue)**
 - [ ] T023 [P] [US4] Create `templates/hooks/pre-commit.sh.template` — husky/lefthook 利用者向けの参考スクリプト (本体は `npx artgraph check --gate --diff` を実行)。任意配布で、`init` の default では自動配置しない (将来の `--with-precommit` 用テンプレ予約)
 - [ ] T024 [P] [US4] Create `templates/agent-context/claude-md-snippet.md` (**Japanese OK**) — 30 行以下。`<!-- artgraph: BEGIN agent context -->` / `<!-- artgraph: END agent context -->` で囲った内容。Skills の使い方、`@impl` 文法、`artgraph impact` / `check` の呼びどころ、Skills 配置場所の 4 点を簡潔に (FR-014, R3, [data-model.md](./data-model.md) E5)
 - [ ] T025 [P] [US4] Create `templates/agent-context/agents-md-snippet.md` (**Japanese OK**) — 同上スニペット (Kiro / 他エージェント共通プロトコル AGENTS.md 用)
 
 #### `installHooks()` / `installAgentContext()` 実装 (US4)
 
-- [ ] T026 [US4] Implement `installHooks(targetDir)` in `src/init.ts` per [contracts/settings-merge.md](./contracts/settings-merge.md) implementation guide. Case A/B/C は merge して exit 0、Case D は警告 + exit 1。 `--force` 不問 (settings.json merge は常に fail-on-conflict、R4)
+- [x] T026 [US4] Implement `installHooks(targetDir)` in `src/init.ts` per [contracts/settings-merge.md](./contracts/settings-merge.md) implementation guide. Case A/B/C は merge して exit 0、Case D は警告 + exit 1。 `--force` 不問 (settings.json merge は常に fail-on-conflict、R4)
 - [ ] T027 [US4] Implement `installAgentContext(targetDir)` in `src/init.ts` — CLAUDE.md / AGENTS.md のターゲットファイル走査、HTML マーカー検出、idempotent 注入。両ファイル無ければ CLAUDE.md を新規作成 (FR-015, R3)
-- [ ] T028 [US4] Wire `installHooks()` and `installAgentContext()` into the default `runInit()` flow from T009. Verify both are called by default and skipped by `--no-hooks` / `--no-agent-context` / `--minimal`
+- [x] T028 [US4] Wire `installHooks()` and `installAgentContext()` into the default `runInit()` flow from T009. Verify both are called by default and skipped by `--no-hooks` / `--no-agent-context` / `--minimal`
 
 #### Kiro steering 改修 (US5)
 
