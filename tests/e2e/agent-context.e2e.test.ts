@@ -2,7 +2,7 @@
 //
 // Asserts the four key invariants from `specs/013-cross-agent-extensions/spec.md`
 // US3 + quickstart §1-2 / §1-5:
-//   - AGENTS.md carries the canonical artgraph body (8 Skill names, marker
+//   - AGENTS.md carries the canonical artgraph body (9 Skill names, marker
 //     block intact) — SC-003 "no body duplication in wrappers".
 //   - CLAUDE.md is a thin wrapper: `@AGENTS.md` import literal + relative
 //     link, no copy of the AGENTS.md body.
@@ -38,6 +38,7 @@ function sha256(path: string): string {
 
 const SKILL_NAMES = [
   "artgraph-setup",
+  "artgraph-bootstrap",
   "artgraph-detect",
   "artgraph-integrate",
   "artgraph-impact",
@@ -62,7 +63,7 @@ describe("e2e: artgraph init --agents=claude,copilot agent-context", () => {
     proj.cleanup();
   });
 
-  it("AGENTS.md carries the artgraph body (marker block + 8 Skill names)", () => {
+  it("AGENTS.md carries the artgraph body (marker block + 9 Skill names)", () => {
     const body = readFileSync(join(proj.dir, "AGENTS.md"), "utf-8");
     expect(body).toContain("<!-- artgraph:begin -->");
     expect(body).toContain("<!-- artgraph:end -->");

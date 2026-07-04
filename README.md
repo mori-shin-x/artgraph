@@ -106,7 +106,7 @@ npm install -D artgraph && npx artgraph init --agents=claude       # pick your a
 
 ### Tier 1 cross-agent distribution
 
-`--agents=<list>` distributes the same canonical SKILL.md set (8 Skills + 3 `_shared/` fragments) to each agent's native discovery path. AGENTS.md is the single canonical agent-context body; the per-agent wrapper files only contain a `@AGENTS.md` import line so the body never duplicates.
+`--agents=<list>` distributes the same canonical SKILL.md set (9 Skills + 3 `_shared/` fragments) to each agent's native discovery path. AGENTS.md is the single canonical agent-context body; the per-agent wrapper files only contain a `@AGENTS.md` import line so the body never duplicates.
 
 | `--agents` value | Agent | Skills path | Agent context | Wrapper file |
 | --- | --- | --- | --- | --- |
@@ -498,11 +498,12 @@ Notes:
 
 ## Claude Code skills
 
-artgraph ships 8 Claude Code Skills that wire the CLI into the agent workflow:
+artgraph ships 9 Claude Code Skills that wire the CLI into the agent workflow:
 
 | Skill                       | Input mode    | When it fires                                                                                                                              |
 | --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `artgraph-setup`            | n/a           | User wants to install / set up / add artgraph on a fresh project                                                                           |
+| `artgraph-bootstrap`        | n/a           | User wants to bootstrap / cold-start / seed initial REQs on an existing untagged (or partially-tagged) project                             |
 | `artgraph-integrate`        | n/a           | User wants to wire artgraph into an installed SDD tool (Spec Kit / Kiro)                                                                   |
 | `artgraph-detect`           | n/a           | User asks whether artgraph is set up / what's installed / what's available                                                                 |
 | `artgraph-impact`           | file + symbol | Forward impact analysis. Input is file paths or `path:symbol` pairs (REQ-IDs are rejected) — explicit args, `--from-tasks <path>`, `--from-plan <path>`, or `--diff` |
