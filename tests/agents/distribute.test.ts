@@ -26,7 +26,11 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
-import { AGENT_DESCRIPTORS, type AgentDescriptor } from "../../src/agents/descriptors.js";
+import {
+  AGENT_DESCRIPTORS,
+  DISTRIBUTED_AGENT_DESCRIPTORS,
+  type AgentDescriptor,
+} from "../../src/agents/descriptors.js";
 import { readSkillSource } from "../../src/agents/source.js";
 import { DistributionError, distribute, planDistribution } from "../../src/agents/distribute.js";
 import { createFreshProject, readDistributedTree } from "./helpers.js";
@@ -39,12 +43,16 @@ function sha256File(abs: string): string {
   return createHash("sha256").update(readFileSync(abs)).digest("hex");
 }
 
-describe("distribute() — parametric over 5 Tier 1 agents", () => {
+describe("distribute() — parametric over Tier 1 distributing agents", () => {
   // describe.each runs the same suite once per descriptor; failures are
   // reported with the agent id so a single broken path is obvious.
-  describe.each(AGENT_DESCRIPTORS.map((d) => [d.id, d] as const))(
+  // issue #130 — Copilot's skillsPath is null (no on-disk Skills), so
+  // it's excluded from this parametric suite. Its no-distribution
+  // semantics are asserted separately below.
+  describe.each(DISTRIBUTED_AGENT_DESCRIPTORS.map((d) => [d.id, d] as const))(
     "agent=%s",
     (_id, descriptor: AgentDescriptor) => {
+      const skillsPath = descriptor.skillsPath as string;
       it("lands every templates/skills file under <skillsPath>/<relPath>", () => {
         const { dir, cleanup } = createFreshProject();
         try {
@@ -58,7 +66,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           expect(result.noopPaths.length).toBe(0);
 
           for (const rel of expectedRelPaths) {
-            const dst = join(dir, descriptor.skillsPath, rel);
+            const dst = join(dir, skillsPath, rel);
             expect(existsSync(dst), `missing: ${dst}`).toBe(true);
           }
         } finally {
@@ -74,7 +82,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
 
           for (const entry of source.entries) {
             for (const file of entry.files) {
-              const dst = join(dir, descriptor.skillsPath, file.relPath);
+              const dst = join(dir, skillsPath, file.relPath);
               const onDisk = sha256File(dst);
               expect(onDisk, `drift: ${file.relPath}`).toBe(file.sha256);
             }
@@ -90,7 +98,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           const source = readSkillSource(REPO_TEMPLATES_DIR);
           distribute(descriptor, source, { rootDir: dir });
 
-          const distRoot = join(dir, descriptor.skillsPath);
+          const distRoot = join(dir, skillsPath);
           const snapshot = readDistributedTree(distRoot);
 
           // Flatten the canonical source to the same shape so we can compare
@@ -121,7 +129,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
 
           // Capture sha256s before the second call so we can prove they are
           // unchanged after the no-op pass.
-          const distRoot = join(dir, descriptor.skillsPath);
+          const distRoot = join(dir, skillsPath);
           const before = readDistributedTree(distRoot);
 
           const second = distribute(descriptor, source, { rootDir: dir });
@@ -145,7 +153,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           distribute(descriptor, source, { rootDir: dir });
 
           // Tamper with one SKILL.md so the second call sees drift.
-          const tampered = join(dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
+          const tampered = join(dir, skillsPath, "artgraph-impact", "SKILL.md");
           writeFileSync(tampered, "user edit\n", "utf-8");
 
           let caught: unknown;
@@ -175,7 +183,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           const source = readSkillSource(REPO_TEMPLATES_DIR);
           distribute(descriptor, source, { rootDir: dir });
 
-          const tampered = join(dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
+          const tampered = join(dir, skillsPath, "artgraph-impact", "SKILL.md");
           writeFileSync(tampered, "user edit\n", "utf-8");
 
           const result = distribute(descriptor, source, {
@@ -201,8 +209,8 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           distribute(descriptor, source, { rootDir: dir });
 
           // Tamper TWO files so the error message lists both.
-          const a = join(dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
-          const b = join(dir, descriptor.skillsPath, "artgraph-verify", "SKILL.md");
+          const a = join(dir, skillsPath, "artgraph-impact", "SKILL.md");
+          const b = join(dir, skillsPath, "artgraph-verify", "SKILL.md");
           writeFileSync(a, "edit A\n", "utf-8");
           writeFileSync(b, "edit B\n", "utf-8");
 
@@ -234,7 +242,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
           expect(sharedEntry!.files.length).toBeGreaterThanOrEqual(3);
 
           for (const file of sharedEntry!.files) {
-            const dst = join(dir, descriptor.skillsPath, file.relPath);
+            const dst = join(dir, skillsPath, file.relPath);
             expect(existsSync(dst), `missing shared: ${file.relPath}`).toBe(true);
             expect(sha256File(dst)).toBe(file.sha256);
           }
@@ -246,7 +254,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
             "_shared/output-schema.md",
             "_shared/package-manager.md",
           ]) {
-            const abs = join(dir, descriptor.skillsPath, known);
+            const abs = join(dir, skillsPath, known);
             expect(existsSync(abs), `missing _shared file: ${known}`).toBe(true);
           }
         } finally {
@@ -259,7 +267,7 @@ describe("distribute() — parametric over 5 Tier 1 agents", () => {
         try {
           const source = readSkillSource(REPO_TEMPLATES_DIR);
           // Plant a symlink at one of the destinations BEFORE distributing.
-          const dstSkillMd = join(dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
+          const dstSkillMd = join(dir, skillsPath, "artgraph-impact", "SKILL.md");
           mkdirSync(dirname(dstSkillMd), { recursive: true });
           // Point at a harmless file the test owns. The point is that
           // distribute() must not follow the symlink and overwrite it.

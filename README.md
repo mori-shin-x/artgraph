@@ -113,8 +113,10 @@ npm install -D artgraph && npx artgraph init --agents=claude       # pick your a
 | `claude`   | Claude Code | `.claude/skills/`  | `AGENTS.md` | `CLAUDE.md` |
 | `codex`    | Codex CLI (OpenAI) | `.agents/skills/`  | `AGENTS.md` | — (AGENTS.md native) |
 | `cursor`   | Cursor | `.cursor/skills/`  | `AGENTS.md` | — (AGENTS.md native) |
-| `copilot`  | GitHub Copilot (IDE / CLI / Coding Agent) | `.github/skills/`  | `AGENTS.md` | `.github/copilot-instructions.md` |
+| `copilot`  | GitHub Copilot (IDE / CLI / Coding Agent) | — (wrapper-only, [#130](https://github.com/ShintaroMorimoto/artgraph/issues/130)) | `AGENTS.md` | `.github/copilot-instructions.md` |
 | `kiro`     | Kiro | `.kiro/skills/`    | `AGENTS.md` | — (`.kiro/steering/artgraph.md` is handled separately by `--integrations=kiro`) |
+
+**GitHub Copilot has no on-disk Skills tree ([#130](https://github.com/ShintaroMorimoto/artgraph/issues/130)).** Copilot's official custom-instructions surfaces are `.github/copilot-instructions.md` (repo-wide) and `.github/instructions/*.instructions.md` (path-scoped) only — `.github/skills/` is not read by any Copilot surface. `--agents=copilot` therefore writes the wrapper + AGENTS.md and skips distribution. Copilot picks up the artgraph Skills catalogue and usage guidance through the wrapper's `@AGENTS.md` link. If your repo carries a legacy `.github/skills/` dir from a pre-fix artgraph version, `artgraph init` leaves it in place with a warning; run `artgraph doctor` and delete the dir manually when convenient (safe to remove).
 
 ### Disabling the Stop hook (troubleshooting)
 
@@ -131,11 +133,11 @@ If you use Claude Code, you can skip the manual install entirely — type `/artg
 
 Even when artgraph itself runs inside WSL2, teammates checking the repo out on native Windows still interact with the distributed files: artgraph distributes a `.gitattributes` file into each `<agent-skills-path>/` that forces LF for the tracked files. Do NOT set `core.autocrlf=true` globally — if `.gitattributes` is not committed, `artgraph doctor` may report drift after checkout. Alternatively add `.claude/skills/** text eol=lf` (and equivalents for other agents) to your repo's `.gitattributes`.
 
-Selecting `--agents=copilot` creates `.github/skills/` in your repo. If your project uses CODEOWNERS / branch protection for `.github/`, coordinate with your team before running `artgraph init --agents=copilot`.
+Selecting `--agents=copilot` writes `.github/copilot-instructions.md` (no on-disk Skills tree — see the [#130](https://github.com/ShintaroMorimoto/artgraph/issues/130) note above). If your project uses CODEOWNERS / branch protection for `.github/`, coordinate with your team before running `artgraph init --agents=copilot`.
 
 ### Committing distributed Skills
 
-Distributed Skills under `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, and `.kiro/skills/` are safe to commit — they're deterministic byte-identical outputs of `artgraph init --agents=<list>`. Team members without artgraph installed still get the Skills via `git pull`. If you prefer to keep them out of git (e.g. to avoid bumping the diff on every artgraph upgrade), add the paths to `.gitignore`; teammates then need to run `artgraph init --agents=<list>` locally.
+Distributed Skills under `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, and `.kiro/skills/` are safe to commit — they're deterministic byte-identical outputs of `artgraph init --agents=<list>`. Team members without artgraph installed still get the Skills via `git pull`. If you prefer to keep them out of git (e.g. to avoid bumping the diff on every artgraph upgrade), add the paths to `.gitignore`; teammates then need to run `artgraph init --agents=<list>` locally. (GitHub Copilot is not in this list because it has no Skills tree — see [#130](https://github.com/ShintaroMorimoto/artgraph/issues/130).)
 
 ### End-to-end: spec → `@impl` → `check`
 

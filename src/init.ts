@@ -105,6 +105,16 @@ export interface InitResult {
    */
   agentContextWritten?: { path: string; written: boolean }[];
   /**
+   * Non-fatal warnings emitted by the Skills / agent-context stages that
+   * the CLI surfaces to the user. Currently populated for:
+   *   - `.github/skills/` legacy residue when `--agents=copilot` is
+   *     selected (issue #130 — Copilot no longer receives Skills, but a
+   *     previously distributed dir is left in place for the user to
+   *     remove manually).
+   * Absent (`undefined`) when the stages ran without warnings.
+   */
+  distributionWarnings?: string[];
+  /**
    * Per-provider result for any one-shot integrations triggered by
    * `--integrate=<tools>` (FR-022/023/024). Empty / undefined when the
    * caller did not request any integration.
@@ -704,6 +714,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   // wrapper failure (e.g. `.github/copilot-instructions.md` write EACCES)
   // does not leave a config file on disk unaccompanied by its AGENTS.md.
   let agentContextWritten: { path: string; written: boolean }[] | undefined;
+  const distributionWarnings: string[] = [];
   if (agentContextStageActive) {
     agentContextWritten = [];
     const ag: WriteResult = writeAgentsMd(abs, resolvedPm);
@@ -715,6 +726,18 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     if (agentsList.includes("copilot")) {
       const w = writeWrapper(abs, "copilot");
       agentContextWritten.push({ path: w.path, written: w.written });
+      // issue #130 — legacy `.github/skills/` residue detection. Copilot
+      // no longer receives on-disk Skills (see descriptors.ts), so a
+      // pre-existing `.github/skills/` dir was almost certainly created
+      // by an earlier artgraph version. Emit a non-fatal warning so the
+      // user knows to remove it manually — init itself never touches
+      // that path (per issue #130's user decision: warn only).
+      const legacyDir = resolve(abs, ".github", "skills");
+      if (existsSync(legacyDir)) {
+        distributionWarnings.push(
+          `WARNING: .github/skills/ exists but is no longer used — GitHub Copilot does not discover that path. artgraph now provides Copilot's instructions via .github/copilot-instructions.md + AGENTS.md instead. Remove .github/skills/ manually when convenient (safe to delete; init did not touch it).`,
+        );
+      }
     }
   }
 
@@ -740,6 +763,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     integrationWarnings: integration.warnings,
     integrationFailureCount: integration.failureCount > 0 ? integration.failureCount : undefined,
     hooksInstall,
+    distributionWarnings: distributionWarnings.length > 0 ? distributionWarnings : undefined,
   };
 }
 

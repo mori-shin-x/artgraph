@@ -139,11 +139,7 @@ export interface DistributeResult {
 export class DistributionError extends Error {
   readonly conflictPaths: string[];
   readonly partiallyWritten: string[];
-  constructor(
-    message: string,
-    conflictPaths: string[] = [],
-    partiallyWritten: string[] = [],
-  ) {
+  constructor(message: string, conflictPaths: string[] = [], partiallyWritten: string[] = []) {
     super(message);
     this.name = "DistributionError";
     this.conflictPaths = conflictPaths;
@@ -160,6 +156,11 @@ export function planDistribution(
   source: SkillSource,
   rootDir: string,
 ): DistributionTarget[] {
+  // issue #130 — a descriptor with `skillsPath === null` (Copilot) opts
+  // out of on-disk Skills distribution entirely. Return an empty plan so
+  // downstream loops become no-ops without needing per-caller guards.
+  if (descriptor.skillsPath === null) return [];
+  const skillsPath = descriptor.skillsPath;
   const absRoot = resolve(rootDir);
   const targets: DistributionTarget[] = [];
   for (const entry of source.entries) {
@@ -170,7 +171,7 @@ export function planDistribution(
         // `agent.skillsPath` is POSIX-style (e.g. `.claude/skills`), so join
         // with the file's POSIX relPath is safe on both POSIX and Windows
         // when funneled through `resolve` here.
-        dstAbsPath: resolve(absRoot, descriptor.skillsPath, file.relPath),
+        dstAbsPath: resolve(absRoot, skillsPath, file.relPath),
         expectedSha256: file.sha256,
       });
     }
@@ -205,6 +206,9 @@ export function preflightDistribution(
   source: SkillSource,
   opts: DistributeOptions,
 ): void {
+  // issue #130 — no-distribution descriptor (Copilot): nothing to
+  // classify, no writes will happen, so pre-flight is a no-op.
+  if (descriptor.skillsPath === null) return;
   const force = opts.force === true;
   const absRoot = resolve(opts.rootDir);
   const targets = planDistribution(descriptor, source, opts.rootDir);
@@ -340,6 +344,12 @@ export function distribute(
   source: SkillSource,
   opts: DistributeOptions,
 ): DistributeResult {
+  // issue #130 — no-distribution descriptor (Copilot): return an empty
+  // DistributeResult so the per-agent loop in `runInit` records
+  // `{ writtenPaths: [], noopPaths: [] }` without side effects.
+  if (descriptor.skillsPath === null) {
+    return { targets: [], writtenPaths: [], noopPaths: [] };
+  }
   const force = opts.force === true;
   const absRoot = resolve(opts.rootDir);
   const targets = planDistribution(descriptor, source, opts.rootDir);
@@ -635,10 +645,7 @@ function sha8(): string {
  * message can pinpoint the offending link, which is essential for A4's
  * "refuse to write through" contract.
  */
-function findSymlinkAncestor(
-  absRoot: string,
-  dstAbsPath: string,
-): string | null {
+function findSymlinkAncestor(absRoot: string, dstAbsPath: string): string | null {
   const leafDir = dirname(dstAbsPath);
   const ancestors: string[] = [];
   let current = leafDir;

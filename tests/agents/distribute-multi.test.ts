@@ -31,6 +31,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import {
   AGENT_DESCRIPTORS,
+  DISTRIBUTED_AGENT_DESCRIPTORS,
   type AgentDescriptor,
 } from "../../src/agents/descriptors.js";
 import { readSkillSource } from "../../src/agents/source.js";
@@ -41,13 +42,7 @@ import {
   type DistributedTreeSnapshot,
 } from "./helpers.js";
 
-const REPO_TEMPLATES_DIR = resolve(
-  import.meta.dirname,
-  "..",
-  "..",
-  "templates",
-  "skills",
-);
+const REPO_TEMPLATES_DIR = resolve(import.meta.dirname, "..", "..", "templates", "skills");
 
 /**
  * Compare two `DistributedTreeSnapshot` instances for full byte-equality:
@@ -55,10 +50,7 @@ const REPO_TEMPLATES_DIR = resolve(
  * human-readable diffs (empty when equal) so vitest's assertion shows the
  * exact divergence rather than a Map-deep-equality black box.
  */
-function diffSnapshots(
-  a: DistributedTreeSnapshot,
-  b: DistributedTreeSnapshot,
-): string[] {
+function diffSnapshots(a: DistributedTreeSnapshot, b: DistributedTreeSnapshot): string[] {
   const diffs: string[] = [];
   const allPaths = new Set([...a.paths, ...b.paths]);
   for (const p of allPaths) {
@@ -73,34 +65,37 @@ function diffSnapshots(
 
 describe("distribute() — US2 multi-agent scenarios", () => {
   // -------------------------------------------------------------------------
-  // T015 — 5 Tier 1 agents distributed in one project, all destinations
-  // byte-equal to one another AND to the canonical `templates/skills/` tree.
+  // T015 — every distributing Tier 1 agent distributed in one project, all
+  // destinations byte-equal to one another AND to the canonical
+  // `templates/skills/` tree. Copilot (issue #130) is excluded — it has
+  // `skillsPath: null` (no on-disk Skills), so there is no destination to
+  // compare against.
   // -------------------------------------------------------------------------
-  it("T015: 5-agent simultaneous distribute lands byte-identical trees at every canonical path", () => {
+  it("T015: multi-agent simultaneous distribute lands byte-identical trees at every canonical path", () => {
     const { dir, cleanup } = createFreshProject();
     try {
       const source = readSkillSource(REPO_TEMPLATES_DIR);
 
-      // Distribute to every Tier 1 agent (claude, codex, cursor, copilot,
-      // kiro). `force: true` mirrors the CLI invocation in the task line.
-      for (const descriptor of AGENT_DESCRIPTORS) {
+      // Distribute to every distributing Tier 1 agent (claude, codex,
+      // cursor, kiro). `force: true` mirrors the CLI invocation in the
+      // task line. Copilot is intentionally skipped (issue #130).
+      for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
         const result = distribute(descriptor, source, {
           rootDir: dir,
           force: true,
         });
         // Fresh project → every target should land as a write, none as no-op.
-        expect(
-          result.writtenPaths.length,
-          `agent=${descriptor.id} expected all-fresh writes`,
-        ).toBe(result.targets.length);
+        expect(result.writtenPaths.length, `agent=${descriptor.id} expected all-fresh writes`).toBe(
+          result.targets.length,
+        );
         expect(result.noopPaths.length).toBe(0);
       }
 
       // Read each destination tree and assert pairwise diff-zero.
       const canonicalSnapshot = readDistributedTree(REPO_TEMPLATES_DIR);
       const perAgent = new Map<string, DistributedTreeSnapshot>();
-      for (const descriptor of AGENT_DESCRIPTORS) {
-        const snap = readDistributedTree(join(dir, descriptor.skillsPath));
+      for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
+        const snap = readDistributedTree(join(dir, descriptor.skillsPath as string));
         perAgent.set(descriptor.id, snap);
 
         // Each destination must match the canonical source byte-for-byte.
@@ -112,20 +107,39 @@ describe("distribute() — US2 multi-agent scenarios", () => {
       }
 
       // Pairwise byte-equality between every (agent_i, agent_j) destination.
-      // Quadratic in 5 agents (= 10 comparisons) — trivial, and explicit so a
-      // single drift between two destinations is reported with both ids.
-      const ids = AGENT_DESCRIPTORS.map((d) => d.id);
+      // Explicit so a single drift between two destinations is reported
+      // with both ids.
+      const ids = DISTRIBUTED_AGENT_DESCRIPTORS.map((d) => d.id);
       for (let i = 0; i < ids.length; i++) {
         for (let j = i + 1; j < ids.length; j++) {
           const a = perAgent.get(ids[i]!)!;
           const b = perAgent.get(ids[j]!)!;
           const diffs = diffSnapshots(a, b);
-          expect(
-            diffs,
-            `${ids[i]} vs ${ids[j]} diverged: ${diffs.join("; ")}`,
-          ).toEqual([]);
+          expect(diffs, `${ids[i]} vs ${ids[j]} diverged: ${diffs.join("; ")}`).toEqual([]);
         }
       }
+    } finally {
+      cleanup();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // issue #130 — Copilot has `skillsPath: null` and must never receive
+  // on-disk Skills. Assert `distribute()` returns an empty result and
+  // creates zero files anywhere under `.github/skills/`.
+  // -------------------------------------------------------------------------
+  it("distribute(copilot) is inert — no writes, no `.github/skills/` directory", () => {
+    const { dir, cleanup } = createFreshProject();
+    try {
+      const source = readSkillSource(REPO_TEMPLATES_DIR);
+      const copilot = AGENT_DESCRIPTORS.find((d) => d.id === "copilot")!;
+      const result = distribute(copilot, source, { rootDir: dir, force: true });
+      expect(result.targets.length).toBe(0);
+      expect(result.writtenPaths.length).toBe(0);
+      expect(result.noopPaths.length).toBe(0);
+      // No `.github/skills/` tree should ever be created.
+      const legacySnapshot = readDistributedTree(join(dir, ".github", "skills"));
+      expect(legacySnapshot.paths).toEqual([]);
     } finally {
       cleanup();
     }
@@ -191,10 +205,7 @@ describe("distribute() — US2 multi-agent scenarios", () => {
       // (relpaths under <skillsPath> are descriptor-independent).
       const codexAfter = readDistributedTree(join(dir, codex.skillsPath));
       const crossDiffs = diffSnapshots(claudeAfter, codexAfter);
-      expect(
-        crossDiffs,
-        `codex tree diverges from claude: ${crossDiffs.join("; ")}`,
-      ).toEqual([]);
+      expect(crossDiffs, `codex tree diverges from claude: ${crossDiffs.join("; ")}`).toEqual([]);
     } finally {
       cleanup();
     }
@@ -224,8 +235,7 @@ describe("distribute() — US2 multi-agent scenarios", () => {
       for (const p of [skillImpactPath, skillVerifyPath, sharedPath]) {
         mkdirSync(dirname(p), { recursive: true });
       }
-      const initialImpactBody =
-        "---\nname: artgraph-impact\ndescription: stub\n---\nv1\n";
+      const initialImpactBody = "---\nname: artgraph-impact\ndescription: stub\n---\nv1\n";
       writeFileSync(skillImpactPath, initialImpactBody, "utf-8");
       writeFileSync(
         skillVerifyPath,
@@ -234,9 +244,11 @@ describe("distribute() — US2 multi-agent scenarios", () => {
       );
       writeFileSync(sharedPath, "shared install-check v1\n", "utf-8");
 
-      // (1) First distribution pass with the v1 source.
+      // (1) First distribution pass with the v1 source. Copilot has
+      // skillsPath: null (issue #130) so it's excluded from every
+      // per-agent assertion in this test.
       const sourceV1 = readSkillSource(sourceDir);
-      for (const descriptor of AGENT_DESCRIPTORS) {
+      for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
         distribute(descriptor, sourceV1, {
           rootDir: projectDir,
           force: true,
@@ -245,10 +257,10 @@ describe("distribute() — US2 multi-agent scenarios", () => {
 
       // Capture snapshot A (post-v1) per agent.
       const snapshotsA = new Map<string, DistributedTreeSnapshot>();
-      for (const descriptor of AGENT_DESCRIPTORS) {
+      for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
         snapshotsA.set(
           descriptor.id,
-          readDistributedTree(join(projectDir, descriptor.skillsPath)),
+          readDistributedTree(join(projectDir, descriptor.skillsPath as string)),
         );
       }
 
@@ -256,7 +268,7 @@ describe("distribute() — US2 multi-agent scenarios", () => {
       const expectedV1Sha = sourceV1.entries
         .flatMap((e) => e.files)
         .find((f) => f.relPath === "artgraph-impact/SKILL.md")!.sha256;
-      for (const descriptor of AGENT_DESCRIPTORS) {
+      for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
         const snap = snapshotsA.get(descriptor.id)!;
         expect(snap.sha256["artgraph-impact/SKILL.md"]).toBe(expectedV1Sha);
       }
@@ -266,7 +278,7 @@ describe("distribute() — US2 multi-agent scenarios", () => {
       writeFileSync(skillImpactPath, editedBody, "utf-8");
 
       // (3) Re-read source (new sha256s) and re-distribute with --force to
-      // every Tier 1 agent.
+      // every distributing Tier 1 agent.
       const sourceV2 = readSkillSource(sourceDir);
       const expectedV2Sha = sourceV2.entries
         .flatMap((e) => e.files)
@@ -274,7 +286,7 @@ describe("distribute() — US2 multi-agent scenarios", () => {
       // sanity — v2 must differ from v1 (otherwise the test setup is wrong)
       expect(expectedV2Sha).not.toBe(expectedV1Sha);
 
-      for (const descriptor of AGENT_DESCRIPTORS) {
+      for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
         const result = distribute(descriptor, sourceV2, {
           rootDir: projectDir,
           force: true,
@@ -286,13 +298,13 @@ describe("distribute() — US2 multi-agent scenarios", () => {
           `agent=${descriptor.id} expected exactly 1 write (the edited file), got ${result.writtenPaths.length}`,
         ).toBe(1);
         expect(result.writtenPaths[0]).toBe(
-          join(projectDir, descriptor.skillsPath, "artgraph-impact", "SKILL.md"),
+          join(projectDir, descriptor.skillsPath as string, "artgraph-impact", "SKILL.md"),
         );
       }
 
       // (4) Snapshot B per agent — should reflect v2 bytes everywhere.
-      for (const descriptor of AGENT_DESCRIPTORS) {
-        const distRoot = join(projectDir, descriptor.skillsPath);
+      for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
+        const distRoot = join(projectDir, descriptor.skillsPath as string);
         const snapB = readDistributedTree(distRoot);
         const snapA = snapshotsA.get(descriptor.id)!;
 
@@ -303,10 +315,7 @@ describe("distribute() — US2 multi-agent scenarios", () => {
         );
 
         // On-disk bytes equal the new source bytes verbatim.
-        const onDisk = readFileSync(
-          join(distRoot, "artgraph-impact", "SKILL.md"),
-          "utf-8",
-        );
+        const onDisk = readFileSync(join(distRoot, "artgraph-impact", "SKILL.md"), "utf-8");
         expect(onDisk).toBe(editedBody);
 
         // Untouched files keep their v1 sha256 (no collateral rewrites).
@@ -318,26 +327,22 @@ describe("distribute() — US2 multi-agent scenarios", () => {
         );
       }
 
-      // (5) All 5 destinations remain pairwise byte-equal after the edit
-      // (canonical-single-truth invariant under edit).
-      const ids = AGENT_DESCRIPTORS.map((d) => d.id);
+      // (5) All distributed destinations remain pairwise byte-equal after
+      // the edit (canonical-single-truth invariant under edit).
+      const ids = DISTRIBUTED_AGENT_DESCRIPTORS.map((d) => d.id);
       const snapsB = new Map<string, DistributedTreeSnapshot>();
-      for (const descriptor of AGENT_DESCRIPTORS) {
+      for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
         snapsB.set(
           descriptor.id,
-          readDistributedTree(join(projectDir, descriptor.skillsPath)),
+          readDistributedTree(join(projectDir, descriptor.skillsPath as string)),
         );
       }
       for (let i = 0; i < ids.length; i++) {
         for (let j = i + 1; j < ids.length; j++) {
-          const diffs = diffSnapshots(
-            snapsB.get(ids[i]!)!,
-            snapsB.get(ids[j]!)!,
+          const diffs = diffSnapshots(snapsB.get(ids[i]!)!, snapsB.get(ids[j]!)!);
+          expect(diffs, `${ids[i]} vs ${ids[j]} post-edit diverged: ${diffs.join("; ")}`).toEqual(
+            [],
           );
-          expect(
-            diffs,
-            `${ids[i]} vs ${ids[j]} post-edit diverged: ${diffs.join("; ")}`,
-          ).toEqual([]);
         }
       }
     } finally {

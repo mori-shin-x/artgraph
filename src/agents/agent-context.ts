@@ -420,8 +420,15 @@ const GITATTRIBUTES_CONTENT = "** text eol=lf\n";
  * Wired into `runInit` after every successful `distribute()` so each selected
  * agent's Skill dist tree carries a `.gitattributes` pinning `** text eol=lf`.
  * Writes atomically via `atomicWriteFile`.
+ *
+ * issue #130 — Descriptors with `skillsPath === null` (Copilot) have no
+ * dist tree to pin. `writeGitAttributes` returns `{ written: false, path: "" }`
+ * as an inert no-op so callers can invoke it uniformly per descriptor.
  */
 export function writeGitAttributes(rootDir: string, descriptor: AgentDescriptor): WriteResult {
+  if (descriptor.skillsPath === null) {
+    return { written: false, path: "" };
+  }
   const absPath = resolve(rootDir, descriptor.skillsPath, ".gitattributes");
 
   // Parent may not exist on a fresh project (Skill dist tree not yet

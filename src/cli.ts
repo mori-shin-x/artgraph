@@ -353,6 +353,7 @@ function registerCommands(program: Command): void {
               integrationResults: result.integrationResults ?? null,
               integrationWarnings: result.integrationWarnings ?? null,
               hooksInstall: result.hooksInstall ?? null,
+              distributionWarnings: result.distributionWarnings ?? null,
             }),
           );
         } else {
@@ -401,6 +402,11 @@ function registerCommands(program: Command): void {
           if (result.integrationWarnings && result.integrationWarnings.length > 0) {
             for (const w of result.integrationWarnings) {
               // Warnings already carry their own "WARNING:" prefix when needed.
+              console.error(w);
+            }
+          }
+          if (result.distributionWarnings && result.distributionWarnings.length > 0) {
+            for (const w of result.distributionWarnings) {
               console.error(w);
             }
           }

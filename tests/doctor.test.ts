@@ -76,14 +76,9 @@ describe("runDoctor — PASS path", () => {
 
   it("emits `agents-md-present` and `wrapper-present` for AGENTS.md + CLAUDE.md", () => {
     const report = runDoctor({ rootDir: proj.dir });
+    expect(findFinding(report.findings, (f) => f.kind === "agents-md-present")).toBeDefined();
     expect(
-      findFinding(report.findings, (f) => f.kind === "agents-md-present"),
-    ).toBeDefined();
-    expect(
-      findFinding(
-        report.findings,
-        (f) => f.kind === "wrapper-present" && f.agent === "claude",
-      ),
+      findFinding(report.findings, (f) => f.kind === "wrapper-present" && f.agent === "claude"),
     ).toBeDefined();
   });
 });
@@ -320,9 +315,7 @@ describe("formatDoctorReportJson — schema conformance", () => {
     const parsed = JSON.parse(json) as DoctorReport;
     expect(parsed.version).toBe(1);
     expect(parsed.summary.totalFindings).toBe(parsed.findings.length);
-    expect(parsed.summary.passCount + parsed.summary.failCount).toBe(
-      parsed.findings.length,
-    );
+    expect(parsed.summary.passCount + parsed.summary.failCount).toBe(parsed.findings.length);
     expect(Array.isArray(parsed.summary.agents)).toBe(true);
     for (const f of parsed.findings) {
       expect(typeof f.severity).toBe("string");
@@ -604,8 +597,7 @@ describe("runDoctor — D2: walk skips dot files", () => {
     const report = runDoctor({ rootDir: proj.dir });
     const extra = report.findings.filter(
       (x) =>
-        x.kind === "extraneous-file" &&
-        (x.path.includes(".DS_Store") || x.path.includes(".swp")),
+        x.kind === "extraneous-file" && (x.path.includes(".DS_Store") || x.path.includes(".swp")),
     );
     expect(extra.length, JSON.stringify(extra, null, 2)).toBe(0);
   });
@@ -636,6 +628,87 @@ describe("runDoctor — D5: auto-detect skips empty / no-canonical dirs", () => 
     initProject(proj.dir, ["kiro"]);
     const report = runDoctor({ rootDir: proj.dir });
     expect(report.summary.agents).toContain("kiro");
+  });
+});
+
+describe("runDoctor — issue #130: Copilot has no Skills distribution", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  it("returns zero fail findings on a fresh Copilot init (no false-green skill checks)", () => {
+    // A fresh `--agents=copilot` init writes AGENTS.md + wrapper only.
+    // Doctor must NOT emit skill-file-missing, distribution-absent, or
+    // extraneous-file findings against the (non-existent) `.github/skills/`.
+    initProject(proj.dir, ["copilot"]);
+    const report = runDoctor({ rootDir: proj.dir });
+    expect(report.summary.failCount, JSON.stringify(report.findings, null, 2)).toBe(0);
+    const skillFindings = report.findings.filter(
+      (f) => f.agent === "copilot" && f.kind.startsWith("skill-file"),
+    );
+    expect(skillFindings.length).toBe(0);
+    const distAbsent = report.findings.filter((f) => f.kind === "distribution-absent");
+    expect(distAbsent.length).toBe(0);
+    // Copilot is still reported as a detected agent (via its wrapper).
+    expect(report.summary.agents).toContain("copilot");
+  });
+
+  it("flags a legacy .github/skills/ residue as `legacy-copilot-skills-path` (severity: fail)", () => {
+    // Simulate a project that was initialized under an old artgraph
+    // version that DID write `.github/skills/`. Current init leaves the
+    // dir untouched (warn-only per issue #130's user decision), and
+    // doctor surfaces the residue so the user can clean up manually.
+    initProject(proj.dir, ["copilot"]);
+    mkdirSync(join(proj.dir, ".github", "skills", "artgraph-impact"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(proj.dir, ".github", "skills", "artgraph-impact", "SKILL.md"),
+      "leftover\n",
+      "utf-8",
+    );
+
+    const report = runDoctor({ rootDir: proj.dir });
+    const legacy = report.findings.find((f) => f.kind === "legacy-copilot-skills-path");
+    expect(legacy, JSON.stringify(report.findings, null, 2)).toBeDefined();
+    expect(legacy!.severity).toBe("fail");
+    expect(legacy!.agent).toBe("copilot");
+    expect(legacy!.path).toBe(".github/skills");
+  });
+
+  it("does NOT flag anything under `.github/skills/` as skill-file-drift or extraneous-file", () => {
+    // The legacy residue must produce EXACTLY the single
+    // legacy-copilot-skills-path finding above — not one per file inside
+    // the tree (which would blow up the report).
+    initProject(proj.dir, ["copilot"]);
+    mkdirSync(join(proj.dir, ".github", "skills", "artgraph-impact"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(proj.dir, ".github", "skills", "artgraph-impact", "SKILL.md"),
+      "leftover\n",
+      "utf-8",
+    );
+    const report = runDoctor({ rootDir: proj.dir });
+    const perFile = report.findings.filter(
+      (f) =>
+        (f.kind === "skill-file-drift" || f.kind === "extraneous-file") &&
+        f.path.includes(".github/skills"),
+    );
+    expect(perFile.length, JSON.stringify(perFile, null, 2)).toBe(0);
+  });
+
+  it("does not emit legacy-copilot-skills-path when `.github/skills/` is absent", () => {
+    initProject(proj.dir, ["copilot"]);
+    const report = runDoctor({ rootDir: proj.dir });
+    const legacy = report.findings.filter((f) => f.kind === "legacy-copilot-skills-path");
+    expect(legacy.length).toBe(0);
   });
 });
 

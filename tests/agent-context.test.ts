@@ -28,7 +28,11 @@ import {
   writeGitAttributes,
   writeWrapper,
 } from "../src/agents/agent-context.js";
-import { AGENT_DESCRIPTORS, findDescriptor } from "../src/agents/descriptors.js";
+import {
+  AGENT_DESCRIPTORS,
+  DISTRIBUTED_AGENT_DESCRIPTORS,
+  findDescriptor,
+} from "../src/agents/descriptors.js";
 import { createFreshProject } from "./agents/helpers.js";
 
 function sha256(filePath: string): string {
@@ -649,17 +653,40 @@ describe("writeGitAttributes (OPS-2)", () => {
     }
   });
 
-  it("works for every Tier 1 descriptor's skillsPath", () => {
-    for (const descriptor of AGENT_DESCRIPTORS) {
+  it("works for every distributing Tier 1 descriptor's skillsPath", () => {
+    // issue #130 — Copilot (skillsPath: null) has no dist tree, so it's
+    // excluded here. Its no-op behaviour is asserted below.
+    for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
       const project = createFreshProject();
       try {
         const res = writeGitAttributes(project.dir, descriptor);
         expect(res.written).toBe(true);
-        expect(res.path).toBe(resolve(project.dir, descriptor.skillsPath, ".gitattributes"));
+        expect(res.path).toBe(
+          resolve(project.dir, descriptor.skillsPath as string, ".gitattributes"),
+        );
         expect(readFileSync(res.path, "utf-8")).toBe("** text eol=lf\n");
       } finally {
         project.cleanup();
       }
+    }
+  });
+
+  it("is an inert no-op for descriptors with skillsPath === null (Copilot, issue #130)", () => {
+    // issue #130 — Copilot never gets an on-disk Skills tree, so
+    // `writeGitAttributes` MUST NOT create `.github/skills/` on its
+    // behalf. It returns `written: false, path: ""` so callers can
+    // invoke it uniformly without special-casing.
+    const project = createFreshProject();
+    try {
+      const copilot = findDescriptor("copilot")!;
+      const res = writeGitAttributes(project.dir, copilot);
+      expect(res.written).toBe(false);
+      expect(res.path).toBe("");
+      // No `.github/` should have been created for a bare Copilot run
+      // (parent dir creation is the wrapper writer's responsibility only).
+      expect(existsSync(resolve(project.dir, ".github", "skills"))).toBe(false);
+    } finally {
+      project.cleanup();
     }
   });
 });

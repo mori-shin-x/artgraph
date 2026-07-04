@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 import {
   AGENT_DESCRIPTORS,
   AGENT_IDS,
+  DISTRIBUTED_AGENT_DESCRIPTORS,
   findDescriptor,
 } from "../../src/agents/descriptors.js";
 import { readSkillSource } from "../../src/agents/source.js";
@@ -43,17 +44,28 @@ describe("AGENT_DESCRIPTORS table (spec 013 §data-model 1)", () => {
     expect(ids).toEqual(["claude", "codex", "copilot", "cursor", "kiro"]);
   });
 
-  it("every skillsPath ends with /skills (no trailing slash)", () => {
-    for (const d of AGENT_DESCRIPTORS) {
-      expect(d.skillsPath.endsWith("/skills"), `${d.id}: ${d.skillsPath}`).toBe(true);
-      expect(d.skillsPath.endsWith("/")).toBe(false);
+  it("every non-null skillsPath ends with /skills (no trailing slash)", () => {
+    // issue #130 — Copilot's skillsPath is null (no on-disk Skills). The
+    // shape invariant only applies to descriptors that do distribute.
+    for (const d of DISTRIBUTED_AGENT_DESCRIPTORS) {
+      expect(d.skillsPath!.endsWith("/skills"), `${d.id}: ${d.skillsPath}`).toBe(true);
+      expect(d.skillsPath!.endsWith("/")).toBe(false);
     }
   });
 
-  it("uses POSIX separators in skillsPath", () => {
-    for (const d of AGENT_DESCRIPTORS) {
-      expect(d.skillsPath.includes("\\"), `${d.id}: ${d.skillsPath}`).toBe(false);
+  it("uses POSIX separators in every non-null skillsPath", () => {
+    for (const d of DISTRIBUTED_AGENT_DESCRIPTORS) {
+      expect(d.skillsPath!.includes("\\"), `${d.id}: ${d.skillsPath}`).toBe(false);
     }
+  });
+
+  it("DISTRIBUTED_AGENT_DESCRIPTORS excludes Copilot and contains the other 4 Tier 1 agents", () => {
+    // issue #130 pin — Copilot must never be treated as a distribution
+    // target. Callers that iterate "every distributing Tier 1 agent"
+    // should use DISTRIBUTED_AGENT_DESCRIPTORS.
+    const ids = DISTRIBUTED_AGENT_DESCRIPTORS.map((d) => d.id).sort();
+    expect(ids).toEqual(["claude", "codex", "cursor", "kiro"]);
+    expect(ids).not.toContain("copilot");
   });
 
   it("claude → .claude/skills, with wrapper CLAUDE.md and both load mode", () => {
@@ -77,9 +89,15 @@ describe("AGENT_DESCRIPTORS table (spec 013 §data-model 1)", () => {
     expect(d.agentContextLoad).toBe("native-agents-md");
   });
 
-  it("copilot → .github/skills with wrapper .github/copilot-instructions.md", () => {
+  it("copilot → null skillsPath (issue #130) with wrapper .github/copilot-instructions.md", () => {
+    // issue #130 — Copilot's official custom-instructions surfaces are
+    // `.github/copilot-instructions.md` and `.github/instructions/*.instructions.md`
+    // only. `.github/skills/` is not read by Copilot, so distributing SKILL.md
+    // there produced a false-green doctor. `skillsPath: null` opts the
+    // descriptor out of distribution entirely; the wrapper is still emitted
+    // so the artgraph instruction layer reaches Copilot via AGENTS.md.
     const d = findDescriptor("copilot")!;
-    expect(d.skillsPath).toBe(".github/skills");
+    expect(d.skillsPath).toBeNull();
     expect(d.wrapperFile).toBe(".github/copilot-instructions.md");
     expect(d.agentContextLoad).toBe("both");
   });
@@ -218,9 +236,7 @@ describe("readSkillSource (spec 013 §data-model 2, R1)", () => {
       );
 
       expect(() => readSkillSource(templatesDir)).toThrow(SkillsInstallError);
-      expect(() => readSkillSource(templatesDir)).toThrow(
-        /artgraph-broken.*missing SKILL\.md/,
-      );
+      expect(() => readSkillSource(templatesDir)).toThrow(/artgraph-broken.*missing SKILL\.md/);
     } finally {
       cleanup();
     }

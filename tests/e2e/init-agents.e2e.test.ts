@@ -22,6 +22,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   AGENT_DESCRIPTORS,
+  DISTRIBUTED_AGENT_DESCRIPTORS,
   type AgentId,
 } from "../../src/agents/descriptors.js";
 import { createFreshProject, readDistributedTree } from "../agents/helpers.js";
@@ -42,7 +43,7 @@ function runInit(cwd: string, args: string[]) {
 }
 
 describe("e2e: artgraph init --agents=<single>", () => {
-  // Run each Tier 1 agent in a fresh tmp dir. The test asserts:
+  // Run each distributing Tier 1 agent in a fresh tmp dir. The test asserts:
   //   1. exit 0
   //   2. <skillsPath>/artgraph-impact/SKILL.md exists at the expected canonical path
   //   3. <skillsPath>/_shared/install-check.md exists (R1 shared fragment travels)
@@ -50,7 +51,11 @@ describe("e2e: artgraph init --agents=<single>", () => {
   //      runs by default; verified more thoroughly in agent-context.e2e.test.ts)
   //   5. CLAUDE.md / .github/copilot-instructions.md wrapper presence
   //      matches the descriptor (only claude / copilot agents get wrappers)
-  for (const descriptor of AGENT_DESCRIPTORS) {
+  // issue #130 — Copilot has `skillsPath: null` (no on-disk Skills), so
+  // it's covered by a dedicated block below rather than this per-Skills
+  // matrix.
+  for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
+    const skillsPath = descriptor.skillsPath as string;
     describe(`agent=${descriptor.id}`, () => {
       let proj: ReturnType<typeof createFreshProject>;
 
@@ -62,16 +67,16 @@ describe("e2e: artgraph init --agents=<single>", () => {
         proj.cleanup();
       });
 
-      it(`lands canonical Skills at ${descriptor.skillsPath}/ and emits AGENTS.md`, () => {
+      it(`lands canonical Skills at ${skillsPath}/ and emits AGENTS.md`, () => {
         const r = runInit(proj.dir, [`--agents=${descriptor.id}`, "--no-scan"]);
         expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
 
         // (2) one representative SKILL.md
-        const skillMd = join(proj.dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
+        const skillMd = join(proj.dir, skillsPath, "artgraph-impact", "SKILL.md");
         expect(existsSync(skillMd), `missing: ${skillMd}`).toBe(true);
 
         // (3) _shared fragment (R1)
-        const sharedMd = join(proj.dir, descriptor.skillsPath, "_shared", "install-check.md");
+        const sharedMd = join(proj.dir, skillsPath, "_shared", "install-check.md");
         expect(existsSync(sharedMd), `missing: ${sharedMd}`).toBe(true);
 
         // (4) AGENTS.md with marker block
@@ -81,13 +86,11 @@ describe("e2e: artgraph init --agents=<single>", () => {
         expect(agentsBody).toContain("<!-- artgraph:begin -->");
         expect(agentsBody).toContain("<!-- artgraph:end -->");
 
-        // (5) wrapper presence — only claude / copilot have wrappers per the
-        // descriptor table. The other 3 agents (codex / cursor / kiro) load
-        // AGENTS.md natively so MUST NOT get a wrapper.
+        // (5) wrapper presence — only claude has a wrapper among the
+        // distributing agents (Copilot's wrapper is exercised in its
+        // own describe block below).
         const claudeMd = join(proj.dir, "CLAUDE.md");
-        const copilotMd = join(proj.dir, ".github", "copilot-instructions.md");
         expect(existsSync(claudeMd)).toBe(descriptor.id === "claude");
-        expect(existsSync(copilotMd)).toBe(descriptor.id === "copilot");
       });
 
       it(`distributed Skills tree byte-matches templates/skills/`, () => {
@@ -95,21 +98,44 @@ describe("e2e: artgraph init --agents=<single>", () => {
         expect(r.status, `stderr: ${r.stderr}`).toBe(0);
 
         const canonical = readDistributedTree(TEMPLATES_DIR);
-        const distributed = readDistributedTree(
-          join(proj.dir, descriptor.skillsPath),
-        );
+        const distributed = readDistributedTree(join(proj.dir, skillsPath));
         // Every canonical path must appear at the destination with matching
         // sha256. The destination MAY have extra paths from a future test that
         // adds bookkeeping files, so we assert containment rather than equality.
         for (const relPath of canonical.paths) {
           expect(
             distributed.sha256[relPath],
-            `missing or mismatched: ${descriptor.skillsPath}/${relPath}`,
+            `missing or mismatched: ${skillsPath}/${relPath}`,
           ).toBe(canonical.sha256[relPath]);
         }
       });
     });
   }
+
+  // issue #130 — Copilot never receives on-disk Skills. `--agents=copilot`
+  // still writes AGENTS.md and `.github/copilot-instructions.md`, and does
+  // NOT create `.github/skills/`.
+  describe("agent=copilot (issue #130 — no Skills distribution)", () => {
+    let proj: ReturnType<typeof createFreshProject>;
+
+    beforeEach(() => {
+      proj = createFreshProject();
+    });
+
+    afterEach(() => {
+      proj.cleanup();
+    });
+
+    it("writes the copilot wrapper + AGENTS.md but does NOT create .github/skills/", () => {
+      const r = runInit(proj.dir, ["--agents=copilot", "--no-scan"]);
+      expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+
+      // Wrapper + AGENTS.md are present, but no on-disk Skills.
+      expect(existsSync(join(proj.dir, "AGENTS.md"))).toBe(true);
+      expect(existsSync(join(proj.dir, ".github", "copilot-instructions.md"))).toBe(true);
+      expect(existsSync(join(proj.dir, ".github", "skills"))).toBe(false);
+    });
+  });
 });
 
 describe("e2e: artgraph init --agents=claude,codex,cursor,copilot,kiro --force", () => {
@@ -131,27 +157,36 @@ describe("e2e: artgraph init --agents=claude,codex,cursor,copilot,kiro --force",
     proj.cleanup();
   });
 
-  it("populates every Tier 1 canonical Skills path", () => {
-    for (const descriptor of AGENT_DESCRIPTORS) {
-      const skillMd = join(proj.dir, descriptor.skillsPath, "artgraph-impact", "SKILL.md");
+  it("populates every distributing Tier 1 canonical Skills path", () => {
+    // issue #130 — Copilot's `skillsPath` is null so it is excluded.
+    // The absence of `.github/skills/` is asserted separately below.
+    for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
+      const skillMd = join(
+        proj.dir,
+        descriptor.skillsPath as string,
+        "artgraph-impact",
+        "SKILL.md",
+      );
       expect(existsSync(skillMd), `missing: ${skillMd}`).toBe(true);
     }
+    // Copilot must never receive an on-disk Skills tree (issue #130).
+    expect(existsSync(join(proj.dir, ".github", "skills"))).toBe(false);
   });
 
-  it("all 5 distributed trees are byte-identical (diff -rq zero)", () => {
-    // Use claude as the reference: every other agent's tree MUST equal it
-    // file-for-file with matching sha256.
+  it("all distributed trees are byte-identical (diff -rq zero)", () => {
+    // Use claude as the reference: every other DISTRIBUTING agent's tree
+    // MUST equal it file-for-file with matching sha256. Copilot (issue
+    // #130) is excluded — it has no tree to compare.
     const ref = readDistributedTree(join(proj.dir, ".claude", "skills"));
     expect(ref.paths.length).toBeGreaterThan(0);
 
-    for (const descriptor of AGENT_DESCRIPTORS) {
+    for (const descriptor of DISTRIBUTED_AGENT_DESCRIPTORS) {
       if (descriptor.id === "claude") continue;
-      const t = readDistributedTree(join(proj.dir, descriptor.skillsPath));
-      expect(t.paths, `path set differs at ${descriptor.skillsPath}`).toEqual(ref.paths);
+      const skillsPath = descriptor.skillsPath as string;
+      const t = readDistributedTree(join(proj.dir, skillsPath));
+      expect(t.paths, `path set differs at ${skillsPath}`).toEqual(ref.paths);
       for (const p of ref.paths) {
-        expect(t.sha256[p], `sha256 differs for ${descriptor.skillsPath}/${p}`).toBe(
-          ref.sha256[p],
-        );
+        expect(t.sha256[p], `sha256 differs for ${skillsPath}/${p}`).toBe(ref.sha256[p]);
       }
     }
   });
@@ -172,6 +207,12 @@ describe("e2e: artgraph init --agents=claude,codex,cursor,copilot,kiro --force",
     expect(existsSync(join(proj.dir, ".cursor", "AGENTS.md"))).toBe(false);
     expect(existsSync(join(proj.dir, ".agents", "AGENTS.md"))).toBe(false);
     expect(existsSync(join(proj.dir, ".kiro", "AGENTS.md"))).toBe(false);
+  });
+
+  it("(issue #130) does not create .github/skills/ even when --agents includes copilot", () => {
+    // Copilot's skillsPath is null; init MUST NOT provision `.github/skills/`
+    // as a side effect of selecting Copilot alongside other agents.
+    expect(existsSync(join(proj.dir, ".github", "skills"))).toBe(false);
   });
 });
 

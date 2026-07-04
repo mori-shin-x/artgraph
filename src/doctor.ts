@@ -58,7 +58,8 @@ export type DoctorFindingKind =
   | "wrapper-broken-marker"
   | "extraneous-file"
   | "walk-error"
-  | "distribution-absent";
+  | "distribution-absent"
+  | "legacy-copilot-skills-path";
 
 export interface DoctorFinding {
   severity: DoctorFindingSeverity;
@@ -116,20 +117,23 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   // action wraps this call in a try/catch so the message surfaces as
   // `Error: ...` (C1).
   const source: SkillSource = readSkillSource(SKILLS_TEMPLATE_DIR);
-  const canonicalTopLevels = new Set<string>(
-    source.entries.map((e) => e.topLevel),
-  );
+  const canonicalTopLevels = new Set<string>(source.entries.map((e) => e.topLevel));
 
   // Step 1 — detect agents.
   //   - explicit `opts.agents`: trust the caller; the CLI parser has already
   //     enforced lowercase + Tier 1 membership. If an id has no distribution
   //     directory on disk, we record it in `absentDescriptors` and emit a
   //     single `distribution-absent` finding (D1) instead of flooding with
-  //     N `skill-file-missing` entries.
+  //     N `skill-file-missing` entries. Descriptors with `skillsPath === null`
+  //     (Copilot, issue #130) are always considered "detected" — they carry
+  //     no Skills tree to look for, so wrapper checks are the only thing
+  //     the doctor can meaningfully do for them.
   //   - default: every descriptor whose `<rootDir>/<skillsPath>` directory
   //     exists on disk AND contains at least one canonical top-level (D5),
   //     using `lstatSync` so a symlink-to-/dev-null does not crash the
-  //     doctor (C-adj-2). Zero detected → return an empty report.
+  //     doctor (C-adj-2). For `skillsPath === null` descriptors, presence
+  //     of the wrapper file (or a legacy `.github/skills/` residue) is the
+  //     detection signal instead. Zero detected → return an empty report.
   const detectedDescriptors: AgentDescriptor[] = [];
   const absentDescriptors: AgentDescriptor[] = [];
   if (opts.agents && opts.agents.length > 0) {
@@ -142,6 +146,13 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
         throw new Error(
           `Unknown agent id: "${id}". Supported values: ${AGENT_DESCRIPTORS.map((x) => x.id).join(", ")}`,
         );
+      }
+      // issue #130 — Copilot has no Skills tree. Explicit selection always
+      // "detects" it so the wrapper check runs; there is no
+      // distribution-absent state to report for a non-distribution agent.
+      if (d.skillsPath === null) {
+        detectedDescriptors.push(d);
+        continue;
       }
       const dist = resolve(rootAbs, d.skillsPath);
       let stat;
@@ -158,6 +169,35 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
     }
   } else {
     for (const descriptor of AGENT_DESCRIPTORS) {
+      // issue #130 — auto-detect for a no-Skills descriptor keys off wrapper
+      // presence (the only on-disk artifact artgraph writes for it). A
+      // legacy `.github/skills/` residue also counts as "detected" so the
+      // doctor can surface it via `legacy-copilot-skills-path` rather than
+      // silently ignoring it.
+      if (descriptor.skillsPath === null) {
+        const wrapperAbs =
+          descriptor.wrapperFile !== null ? resolve(rootAbs, descriptor.wrapperFile) : null;
+        let wrapperExists = false;
+        if (wrapperAbs !== null) {
+          try {
+            wrapperExists = lstatSync(wrapperAbs).isFile();
+          } catch {
+            wrapperExists = false;
+          }
+        }
+        let legacyResidueExists = false;
+        if (descriptor.id === "copilot") {
+          try {
+            legacyResidueExists = lstatSync(resolve(rootAbs, ".github", "skills")).isDirectory();
+          } catch {
+            legacyResidueExists = false;
+          }
+        }
+        if (wrapperExists || legacyResidueExists) {
+          detectedDescriptors.push(descriptor);
+        }
+        continue;
+      }
       const dist = resolve(rootAbs, descriptor.skillsPath);
       let stat;
       try {
@@ -197,23 +237,40 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   const findings: DoctorFinding[] = [];
 
   // D1 — explicit --agents ids whose distribution dir does not exist get a
-  // single `distribution-absent` finding, no per-file scanning.
+  // single `distribution-absent` finding, no per-file scanning. Note:
+  // `absentDescriptors` only ever contains descriptors with a non-null
+  // `skillsPath` — the null-skillsPath branch above never pushes here.
   for (const d of absentDescriptors) {
+    const skillsPath = d.skillsPath as string;
     findings.push({
       severity: "fail",
       agent: d.id,
       kind: "distribution-absent",
-      path: d.skillsPath,
+      path: skillsPath,
       expected: "distribution present",
       actual: "no distribution directory",
-      message: `${d.displayName} distribution is not installed under ${d.skillsPath}/. Run \`artgraph init --agents=${d.id}\` to install it.`,
+      message: `${d.displayName} distribution is not installed under ${skillsPath}/. Run \`artgraph init --agents=${d.id}\` to install it.`,
     });
   }
 
-  // Step 3 — per-agent Skills + extraneous-file diagnostics.
+  // Step 3 — per-agent Skills + extraneous-file diagnostics. Descriptors
+  // with `skillsPath === null` (Copilot, issue #130) skip these entirely
+  // — they carry no on-disk Skills tree, so a per-file scan would be
+  // vacuous. In their place, step 3b flags any legacy residue.
   for (const descriptor of detectedDescriptors) {
+    if (descriptor.skillsPath === null) continue;
     addSkillFindings(rootAbs, descriptor, source, findings);
     addExtraneousFindings(rootAbs, descriptor, source, findings);
+  }
+
+  // Step 3b — legacy `.github/skills/` residue (issue #130). Previously
+  // artgraph distributed Copilot Skills to `.github/skills/`; that path is
+  // no longer official (Copilot doesn't discover it) and current init
+  // skips it. A leftover dir is safe to keep but misleading, so surface
+  // it as a fail-severity finding pointing the user at manual cleanup.
+  for (const descriptor of detectedDescriptors) {
+    if (descriptor.id !== "copilot") continue;
+    addLegacyCopilotSkillsFindings(rootAbs, findings);
   }
 
   // Step 4 — AGENTS.md (single shared resource; `agent: null`).
@@ -232,10 +289,7 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   const passCount = findings.filter((f) => f.severity === "pass").length;
   const failCount = findings.length - passCount;
   const agents = [
-    ...new Set([
-      ...detectedDescriptors.map((d) => d.id),
-      ...absentDescriptors.map((d) => d.id),
-    ]),
+    ...new Set([...detectedDescriptors.map((d) => d.id), ...absentDescriptors.map((d) => d.id)]),
   ].sort();
 
   return {
@@ -260,9 +314,12 @@ function addSkillFindings(
   source: SkillSource,
   out: DoctorFinding[],
 ): void {
+  // Call sites gate on `descriptor.skillsPath !== null`; narrow it once here
+  // so the loop body can pass it to `resolve()` without repeated casts.
+  const skillsPath = descriptor.skillsPath as string;
   for (const entry of source.entries) {
     for (const file of entry.files) {
-      const distAbs = resolve(rootAbs, descriptor.skillsPath, file.relPath);
+      const distAbs = resolve(rootAbs, skillsPath, file.relPath);
       const relPath = toRepoRel(rootAbs, distAbs);
       // C3 — collapse existsSync + hashFile into a single try/catch pass so a
       // concurrent `rm` between the two syscalls cannot surface an ENOENT
@@ -330,7 +387,9 @@ function addExtraneousFindings(
   source: SkillSource,
   out: DoctorFinding[],
 ): void {
-  const distRoot = resolve(rootAbs, descriptor.skillsPath);
+  // Call sites gate on `descriptor.skillsPath !== null`; narrow it once here.
+  const skillsPath = descriptor.skillsPath as string;
+  const distRoot = resolve(rootAbs, skillsPath);
   // Rooted lstat guard — the auto-detect step already checked existence but
   // for the explicit-agents path a concurrent rm may have removed it since.
   try {
@@ -349,9 +408,7 @@ function addExtraneousFindings(
   // Within each canonical top-level dir, every file MUST match a canonical
   // relPath; mismatches (old version remnants, manually added files) are
   // reported as `extraneous-file`.
-  const canonicalTopLevels = new Set<string>(
-    source.entries.map((e) => e.topLevel),
-  );
+  const canonicalTopLevels = new Set<string>(source.entries.map((e) => e.topLevel));
   const canonical = new Set<string>();
   for (const entry of source.entries) {
     for (const file of entry.files) {
@@ -404,6 +461,36 @@ function addExtraneousFindings(
       }
     }
   }
+}
+
+/**
+ * issue #130 — surface a leftover `.github/skills/` dir as a fail-severity
+ * `legacy-copilot-skills-path` finding when Copilot is in scope. Copilot's
+ * `descriptor.skillsPath` is now `null` (the path is not an official
+ * Copilot discovery location), so init no longer touches `.github/skills/`.
+ * A residual dir from an earlier artgraph version is safe to keep but
+ * misleading — the file is not read by Copilot. This finding points the
+ * user at manual cleanup without artgraph auto-deleting anything (per the
+ * issue #130 user decision: warn only).
+ */
+function addLegacyCopilotSkillsFindings(rootAbs: string, out: DoctorFinding[]): void {
+  const legacyDir = resolve(rootAbs, ".github", "skills");
+  let isDir = false;
+  try {
+    isDir = lstatSync(legacyDir).isDirectory();
+  } catch {
+    return;
+  }
+  if (!isDir) return;
+  out.push({
+    severity: "fail",
+    agent: "copilot",
+    kind: "legacy-copilot-skills-path",
+    path: ".github/skills",
+    expected: "not present",
+    actual: "present",
+    message: `.github/skills/ is a legacy artgraph distribution path that GitHub Copilot does not discover. Copilot now reads instructions from .github/copilot-instructions.md + AGENTS.md only. Remove .github/skills/ manually when convenient (safe to delete).`,
+  });
 }
 
 function addAgentsMdFindings(rootAbs: string, out: DoctorFinding[]): void {
@@ -564,9 +651,7 @@ export function formatDoctorReportText(report: DoctorReport): string {
 
   if (report.findings.length === 0) {
     // No distribution detected → soft-success path (per FR-011 + quickstart §3-5).
-    lines.push(
-      "No Tier 1 distribution detected. Run `artgraph init --agents=<list>` to set up.",
-    );
+    lines.push("No Tier 1 distribution detected. Run `artgraph init --agents=<list>` to set up.");
     return lines.join("\n");
   }
 
@@ -589,7 +674,9 @@ export function formatDoctorReportText(report: DoctorReport): string {
       for (const f of failures) {
         lines.push(`  ✗ ${f.path}    (${f.kind})`);
         if (f.kind === "skill-file-drift" && f.expected && f.actual) {
-          lines.push(`       expected: ${f.expected.slice(0, 12)}…  actual: ${f.actual.slice(0, 12)}…`);
+          lines.push(
+            `       expected: ${f.expected.slice(0, 12)}…  actual: ${f.actual.slice(0, 12)}…`,
+          );
         } else if (f.expected !== null && f.actual !== null) {
           lines.push(`       expected: ${f.expected}  actual: ${f.actual}`);
         }
@@ -722,9 +809,10 @@ function toPosix(p: string): string {
 }
 
 function toRepoRel(rootAbs: string, abs: string): string {
-  const stripped = abs.startsWith(rootAbs + sep) || abs.startsWith(rootAbs + "/")
-    ? abs.slice(rootAbs.length + 1)
-    : abs;
+  const stripped =
+    abs.startsWith(rootAbs + sep) || abs.startsWith(rootAbs + "/")
+      ? abs.slice(rootAbs.length + 1)
+      : abs;
   return toPosix(stripped);
 }
 
@@ -742,14 +830,10 @@ function brokenMarkerDescription(
   const endCount = Array.from(content.matchAll(END_RE_G)).length;
   if (!h.hasBegin && !h.hasEnd) return "no markers found";
   if (h.hasBegin && !h.hasEnd) {
-    return beginCount === 1
-      ? "1 begin marker without end"
-      : `${beginCount} begin markers, 0 ends`;
+    return beginCount === 1 ? "1 begin marker without end" : `${beginCount} begin markers, 0 ends`;
   }
   if (!h.hasBegin && h.hasEnd) {
-    return endCount === 1
-      ? "1 end marker without begin"
-      : `0 begins, ${endCount} end markers`;
+    return endCount === 1 ? "1 end marker without begin" : `0 begins, ${endCount} end markers`;
   }
   return `markers present but unpaired (${beginCount} begins, ${endCount} ends)`;
 }
