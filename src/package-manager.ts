@@ -7,10 +7,11 @@ export type { PackageManager } from "./types.js";
 /**
  * Detect the package manager for a project, following the truth table in
  * specs/015-pkg-mgr-agnostic/contracts/package-manager.md §1. This is a
- * verbatim TypeScript port of the bash snippet in
- * templates/skills/_shared/package-manager.md — the two MUST stay in sync
- * (SC-007). The bash version exists because the `artgraph-setup` Skill runs it
- * during bootstrap, before artgraph itself is installed, so it cannot call this.
+ * verbatim TypeScript implementation of the prose rule table in
+ * templates/skills/_shared/package-manager.md — the two MUST stay in sync at
+ * the rule level (SC-007). The prose version exists because the
+ * `artgraph-setup` Skill follows it during bootstrap, before artgraph itself
+ * is installed, so it cannot call this.
  *
  * Default PM is **pnpm**: the signal-less default, the Yarn fallback, and the
  * downstream fallback all resolve to pnpm. Only an explicit npm signal
@@ -30,7 +31,7 @@ export function detectPackageManager(
 ): PackageManager | null {
   // Use isFile() (not existsSync) so a directory or symlink named like a
   // lockfile (e.g. `mkdir bun.lockb`) does not get mistaken for the real
-  // lockfile. Mirrors `[ -f <name> ]` in the bash snippet.
+  // lockfile. Mirrors the "regular files only" rule in the template.
   const hasFile = (name: string): boolean => {
     const stat = statSync(join(rootDir, name), { throwIfNoEntry: false });
     return stat?.isFile() ?? false;
@@ -69,7 +70,7 @@ export function detectPackageManager(
   // (3) package.json present but no other signal → pnpm (artgraph default).
   if (hasPkgJson) return "pnpm";
 
-  // (4) Nothing detectable. Match the bash snippet's stderr prefix exactly
+  // (4) Nothing detectable. Match the template's stderr prefix exactly
   // ("ERROR:") so SSOT scripts and the TS detector emit identical text.
   // When the caller opts into `quiet`, it takes over user-facing messaging
   // (see src/cli.ts install-hooks flow) — suppressing this avoids a
@@ -86,8 +87,8 @@ export function detectPackageManager(
  * (e.g. "pnpm@9.0.0") and return the bare PM name. Returns null when the field
  * is absent, the value lacks the required `@version` suffix (bare "npm" etc.),
  * or the JSON itself is unparseable. Strips a leading UTF-8 BOM before parsing
- * so the TS detector matches the bash snippet (`node -e ...`) on BOM-prefixed
- * package.json files (SC-007).
+ * so the TS detector matches the template's top-level-field rule on
+ * BOM-prefixed package.json files (SC-007).
  */
 function readPackageManagerField(pkgJsonPath: string): string | null {
   let raw: string;
@@ -112,8 +113,8 @@ function readPackageManagerField(pkgJsonPath: string): string | null {
 
 /**
  * Build the exec command that runs the local `artgraph` binary under a given PM.
- * Mapping per contracts/package-manager.md §2 — keep in sync with the bash
- * Command mapping table (SC-003).
+ * Mapping per contracts/package-manager.md §2 — keep in sync with the
+ * template's Command mapping table (SC-003).
  */
 export function buildExecCommand(pm: PackageManager, subcommand = ""): string {
   const prefix = execPrefix(pm);
@@ -166,11 +167,11 @@ function assertNever(value: never): never {
 }
 
 function warn(message: string): void {
-  // Mirror the bash snippet, which writes warnings to stderr.
+  // Mirror the template's convention: warnings go to stderr.
   console.error(`WARNING: ${message}`);
 }
 
 function error(message: string): void {
-  // Mirror the bash snippet's `ERROR: ...` prefix exactly (SC-007).
+  // Mirror the template's `ERROR: ...` prefix exactly (SC-007).
   console.error(`ERROR: ${message}`);
 }

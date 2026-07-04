@@ -34,27 +34,22 @@ See [install-check](../_shared/install-check.md). For this Skill the probe is ex
 
 ### 2. Detect the package manager
 
-Run this whole block as one Bash call. The Corepack `packageManager` field wins over lockfile sniffing; the canonical rules and rationale live in [package-manager](../_shared/package-manager.md). If both signals disagree (e.g. `packageManager: bun@*` with a `pnpm-lock.yaml`), ask the user.
+Inspect the project root and apply these rules in order — first match wins. The Corepack `packageManager` field wins over lockfile sniffing; the canonical rules and rationale live in [package-manager](../_shared/package-manager.md), which must stay in sync with `src/package-manager.ts`. If both signals disagree (e.g. `packageManager: bun@*` with a `pnpm-lock.yaml`), ask the user.
 
-```bash
-if [ -f package.json ]; then
-  pm_field=$(node -e 'try{const p=require("./package.json").packageManager;if(typeof p==="string"){const m=p.match(/^([a-z]+)@/);process.stdout.write(m?m[1]:"")}}catch{}' 2>/dev/null)
-  case "$pm_field" in
-    npm|pnpm|bun) echo "Detected: $pm_field"; exit 0 ;;
-    yarn) echo "WARN: packageManager=yarn; falling back to pnpm (Yarn not supported)" >&2; echo "Detected: pnpm"; exit 0 ;;
-  esac
-fi
-if [ -f bun.lockb ] || [ -f bun.lock ]; then echo "Detected: bun"
-elif { [ -f deno.lock ] || [ -f deno.json ] || [ -f deno.jsonc ]; } && [ ! -f package.json ]; then echo "Detected: deno"
-elif [ -f pnpm-lock.yaml ]; then echo "Detected: pnpm"
-elif [ -f yarn.lock ]; then echo "WARN: yarn.lock found; falling back to pnpm (Yarn not supported)" >&2; echo "Detected: pnpm"
-elif [ -f package-lock.json ]; then echo "Detected: npm"
-elif [ -f package.json ]; then echo "Detected: pnpm"
-else echo "ERROR: cannot detect package manager; ask the user which to use (npm / pnpm / bun / deno)" >&2; exit 1
-fi
-```
+1. If `package.json` exists, read its **top-level** `"packageManager"` field (Corepack-style `<pm>@<version>`, e.g. `pnpm@9.0.0`; a nested key does not count, and a value without an `@version` suffix is ignored):
+   - `npm` / `pnpm` / `bun` -> use that PM.
+   - `yarn` -> use **pnpm** and warn the user: Yarn is not supported, falling back to pnpm.
+   - Field absent, malformed, or any other value -> continue to rule 2.
+2. Lockfile / config sniffing — first matching **regular file** wins, in this order:
+   - `bun.lockb` or `bun.lock` -> **bun**
+   - `deno.lock`, `deno.json`, or `deno.jsonc`, and **no** `package.json` -> **deno**
+   - `pnpm-lock.yaml` -> **pnpm**
+   - `yarn.lock` -> **pnpm**, warn the user: Yarn is not supported, falling back to pnpm.
+   - `package-lock.json` -> **npm**
+3. `package.json` exists but nothing above matched -> default to **pnpm**.
+4. Nothing matched at all -> detection fails: tell the user you cannot detect the package manager and ask which to use (npm / pnpm / bun / deno).
 
-Pass any `WARN:` / `ERROR:` line to the user verbatim. On error, ask which PM (npm / pnpm / bun / deno) and use that answer for the rest of the steps. Remember the chosen PM for steps 3-6.
+Relay any warning to the user verbatim. On detection failure, ask which PM (npm / pnpm / bun / deno) and use that answer for the rest of the steps. Remember the chosen PM for steps 3-6.
 
 ### 3. Get explicit user consent
 

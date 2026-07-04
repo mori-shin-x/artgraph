@@ -2,17 +2,26 @@
 
 The `artgraph-setup` Skill uses the rules below to pick the right install / exec commands. Supported: npm, pnpm, Bun, Deno. **The default PM is pnpm**: the signal-less default and the Yarn fallback both resolve to pnpm. Only an explicit npm signal (`package-lock.json` / `packageManager: npm@x`) selects npm.
 
-## Detection order
+> **Sync contract (SC-007):** these rules are the prose form of `detectPackageManager()` in `src/package-manager.ts` (truth table: `specs/015-pkg-mgr-agnostic/contracts/package-manager.md` §1). The two MUST stay in sync at the rule level — same precedence, same outcomes, same warning/error semantics. This prose version exists because `artgraph-setup` runs during bootstrap, before artgraph itself is installed, so it cannot call the TS function.
 
-1. If `package.json` exists and contains a top-level `"packageManager"` field, parse it (`npm@x.y.z` / `pnpm@x.y.z` / `bun@x.y.z` → that PM; `yarn@x.y.z` → **fallback to pnpm, warn**). Corepack-style `<pm>@<version>` format (Corepack itself only ships npm/pnpm/yarn, but artgraph extends the same shape to Bun).
-2. Lockfile sniffing — first match wins, in this order:
-   - `bun.lockb` or `bun.lock` → `bun`
-   - `deno.lock` or `deno.json(c)` (without `package.json`) → `deno`
-   - `pnpm-lock.yaml` → `pnpm`
-   - `yarn.lock` → **fallback to pnpm, warn user** ("Yarn is not supported")
-   - `package-lock.json` → `npm`
-3. If none of the above match but `package.json` exists → default to `pnpm`.
-4. Otherwise → error: "Cannot detect package manager; ask the user which to use".
+## Detection rules
+
+Inspect the project root and apply these rules in order — first match wins. Compose whatever file checks your shell needs; only **regular files** count (a directory or dangling symlink named like a lockfile is not a match).
+
+1. If `package.json` exists, read its **top-level** `"packageManager"` field. It uses the Corepack-style `<pm>@<version>` shape (Corepack itself only ships npm/pnpm/yarn; artgraph extends the same shape to Bun). Parse the top-level field only — a nested `"packageManager"` key elsewhere in the JSON does not count — and ignore values without an `@version` suffix (a bare `"npm"` is malformed):
+   - `npm` / `pnpm` / `bun` -> use that PM.
+   - `yarn` -> use **pnpm** and warn: `packageManager=yarn but Yarn is not supported; falling back to pnpm`.
+   - Field absent, malformed, unknown PM, or unparseable JSON -> continue to rule 2.
+2. Lockfile / config sniffing — first match wins, in this order:
+   - `bun.lockb` or `bun.lock` -> **bun**
+   - `deno.lock`, `deno.json`, or `deno.jsonc`, and **no** `package.json` -> **deno**
+   - `pnpm-lock.yaml` -> **pnpm**
+   - `yarn.lock` -> **pnpm**, with warning: `yarn.lock found but Yarn is not supported; falling back to pnpm`
+   - `package-lock.json` -> **npm**
+3. `package.json` exists but nothing above matched -> default to **pnpm** (artgraph's default PM).
+4. Nothing matched at all -> detection fails with error: `Cannot detect package manager; ask the user which to use`.
+
+Warnings and the failure message go to the user (the TS detector writes them to stderr with `WARNING:` / `ERROR:` prefixes — keep the same wording when relaying).
 
 ## Command mapping
 
@@ -23,47 +32,6 @@ The `artgraph-setup` Skill uses the rules below to pick the right install / exec
 | bun | `bun add -d artgraph` | `bunx artgraph <cmd>` |
 | deno | `deno add npm:artgraph` | `deno run -A npm:artgraph/cli <cmd>` |
 
-## Bash detection snippet
-
-```bash
-detect_package_manager() {
-  local pm_field
-  # 1. Corepack-style "<pm>@<version>" field in package.json. Corepack itself
-  #    only ships npm/pnpm/yarn; artgraph extends the same shape to Bun.
-  #    Parse the TOP-LEVEL field only (via node, which is present in any artgraph
-  #    project) so this matches the TS detector exactly — a plain `grep` would
-  #    also match a nested "packageManager" key and diverge (SC-007).
-  if [ -f package.json ]; then
-    pm_field=$(node -e 'try{const p=require("./package.json").packageManager;if(typeof p==="string"){const m=p.match(/^([a-z]+)@/);process.stdout.write(m?m[1]:"")}}catch{}' 2>/dev/null)
-    case "$pm_field" in
-      npm|pnpm|bun) echo "$pm_field"; return 0 ;;
-      yarn)
-        echo "WARNING: packageManager=yarn but Yarn is not supported; falling back to pnpm" >&2
-        echo "pnpm"; return 0 ;;
-    esac
-  fi
-
-  # 2. Lockfile sniffing (first match wins)
-  if [ -f bun.lockb ] || [ -f bun.lock ]; then echo "bun"; return 0; fi
-  if [ ! -f package.json ] && { [ -f deno.lock ] || [ -f deno.json ] || [ -f deno.jsonc ]; }; then
-    echo "deno"; return 0
-  fi
-  if [ -f pnpm-lock.yaml ]; then echo "pnpm"; return 0; fi
-  if [ -f yarn.lock ]; then
-    echo "WARNING: yarn.lock found but Yarn is not supported; falling back to pnpm" >&2
-    echo "pnpm"; return 0
-  fi
-  if [ -f package-lock.json ]; then echo "npm"; return 0; fi
-
-  # 3. Fallback: package.json present but no other signal → pnpm (default PM)
-  if [ -f package.json ]; then echo "pnpm"; return 0; fi
-
-  # 4. Give up
-  echo "ERROR: Cannot detect package manager; ask the user which to use" >&2
-  return 1
-}
-```
-
 ## Per-PM notes
 
 - **npm**: assume npm >= 8 (bundled with Node 18+). `npx` resolves the local `node_modules/.bin/artgraph` first, so no global install is needed.
@@ -73,4 +41,4 @@ detect_package_manager() {
 
 ## Failure handling
 
-If `detect_package_manager` exits non-zero or emits a `WARNING` / `ERROR` line to stderr, the Skill must pause and ask the user: "Which package manager would you like to use? (npm / pnpm / bun / deno)". Use the answer as the authoritative PM for the rest of the session and skip re-running detection. Record the chosen PM in the Skill's working memory so subsequent steps (install, exec) stay consistent.
+If detection fails (rule 4) or produced a warning, the Skill must pause and ask the user: "Which package manager would you like to use? (npm / pnpm / bun / deno)". Use the answer as the authoritative PM for the rest of the session and skip re-running detection. Record the chosen PM in the Skill's working memory so subsequent steps (install, exec) stay consistent.
