@@ -677,13 +677,14 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     ? runRequestedIntegrations(abs, detection, options)
     : { failureCount: 0 };
 
-  // PM resolution priority for the hooks stage (contract §PM 検出優先度):
-  // (1) live detection this run, (2) the value already recorded in
-  // .artgraph.json (covers repos where lockfiles were removed/rotated after
-  // the initial init), (3) null → graceful skip.
-  const pmForHooks = detectedPm ?? config.packageManager ?? null;
+  // PM resolution priority shared by the hooks and agent-context stages
+  // (contract §PM 検出優先度): (1) live detection this run, (2) the value
+  // already recorded in .artgraph.json (covers repos where lockfiles were
+  // removed/rotated after the initial init), (3) null → graceful skip for
+  // hooks, bare-`artgraph` command examples for agent-context (#110).
+  const resolvedPm = detectedPm ?? config.packageManager ?? null;
   const hooksInstall = stages.hooks
-    ? installHooks(abs, pmForHooks, {
+    ? installHooks(abs, resolvedPm, {
         force: options.force,
         // E1: `explicitOptIn` is only meaningful under `--minimal`, where the
         // user has to opt IN to each stage. In default mode `--with-hooks` is
@@ -705,7 +706,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   let agentContextWritten: { path: string; written: boolean }[] | undefined;
   if (agentContextStageActive) {
     agentContextWritten = [];
-    const ag: WriteResult = writeAgentsMd(abs);
+    const ag: WriteResult = writeAgentsMd(abs, resolvedPm);
     agentContextWritten.push({ path: ag.path, written: ag.written });
     if (agentsList.includes("claude")) {
       const w = writeWrapper(abs, "claude");

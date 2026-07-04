@@ -28,7 +28,18 @@
 import { existsSync, mkdirSync, readFileSync, rmdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { atomicWriteFile } from "../integrate/atomic-write.js";
+import { execPrefix, type PackageManager } from "../package-manager.js";
+import { renderTemplate } from "../template.js";
 import type { AgentDescriptor } from "./descriptors.js";
+
+// `templates/agent-context/` lives next to `dist/` (tsc preserves the
+// directory layout, so this module compiles to `dist/agents/agent-context.js`
+// — two levels below the package root). Same convention as
+// SKILLS_TEMPLATE_DIR / HOOKS_TEMPLATE_PATH in src/init.ts.
+const AGENTS_MD_TEMPLATE_PATH = resolve(
+  import.meta.dirname,
+  "../../templates/agent-context/agents-md-snippet.md",
+);
 
 // ---------------------------------------------------------------------------
 // Marker block (T018)
@@ -60,11 +71,9 @@ export class MarkerBlockCorruptError extends Error {
 // flag self-heals IDE autocorrect that title-cases the marker into
 // `<!-- artgraph:Begin -->` / `<!-- artgraph:End -->` (OPS-9). Trailing
 // `\r?$` keeps CRLF line endings well-behaved (Windows / git autocrlf).
-const MARKER_RE =
-  /^<!--\s*artgraph:begin\s*-->[\s\S]*?<!--\s*artgraph:end\s*-->\r?$/im;
+const MARKER_RE = /^<!--\s*artgraph:begin\s*-->[\s\S]*?<!--\s*artgraph:end\s*-->\r?$/im;
 /** Global variant for enumeration / duplicate-block detection (A2). */
-const MARKER_RE_GLOBAL =
-  /^<!--\s*artgraph:begin\s*-->[\s\S]*?<!--\s*artgraph:end\s*-->\r?$/gim;
+const MARKER_RE_GLOBAL = /^<!--\s*artgraph:begin\s*-->[\s\S]*?<!--\s*artgraph:end\s*-->\r?$/gim;
 
 /** Begin/end discovery regexes for the `inspectMarkerBlock` diagnostic. */
 const BEGIN_RE = /^<!--\s*artgraph:begin\s*-->\r?$/im;
@@ -206,46 +215,48 @@ export function inspectMarkerBlock(content: string): MarkerBlockHealth {
 // ---------------------------------------------------------------------------
 
 /**
- * Canonical artgraph block body that lives inside AGENTS.md. Mirrors
- * contracts/agent-context-format.md §AGENTS.md verbatim (8 Skills + workflows
- * + quickstart). The text is the artgraph guide itself, NOT a wrapper.
+ * Canonical artgraph block body that lives inside AGENTS.md. Rendered from
+ * `templates/agent-context/agents-md-snippet.md` (8 Skills + workflows +
+ * quickstart — contracts/agent-context-format.md §AGENTS.md). The text is the
+ * artgraph guide itself, NOT a wrapper.
+ *
+ * PM independence (#110): command examples embed the exec prefix for the
+ * package manager detected at init time (`npx artgraph`, `pnpm exec artgraph`,
+ * …) via `{{ARTGRAPH_EXEC}}`. `{{PM_NOTICE}}` renders a leading HTML comment
+ * telling readers which PM the block was generated for and how to regenerate
+ * after switching — the passive Default-Drift breadcrumb from #110; there is
+ * no runtime drift warning.
+ *
+ * `detectedPm === null` (no lockfile / packageManager field) degrades to the
+ * bare `artgraph` binary rather than skipping the stage — unlike the Stop
+ * hook, prose guidance stays useful without a runnable exec prefix.
  *
  * Returned without surrounding markers — `applyMarkerBlock` adds them.
+ * Throws when the packaged template is missing or references a variable not
+ * supplied here (both are packaging faults, not user errors).
  */
-export function buildAgentsMdBody(): string {
-  return [
-    "## artgraph — Cross-agent traceability",
-    "",
-    "artgraph manages the trace lock and provides 8 Skills for spec ↔ code ↔ test traceability.",
-    "",
-    "### Available Skills",
-    "",
-    "- `artgraph-setup` — install artgraph in this project",
-    "- `artgraph-detect` — report artgraph installation state",
-    "- `artgraph-integrate` — wire artgraph into Spec Kit / Kiro",
-    "- `artgraph-impact` — file/symbol → REQs impact",
-    "- `artgraph-plan-coverage` — reverse audit of tasks.md / plan.md",
-    "- `artgraph-coverage` — per-REQ coverage status",
-    "- `artgraph-verify` — `artgraph check --diff` self-check",
-    "- `artgraph-rename` — safe rename / split / merge of REQ IDs",
-    "",
-    "See `<agent_skills_path>/<skill-name>/SKILL.md` for each Skill's full description (where `<agent_skills_path>` is `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, or `.kiro/skills/` depending on your agent).",
-    "",
-    "### Common workflows",
-    "",
-    "- After editing `tasks.md` / `plan.md`: run **artgraph-plan-coverage** to catch implicit REQ impacts.",
-    "- Before review: run **artgraph-verify** (`artgraph check --diff`).",
-    "- When proposing a code change: invoke **artgraph-impact** with `path:symbol`.",
-    "",
-    "### Quickstart",
-    "",
-    "```bash",
-    "artgraph init --agents=<list>          # provision Skills + agent-context",
-    "artgraph doctor                        # diagnose distribution health",
-    "```",
-    "",
-    "For full CLI reference, run `artgraph --help` or see https://github.com/ShintaroMorimoto/artgraph.",
-  ].join("\n");
+export function buildAgentsMdBody(detectedPm: PackageManager | null): string {
+  const exec = detectedPm === null ? "artgraph" : execPrefix(detectedPm);
+  const notice =
+    detectedPm === null
+      ? "<!-- artgraph: no package manager was detected at init time; commands below assume a globally installed `artgraph`. After adding a lockfile, re-run `artgraph init --force` to regenerate this block. -->"
+      : `<!-- artgraph: generated for packageManager=${detectedPm}. If you switch package managers, re-run \`${exec} init --force\` to regenerate this block. -->`;
+
+  let raw: string;
+  try {
+    raw = readFileSync(AGENTS_MD_TEMPLATE_PATH, "utf-8");
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    throw new Error(
+      `cannot read agent-context template at ${AGENTS_MD_TEMPLATE_PATH}: ` +
+        `${err.message ?? String(e)} (broken artgraph installation — try reinstalling)`,
+    );
+  }
+
+  // The template file ends with a POSIX trailing newline; strip exactly that
+  // one so `applyMarkerBlock` (which wraps the body in `\n…\n`) does not
+  // produce a blank line before the end marker.
+  return renderTemplate(raw, { ARTGRAPH_EXEC: exec, PM_NOTICE: notice }).replace(/\n$/, "");
 }
 
 export interface WriteResult {
@@ -270,10 +281,14 @@ export interface WriteResult {
  * `--force` only gates user-drift Skill file overwrites in `distribute()`;
  * it does NOT gate the AGENTS.md / wrapper block bodies, which are always
  * treated as machine-owned canonical content.
+ *
+ * `detectedPm` selects the exec prefix embedded in the block's command
+ * examples (see `buildAgentsMdBody`). A PM switch between runs therefore
+ * surfaces as a normal body refresh (`written: true`) on the next init.
  */
-export function writeAgentsMd(rootDir: string): WriteResult {
+export function writeAgentsMd(rootDir: string, detectedPm: PackageManager | null): WriteResult {
   const absPath = resolve(rootDir, "AGENTS.md");
-  return writeMarkerFile(absPath, buildAgentsMdBody());
+  return writeMarkerFile(absPath, buildAgentsMdBody(detectedPm));
 }
 
 // ---------------------------------------------------------------------------
@@ -406,10 +421,7 @@ const GITATTRIBUTES_CONTENT = "** text eol=lf\n";
  * agent's Skill dist tree carries a `.gitattributes` pinning `** text eol=lf`.
  * Writes atomically via `atomicWriteFile`.
  */
-export function writeGitAttributes(
-  rootDir: string,
-  descriptor: AgentDescriptor,
-): WriteResult {
+export function writeGitAttributes(rootDir: string, descriptor: AgentDescriptor): WriteResult {
   const absPath = resolve(rootDir, descriptor.skillsPath, ".gitattributes");
 
   // Parent may not exist on a fresh project (Skill dist tree not yet
@@ -425,9 +437,7 @@ export function writeGitAttributes(
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
     if (err.code !== "ENOENT") {
-      throw new Error(
-        `cannot read existing file at ${absPath}: ${err.message ?? String(e)}`,
-      );
+      throw new Error(`cannot read existing file at ${absPath}: ${err.message ?? String(e)}`);
     }
   }
 
@@ -466,9 +476,7 @@ function writeMarkerFile(absPath: string, body: string): WriteResult {
     if (err.code === "ENOENT") {
       existing = "";
     } else {
-      throw new Error(
-        `cannot read existing file at ${absPath}: ${err.message ?? String(e)}`,
-      );
+      throw new Error(`cannot read existing file at ${absPath}: ${err.message ?? String(e)}`);
     }
   }
   const { newContent } = applyMarkerBlock(existing, body);
