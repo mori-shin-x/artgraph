@@ -13,7 +13,7 @@
 //   - `_shared/` (3 files) lands under every agent's skills path (R1)
 //   - symlinks at the destination refused even with --force
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   chmodSync,
   existsSync,
@@ -739,4 +739,165 @@ describe("planDistribution()", () => {
       cleanup();
     }
   });
+});
+
+// ===========================================================================
+// PR #114 OUT-4 — direct regression tests for two failure modes that only
+// had indirect / removed coverage:
+//   1. post-write sha256 mismatch (the OPS-15 verification step in
+//      distribute()'s write loop) actually throws and rolls back.
+//   2. a rollback step that itself fails (unlinkSync of an already-written
+//      fresh-write target) is reported via `DistributionError.partiallyWritten`
+//      instead of being silently swallowed.
+//
+// `unlinkFailurePath` + the `node:fs` mock below exist ONLY for test 2. Real
+// POSIX permissions cannot reproduce "target A's write succeeds, then A's
+// OWN directory becomes unwritable before rollback" within a single
+// synchronous `distribute()` call: creating a directory entry (the tmp file
+// + rename) and removing one (rollback's unlinkSync) both require the
+// identical write+execute bit on the SAME containing directory (verified
+// empirically — chmod 0555 applied before the call blocks both operations
+// together, so it cannot single out only the later one). The mock lets
+// exactly one targeted `unlinkSync(path)` call fail while every other fs
+// operation in this file — including every existing test above — is
+// untouched (delegates straight through to the real implementation).
+// ===========================================================================
+
+let unlinkFailurePath: string | null = null;
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    unlinkSync: (path: Parameters<typeof actual.unlinkSync>[0]) => {
+      if (unlinkFailurePath !== null && path === unlinkFailurePath) {
+        const err = new Error(
+          `EACCES: permission denied, unlink '${String(path)}'`,
+        ) as NodeJS.ErrnoException;
+        err.code = "EACCES";
+        throw err;
+      }
+      return actual.unlinkSync(path);
+    },
+  };
+});
+
+describe("distribute() — PR #114 OUT-4", () => {
+  it("post-write sha256 mismatch: source tampered after readSkillSource() throws DistributionError and rolls back the fresh write", () => {
+    const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
+    const { dir: sourceDir, cleanup: cleanupSource } = createFreshProject();
+    try {
+      const source = makeSyntheticSource(sourceDir, [
+        {
+          relPath: "artgraph-a/SKILL.md",
+          body: "---\nname: artgraph-a\ndescription: A stub\n---\noriginal content\n",
+        },
+      ]);
+
+      // Overwrite the source file AFTER readSkillSource() already captured
+      // sha256(original) into `source.entries[].files[].sha256`. distribute()
+      // reads the file's CURRENT (tampered) bytes via copyFileSync, writes
+      // them to the destination, then recomputes sha256(dst) — which now
+      // mismatches the stale `expectedSha256` from the plan.
+      const srcAbs = join(sourceDir, "artgraph-a", "SKILL.md");
+      writeFileSync(
+        srcAbs,
+        "---\nname: artgraph-a\ndescription: A stub\n---\ntampered after hashing\n",
+        "utf-8",
+      );
+
+      let caught: unknown;
+      try {
+        distribute(CLAUDE, source, { rootDir: projectDir });
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(DistributionError);
+      if (caught instanceof DistributionError) {
+        expect(caught.message).toMatch(/post-write sha256 mismatch/);
+      }
+
+      // Rollback ran: the fresh write must be undone, not left on disk with
+      // the wrong (tampered) bytes.
+      const dst = join(projectDir, CLAUDE.skillsPath, "artgraph-a", "SKILL.md");
+      expect(existsSync(dst)).toBe(false);
+    } finally {
+      cleanupProject();
+      cleanupSource();
+    }
+  });
+
+  it.skipIf(IS_WIN)(
+    "partiallyWritten: a rollback unlinkSync failure for an already-succeeded fresh write is reported as a survivor",
+    () => {
+      const { dir: projectDir, cleanup: cleanupProject } = createFreshProject();
+      const { dir: sourceDir, cleanup: cleanupSource } = createFreshProject();
+      let lockedDir: string | null = null;
+      try {
+        // Two fresh-write targets across two skill dirs — deterministic
+        // ordering (`artgraph-a` < `artgraph-b`) means A is written (and
+        // succeeds) before B is attempted.
+        const source = makeSyntheticSource(sourceDir, [
+          {
+            relPath: "artgraph-a/SKILL.md",
+            body: "---\nname: artgraph-a\ndescription: A stub\n---\ncanonical-A\n",
+          },
+          {
+            relPath: "artgraph-b/SKILL.md",
+            body: "---\nname: artgraph-b\ndescription: B stub\n---\ncanonical-B\n",
+          },
+        ]);
+
+        const targetA = join(
+          projectDir,
+          CLAUDE.skillsPath,
+          "artgraph-a",
+          "SKILL.md",
+        );
+
+        // Pre-create + lock B's directory (real chmod, same technique as
+        // the B1/B5 tests above) so B's write — the SECOND target in the
+        // loop — fails with a genuine EACCES, triggering rollback.
+        lockedDir = join(projectDir, CLAUDE.skillsPath, "artgraph-b");
+        mkdirSync(lockedDir, { recursive: true });
+        chmodSync(lockedDir, 0o500);
+
+        // A's OWN rollback (unlinkSync of the fresh write that already
+        // succeeded) is the one call forced to fail — see the mock's
+        // header comment for why this can't be done via a real chmod on
+        // A's directory instead.
+        unlinkFailurePath = targetA;
+
+        let caught: unknown;
+        try {
+          distribute(CLAUDE, source, { rootDir: projectDir });
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(DistributionError);
+        if (caught instanceof DistributionError) {
+          expect(caught.partiallyWritten.length).toBeGreaterThan(0);
+          expect(caught.partiallyWritten).toContain(targetA);
+        }
+
+        // A's bytes are still on disk — the rollback failed to remove
+        // them, which is exactly the "manual cleanup required" state
+        // `partiallyWritten` exists to surface to the caller.
+        expect(existsSync(targetA)).toBe(true);
+      } finally {
+        unlinkFailurePath = null;
+        if (lockedDir !== null) {
+          // Explicit teardown BEFORE cleanup's recursive rmSync — otherwise
+          // vitest's tmp-dir removal can't traverse the locked directory.
+          try {
+            chmodSync(lockedDir, 0o755);
+          } catch {
+            /* best-effort */
+          }
+        }
+        cleanupProject();
+        cleanupSource();
+      }
+    },
+  );
 });
