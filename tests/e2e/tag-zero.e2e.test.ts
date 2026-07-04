@@ -102,7 +102,10 @@ describe("e2e: tag-zero brownfield (issue #122)", () => {
     // `.artgraph.json` written by attempt 1 and fail with an unrelated
     // "already exists" error, masking whatever assertion actually triggered
     // the retry.
-    const r = spawnSync("node", [CLI, "init", "--force"], {
+    // spec 013 requires --agents when Skills / agent-context stages run.
+    // The zero-tag hint is orthogonal to those stages, so opt out
+    // explicitly to keep the test focused on the onboarding message.
+    const r = spawnSync("node", [CLI, "init", "--force", "--no-skills", "--no-agent-context"], {
       encoding: "utf-8",
       cwd: workDir,
       timeout: 30000,

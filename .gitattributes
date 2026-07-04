@@ -5,3 +5,7 @@
 # Skills + templates must always be LF (dogfood sync test compares hashes)
 templates/** text eol=lf
 .claude/skills/** text eol=lf
+.agents/skills/** text eol=lf
+.cursor/skills/** text eol=lf
+.github/skills/** text eol=lf
+.kiro/skills/** text eol=lf

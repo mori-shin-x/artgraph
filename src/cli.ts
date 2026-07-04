@@ -50,13 +50,22 @@ import {
 } from "./hook-pretool.js";
 import type { ArtgraphConfig, TestResultMap } from "./types.js";
 import { runInit } from "./init.js";
+import { DistributionError } from "./agents/distribute.js";
 import { runPlanCoverage } from "./plan-coverage/index.js";
 import { resolveSpecDir } from "./plan-coverage/spec-resolver.js";
 import { loadTestResults } from "./test-results.js";
 import { executeRename, executeSplit, executeMerge } from "./rename-executor.js";
 import type { RenameResult } from "./rename-executor.js";
-import { getProviderStatuses, registerBuiltinProviders, runIntegrate } from "./integrate/index.js";
+import {
+  getProviderStatuses,
+  listProviders,
+  registerBuiltinProviders,
+  runIntegrate,
+} from "./integrate/index.js";
 import type { IntegrateResult, IntegrationProviderId } from "./types.js";
+import { parseAgentsList, AgentsParseError } from "./agents/parse-agents.js";
+import { AGENT_IDS, type AgentId } from "./agents/descriptors.js";
+import { runDoctor, formatDoctorReportJson, formatDoctorReportText } from "./doctor.js";
 
 // Wire up the built-in integration providers (speckit / kiro) before
 // commander parses argv. Today the registration body is empty (T014); US1
@@ -102,37 +111,52 @@ function registerCommands(program: Command): void {
   program
     .command("init")
     .description(
-      "Initialize artgraph for this project (default: config + scan + Skills + auto-integrate detected SDD tools + Stop hook; agent-context snippet lands in PR-B). Use --minimal for bare config only.",
+      "Initialize artgraph for this project (default: config + scan + Skills + auto-integrate detected SDD tools + AGENTS.md / wrapper injection; Stop hook lands in PR-B). Use --minimal for bare config only.",
     )
-    .option("--force", "Overwrite existing .artgraph.json")
+    .option(
+      "--force",
+      "Overwrite existing .artgraph.json, distributed Skill files, and integration files. Refuses symlinks even with --force.",
+    )
     .option("--minimal", "Bare config only — opt out of every extra setup stage")
     // Stage opt-outs (in default mode)
     .option("--no-scan", "Skip initial scan + reconcile")
     .option(
       "--no-skills",
-      "Skip Claude Code Skills install (default mode only — already off under --minimal)",
+      "Skip Skills distribution to the selected --agents (default mode only — already off under --minimal)",
     )
     .option("--no-integrate", "Skip SDD-tool auto-integration (default mode only)")
-    .option("--no-hooks", "Skip Stop hook installation (default mode only)")
-    .option(
-      "--no-agent-context",
-      "Skip CLAUDE.md / AGENTS.md snippet injection (default mode only; P1 deliverable)",
-    )
+    .option("--no-hooks", "Skip Stop hook installation (default mode only; P1 deliverable)")
+    .option("--no-agent-context", "Skip AGENTS.md / wrapper injection (default mode only)")
     // Stage opt-ins (used with --minimal)
-    .option("--with-skills", "Install Claude Code Skills into .claude/skills/ (use with --minimal)")
+    .option(
+      "--with-skills",
+      "Distribute Skills to the selected --agents canonical paths (use with --minimal)",
+    )
     .option("--with-integrate", "Auto-integrate detected SDD tools (use with --minimal)")
-    .option("--with-hooks", "Install Stop hook (use with --minimal)")
+    .option("--with-hooks", "Install Stop hook (use with --minimal; P1 deliverable, no effect yet)")
     .option(
       "--with-agent-context",
-      "Inject CLAUDE.md / AGENTS.md snippet (use with --minimal; P1 deliverable, no effect yet)",
+      "Inject AGENTS.md + wrapper(s) for the selected --agents (use with --minimal)",
     )
     // Explicit integrate list (overrides auto-detect)
     .option(
       "--integrations <tools>",
-      "Comma-separated SDD tools to integrate (overrides auto-detect; e.g. speckit,kiro or all)",
+      "Comma-separated SDD tools to integrate (overrides auto-detect; e.g. speckit,kiro or 'all' (= auto-detect every installed SDD tool))",
     )
     .option("--integrate-gate", "Pass --gate to speckit during integration")
     .option("--no-integrate-gate", "Pass --no-gate to speckit during integration")
+    // spec 013 (FR-001 / FR-002) — Tier 1 agent ids the user wants to target.
+    // Required when Skills or agent-context distribution runs; rejected
+    // (with a "Did you mean ...?" hint) for unknown / uppercase / empty /
+    // duplicate values per contracts/cli-flags.md.
+    .option(
+      "--agents <list>",
+      // E-adj-A9 / BND-7: derive the id list from AGENT_IDS (descriptors.ts is
+      // the single source of truth) instead of hardcoding it a second time —
+      // a 6th agent id landing in descriptors.ts would otherwise leave this
+      // help text silently stale.
+      `Comma-separated Tier 1 agent ids to target (${[...AGENT_IDS].sort().join(", ")}). Required for Skills / agent-context distribution.`,
+    )
     .option("--format <format>", "Output format: json | text", "text")
     .action((opts) => {
       const rootDir = process.cwd();
@@ -142,7 +166,7 @@ function registerCommands(program: Command): void {
       // (or `--integrations=all`). Without this pre-parse, that pair silently
       // dropped in default mode and reversed meaning under `--minimal`
       // (explicit list acts as an integrate opt-in — see computeStageGates).
-      const integrations = parseInitIntegrations(opts.integrations);
+      let integrations = parseInitIntegrations(opts.integrations);
 
       // M24: detect mutually-exclusive --no-X + --with-X combinations before
       // doing any work. commander otherwise silently lets --with-X "win"
@@ -156,10 +180,10 @@ function registerCommands(program: Command): void {
         conflicts.push("--no-hooks / --with-hooks");
       if (opts.agentContext === false && opts.withAgentContext === true)
         conflicts.push("--no-agent-context / --with-agent-context");
-      // E2-2: `--no-integrate` is only really an opt-out if we also reject the
-      // silent-conflict pair `--no-integrate --integrations=<...>`. An empty
-      // list (`parseInitIntegrations` collapses to undefined) is a no-op and
-      // must NOT trigger the check.
+      // E2-2 (#140): `--no-integrate` is only really an opt-out if we also
+      // reject the silent-conflict pair `--no-integrate --integrations=<...>`.
+      // An empty list (`parseInitIntegrations` collapses to undefined) is a
+      // no-op and must NOT trigger the check.
       if (opts.integrate === false && Array.isArray(integrations) && integrations.length > 0) {
         conflicts.push("--no-integrate / --integrations=<non-empty>");
       }
@@ -171,28 +195,69 @@ function registerCommands(program: Command): void {
         process.exit(1);
       }
 
-      // C1: --with-agent-context is accepted (so the flag surface is stable
-      // for PR-B) but currently no-op. Warn so the user doesn't think they got
-      // the snippet without checking output.
-      if (opts.withAgentContext === true) {
+      // D3 / D-adj-3 / D-adj-6: `--minimal --with-skills` (or
+      // `--with-agent-context`) without `--agents` used to silently no-op —
+      // `agentsRequired` is false under `--minimal`, so the missing-`--agents`
+      // gate below never fired, and the distribution stage skipped itself
+      // with zero agents and zero warning. That's the same "no-op combination"
+      // family the mutex-conflict detector above already guards against, and
+      // it's asymmetric with `--with-hooks`, which at least WARNs about being
+      // a no-op. Treat it as a hard error, consistent with the
+      // AGENTS_REQUIRED_ERROR path used everywhere else --agents is missing.
+      if (
+        opts.minimal === true &&
+        (opts.withSkills === true || opts.withAgentContext === true) &&
+        !opts.agents
+      ) {
         console.error(
-          "WARNING: --with-agent-context is a P1 deliverable; the flag has no effect in this release.",
+          "ERROR: --with-skills / --with-agent-context under --minimal requires --agents=<list>; otherwise this is a no-op.",
+        );
+        process.exit(1);
+      }
+
+      // C1: --with-hooks is accepted (so the flag surface is stable for PR-B)
+      // but currently no-op. Warn so the user doesn't think they got hooks
+      // without checking output. --with-agent-context now lands real output
+      // (AGENTS.md + wrappers, spec 013 T021); the warning was removed.
+      if (opts.withHooks === true) {
+        console.error(
+          "WARNING: --with-hooks is a P1 deliverable; the flag has no effect in this release.",
         );
       }
 
-      // `integrations` is already resolved above (needed by the M24 check).
-      //
       // M12: surface valid provider ids when the user fat-fingers an
-      // --integrations value. runInit's own warning also fires later, but
-      // showing the valid set here gives the user the hint *before* init runs.
-      const VALID_PROVIDER_IDS = new Set(["speckit", "kiro"]);
+      // --integrations value, and do it *before* runInit runs.
+      //
+      // OUT-10: derive the valid-id set from the live provider registry
+      // (the same source `getProviderStatuses` reads) instead of a hardcoded
+      // `{"speckit","kiro"}` literal, so a newly-registered provider (e.g.
+      // openspec) doesn't silently fall through this check as "unknown".
+      const VALID_PROVIDER_IDS = new Set(listProviders().map((p) => p.id));
       if (Array.isArray(integrations)) {
-        const invalid = integrations.filter((id) => !VALID_PROVIDER_IDS.has(id as string));
+        const invalid = integrations.filter(
+          (id) => !VALID_PROVIDER_IDS.has(id as IntegrationProviderId),
+        );
         if (invalid.length > 0) {
           const valid = [...VALID_PROVIDER_IDS].join(", ");
           console.error(
             `WARNING: unknown integration provider(s): ${invalid.join(", ")} (valid: ${valid})`,
           );
+
+          // E2: drop the invalid ids before handing the list to runInit so
+          // its own `runRequestedIntegrations` unknown-provider warning
+          // doesn't fire a second time for the same id (previously the same
+          // "unknown provider" fact was reported twice, once here and once
+          // from init.ts). Only reassign when at least one valid id
+          // survives — an all-invalid list must still reach runInit as a
+          // non-empty array so it stays on the "explicit request, zero real
+          // integrations" path rather than falling through to the
+          // auto-detect branch (which an empty array would trigger).
+          const validOnly = integrations.filter((id) =>
+            VALID_PROVIDER_IDS.has(id as IntegrationProviderId),
+          );
+          if (validOnly.length > 0) {
+            integrations = validOnly;
+          }
         }
       }
 
@@ -203,6 +268,49 @@ function registerCommands(program: Command): void {
       const integrateGate: boolean = Object.prototype.hasOwnProperty.call(opts, "integrateGate")
         ? (opts.integrateGate as boolean)
         : true; // contract default
+
+      // spec 013 (T005 / T006) — --agents=<csv> parsing + orthogonality.
+      //
+      // Parse the raw flag value first so a malformed list (uppercase,
+      // duplicate, unknown id) fails with the canonical "Did you mean ...?"
+      // hint before we even look at the other gates. The parser throws
+      // `AgentsParseError` with the full stderr-ready message; we surface it
+      // verbatim and exit 1.
+      let parsedAgents: AgentId[] | undefined;
+      if (opts.agents !== undefined) {
+        parsedAgents = parseAgentsFlag(String(opts.agents));
+      }
+
+      // @impl 013-cross-agent-extensions/FR-013
+      // Orthogonality rules (FR-013, contracts/cli-flags.md):
+      //   - --minimal:                  every cross-agent stage off, --agents ignored (warn if given)
+      //   - --no-skills --no-agent-context: both off, --agents ignored (warn if given)
+      //   - else:                       --agents required, error with 3-option UX if missing
+      //
+      // We deliberately key the "skip" decision on the user-facing flag
+      // intent (NOT computeStageGates) so that --with-skills under --minimal
+      // does NOT bypass the spec-013 requirement: --minimal stays "all off"
+      // for the cross-agent stages regardless of the legacy --with-* opt-ins.
+      const skipDueToMinimal = opts.minimal === true;
+      const skipDueToBothStagesOff =
+        !skipDueToMinimal && opts.skills === false && opts.agentContext === false;
+
+      if (skipDueToMinimal && parsedAgents !== undefined) {
+        console.error("WARNING: --minimal overrides --agents (all cross-agent stages disabled)");
+        parsedAgents = undefined;
+      } else if (skipDueToBothStagesOff && parsedAgents !== undefined) {
+        console.error(
+          "WARNING: --no-skills --no-agent-context disables every cross-agent stage; --agents value is ignored",
+        );
+        parsedAgents = undefined;
+      }
+
+      // @impl 013-cross-agent-extensions/FR-002
+      const agentsRequired = !(skipDueToMinimal || skipDueToBothStagesOff);
+      if (agentsRequired && parsedAgents === undefined) {
+        console.error(AGENTS_REQUIRED_ERROR);
+        process.exit(1);
+      }
 
       try {
         const result = runInit(rootDir, {
@@ -221,6 +329,7 @@ function registerCommands(program: Command): void {
           withAgentContext: opts.withAgentContext === true,
           integrations,
           integrateGate,
+          agents: parsedAgents,
         });
 
         if (opts.format === "json") {
@@ -427,9 +536,42 @@ function registerCommands(program: Command): void {
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         console.error(`Error: ${msg}`);
+        // B6: `DistributionError.partiallyWritten` lists paths whose rollback
+        // step itself failed (e.g. Windows AV / IDE holding a file open, or a
+        // cross-agent survivor whose unlink hit EACCES). Silently dropping
+        // these — as the previous catch did — left the user with no idea
+        // which paths still needed manual cleanup. Surfacing them here means
+        // the "manual cleanup required" hint arrives together with the error
+        // that necessitates it.
+        if (e instanceof DistributionError && e.partiallyWritten && e.partiallyWritten.length > 0) {
+          console.error("");
+          console.error("Partial writes could not be rolled back. Manual cleanup required:");
+          for (const p of e.partiallyWritten) console.error(`  ${p}`);
+        }
         process.exit(1);
       }
     });
+
+  /**
+   * E-adj-A5: `init` and `doctor` both need to parse `--agents=<csv>` and both
+   * need the same "print `AgentsParseError.message` verbatim, exit 1"
+   * wrapping around `parseAgentsList`. The two call sites used to duplicate
+   * this try/catch byte-for-byte; centralizing it here means a future change
+   * to the error-to-exit behavior only has to land once.
+   *
+   * Both `init` and `doctor` route --agents parsing through this helper.
+   */
+  function parseAgentsFlag(raw: string): AgentId[] {
+    try {
+      return parseAgentsList(raw);
+    } catch (e) {
+      if (e instanceof AgentsParseError) {
+        console.error(e.message);
+        process.exit(1);
+      }
+      throw e;
+    }
+  }
 
   /**
    * Parse the comma-separated value passed to `--integrate`. Returns:
@@ -452,7 +594,17 @@ function registerCommands(program: Command): void {
       .split(",")
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
-    if (ids.length === 0) return undefined;
+    if (ids.length === 0) {
+      // E-adj-A7: a non-empty value that still yields zero ids (",,," and
+      // friends) silently fell back to auto-detect with no signal that the
+      // flag's value was discarded. Warn so the user isn't left wondering why
+      // every SDD tool got auto-integrated instead of the (mistyped)
+      // explicit list they gave.
+      console.error(
+        `WARNING: invalid --integrations value '${raw}' — falling back to auto-detect.`,
+      );
+      return undefined;
+    }
     return ids as IntegrationProviderId[];
   }
 
@@ -545,6 +697,36 @@ function registerCommands(program: Command): void {
         printWarnings(result.warnings);
       }
     });
+
+  // spec 013 (FR-002 / SC-006) — verbatim error UX emitted to stderr when
+  // `--agents=<list>` is missing on a path that runs the Skills or
+  // agent-context distribution stage. The 3-option enumeration is part of
+  // the spec contract and is asserted as plain text by the CLI error tests
+  // (T013 in Phase 3); changes here must be mirrored in contracts/cli-flags.md.
+  const AGENTS_REQUIRED_ERROR = [
+    "ERROR: --agents=<list> is required when Skills or agent-context distribution runs.",
+    "",
+    // E-adj-A9 / BND-7: derive from AGENT_IDS instead of a second hardcoded
+    // literal (descriptors.ts is the single source of truth).
+    `Supported values: ${[...AGENT_IDS].sort().join(", ")}`,
+    "",
+    "To resolve, choose one:",
+    "  1. Specify target agents:",
+    "       artgraph init --agents=<list>          (e.g. --agents=claude,codex)",
+    "  2. Skip Skills and agent-context distribution:",
+    "       artgraph init --no-skills --no-agent-context",
+    "  3. Skip every extra setup stage:",
+    "       artgraph init --minimal",
+    "",
+    // E-adj-A6: --with-skills / --with-agent-context under --minimal is a
+    // no-op unless --agents is also given — spell that out here since option
+    // 3 above (--minimal) reads like a standalone fix, and D3 hard-errors on
+    // exactly this combination.
+    "Additional notes:",
+    "  --minimal requires --with-skills (or --with-agent-context) AND --agents",
+    "  together to opt back into Skills / agent-context distribution; either",
+    "  alone is a no-op.",
+  ].join("\n");
 
   // spec 014 (FR-001 / FR-003): REQ-ID inputs are no longer accepted here.
   // The four supported start sources are listed in this error so the user is
@@ -997,6 +1179,45 @@ function registerCommands(program: Command): void {
 
       if (opts.gate && !result.pass) {
         process.exit(2);
+      }
+    });
+
+  // spec 013 T028 — `artgraph doctor` subcommand. Diagnoses Tier 1 distribution
+  // health (Skills sha256 / AGENTS.md marker / wrappers / extraneous files).
+  // Independent of `artgraph check` per FR-012: the doctor MUST NOT participate
+  // in the `check --gate` decision (regression-tested in
+  // `tests/check-gate-no-regression.test.ts`).
+  // @impl 013-cross-agent-extensions/FR-012
+  program
+    .command("doctor")
+    .description("Diagnose Tier 1 cross-agent distribution health")
+    .option("--agents <list>", "Comma-separated agent ids to diagnose (default: all detected)")
+    .addOption(
+      new Option("--format <format>", "Output format").choices(["text", "json"]).default("text"),
+    )
+    .action((opts) => {
+      const rootDir = process.cwd();
+      // E-adj-A5: parseAgentsFlag centralizes the parseAgentsList catch — same
+      // as init's --agents branch. `init` and `doctor` used to inline a byte-
+      // identical try/catch; migrating doctor onto the helper keeps them in
+      // sync when the error-to-exit behavior changes.
+      const agents: AgentId[] | undefined =
+        opts.agents !== undefined ? parseAgentsFlag(String(opts.agents)) : undefined;
+      // C1 — mirror the `init` action's try/catch so `SkillsInstallError`,
+      // `EACCES` reads, unknown-agent throws, etc. surface as a single
+      // `Error: <msg>` line rather than a raw Node stack trace.
+      try {
+        const report = runDoctor({ rootDir, agents });
+        const out =
+          opts.format === "json" ? formatDoctorReportJson(report) : formatDoctorReportText(report);
+        console.log(out);
+        if (report.summary.failCount > 0) {
+          process.exitCode = 1;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error(`Error: ${msg}`);
+        process.exit(1);
       }
     });
 
@@ -1647,6 +1868,10 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
   const origStderrWrite = process.stderr.write.bind(process.stderr);
   const hadStdinOverride = _hookStdinOverride !== undefined;
   const prevStdinOverride = _hookStdinOverride;
+  // Snapshot `process.exitCode` so we can restore it after this runCli call.
+  // Commands may leave a non-zero exitCode (e.g. `init` on hooksInstall
+  // failure) that would otherwise poison the surrounding vitest process's
+  // exit state.
   const origProcessExitCode = process.exitCode;
 
   const pushStdout = (s: string) => stdoutChunks.push(s);
@@ -1657,9 +1882,6 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
   try {
     if (opts.cwd) process.chdir(opts.cwd);
     if (opts.stdin !== undefined) _hookStdinOverride = opts.stdin;
-    // Reset so a prior test's leftover `process.exitCode` doesn't leak into
-    // this invocation's captured return value.
-    process.exitCode = undefined;
 
     console.log = (...args: unknown[]) => {
       pushStdout(args.map(formatLogArg).join(" ") + "\n");

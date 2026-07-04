@@ -17,9 +17,20 @@ export function atomicWriteFile(destPath: string, content: string): void {
   const tmpName = `.artgraph-tmp-${randomBytes(6).toString("hex")}`;
   const tmpPath = join(dir, tmpName);
 
-  // If even writing tmp fails (e.g. parent dir missing / EACCES), there's
-  // nothing to clean up — the error propagates as-is.
-  writeFileSync(tmpPath, content, "utf-8");
+  // Write the tmp file first. Most failures here (parent dir missing /
+  // EACCES) leave nothing on disk to clean up, but a partial write (e.g.
+  // ENOSPC mid-write) can leave a truncated tmp file behind — clean it up
+  // before re-throwing so a failed write never leaks a stray tmp file.
+  try {
+    writeFileSync(tmpPath, content, "utf-8");
+  } catch (e) {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      /* swallow: tmp may not exist */
+    }
+    throw e;
+  }
 
   try {
     renameSync(tmpPath, destPath);

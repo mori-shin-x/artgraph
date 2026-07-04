@@ -1,5 +1,6 @@
 installed:
 - agent-context
+- artgraph
 settings:
   auto_execute_hooks: true
 hooks:
@@ -20,4 +21,31 @@ hooks:
     priority: 10
     prompt: Execute speckit.agent-context.update?
     description: Refresh agent context after planning
+    condition: null
+  after_tasks:
+  - extension: artgraph
+    command: artgraph.scan-reconcile
+    enabled: true
+    optional: false
+    priority: 50
+    prompt: Run artgraph scan && reconcile to refresh trace baseline?
+    description: Refresh artgraph baseline after tasks
+    condition: null
+  after_implement:
+  - extension: artgraph
+    command: artgraph.check-diff
+    enabled: true
+    optional: false
+    priority: 50
+    prompt: Run artgraph check --diff to verify coverage/orphan/drift?
+    description: Verify artgraph traceability after implementation
+    condition: null
+  before_implement:
+  - extension: artgraph
+    command: artgraph.check-gate
+    enabled: true
+    optional: false
+    priority: 50
+    prompt: "Gate: run artgraph check --gate before implementing?"
+    description: Gate implementation on artgraph traceability
     condition: null

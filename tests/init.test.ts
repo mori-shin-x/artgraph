@@ -15,10 +15,11 @@ import {
   runInit,
   detectProject,
   generateConfig,
-  installSkills,
   SkillsInstallError,
   computeStageGates,
 } from "../src/init.js";
+import { DistributionError } from "../src/agents/distribute.js";
+import { readSkillSource } from "../src/agents/source.js";
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), "artgraph-init-"));
@@ -346,28 +347,25 @@ describe("runInit", () => {
     expect(written.packageManager).toBe("pnpm");
   });
 
-  it("partial-state guard: installSkills failure leaves no .artgraph.json / .trace.lock orphan", () => {
-    // Force `installSkills` to fail mid-loop AFTER the conflict pre-flight
-    // accepts the layout: place a DIRECTORY at the destination path of a
-    // SKILL.md and pass --force. `findConflicts` flags it as a regular
-    // conflict (lstat says non-symlink), `--force` lets it through, then
-    // `copyFileSync` blows up with EISDIR. With the order fixed (skills first,
-    // config write last), neither `.artgraph.json` nor `.trace.lock` should
-    // be on disk after the throw.
+  it("partial-state guard: distribute() failure leaves no .artgraph.json / .trace.lock orphan", () => {
+    // Force `distribute()` to fail pre-flight: place a DIRECTORY at the
+    // destination path of a SKILL.md. distribute()'s pre-flight detects the
+    // non-regular file and throws `DistributionError` *before* any write —
+    // even with --force, since clobbering a directory with a regular file
+    // would lose user content. With the order fixed (skills first, config
+    // write last), neither `.artgraph.json` nor `.trace.lock` should be on
+    // disk after the throw.
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), {
       recursive: true,
     });
-    // Stash a marker inside the offending dir so the rollback's `rmdirSync`
-    // (which only removes empty dirs) can't accidentally tidy it away and
-    // make the failure go silent next iteration.
     writeFileSync(
       join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md", "marker"),
       "user content\n",
     );
 
-    expect(() => runInit(tmp, { force: true, noScan: true, withSkills: true })).toThrow(
-      SkillsInstallError,
-    );
+    expect(() =>
+      runInit(tmp, { force: true, noScan: true, withSkills: true, agents: ["claude"] }),
+    ).toThrow(DistributionError);
 
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
     expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
@@ -416,7 +414,7 @@ describe("runInit Skills installation (directory format)", () => {
   // on the Skills stage specifically.
 
   it("copies every <name>/SKILL.md into .claude/skills/<name>/ when Skills stage runs", () => {
-    const result = runInit(tmp, { noScan: true, withSkills: true });
+    const result = runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] });
 
     expect(result.skillsInstalled).toBeDefined();
     for (const dir of EXPECTED_SKILL_DIRS) {
@@ -429,7 +427,7 @@ describe("runInit Skills installation (directory format)", () => {
   });
 
   it("copies _shared/ fragments into .claude/skills/_shared/", () => {
-    runInit(tmp, { noScan: true, withSkills: true });
+    runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] });
     for (const name of ["install-check.md", "output-schema.md", "package-manager.md"]) {
       expect(existsSync(join(tmp, ".claude", "skills", "_shared", name))).toBe(true);
     }
@@ -439,7 +437,7 @@ describe("runInit Skills installation (directory format)", () => {
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
     writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "user content\n");
 
-    expect(() => runInit(tmp, { noScan: true, withSkills: true })).toThrow(
+    expect(() => runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] })).toThrow(
       /artgraph-impact[/\\]SKILL\.md.*--force/,
     );
 
@@ -453,7 +451,12 @@ describe("runInit Skills installation (directory format)", () => {
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
     writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "user content\n");
 
-    const result = runInit(tmp, { noScan: true, withSkills: true, force: true });
+    const result = runInit(tmp, {
+      noScan: true,
+      withSkills: true,
+      force: true,
+      agents: ["claude"],
+    });
 
     expect(result.skillsInstalled!.length).toBeGreaterThan(0);
     const body = readFileSync(
@@ -472,12 +475,12 @@ describe("runInit Skills installation (directory format)", () => {
 
     let caught: unknown;
     try {
-      runInit(tmp, { noScan: true, withSkills: true });
+      runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] });
     } catch (e) {
       caught = e;
     }
 
-    expect(caught).toBeInstanceOf(SkillsInstallError);
+    expect(caught).toBeInstanceOf(DistributionError);
     const msg = (caught as Error).message;
     expect(msg).toContain("artgraph-impact");
     expect(msg).toContain("artgraph-verify");
@@ -488,7 +491,7 @@ describe("runInit Skills installation (directory format)", () => {
     mkdirSync(join(tmp, ".claude", "skills"), { recursive: true });
     writeFileSync(join(tmp, ".claude", "skills", "my-custom.md"), "user skill\n");
 
-    runInit(tmp, { noScan: true, withSkills: true, force: true });
+    runInit(tmp, { noScan: true, withSkills: true, force: true, agents: ["claude"] });
 
     // Custom file untouched, even when --force overwrites artgraph-* templates.
     expect(readFileSync(join(tmp, ".claude", "skills", "my-custom.md"), "utf-8")).toBe(
@@ -500,12 +503,76 @@ describe("runInit Skills installation (directory format)", () => {
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
     writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "preexisting\n");
 
-    expect(() => runInit(tmp, { noScan: true, withSkills: true })).toThrow(SkillsInstallError);
+    expect(() => runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] })).toThrow(
+      DistributionError,
+    );
 
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
     expect(
       readFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "utf-8"),
     ).toBe("preexisting\n");
+  });
+
+  // -------------------------------------------------------------------------
+  // spec 013 PR #114 [B2] — cross-agent all-or-nothing pre-flight.
+  // Multi-agent distribute previously had no outer try/catch: agent #3
+  // failing after agents #1-2 fully wrote their trees left a partial state
+  // (Skill files landed for the first two agents, but no `.artgraph.json`,
+  // `.trace.lock`, or AGENTS.md ever landed). The fix runs pre-flight
+  // classification for EVERY agent before any write, so a conflict on ANY
+  // agent aborts init before touching disk.
+  // -------------------------------------------------------------------------
+  it("[B2] pre-flights every selected agent before writing any of them", () => {
+    // Agent 1 (claude) has a clean tree. Agent 2 (codex) has a drift
+    // conflict at .agents/skills/artgraph-impact/SKILL.md — its content
+    // differs from the canonical bytes and --force is NOT set.
+    mkdirSync(join(tmp, ".agents", "skills", "artgraph-impact"), { recursive: true });
+    writeFileSync(
+      join(tmp, ".agents", "skills", "artgraph-impact", "SKILL.md"),
+      "codex user-edited content\n",
+    );
+
+    expect(() =>
+      runInit(tmp, {
+        noScan: true,
+        withSkills: true,
+        agents: ["claude", "codex"],
+      }),
+    ).toThrow(DistributionError);
+
+    // No config file. No trace lock. No AGENTS.md.
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
+    expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
+    expect(existsSync(join(tmp, "AGENTS.md"))).toBe(false);
+
+    // Critically: agent 1 (claude) MUST NOT have any Skill files on disk.
+    // Prior to the B2 fix, agent 1's distribute() ran to completion before
+    // agent 2's failed, leaving `.claude/skills/artgraph-impact/SKILL.md`.
+    expect(existsSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"))).toBe(false);
+
+    // Agent 2's pre-existing user content is preserved unchanged.
+    expect(
+      readFileSync(join(tmp, ".agents", "skills", "artgraph-impact", "SKILL.md"), "utf-8"),
+    ).toBe("codex user-edited content\n");
+  });
+
+  // -------------------------------------------------------------------------
+  // spec 013 PR #114 [OPS-2 wiring] — writeGitAttributes runs after every
+  // successful distribute() so the Skill dist tree is pinned to LF eol
+  // (Windows-safe hash comparison in doctor).
+  // -------------------------------------------------------------------------
+  it("writes .gitattributes into every selected agent's skillsPath", () => {
+    runInit(tmp, {
+      noScan: true,
+      withSkills: true,
+      agents: ["claude", "codex"],
+    });
+
+    for (const skillsPath of [".claude/skills", ".agents/skills"]) {
+      const attrPath = join(tmp, ...skillsPath.split("/"), ".gitattributes");
+      expect(existsSync(attrPath), `missing ${attrPath}`).toBe(true);
+      expect(readFileSync(attrPath, "utf-8")).toBe("** text eol=lf\n");
+    }
   });
 });
 
@@ -529,7 +596,9 @@ describe("runInit default behavior (P0)", () => {
     mkdirSync(join(tmp, "src"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
 
-    const result = runInit(tmp);
+    // spec 013: programmatic runInit caller must pass `agents` explicitly —
+    // the CLI layer parses --agents=<list>, but here we wire it manually.
+    const result = runInit(tmp, { agents: ["claude"] });
 
     // 1. .artgraph.json
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
@@ -549,7 +618,7 @@ describe("runInit default behavior (P0)", () => {
   // deploy the new artgraph-plan-coverage Skill so /speckit-tasks → plan-coverage
   // workflow works out of the box.
   it("deploys artgraph-plan-coverage Skill in default mode (spec 014 SC-007)", () => {
-    const result = runInit(tmp);
+    const result = runInit(tmp, { agents: ["claude"] });
     const installedPath = join(tmp, ".claude", "skills", "artgraph-plan-coverage", "SKILL.md");
     expect(existsSync(installedPath)).toBe(true);
     const body = readFileSync(installedPath, "utf-8");
@@ -590,8 +659,13 @@ describe("runInit default behavior (P0)", () => {
     expect(existsSync(join(tmp, ".specify", "extensions"))).toBe(false);
   });
 
-  it("--minimal --with-skills enables only Skills on top of bare config", () => {
-    const result = runInit(tmp, { minimal: true, withSkills: true });
+  it("--minimal --with-skills + agents=claude enables only Skills on top of bare config", () => {
+    // spec 013 (FR-013): --minimal + --with-skills still produces Skills
+    // when called via the programmatic API with `agents` explicitly set.
+    // The CLI layer ignores --agents under --minimal (warning), so this
+    // path is unreachable from the command line; this test exercises the
+    // direct runInit contract that other internal callers rely on.
+    const result = runInit(tmp, { minimal: true, withSkills: true, agents: ["claude"] });
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
     expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
     expect(result.skillsInstalled).toBeDefined();
@@ -629,7 +703,7 @@ describe("runInit default behavior (P0)", () => {
     expect(settings.hooks.Stop[0].hooks[0].command).toMatch(/^pnpm exec artgraph /);
   });
 
-  it("default mode does NOT create or modify CLAUDE.md (agent-context stub no-op in P0)", () => {
+  it("default mode without --agents does NOT create or modify CLAUDE.md (agent-context stage requires --agents)", () => {
     runInit(tmp);
     expect(existsSync(join(tmp, "CLAUDE.md"))).toBe(false);
   });
@@ -655,7 +729,11 @@ describe("runInit default behavior (P0)", () => {
   });
 });
 
-describe("installSkills (direct invocation)", () => {
+// ---------------------------------------------------------------------------
+// spec 013 PR #114 review — Cluster C
+// (B3 atomic config write / B7 reorder / OPS-14 partial-state guard)
+// ---------------------------------------------------------------------------
+describe("runInit — PR #114 Cluster C (B3 / B7 / OPS-14)", () => {
   let tmp: string;
 
   beforeEach(() => {
@@ -666,35 +744,105 @@ describe("installSkills (direct invocation)", () => {
     cleanup(tmp);
   });
 
-  it("returns paths covering every <name>/SKILL.md plus _shared/*.md fragments", () => {
-    const installed = installSkills(tmp);
+  // -------------------------------------------------------------------------
+  // [B3] `.artgraph.json` is now written via `atomicWriteFile` (tmp + rename)
+  // instead of a raw `writeFileSync`. Observable effects:
+  //   1. A successful init leaves no lingering `.artgraph-tmp-*` sibling.
+  //   2. The final on-disk file parses as complete JSON — never a truncated
+  //      body from a mid-write crash.
+  // -------------------------------------------------------------------------
+  it("[B3] writes .artgraph.json atomically (no tmp sibling lingers)", () => {
+    runInit(tmp, { minimal: true });
 
-    const templateDir = resolve(import.meta.dirname, "..", "templates", "skills");
-    const topDirs = readdirSync(templateDir).filter((name) => !name.startsWith("."));
-    // At least every top-level directory must have produced at least one file.
-    for (const dir of topDirs) {
-      expect(installed.some((p) => p.startsWith(join(".claude", "skills", dir)))).toBe(true);
-    }
-    // Every SKILL.md must exist at its mirrored destination.
-    for (const dir of topDirs) {
-      if (dir === "_shared") continue;
-      expect(existsSync(join(tmp, ".claude", "skills", dir, "SKILL.md"))).toBe(true);
-    }
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
+
+    const siblings = readdirSync(tmp);
+    const stray = siblings.filter((n) => n.startsWith(".artgraph-tmp-"));
+    expect(stray).toEqual([]);
+
+    // Config must be fully-formed JSON (no truncation).
+    const parsed = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
+    expect(parsed).toHaveProperty("include");
+    expect(parsed).toHaveProperty("lockFile");
   });
 
-  it("creates .claude/skills/ recursively when it does not exist", () => {
-    expect(existsSync(join(tmp, ".claude"))).toBe(false);
-    installSkills(tmp);
-    expect(existsSync(join(tmp, ".claude", "skills"))).toBe(true);
+  // -------------------------------------------------------------------------
+  // [B7] agent-context stage runs BEFORE the `.artgraph.json` write.
+  // If a wrapper / AGENTS.md write throws, no config file is left on disk —
+  // the user sees a clean failure instead of an inconsistent state where
+  // `.artgraph.json` claims a completed init but AGENTS.md is missing.
+  //
+  // Reproduction: place a DIRECTORY at `<rootDir>/AGENTS.md`. `writeAgentsMd`
+  // → `writeMarkerFile` → `readFileSync(AGENTS.md, "utf-8")` throws EISDIR.
+  // EISDIR is not the tolerated ENOENT branch, so the error propagates.
+  // -------------------------------------------------------------------------
+  it("[B7] agent-context failure leaves no .artgraph.json orphan", () => {
+    // Poison AGENTS.md: a directory here breaks readFileSync → propagates.
+    mkdirSync(join(tmp, "AGENTS.md"));
+
+    expect(() =>
+      runInit(tmp, {
+        noScan: true,
+        withSkills: true,
+        withAgentContext: true,
+        agents: ["claude"],
+      }),
+    ).toThrow();
+
+    // Config must NOT be written when a preceding stage throws (B7 reorder).
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // [OPS-14] The "recommended simpler approach" from the PR feedback: when
+  // agent-context succeeds but a later stage fails, we do NOT unwind the
+  // marker block writes. They are idempotent and get refreshed on the next
+  // successful init.
+  //
+  // With B7's reorder the last write IS `.artgraph.json` (via
+  // `atomicWriteFile`), so a real-world post-agent-context failure is rare
+  // — but we assert the invariant explicitly: successful init leaves
+  // both AGENTS.md and CLAUDE.md on disk with a matching config file.
+  // -------------------------------------------------------------------------
+  it("[OPS-14 / B7] successful init leaves AGENTS.md + CLAUDE.md + .artgraph.json all present", () => {
+    runInit(tmp, {
+      noScan: true,
+      withSkills: true,
+      withAgentContext: true,
+      agents: ["claude"],
+    });
+
+    expect(existsSync(join(tmp, "AGENTS.md"))).toBe(true);
+    expect(existsSync(join(tmp, "CLAUDE.md"))).toBe(true);
+    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
+
+    // AGENTS.md must contain the marker block bytes (proof it actually ran).
+    const agentsMd = readFileSync(join(tmp, "AGENTS.md"), "utf-8");
+    expect(agentsMd).toContain("<!-- artgraph:begin -->");
+    expect(agentsMd).toContain("<!-- artgraph:end -->");
+  });
+});
+
+// spec 013 (T010) — the legacy `installSkills` direct-invocation tests were
+// removed when distribute() became the production Skills installer. The
+// packaging-fault surface (template dir missing / no skill dirs / missing
+// SKILL.md) now lives behind `readSkillSource()`, asserted here.
+describe("readSkillSource (packaging-fault surface)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(tmp);
   });
 
   it("throws SkillsInstallError when the templates directory is missing (packaging fault)", () => {
     const missingDir = join(tmp, "does-not-exist");
 
-    expect(() => installSkills(tmp, { templateDir: missingDir })).toThrow(SkillsInstallError);
-    expect(() => installSkills(tmp, { templateDir: missingDir })).toThrow(
-      /template directory not found.*packaging/i,
-    );
+    expect(() => readSkillSource(missingDir)).toThrow(SkillsInstallError);
+    expect(() => readSkillSource(missingDir)).toThrow(/template directory not found.*packaging/i);
   });
 
   it("throws SkillsInstallError when the templates directory has no Skill directories", () => {
@@ -704,8 +852,8 @@ describe("installSkills (direct invocation)", () => {
     writeFileSync(join(emptyTemplates, "README.txt"), "not a skill dir\n");
 
     try {
-      expect(() => installSkills(tmp, { templateDir: emptyTemplates })).toThrow(SkillsInstallError);
-      expect(() => installSkills(tmp, { templateDir: emptyTemplates })).toThrow(
+      expect(() => readSkillSource(emptyTemplates)).toThrow(SkillsInstallError);
+      expect(() => readSkillSource(emptyTemplates)).toThrow(
         /No skill template directories.*packaging/i,
       );
     } finally {
@@ -720,34 +868,24 @@ describe("installSkills (direct invocation)", () => {
     writeFileSync(join(customTemplates, "artgraph-broken", "README.md"), "no SKILL.md here\n");
 
     try {
-      expect(() => installSkills(tmp, { templateDir: customTemplates })).toThrow(
-        /artgraph-broken.*missing SKILL\.md/,
-      );
+      expect(() => readSkillSource(customTemplates)).toThrow(/artgraph-broken.*missing SKILL\.md/);
     } finally {
       rmSync(customTemplates, { recursive: true, force: true });
     }
   });
 
-  it("throws SkillsInstallError with the failing path when copy fails mid-loop", () => {
-    const customTemplates = mkdtempSync(join(tmpdir(), "artgraph-custom-templates-"));
-    mkdirSync(join(customTemplates, "artgraph-only"), { recursive: true });
-    writeFileSync(join(customTemplates, "artgraph-only", "SKILL.md"), "skill body\n");
+  // PR #114 BND-3 — `_shared/` alone is not a distributable set.
+  it("throws SkillsInstallError when the only top-level dir is `_shared/`", () => {
+    const sharedOnly = mkdtempSync(join(tmpdir(), "artgraph-shared-only-"));
+    mkdirSync(join(sharedOnly, "_shared"), { recursive: true });
+    writeFileSync(join(sharedOnly, "_shared", "helper.md"), "shared fragment\n");
 
-    // Place a directory at the destination so copyFileSync fails with EISDIR.
-    mkdirSync(join(tmp, ".claude", "skills", "artgraph-only", "SKILL.md"), { recursive: true });
-
-    let caught: unknown;
     try {
-      installSkills(tmp, { templateDir: customTemplates, force: true });
-    } catch (e) {
-      caught = e;
+      expect(() => readSkillSource(sharedOnly)).toThrow(SkillsInstallError);
+      expect(() => readSkillSource(sharedOnly)).toThrow(/Only _shared.*no distributable Skills/i);
     } finally {
-      rmSync(customTemplates, { recursive: true, force: true });
+      rmSync(sharedOnly, { recursive: true, force: true });
     }
-
-    expect(caught).toBeInstanceOf(SkillsInstallError);
-    const err = caught as SkillsInstallError;
-    expect(err.message).toMatch(/Failed to copy .*SKILL\.md/);
   });
 });
 

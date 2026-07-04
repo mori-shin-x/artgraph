@@ -85,13 +85,13 @@ Continue with **Quickstart** below.
 
 ```bash
 # Pick your package manager (npm / pnpm / Bun / Deno all supported; Yarn falls back to pnpm)
-npm install -D artgraph && npx artgraph init       # default: full agent-native setup
-# pnpm add -D artgraph && pnpm exec artgraph init
-# bun add -d artgraph && bunx artgraph init
-# deno add npm:artgraph && deno run -A npm:artgraph/cli init
+npm install -D artgraph && npx artgraph init --agents=claude       # pick your agent(s)
+# pnpm add -D artgraph && pnpm exec artgraph init --agents=claude,codex
+# bun add -d artgraph && bunx artgraph init --agents=claude
+# deno add npm:artgraph && deno run -A npm:artgraph/cli init --agents=claude
 ```
 
-`artgraph init` runs the full setup by default: `.artgraph.json` config + initial scan + Claude Code Skills + auto-integrate detected SDD tools (Spec Kit / Kiro) + Stop hook. Pass `--minimal` for bare config only, or any of `--no-skills` / `--no-integrate` / `--no-hooks` to skip specific stages. Commit `.claude/settings.json` to share the Stop hook with teammates, or add it to `.gitignore` if you want per-developer hooks.
+`artgraph init` runs the full setup: `.artgraph.json` config + initial scan + cross-agent Skills distribution + auto-integrate detected SDD tools (Spec Kit / Kiro) + Stop hook + AGENTS.md snippet (and a thin `CLAUDE.md` / `.github/copilot-instructions.md` wrapper when the matching agent is selected). The `--agents=<list>` flag is **required** whenever Skills or agent-context distribution runs — supported values are `claude`, `codex`, `cursor`, `copilot`, `kiro` (lowercase, comma-separated). To opt out instead, pass `--minimal` for bare config only, or any of `--no-skills` / `--no-agent-context` / `--no-integrate` / `--no-hooks` to skip specific stages (`--agents` is then optional). Commit `.claude/settings.json` to share the Stop hook with teammates, or add it to `.gitignore` if you want per-developer hooks.
 
 > **Note:** The generated Stop hook `command` string is package-manager-specific
 > (e.g., `pnpm exec artgraph …` under pnpm, `bunx artgraph …` under bun,
@@ -101,6 +101,18 @@ npm install -D artgraph && npx artgraph init       # default: full agent-native 
 > so each developer runs `artgraph init` locally to get their PM-appropriate
 > command.
 
+### Tier 1 cross-agent distribution
+
+`--agents=<list>` distributes the same canonical SKILL.md set (8 Skills + 3 `_shared/` fragments) to each agent's native discovery path. AGENTS.md is the single canonical agent-context body; the per-agent wrapper files only contain a `@AGENTS.md` import line so the body never duplicates.
+
+| `--agents` value | Agent | Skills path | Agent context | Wrapper file |
+| --- | --- | --- | --- | --- |
+| `claude`   | Claude Code | `.claude/skills/`  | `AGENTS.md` | `CLAUDE.md` |
+| `codex`    | Codex CLI (OpenAI) | `.agents/skills/`  | `AGENTS.md` | — (AGENTS.md native) |
+| `cursor`   | Cursor | `.cursor/skills/`  | `AGENTS.md` | — (AGENTS.md native) |
+| `copilot`  | GitHub Copilot (IDE / CLI / Coding Agent) | `.github/skills/`  | `AGENTS.md` | `.github/copilot-instructions.md` |
+| `kiro`     | Kiro | `.kiro/skills/`    | `AGENTS.md` | — (`.kiro/steering/artgraph.md` is handled separately by `--integrations=kiro`) |
+
 ### Disabling the Stop hook (troubleshooting)
 
 If `artgraph check` blocks Claude Code unexpectedly (e.g., after an artgraph
@@ -109,6 +121,16 @@ upgrade regression), you can temporarily disable the Stop hook by editing
 `artgraph init --force` (once the issue is resolved) to reinstall it.
 
 If you use Claude Code, you can skip the manual install entirely — type `/artgraph-setup` and the Skill detects the package manager, installs artgraph, and runs `init` for you in one turn.
+
+### Windows note
+
+On Windows, artgraph distributes a `.gitattributes` file into each `<agent-skills-path>/` that forces LF for the tracked files. Do NOT set `core.autocrlf=true` globally — if `.gitattributes` is not committed, `artgraph doctor` may report drift after checkout. Alternatively add `.claude/skills/** text eol=lf` (and equivalents for other agents) to your repo's `.gitattributes`.
+
+Selecting `--agents=copilot` creates `.github/skills/` in your repo. If your project uses CODEOWNERS / branch protection for `.github/`, coordinate with your team before running `artgraph init --agents=copilot`.
+
+### Committing distributed Skills
+
+Distributed Skills under `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, and `.kiro/skills/` are safe to commit — they're deterministic byte-identical outputs of `artgraph init --agents=<list>`. Team members without artgraph installed still get the Skills via `git pull`. If you prefer to keep them out of git (e.g. to avoid bumping the diff on every artgraph upgrade), add the paths to `.gitignore`; teammates then need to run `artgraph init --agents=<list>` locally.
 
 ### End-to-end: spec → `@impl` → `check`
 
@@ -351,6 +373,37 @@ for the formalisation.
 | `artgraph reconcile`     | Rebuild `.trace.lock` from the current graph                                                        |
 | `artgraph graph`         | Emit the graph (dot / json)                                                                         |
 | `artgraph rename`        | Rename / split / merge requirement IDs (see below)                                                  |
+| `artgraph doctor`        | Diagnose Tier 1 cross-agent distributions (drift / missing / extraneous-file); see below           |
+
+## `artgraph doctor` — cross-agent distribution health check
+
+Diagnoses whether the SKILL.md files distributed by `artgraph init --agents=<list>`
+are still byte-equal to the canonical `templates/skills/` source, whether the
+`AGENTS.md` marker block is intact, and whether the per-agent wrapper files
+(`CLAUDE.md`, `.github/copilot-instructions.md`) still import `@AGENTS.md`.
+
+```bash
+# Diagnose every detected agent distribution (text output, default)
+artgraph doctor
+
+# Restrict to specific agents
+artgraph doctor --agents=claude,codex
+
+# Machine-readable output
+artgraph doctor --format json
+```
+
+Exit code is `0` when every finding is `pass` (or no Tier 1 distribution exists
+yet), non-zero when at least one finding is `fail` (drift / missing / wrapper
+missing the import / extraneous file). Example text output:
+
+```text
+[claude] .claude/skills/      12 pass
+[codex]  .agents/skills/      12 pass
+AGENTS.md: ✓ marker block intact
+
+Summary: 24 pass, 0 fail
+```
 
 ## `artgraph rename` — ID lifecycle
 
@@ -455,7 +508,7 @@ artgraph ships 8 Claude Code Skills that wire the CLI into the agent workflow:
 
 Skills marked `file + symbol` accept either `src/auth.ts` (file unit) or `src/auth.ts:validateToken` (symbol unit). Symbol-level input additionally requires `.artgraph.json` to be set to `"mode": "symbol"` and the graph re-scanned — see [docs/skills-guide.md](docs/skills-guide.md#file-mode-vs-symbol-mode) for the trade-off, config example, and the `impactReqs` / `originReqs` dual-axis drift guide.
 
-Skills live at `templates/skills/<name>/SKILL.md` and ship in English (for cross-agent reach + Claude Skills best practice). `artgraph init` installs them into `.claude/skills/` by default; pass `--no-skills` to opt out.
+Skills live at `templates/skills/<name>/SKILL.md` and ship in English (for cross-agent reach + Claude Skills best practice). `artgraph init --agents=<list>` distributes them to each selected agent's canonical Skills path (see [Tier 1 cross-agent distribution](#tier-1-cross-agent-distribution) above); pass `--no-skills` to opt out of the distribution stage.
 
 > Note: `artgraph-impact` was previously called `artgraph-plan`. It was renamed because "plan" implies pre-change design while the underlying `artgraph impact --diff` only works once changes exist. Spec 014 then narrowed the CLI surface to **file-only** start sources (REQ-ID inputs now error out with a four-path migration hint), and split the "implicit impact" use case into the dedicated `artgraph-plan-coverage` Skill so each Skill's description matches what the CLI actually delivers.
 

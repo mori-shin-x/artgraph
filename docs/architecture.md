@@ -214,9 +214,11 @@ drift = 現在の hash ≠ lock の hash。
 共通フラグ: `--mode`, `--diff`, `--gate`, `--type req|doc|code|test`, `--format json|text`。
 `impact`/`check` は全エッジ型（doc↔doc 含む）を辿る。
 
-## 8. Claude Code 統合
+**Update (spec 013, 2026-06)**: 当初の `artgraph mcp-server` 構想は spec 013 で再評価した結果スコープ外とし、5 エージェント (Claude Code / Codex CLI / Cursor / GitHub Copilot / Kiro) を **Tier 1** として位置づけ、Skills + AGENTS.md + 薄ラッパー方式でカバーする構成に転換した。`artgraph init --agents=<csv>` で各エージェントの canonical Skills パス (`.claude/skills/` / `.agents/skills/` / `.cursor/skills/` / `.github/skills/` / `.kiro/skills/`) に同一の SKILL.md を配布し、AGENTS.md を canonical agent-context として `CLAUDE.md` / `.github/copilot-instructions.md` から `@AGENTS.md` 取り込みのみで参照する。診断は新サブコマンド `artgraph doctor` が drift / 欠落 / extraneous-file を検出する。MCP サーバの差別化価値は将来 Tier 2 拡張時 (Cline / Goose / Continue 等) に再検討する。詳細は [`specs/013-cross-agent-extensions/research.md`](../specs/013-cross-agent-extensions/research.md) R4 を参照。**§8 は spec 013 以前に書かれた `mcp-server` ベースの Hook 統合構想であり、現行スコープ (Tier 1: Skills + AGENTS.md) には含まれない。** 実装判断の根拠として §8 に沿った PR を出さないこと。
 
-- Plan 精緻化 → `mcp-server` を登録し、エージェントがプラン時に `impact` を呼ぶ。任意で SessionStart で現状を context 注入。
+## 8. Claude Code 統合（spec 013 以前の構想 — 現行スコープ外、Tier 2 参考）
+
+- ~~Plan 精緻化 → `mcp-server` を登録し、エージェントがプラン時に `impact` を呼ぶ。任意で SessionStart で現状を context 注入。~~ (spec 013 で見送り。Tier 1 では `artgraph-impact` Skill がこの役割を代替する。Tier 2 拡張時に再評価)
 - PreToolUse（`Edit|Write`）→ 助言。`tool_input.file_path` からインパクトを `additionalContext` で注入（exit 0 + JSON）。低遅延必須 → http ハンドラで常駐デーモンに POST。ブロック（exit 2）は orphan 化等の狭い場合のみ。
 - PostToolUse（`Edit|Write`）→ グラフ増分更新 ＋ 軽いナッジ（フィードバック可、取り消し不可）。
 - Stop（＝検証ゲート） → diff 全体を `check --gate`。drift（コード・ドキュメント両方）/ orphan / 未カバー / 未テストがあれば exit 2 で作業継続させる（stderr 再注入）。`stop_hook_active` を見て無限ループ回避。
