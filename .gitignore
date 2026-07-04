@@ -10,4 +10,5 @@ coverage/
 !.claude/skills/artgraph-*/
 !.claude/skills/_shared/
 !.claude/skills/speckit-*/
+# CLAUDE.md is user-editable — each maintainer keeps a local copy. Not tracked.
 CLAUDE.md

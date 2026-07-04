@@ -427,3 +427,25 @@ spec impact set introduced after spec 014 was merged.
 - Considered: 016-impact-plan-symbol-level/SC-004 — added post-merge by spec 016, no spec 014 behaviour change
 - Considered: 016-impact-plan-symbol-level/SC-005 — added post-merge by spec 016, no spec 014 behaviour change
 - Considered: 016-impact-plan-symbol-level/SC-006 — added post-merge by spec 016, no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-001 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-002 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-003 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-004 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-005 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-006 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-007 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-008 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-009 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-010 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-011 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-012 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-013 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-014 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/SC-001 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/SC-002 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/SC-003 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/SC-004 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/SC-005 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/SC-006 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/SC-007 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/SC-008 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change

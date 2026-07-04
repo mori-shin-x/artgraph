@@ -14,12 +14,17 @@ permissions:
 
 jobs:
   build:
-    name: build / knip / test (Node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    name: build / knip / test (Node ${{ matrix.node }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         node: ['22']
+        # Windows was included briefly (PR #114 OPS-3) but 80+ pre-existing
+        # tests fail on Windows (path-sep / EPERM / package-manager detection).
+        # Tracked in follow-up issue #137; restore `windows-latest` here once
+        # those are fixed.
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 

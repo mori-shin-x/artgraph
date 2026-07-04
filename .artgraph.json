@@ -1,0 +1,17 @@
+{
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx"
+  ],
+  "specDirs": [
+    "specs",
+    "docs"
+  ],
+  "testPatterns": [
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/*.test.tsx"
+  ],
+  "lockFile": ".trace.lock",
+  "packageManager": "pnpm"
+}
