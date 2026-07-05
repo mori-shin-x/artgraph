@@ -1,11 +1,12 @@
 {{PM_NOTICE}}
 ## artgraph — Cross-agent traceability
 
-artgraph manages the trace lock and provides 8 Skills for spec ↔ code ↔ test traceability.
+artgraph manages the trace lock and provides 9 Skills for spec ↔ code ↔ test traceability.
 
 ### Available Skills
 
 - `artgraph-setup` — install artgraph in this project
+- `artgraph-bootstrap` — bootstrap spec/@impl/test tags in an existing project (LLM proposes, artgraph check verifies)
 - `artgraph-detect` — report artgraph installation state
 - `artgraph-integrate` — wire artgraph into Spec Kit / Kiro
 - `artgraph-impact` — file/symbol → REQs impact

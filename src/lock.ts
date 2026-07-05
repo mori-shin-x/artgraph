@@ -35,7 +35,7 @@ export class LockSchemaError extends Error {
 function validateLockSchema(lock: unknown): asserts lock is LockFile {
   if (lock === null || typeof lock !== "object" || Array.isArray(lock)) {
     throw new LockSchemaError(
-      `LockFile must be a JSON object at the top level. Delete .trace.lock and re-run \`artgraph scan\` to regenerate.`,
+      `LockFile must be a JSON object at the top level. Delete .trace.lock and run \`artgraph reconcile\` to regenerate.`,
     );
   }
 }
