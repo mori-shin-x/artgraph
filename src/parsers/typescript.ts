@@ -4,7 +4,7 @@ import { readFileSync, statSync } from "node:fs";
 import { dirname, resolve, relative } from "node:path";
 import fastGlob from "fast-glob";
 import type { GraphNode, GraphEdge } from "../types.js";
-import { NAMESPACED_ID_TOKEN } from "../req-id.js";
+import { NAMESPACED_ID_TOKEN } from "../grammar/tokens.js";
 
 // oxc-parser based TypeScript extraction layer (issue #159).
 //
@@ -52,18 +52,10 @@ type OxcParseResult = import("oxc-parser").ParseResult;
 type OxcProgram = OxcParseResult["program"];
 type OxcStatement = OxcProgram["body"][number];
 
-// Default requirement-ID *token* used when no custom `reqPatterns.codeId` is set.
-// The token matches the whole ID (e.g. `FR-001`, `auth/AUTH-2`, `Requirement-3`).
-// Shared with src/test-results.ts via src/req-id.ts so code tags and test-result
-// REQ tags recognize the same ID shapes. Exported so the rename rewriter and ID
-// validator track the exact same grammar the parser emits (avoids regex drift
-// between discovery and rewriting).
-export const DEFAULT_ID_TOKEN = NAMESPACED_ID_TOKEN;
-
 // Regexes that locate requirement IDs in code/test tags. When the project sets a
 // custom `reqPatterns.codeId`, these are rebuilt from that token so that @impl /
 // test-bracket / `req:` annotations track the same IDs the markdown parser emits.
-export interface IdMatchers {
+interface IdMatchers {
   implRe: RegExp;
   reqIdRe: RegExp;
   testReqRe: RegExp;
@@ -72,8 +64,8 @@ export interface IdMatchers {
 
 // For codeId, the whole match is the ID, so the constructed matchers below rely
 // on the token having no significance beyond what it matches.
-export function buildIdMatchers(codeId?: string): IdMatchers {
-  const token = codeId ?? DEFAULT_ID_TOKEN;
+function buildIdMatchers(codeId?: string): IdMatchers {
+  const token = codeId ?? NAMESPACED_ID_TOKEN;
   return {
     implRe: new RegExp(`//[^\\S\\n]*@impl[^\\S\\n]+((?:(?:${token})[^\\S\\n]*)+)`, "gm"),
     reqIdRe: new RegExp(token, "g"),
@@ -87,7 +79,7 @@ export interface ParsedTS {
   edges: GraphEdge[];
 }
 
-export interface SymbolRange {
+interface SymbolRange {
   name: string;
   startLine: number;
   endLine: number;
@@ -1069,7 +1061,7 @@ function parseJsonc(text: string): unknown {
 // Requirement-ID tag extraction (plain-text regex — needs no AST)
 // ---------------------------------------------------------------------------
 
-export function extractImplTags(
+function extractImplTags(
   content: string,
   relPath: string,
   isTest: boolean,

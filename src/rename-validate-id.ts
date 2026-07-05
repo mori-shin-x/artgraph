@@ -1,4 +1,4 @@
-import { DEFAULT_ID_TOKEN } from "./parsers/typescript.js";
+import { NAMESPACED_ID_TOKEN } from "./grammar/tokens.js";
 import { BUILTIN_TASK_PRESETS } from "./parsers/markdown.js";
 import type { ReqPatternConfig, TaskConventionPreset } from "./types.js";
 
@@ -36,7 +36,7 @@ export function isValidTargetId(
   if (id.startsWith("doc:")) {
     return id.length > "doc:".length;
   }
-  const token = codeId ?? DEFAULT_ID_TOKEN;
+  const token = codeId ?? NAMESPACED_ID_TOKEN;
   if (new RegExp(`^(?:${token})$`).test(id)) return true;
 
   // Built-in task shapes
