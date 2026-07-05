@@ -59,7 +59,7 @@
   "dependencies": {
     "commander": "^13.1.0",
     "fast-glob": "^3.3.3",
-    "glob": "^11.0.2",
+    "glob": "^13.0.6",
     "mdast-util-to-string": "^4.0.0",
     "oxc-parser": "^0.137.0",
     "remark-parse": "^11.0.0",
