@@ -117,7 +117,7 @@ export interface InlineLinkRef {
   rawHref: string;
 }
 
-interface ParsedSpec {
+export interface ParsedSpec {
   nodes: GraphNode[];
   edges: GraphEdge[];
   warnings: ParseWarning[];
@@ -125,13 +125,25 @@ interface ParsedSpec {
 }
 
 export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions): ParsedSpec {
+  return parseMarkdownContent(readFileSync(filePath, "utf-8"), filePath, options);
+}
+
+// Content-level entry point: identical to `parseMarkdown` but takes the file
+// text instead of reading it. The parse-cache path reads (and hashes) each
+// spec file once to decide hit/miss, so on a miss it hands the already-read
+// source here rather than paying a second read.
+export function parseMarkdownContent(
+  source: string,
+  filePath: string,
+  options?: ParseMarkdownOptions,
+): ParsedSpec {
   // Normalize line endings so downstream offsets, regexes, and hashes see a
   // single `\n` regardless of how the file was checked out (CRLF on Windows
   // git workspaces, lone CR from legacy editors). Without this, an authored
   // `(depends_on: X)\r\n` line bypasses ANNOTATION_RE_LINE in the rewriter
   // while still being parsed as an annotation here — i.e. parser/rewriter
   // parity breaks on CRLF files (meta-review additional F4).
-  const raw = readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const raw = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const rootDir = options?.rootDir;
   const specDirPrefix = options?.specDirPrefix;
   const relPath = rootDir ? relative(rootDir, filePath) : filePath;
