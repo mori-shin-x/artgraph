@@ -5,6 +5,7 @@ import {
   readFileSync,
   renameSync,
   rmdirSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -733,7 +734,20 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
       // user knows to remove it manually — init itself never touches
       // that path (per issue #130's user decision: warn only).
       const legacyDir = resolve(abs, ".github", "skills");
-      if (existsSync(legacyDir)) {
+      // B1 (issue #130 follow-up review): use `statSync` (follows symlink)
+      // to match doctor's `.github/skills/` residue judgment. Previously
+      // init used `existsSync` (matches anything — file, dir, symlink) while
+      // doctor used `lstatSync().isDirectory()` (misses symlink→dir); a
+      // symlink-managed repo saw WARN here but a clean bill from doctor
+      // (or vice versa). Both now agree: a directory (or symlink to one)
+      // triggers the warning; regular files at `.github/skills/` do not.
+      let legacyStat;
+      try {
+        legacyStat = statSync(legacyDir);
+      } catch {
+        legacyStat = undefined;
+      }
+      if (legacyStat?.isDirectory()) {
         distributionWarnings.push(
           `WARNING: .github/skills/ exists but is no longer used — GitHub Copilot does not discover that path. artgraph now provides Copilot's instructions via .github/copilot-instructions.md + AGENTS.md instead. Remove .github/skills/ manually when convenient (safe to delete; init did not touch it).`,
         );

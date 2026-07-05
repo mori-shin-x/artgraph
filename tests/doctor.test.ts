@@ -760,6 +760,28 @@ describe("runDoctor — issue #130: Copilot has no Skills distribution", () => {
     expect(report.summary.failCount, JSON.stringify(report.findings, null, 2)).toBe(0);
   });
 
+  it("(B1) treats a symlink→dir at .github/skills/ as legacy residue (statSync alignment)", () => {
+    // Pre-fix, init used `existsSync` (matches symlink) while doctor used
+    // `lstatSync().isDirectory()` (misses symlink→dir). A user managing
+    // `.github/skills/` as a symlink would see init WARN but doctor clean
+    // — the two must agree. Both now use `statSync` (follows symlink).
+    initProject(proj.dir, ["copilot"]);
+    // Put the real residue tree in a sibling location, then symlink
+    // `.github/skills/` to it. `statSync` follows the link and finds the
+    // canonical top-level; `lstatSync` would report a symlink and miss the
+    // finding.
+    const realResidue = join(proj.dir, "residue-store");
+    mkdirSync(join(realResidue, "artgraph-impact"), { recursive: true });
+    writeFileSync(join(realResidue, "artgraph-impact", "SKILL.md"), "leftover\n", "utf-8");
+    mkdirSync(join(proj.dir, ".github"), { recursive: true });
+    symlinkSync(realResidue, join(proj.dir, ".github", "skills"), "dir");
+
+    const report = runDoctor({ rootDir: proj.dir });
+    const legacy = report.findings.find((f) => f.kind === "legacy-copilot-skills-path");
+    expect(legacy, JSON.stringify(report.findings, null, 2)).toBeDefined();
+    expect(legacy!.path).toBe(".github/skills");
+  });
+
   it("(B2) does NOT flag `.github/skills/` as legacy residue when only third-party Skills are present", () => {
     // False-positive guard: a repo that carries `.github/skills/speckit-*/`
     // (some other tool's SKILL tree) but no artgraph canonical top-level

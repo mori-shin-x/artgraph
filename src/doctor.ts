@@ -17,7 +17,7 @@
 // only side effects are reads of `<rootDir>/...` and `templates/skills/`.
 
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import {
   AGENT_DESCRIPTORS,
@@ -188,7 +188,12 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
         let wrapperExists = false;
         if (wrapperAbs !== null) {
           try {
-            if (lstatSync(wrapperAbs).isFile()) {
+            // B1 (issue #130 follow-up review): `statSync` (follows symlink)
+            // so a symlink→file wrapper still gets its marker inspected —
+            // `readFileSync` also follows symlinks, so `lstatSync().isFile()`
+            // would drop symlinked wrappers even though the content is
+            // reachable.
+            if (statSync(wrapperAbs).isFile()) {
               const content = readFileSync(wrapperAbs, "utf-8");
               const health = inspectMarkerBlock(content);
               wrapperExists = health.hasBegin || health.hasEnd;
@@ -207,7 +212,11 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
         if (descriptor.id === "copilot") {
           const legacyDir = resolve(rootAbs, ".github", "skills");
           try {
-            if (lstatSync(legacyDir).isDirectory()) {
+            // B1 (issue #130 follow-up review): `statSync` (follows symlink)
+            // to match `init`'s residue judgment. A symlink→dir counts as
+            // "present" from the user's perspective and both codepaths must
+            // agree on that.
+            if (statSync(legacyDir).isDirectory()) {
               const entries = readdirSync(legacyDir);
               legacyResidueExists = entries.some((e) => canonicalTopLevels.has(e));
             }
@@ -503,7 +512,10 @@ function addLegacyCopilotSkillsFindings(
   const legacyDir = resolve(rootAbs, ".github", "skills");
   let isDir = false;
   try {
-    isDir = lstatSync(legacyDir).isDirectory();
+    // B1 (issue #130 follow-up review): `statSync` (follows symlink) so a
+    // symlink→dir residue triggers the same finding as a real directory.
+    // Must match init's judgment.
+    isDir = statSync(legacyDir).isDirectory();
   } catch {
     return;
   }
