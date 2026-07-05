@@ -1,8 +1,21 @@
 import { resolve, relative, basename, dirname } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { globSync } from "glob";
-import { parseMarkdown, type ParseWarning, type InlineLinkRef } from "../parsers/markdown.js";
-import { createTSParser } from "../parsers/typescript.js";
+import {
+  parseMarkdownContent,
+  type ParseWarning,
+  type InlineLinkRef,
+} from "../parsers/markdown.js";
+import { globCodeFiles, parseTSFilePaths } from "../parsers/typescript.js";
+import {
+  computeCacheFingerprint,
+  hashContent,
+  importTargetsExist,
+  readParseCache,
+  writeParseCache,
+  type MdFragment,
+  type TsFragment,
+} from "../parse-cache.js";
 import type {
   ArtifactGraph,
   GraphNode,
@@ -80,6 +93,14 @@ export function buildGraph(
   const RESERVED_PREFIXES = ["doc:", "file:", "test:", "symbol:"];
   const parseWarnings: ParseWarning[] = [];
 
+  // Incremental parse cache (see src/parse-cache.ts). Fragments are a pure
+  // memo of per-file parser output; every assembly step below (collision
+  // remap, dedup, sorting, warning conversion) still runs fresh each build,
+  // so a warm build is structurally identical to a cold one.
+  const cacheFingerprint = computeCacheFingerprint(config);
+  const prevCache = readParseCache(rootDir, cacheFingerprint);
+  const nextMd: Record<string, MdFragment> = {};
+
   // Pass 1: collect all req nodes and detect collisions
   const collected: CollectedReq[] = [];
   const nonReqNodes: GraphNode[] = [];
@@ -89,14 +110,30 @@ export function buildGraph(
   for (const specDirName of config.specDirs) {
     const specFiles = globSync(resolve(rootDir, specDirName, "**/*.md"));
     for (const file of specFiles) {
-      const result = parseMarkdown(file, {
-        rootDir,
-        specDirPrefix: specDirName,
-        reqPatterns: config.reqPatterns,
-        taskConventions: config.taskConventions,
-        disableBuiltinTaskConventions: config.disableBuiltinTaskConventions,
-      });
       const relFile = relative(rootDir, file);
+      const mdSource = readFileSync(file, "utf-8");
+      const mdHash = hashContent(mdSource);
+      // Key by specDir too: a file nested under two specDirs is parsed once
+      // per dir with a different `specDirPrefix` (and thus a different doc id).
+      const mdKey = `${specDirName}|${relFile}`;
+      const mdHit = prevCache?.data.md[mdKey];
+      const result =
+        mdHit && mdHit.contentHash === mdHash
+          ? mdHit
+          : parseMarkdownContent(mdSource, file, {
+              rootDir,
+              specDirPrefix: specDirName,
+              reqPatterns: config.reqPatterns,
+              taskConventions: config.taskConventions,
+              disableBuiltinTaskConventions: config.disableBuiltinTaskConventions,
+            });
+      nextMd[mdKey] = {
+        contentHash: mdHash,
+        nodes: result.nodes,
+        edges: result.edges,
+        warnings: result.warnings,
+        inlineLinks: result.inlineLinks,
+      };
       const specDir = extractSpecDir(relFile, config.specDirs);
       // Compute what the auto-generated doc ID would be for this file
       const specDirRelPath = relFile.startsWith(specDirName + "/")
@@ -253,15 +290,62 @@ export function buildGraph(
     edges.push({ ...edge, target: remappedTarget });
   }
 
-  // Parse TypeScript files
+  // Parse TypeScript files — incrementally when the parse cache holds valid
+  // fragments. The file set comes from globCodeFiles (the exact fast-glob
+  // call ts-morph makes inside addSourceFilesAtPaths), so hit and miss paths
+  // see the same files a full ts-morph scan would. Only changed files are
+  // handed to ts-morph; a fully-warm run never loads it at all.
   const codePatterns = [...config.include, ...config.testPatterns];
-  const tsParser = createTSParser(
-    rootDir,
-    codePatterns,
-    config.mode ?? "file",
-    config.reqPatterns?.codeId,
+  const tsMode = config.mode ?? "file";
+  const codeId = config.reqPatterns?.codeId;
+  const codeFiles = globCodeFiles(rootDir, codePatterns);
+  const relCodeFiles = codeFiles.map((f) => relative(rootDir, f));
+
+  // TS fragments are only reusable while the import-resolution environment is
+  // unchanged: tsconfig content, analysis mode, codeId token, and the matched
+  // file set (an added/removed file can change how an UNCHANGED file's import
+  // specifier resolves). Any difference invalidates every TS fragment.
+  const tsconfigPath = resolve(rootDir, "tsconfig.json");
+  const tsconfigHash = existsSync(tsconfigPath)
+    ? hashContent(readFileSync(tsconfigPath, "utf-8"))
+    : "no-tsconfig";
+  const tsEnvKey = hashContent(
+    JSON.stringify([tsconfigHash, tsMode, codeId ?? null, [...relCodeFiles].sort()]),
   );
-  const tsResult = tsParser.parse();
+  const tsFragmentsValid = prevCache !== undefined && prevCache.data.tsEnvKey === tsEnvKey;
+
+  const nextTs: Record<string, TsFragment> = {};
+  const fragmentByFile = new Map<string, TsFragment>();
+  const missPaths: string[] = [];
+  const missHashes = new Map<string, string>();
+  for (let i = 0; i < codeFiles.length; i++) {
+    const content = readFileSync(codeFiles[i], "utf-8");
+    const contentHash = hashContent(content);
+    const hit = tsFragmentsValid ? prevCache!.data.ts[relCodeFiles[i]] : undefined;
+    if (hit && hit.contentHash === contentHash && importTargetsExist(hit.edges, rootDir)) {
+      fragmentByFile.set(codeFiles[i], hit);
+    } else {
+      missPaths.push(codeFiles[i]);
+      missHashes.set(codeFiles[i], contentHash);
+    }
+  }
+  if (missPaths.length > 0) {
+    const parsed = parseTSFilePaths(rootDir, missPaths, tsMode, codeId);
+    for (const [abs, frag] of parsed) {
+      fragmentByFile.set(abs, {
+        contentHash: missHashes.get(abs)!,
+        nodes: frag.nodes,
+        edges: frag.edges,
+      });
+    }
+  }
+  const tsResult: { nodes: GraphNode[]; edges: GraphEdge[] } = { nodes: [], edges: [] };
+  for (let i = 0; i < codeFiles.length; i++) {
+    const frag = fragmentByFile.get(codeFiles[i])!;
+    tsResult.nodes.push(...frag.nodes);
+    tsResult.edges.push(...frag.edges);
+    nextTs[relCodeFiles[i]] = frag;
+  }
 
   for (const node of tsResult.nodes) {
     addNodeWithDupCheck(nodes, node, warnings);
@@ -555,6 +639,15 @@ export function buildGraph(
   // Rebuilding the Map with sorted entries is the minimal surface change.
   const sortedNodes = new Map(
     [...nodes.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
+
+  // Persist the fragments BEFORE returning so later mutation of the returned
+  // graph by a caller can never leak into the cache file. No-ops when the
+  // cache is disabled or nothing changed; never throws.
+  writeParseCache(
+    rootDir,
+    { fingerprint: cacheFingerprint, tsEnvKey, md: nextMd, ts: nextTs },
+    prevCache?.raw,
   );
 
   return { graph: { nodes: sortedNodes, edges: dedupedEdges }, warnings };
