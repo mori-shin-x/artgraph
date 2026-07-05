@@ -101,6 +101,20 @@
       display: flex;
       flex-direction: column;
       gap: 2px;
+      cursor: pointer;
+      user-select: none;
+      transition: border-color 0.1s ease, background 0.1s ease;
+    }
+
+    .stat-tile:hover {
+      border-color: var(--accent);
+    }
+
+    /* Click-to-filter state: clicking a tile isolates nodes with that
+       state and dims the rest (see wireStatFilters in app.js). */
+    .stat-tile.active {
+      border-color: var(--accent);
+      background: var(--panel-border);
     }
 
     .stat-tile .stat-label {
@@ -330,19 +344,34 @@
     </div>
 
     <div class="stats-grid">
-      <div class="stat-tile">
+      <div class="stat-tile" id="stat-total-tile" data-state="" title="Click to clear the filter">
         <span class="stat-label">Total</span>
         <span class="stat-value" id="stat-total">0</span>
       </div>
-      <div class="stat-tile stat-drift" id="stat-drift-tile">
+      <div
+        class="stat-tile stat-drift"
+        id="stat-drift-tile"
+        data-state="drift"
+        title="Click to isolate drift nodes"
+      >
         <span class="stat-label">Drift</span>
         <span class="stat-value" id="stat-drift">0</span>
       </div>
-      <div class="stat-tile">
+      <div
+        class="stat-tile"
+        id="stat-orphan-tile"
+        data-state="orphan"
+        title="Click to isolate orphan nodes"
+      >
         <span class="stat-label">Orphan</span>
         <span class="stat-value" id="stat-orphan">0</span>
       </div>
-      <div class="stat-tile">
+      <div
+        class="stat-tile"
+        id="stat-uncovered-tile"
+        data-state="uncovered"
+        title="Click to isolate uncovered nodes"
+      >
         <span class="stat-label">Uncovered</span>
         <span class="stat-value" id="stat-uncovered">0</span>
       </div>

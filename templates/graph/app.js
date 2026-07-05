@@ -54,6 +54,7 @@
     const cy = initCytoscape(cyContainer, data);
     wireSearch(cy);
     wireInteractions(cy);
+    wireStatFilters(cy);
   }
 
   // ---- Data ----------------------------------------------------------------
@@ -204,10 +205,17 @@
           },
         },
         {
+          // Neighborhood highlight after a node click. `border-style` isn't
+          // set here on purpose... except that leaving it unset means a
+          // dashed `uncovered` node keeps its dashed style while its color
+          // flips to gold — reading as a color the legend never shows.
+          // Forcing `solid` keeps "highlighted" visually unambiguous
+          // regardless of the underlying node's state.
           selector: ".highlighted",
           style: {
             "border-color": "#f1e05a",
             "border-width": 3,
+            "border-style": "solid",
             opacity: 1,
             "line-color": "#f1e05a",
             "target-arrow-color": "#f1e05a",
@@ -219,6 +227,7 @@
           style: {
             "border-color": "#f1e05a",
             "border-width": 4,
+            "border-style": "solid",
             "shadow-blur": 20,
             "shadow-color": "#f1e05a",
             "shadow-opacity": 0.8,
@@ -284,12 +293,20 @@
 
   // ---- Search --------------------------------------------------------------
 
+  /** Deactivates any stat-tile filter — called whenever search or node-click
+   * interaction takes over `.dimmed`, so the tile's visual "active" state
+   * never lingers after something else has changed what's shown. */
+  function clearStatTileActive() {
+    document.querySelectorAll(".stat-tile.active").forEach((t) => t.classList.remove("active"));
+  }
+
   function wireSearch(cy) {
     const input = document.getElementById("search-input");
     if (!input) return;
 
     input.addEventListener("input", () => {
       const query = input.value.trim().toLowerCase();
+      clearStatTileActive();
 
       if (!query) {
         cy.elements().removeClass("dimmed");
@@ -309,6 +326,50 @@
           const t = edge.target();
           const bothMatch = !s.hasClass("dimmed") && !t.hasClass("dimmed");
           edge.toggleClass("dimmed", !bothMatch);
+        });
+      });
+    });
+  }
+
+  // ---- Stat tile filters -----------------------------------------------
+
+  /**
+   * Clicking a stat tile (Drift / Orphan / Uncovered) isolates nodes in
+   * that state by dimming everything else, reusing the same `.dimmed`
+   * class as search. Clicking the active tile again — or the Total tile —
+   * clears back to showing everything. Starting a stat filter also clears
+   * any active search text and node-focus so the three interactions never
+   * fight over `.dimmed` (see PR #155 / issue #171 for the underlying
+   * shared-class caveat this sidesteps by always resetting first).
+   */
+  function wireStatFilters(cy) {
+    const tiles = Array.from(document.querySelectorAll(".stat-tile[data-state]"));
+    if (tiles.length === 0) return;
+
+    tiles.forEach((tile) => {
+      tile.addEventListener("click", () => {
+        const state = tile.dataset.state || "";
+        const wasActive = tile.classList.contains("active");
+
+        tiles.forEach((t) => t.classList.remove("active"));
+        cy.elements().removeClass("dimmed highlighted selected");
+        const searchInput = document.getElementById("search-input");
+        if (searchInput) searchInput.value = "";
+
+        // Toggling off the already-active tile, or clicking Total, both
+        // mean "show everything" — nothing left to do once cleared above.
+        if (wasActive || !state) return;
+
+        tile.classList.add("active");
+        cy.batch(() => {
+          cy.nodes().forEach((node) => {
+            node.toggleClass("dimmed", node.data("state") !== state);
+          });
+          cy.edges().forEach((edge) => {
+            const bothVisible =
+              !edge.source().hasClass("dimmed") && !edge.target().hasClass("dimmed");
+            edge.toggleClass("dimmed", !bothVisible);
+          });
         });
       });
     });
@@ -342,6 +403,7 @@
     }
 
     function focusNeighborhood(cy, node) {
+      clearStatTileActive();
       const neighborhood = node.closedNeighborhood();
       cy.batch(() => {
         cy.elements().addClass("dimmed").removeClass("highlighted selected");
