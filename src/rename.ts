@@ -4,6 +4,7 @@ import {
   findFrontmatterBounds,
   maskInlineProtectedSpans,
 } from "./parsers/markdown.js";
+import { LIST_ITEM_RE, KIRO_HEADING_RE } from "./grammar/tokens.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -39,11 +40,6 @@ export interface RewriteOptions {
   taskConventions?: TaskConventionPreset[];
   disableBuiltinTaskConventions?: string[];
 }
-
-// Mirror the parser defaults (src/parsers/markdown.ts) so discovery and
-// rewriting use the exact same grammar.
-const DEFAULT_LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
-const DEFAULT_KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*:/;
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -101,7 +97,7 @@ function fencedLineSet(lines: string[]): Set<number> {
 }
 
 function listItemRegex(opts?: RewriteOptions): RegExp {
-  return opts?.reqPatterns?.listItem ? new RegExp(opts.reqPatterns.listItem) : DEFAULT_LIST_ITEM_RE;
+  return opts?.reqPatterns?.listItem ? new RegExp(opts.reqPatterns.listItem) : LIST_ITEM_RE;
 }
 
 // Every active task preset's `taskIdRe`, with built-ins filtered by the disable
@@ -121,9 +117,7 @@ function listItemRegexes(opts?: RewriteOptions): RegExp[] {
 }
 
 function headingRegex(opts?: RewriteOptions): RegExp {
-  return opts?.reqPatterns?.heading
-    ? new RegExp(opts.reqPatterns.heading)
-    : DEFAULT_KIRO_HEADING_RE;
+  return opts?.reqPatterns?.heading ? new RegExp(opts.reqPatterns.heading) : KIRO_HEADING_RE;
 }
 
 /**
@@ -153,7 +147,7 @@ export function specDefinitionId(line: string, opts?: RewriteOptions): string | 
     const headRe = headingRegex(opts);
     const m = hm[2].match(headRe);
     if (m && m[1] != null) {
-      return headRe.source === DEFAULT_KIRO_HEADING_RE.source ? `Requirement-${m[1]}` : m[1];
+      return headRe.source === KIRO_HEADING_RE.source ? `Requirement-${m[1]}` : m[1];
     }
   }
   return null;
@@ -241,7 +235,7 @@ export function rewriteSpecHeading(
   const fenced = fencedLineSet(lines);
   const headRe = headingRegex(opts);
 
-  const usingDefault = headRe.source === DEFAULT_KIRO_HEADING_RE.source;
+  const usingDefault = headRe.source === KIRO_HEADING_RE.source;
 
   if (usingDefault) {
     const oldMatch = oldId.match(/^Requirement-(\d+)$/);

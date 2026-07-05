@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 // builtins, and the two data-only modules needed to render help text
 // (agents/descriptors, agents/parse-agents) stay static. Types are erased at
 // compile time, so `import type` is free.
-import type { SymbolEntry } from "./parsers/sdd-files.js";
+import type { SymbolEntry } from "./types.js";
 
 // spec 016 (R-003) — direct CLI / --diff inputs come in as raw
 // strings (file paths or `path:symbol` declarations). lift each into the
