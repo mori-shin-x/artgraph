@@ -63,6 +63,23 @@ export interface ArtifactGraph {
   edges: GraphEdge[];
 }
 
+/**
+ * spec 016 (FR-001 / R-001 / R-002) — Stage A `Files:` entry. `symbol === undefined`
+ * encodes a file-unit declaration (`Files: src/a.ts`); a defined `symbol`
+ * encodes a symbol-unit declaration (`Files: src/a.ts:fn1`). `line` is the
+ * 1-based source line of the Stage A entry (header or bullet).
+ *
+ * Lives here rather than in `parsers/sdd-files.ts` because it is shared
+ * between the sdd-files parser (producer) and graph traversal / plan-coverage
+ * / CLI (consumers) — keeping it in the parser forced a reverse
+ * graph→parsers import edge (issue #164).
+ */
+export interface SymbolEntry {
+  path: string;
+  symbol?: string;
+  line: number;
+}
+
 export interface LockEntry {
   specFile?: string;
   contentHash: string;

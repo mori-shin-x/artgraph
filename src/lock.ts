@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, renameSync, realpathSync } from "node:fs";
 import { resolve, dirname, basename, relative, isAbsolute } from "node:path";
 import type { LockFile, ArtifactGraph, LockEntry, EdgeProvenance } from "./types.js";
-import { unionDeps } from "./rename-lock.js";
+import { unionDeps, sortUniqueProvenances } from "./graph/canonical.js";
 
 // Defence-in-depth against symlinked directory components escaping the project
 // root. `loadConfig` validates the lockFile path with string-only resolve/relative,
@@ -183,16 +183,18 @@ export function buildLockFromGraph(graph: ArtifactGraph, prevLock?: LockFile): L
     );
     if (depEdges.length > 0) {
       // Defence-in-depth (review C3): builder.ts already dedups provenances,
-      // but emit `[...new Set(...)]` here so a future graph code-path that
-      // forgets to dedup cannot break INV-L2 (provenances sorted+unique).
+      // but `sortUniqueProvenances` is applied here too so a future graph
+      // code-path that forgets to dedup cannot break INV-L2 (provenances
+      // sorted+unique).
       //
       // id-based union (review C4): a target reached via BOTH `depends_on`
-      // and `derives_from` would otherwise appear twice. `unionDeps` merges
-      // by id and set-unions provenances, matching the rename-lock collapse
-      // so `scan → rename → scan` is shape-stable.
+      // and `derives_from` would otherwise appear twice. `unionDeps`
+      // (canonical.ts, which owns the invariant for rename-lock.ts too)
+      // merges by id and set-unions provenances so `scan → rename → scan`
+      // is shape-stable.
       const raw = depEdges.map((e) => ({
         id: e.target,
-        provenances: [...new Set(e.provenances)].sort() as EdgeProvenance[],
+        provenances: sortUniqueProvenances(e.provenances),
       }));
       entry.dependsOn = unionDeps(raw);
     }

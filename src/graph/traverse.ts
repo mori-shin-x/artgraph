@@ -1,7 +1,6 @@
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import type { ArtifactGraph, ImpactResult, DriftEntry } from "../types.js";
+import type { ArtifactGraph, ImpactResult, DriftEntry, SymbolEntry } from "../types.js";
 import type { LockFile } from "../types.js";
-import type { SymbolEntry } from "../parsers/sdd-files.js";
 
 // spec 016 (R-006, data-model.md §2.3) — `impact()` BFS body is **unchanged
 // from spec 014**. The redesign reroutes the startId construction (now via

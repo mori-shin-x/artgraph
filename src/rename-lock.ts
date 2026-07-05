@@ -1,12 +1,14 @@
-import type { LockFile, LockEntry, EdgeProvenance } from "./types.js";
+import type { LockFile, LockEntry } from "./types.js";
+// The id-based union of dependsOn entries (dedup + provenance set-union +
+// deterministic sort) is owned by canonical.ts, alongside the graph-level
+// edge dedup it must stay in lockstep with.
+import { unionDeps, type DepRef } from "./graph/canonical.js";
 
 export interface LockChange {
   kind: "rename" | "delete" | "create";
   oldKey?: string;
   newKey?: string;
 }
-
-type DepRef = { id: string; provenances: EdgeProvenance[] };
 
 function isSymbolKey(key: string): boolean {
   return key.startsWith("symbol:");
@@ -22,33 +24,6 @@ function deepCopyEntry(entry: LockEntry): LockEntry {
 
 function dedupe(arr: string[]): string[] {
   return [...new Set(arr)];
-}
-
-function sortDeps(deps: DepRef[]): DepRef[] {
-  return [...deps].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-}
-
-// Union dependsOn entries by `id`: collapse duplicates, set-union their
-// `provenances`, and emit a single sorted array. Mirrors the dedup union in
-// builder.ts so the lock-level shape matches the graph-level invariants.
-// Exported so `buildLockFromGraph` (lock.ts) can apply the same id-based
-// union when the same target appears under both `depends_on` and
-// `derives_from` (review C4).
-export function unionDeps(deps: DepRef[]): DepRef[] {
-  const byId = new Map<string, Set<EdgeProvenance>>();
-  for (const d of deps) {
-    let provs = byId.get(d.id);
-    if (!provs) {
-      provs = new Set();
-      byId.set(d.id, provs);
-    }
-    for (const p of d.provenances) provs.add(p);
-  }
-  const result: DepRef[] = [];
-  for (const [id, provs] of byId) {
-    result.push({ id, provenances: [...provs].sort() });
-  }
-  return sortDeps(result);
 }
 
 /**
