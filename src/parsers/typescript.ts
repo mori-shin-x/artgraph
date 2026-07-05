@@ -28,7 +28,10 @@ export const DEFAULT_ID_TOKEN = NAMESPACED_ID_TOKEN;
 // Regexes that locate requirement IDs in code/test tags. When the project sets a
 // custom `reqPatterns.codeId`, these are rebuilt from that token so that @impl /
 // test-bracket / `req:` annotations track the same IDs the markdown parser emits.
-interface IdMatchers {
+// Exported (with buildIdMatchers/extractImplTags/hash below) so the oxc-based
+// parser in typescript-oxc.ts shares the exact same tag grammar and hashing —
+// the regex layer is AST-independent and must not fork between the two backends.
+export interface IdMatchers {
   implRe: RegExp;
   reqIdRe: RegExp;
   testReqRe: RegExp;
@@ -37,7 +40,7 @@ interface IdMatchers {
 
 // For codeId, the whole match is the ID, so the constructed matchers below rely
 // on the token having no significance beyond what it matches.
-function buildIdMatchers(codeId?: string): IdMatchers {
+export function buildIdMatchers(codeId?: string): IdMatchers {
   const token = codeId ?? DEFAULT_ID_TOKEN;
   return {
     implRe: new RegExp(`//[^\\S\\n]*@impl[^\\S\\n]+((?:(?:${token})[^\\S\\n]*)+)`, "gm"),
@@ -52,7 +55,7 @@ export interface ParsedTS {
   edges: GraphEdge[];
 }
 
-interface SymbolRange {
+export interface SymbolRange {
   name: string;
   startLine: number;
   endLine: number;
@@ -303,7 +306,7 @@ function resolveImport(sourceFile: SourceFile, decl: any): string | undefined {
   }
 }
 
-function extractImplTags(
+export function extractImplTags(
   content: string,
   relPath: string,
   isTest: boolean,
@@ -386,6 +389,6 @@ function resolveSymbolAtLine(ranges: SymbolRange[], line: number): string | null
   return best?.name ?? null;
 }
 
-function hash(content: string): string {
+export function hash(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
