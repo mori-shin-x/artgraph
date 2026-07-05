@@ -119,6 +119,12 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   const source: SkillSource = readSkillSource(SKILLS_TEMPLATE_DIR);
   const canonicalTopLevels = new Set<string>(source.entries.map((e) => e.topLevel));
 
+  // Auto-detect can produce diagnostic findings before the main `findings`
+  // array is created (e.g. EACCES on `.github/copilot-instructions.md`
+  // during EX3 wrapper-existence probing). Accumulate them here and merge
+  // once `findings` exists below.
+  const preFindings: DoctorFinding[] = [];
+
   // Step 1 — detect agents.
   //   - explicit `opts.agents`: trust the caller; the CLI parser has already
   //     enforced lowercase + Tier 1 membership. If an id has no distribution
@@ -198,8 +204,25 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
               const health = inspectMarkerBlock(content);
               wrapperExists = health.hasBegin || health.hasEnd;
             }
-          } catch {
+          } catch (e) {
+            // EX3 (issue #130 follow-up review): ENOENT (wrapper simply
+            // isn't there) is silent — agent stays undetected. Other errnos
+            // (EACCES on a hardened `.github/` etc.) surface as a
+            // `walk-error` finding so the doctor doesn't sweep them under
+            // the rug.
+            const code = (e as NodeJS.ErrnoException | undefined)?.code;
             wrapperExists = false;
+            if (code !== "ENOENT" && wrapperAbs !== null) {
+              preFindings.push({
+                severity: "fail",
+                agent: descriptor.id,
+                kind: "walk-error",
+                path: toRepoRel(rootAbs, wrapperAbs),
+                expected: "readable file",
+                actual: `stat error: ${(e as Error).message}`,
+                message: `Failed to stat ${descriptor.displayName} wrapper: ${(e as Error).message}.`,
+              });
+            }
           }
         }
         // B2 (issue #130 follow-up review): mirror the D5 canonical
@@ -220,8 +243,23 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
               const entries = readdirSync(legacyDir);
               legacyResidueExists = entries.some((e) => canonicalTopLevels.has(e));
             }
-          } catch {
+          } catch (e) {
+            // EX3 — ENOENT is silent (no residue). Other errnos become a
+            // `walk-error` finding so the auto-detect isn't blind to
+            // permission problems on `.github/skills/`.
+            const code = (e as NodeJS.ErrnoException | undefined)?.code;
             legacyResidueExists = false;
+            if (code !== "ENOENT") {
+              preFindings.push({
+                severity: "fail",
+                agent: "copilot",
+                kind: "walk-error",
+                path: ".github/skills",
+                expected: "readable directory",
+                actual: `stat/readdir error: ${(e as Error).message}`,
+                message: `Failed to probe .github/skills/ during auto-detect: ${(e as Error).message}.`,
+              });
+            }
           }
         }
         if (wrapperExists || legacyResidueExists) {
@@ -266,6 +304,10 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   }
 
   const findings: DoctorFinding[] = [];
+
+  // Splice in any pre-Step-1 diagnostic findings (EX3 auto-detect errno
+  // branch). Do this immediately so the summary counts include them.
+  findings.push(...preFindings);
 
   // D1 — explicit --agents ids whose distribution dir does not exist get a
   // single `distribution-absent` finding, no per-file scanning. Note:
@@ -516,7 +558,23 @@ function addLegacyCopilotSkillsFindings(
     // symlink→dir residue triggers the same finding as a real directory.
     // Must match init's judgment.
     isDir = statSync(legacyDir).isDirectory();
-  } catch {
+  } catch (e) {
+    // EX2 (issue #130 follow-up review): only silent-return on ENOENT (the
+    // path simply doesn't exist — nothing to report). Other errnos
+    // (EACCES/EPERM/ELOOP) mean the residue MAY be present but is
+    // unreadable; surface it as a `walk-error` finding so the doctor
+    // doesn't stay silent about broken permissions.
+    const code = (e as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return;
+    out.push({
+      severity: "fail",
+      agent: "copilot",
+      kind: "walk-error",
+      path: ".github/skills",
+      expected: "readable path",
+      actual: `stat error: ${(e as Error).message}`,
+      message: `Failed to stat .github/skills/: ${(e as Error).message}. Cannot determine legacy residue state.`,
+    });
     return;
   }
   if (!isDir) return;
@@ -531,7 +589,21 @@ function addLegacyCopilotSkillsFindings(
   try {
     const entries = readdirSync(legacyDir);
     hasCanonical = entries.some((e) => canonicalTopLevels.has(e));
-  } catch {
+  } catch (e) {
+    // EX2 — same rationale as the stat catch above: ENOENT (concurrent rm
+    // between stat and readdir) is silent, but a permission failure gets
+    // surfaced.
+    const code = (e as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT") return;
+    out.push({
+      severity: "fail",
+      agent: "copilot",
+      kind: "walk-error",
+      path: ".github/skills",
+      expected: "readable directory",
+      actual: `readdir error: ${(e as Error).message}`,
+      message: `Failed to enumerate .github/skills/: ${(e as Error).message}. Cannot determine legacy residue state.`,
+    });
     return;
   }
   if (!hasCanonical) return;
