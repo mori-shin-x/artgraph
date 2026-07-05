@@ -76,14 +76,9 @@ describe("runDoctor — PASS path", () => {
 
   it("emits `agents-md-present` and `wrapper-present` for AGENTS.md + CLAUDE.md", () => {
     const report = runDoctor({ rootDir: proj.dir });
+    expect(findFinding(report.findings, (f) => f.kind === "agents-md-present")).toBeDefined();
     expect(
-      findFinding(report.findings, (f) => f.kind === "agents-md-present"),
-    ).toBeDefined();
-    expect(
-      findFinding(
-        report.findings,
-        (f) => f.kind === "wrapper-present" && f.agent === "claude",
-      ),
+      findFinding(report.findings, (f) => f.kind === "wrapper-present" && f.agent === "claude"),
     ).toBeDefined();
   });
 });
@@ -320,9 +315,7 @@ describe("formatDoctorReportJson — schema conformance", () => {
     const parsed = JSON.parse(json) as DoctorReport;
     expect(parsed.version).toBe(1);
     expect(parsed.summary.totalFindings).toBe(parsed.findings.length);
-    expect(parsed.summary.passCount + parsed.summary.failCount).toBe(
-      parsed.findings.length,
-    );
+    expect(parsed.summary.passCount + parsed.summary.failCount).toBe(parsed.findings.length);
     expect(Array.isArray(parsed.summary.agents)).toBe(true);
     for (const f of parsed.findings) {
       expect(typeof f.severity).toBe("string");
@@ -500,7 +493,7 @@ describe("runDoctor — C3: TOCTOU race on skill file read", () => {
     // and would surface a raw ENOENT if a concurrent process removed a file
     // between the two syscalls; the fix uses `try { hashFile } catch (ENOENT)`.
     rmSync(join(proj.dir, ".claude/skills/artgraph-verify/SKILL.md"));
-    rmSync(join(proj.dir, ".claude/skills/artgraph-detect/SKILL.md"));
+    rmSync(join(proj.dir, ".claude/skills/artgraph-impact/SKILL.md"));
     expect(() => runDoctor({ rootDir: proj.dir })).not.toThrow();
     const report = runDoctor({ rootDir: proj.dir });
     const missing = report.findings.filter((x) => x.kind === "skill-file-missing");
@@ -604,8 +597,7 @@ describe("runDoctor — D2: walk skips dot files", () => {
     const report = runDoctor({ rootDir: proj.dir });
     const extra = report.findings.filter(
       (x) =>
-        x.kind === "extraneous-file" &&
-        (x.path.includes(".DS_Store") || x.path.includes(".swp")),
+        x.kind === "extraneous-file" && (x.path.includes(".DS_Store") || x.path.includes(".swp")),
     );
     expect(extra.length, JSON.stringify(extra, null, 2)).toBe(0);
   });

@@ -106,7 +106,7 @@ npm install -D artgraph && npx artgraph init --agents=claude       # pick your a
 
 ### Tier 1 cross-agent distribution
 
-`--agents=<list>` distributes the same canonical SKILL.md set (9 Skills + 3 `_shared/` fragments) to each agent's native discovery path. AGENTS.md is the single canonical agent-context body; the per-agent wrapper files only contain a `@AGENTS.md` import line so the body never duplicates.
+`--agents=<list>` distributes the same canonical SKILL.md set (6 Skills + 3 `_shared/` fragments) to each agent's native discovery path. AGENTS.md is the single canonical agent-context body; the per-agent wrapper files only contain a `@AGENTS.md` import line so the body never duplicates.
 
 > **Support scope**: The 5 agents below are the entire supported set — artgraph has **no roadmap to expand beyond Tier 1 in v0.x**. See [docs/architecture.md §8 Support Scope](./docs/architecture.md#8-support-scope) for the full policy.
 
@@ -361,8 +361,8 @@ for the formalisation.
 
 > **Note on lock `dependsOn` consumers.** The structured `dependsOn` field in
 > `.trace.lock` is currently not consumed by runtime code paths: `artgraph
-> check` decides drift purely from `contentHash`, and `coverage` / `impact` /
-> `traverse` walk `graph.edges` directly. Its present value is (a) a
+> check` decides drift purely from `contentHash`, and coverage computation /
+> `impact` / `traverse` walk `graph.edges` directly. Its present value is (a) a
 > presentational diff target when reviewers read `git diff .trace.lock`, and
 > (b) the input that `artgraph rename` rewrites when an ID changes. A
 > first-class consumer (e.g. an `artgraph diff` subcommand surfacing
@@ -372,12 +372,14 @@ for the formalisation.
 
 | Command                  | Purpose                                                                                             |
 | ------------------------ | --------------------------------------------------------------------------------------------------- |
+| `artgraph init`          | Full agent-native setup: config + scan + Skills + SDD auto-integrate + Stop hook + agent context    |
 | `artgraph scan`          | Build the artifact graph and report counts (`--format json` includes the full graph)                |
 | `artgraph check`         | Report drift / orphans / uncovered (`--gate` to fail a hook)                                        |
 | `artgraph impact`        | File-only forward impact (file paths / `--diff`)                                                    |
 | `artgraph plan-coverage` | Detect implicit REQ impacts: REQs touched by tasks.md `Files:` but not mentioned in tasks/plan/spec |
 | `artgraph reconcile`     | Rebuild `.trace.lock` from the current graph                                                        |
 | `artgraph rename`        | Rename / split / merge requirement IDs (see below)                                                  |
+| `artgraph integrate`     | Wire artgraph into an installed SDD tool (Spec Kit / Kiro); see [SDD tool integration](#sdd-tool-integration) |
 | `artgraph doctor`        | Diagnose Tier 1 cross-agent distributions (drift / missing / extraneous-file); see below           |
 
 ## `artgraph doctor` — cross-agent distribution health check
@@ -403,11 +405,11 @@ yet), non-zero when at least one finding is `fail` (drift / missing / wrapper
 missing the import / extraneous file). Example text output:
 
 ```text
-[claude] .claude/skills/      12 pass
-[codex]  .agents/skills/      12 pass
+[claude] .claude/skills/      11 pass
+[codex]  .agents/skills/      10 pass
 AGENTS.md: ✓ marker block intact
 
-Summary: 24 pass, 0 fail
+Summary: 22 pass, 0 fail
 ```
 
 ## `artgraph rename` — ID lifecycle
@@ -494,19 +496,18 @@ Notes:
 
 ## Claude Code skills
 
-artgraph ships 9 Claude Code Skills that wire the CLI into the agent workflow:
+artgraph ships 6 Claude Code Skills that wire the CLI into the agent workflow:
 
 | Skill                       | Input mode    | When it fires                                                                                                                              |
 | --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `artgraph-setup`            | n/a           | User wants to install / set up / add artgraph on a fresh project                                                                           |
+| `artgraph-setup`            | n/a           | User wants to install / set up / add artgraph, asks what's installed, or needs to wire in an SDD tool added after artgraph                 |
 | `artgraph-bootstrap`        | n/a           | User wants to bootstrap / cold-start / seed initial REQs on an existing untagged (or partially-tagged) project                             |
-| `artgraph-integrate`        | n/a           | User wants to wire artgraph into an installed SDD tool (Spec Kit / Kiro)                                                                   |
-| `artgraph-detect`           | n/a           | User asks whether artgraph is set up / what's installed / what's available                                                                 |
 | `artgraph-impact`           | file + symbol | Forward impact analysis. Input is file paths or `path:symbol` pairs (REQ-IDs are rejected) — explicit args or `--diff` |
 | `artgraph-plan-coverage`    | file + symbol | Detects implicit impacts: files / `path:symbol` declared in `tasks.md` may affect existing REQs not mentioned in `tasks.md` / `plan.md` / `spec.md`. Run after `/speckit-tasks` or before `/speckit-implement` |
 | `artgraph-verify`           | n/a           | User reports implementation completion or wants a consistency check                                                                        |
-| `artgraph-coverage`         | n/a           | User asks for progress, remaining work, or what's left to test                                                                             |
 | `artgraph-rename`           | n/a           | User wants to rename / split / merge requirement IDs                                                                                       |
+
+Installation-state questions and post-hoc SDD-tool wiring (formerly the `artgraph-detect` / `artgraph-integrate` Skills) are handled by `artgraph-setup`; progress questions (formerly `artgraph-coverage`) are answered by `artgraph check` output (`--format json` includes per-requirement coverage rows).
 
 Skills marked `file + symbol` accept either `src/auth.ts` (file unit) or `src/auth.ts:validateToken` (symbol unit). Symbol-level input additionally requires `.artgraph.json` to be set to `"mode": "symbol"` and the graph re-scanned — see [docs/skills-guide.md](docs/skills-guide.md#file-mode-vs-symbol-mode) for the trade-off, config example, and the `impactReqs` / `originReqs` dual-axis drift guide.
 

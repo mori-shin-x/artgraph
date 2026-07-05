@@ -63,22 +63,6 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
 }
 ```
 
-## artgraph coverage
-
-```json
-{
-  "items": [                                           // per-requirement coverage rows
-    { "reqId": "FR-001", "status": "verified" }        // status: "verified" | "impl-only" | "untagged"
-  ],
-  "summary": {
-    "total": 10,
-    "verified": 7,
-    "implOnly": 2,                                     // camelCase, not "impl-only"
-    "untagged": 1
-  }
-}
-```
-
 ## artgraph rename
 
 The same shape is emitted for `--from/--to`, `--split/--into`, and `--merge/--into` (see `RenameResult` in `src/rename-executor.ts`). Which structural fields are populated depends on `operation`.

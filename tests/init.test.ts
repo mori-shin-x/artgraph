@@ -388,10 +388,8 @@ describe("runInit", () => {
 // ---------------------------------------------------------------------------
 
 const EXPECTED_SKILL_DIRS = [
-  "artgraph-coverage",
-  "artgraph-detect",
+  "artgraph-bootstrap",
   "artgraph-impact",
-  "artgraph-integrate",
   "artgraph-plan-coverage",
   "artgraph-rename",
   "artgraph-setup",

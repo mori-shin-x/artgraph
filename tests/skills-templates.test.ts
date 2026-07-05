@@ -28,7 +28,6 @@ const SKILLS_LINKING_INSTALL_CHECK = [
   "artgraph-impact",
   "artgraph-plan-coverage",
   "artgraph-verify",
-  "artgraph-coverage",
   "artgraph-rename",
 ] as const;
 
@@ -151,12 +150,21 @@ describe("templates/skills metatest", () => {
     });
   });
 
-  it("at least 9 Skill directories are present (regression guard)", () => {
+  it("exactly 6 Skill directories are present (regression guard)", () => {
     // Pairs with the dynamic discoverSkillDirs() — if someone accidentally
     // moves a Skill out of templates/skills/, the count drops and this trips.
     // Bumped from 7 to 8 with spec 014 (artgraph-plan-coverage added).
     // Bumped from 8 to 9 with issue #123 (artgraph-bootstrap added).
-    expect(EXPECTED_SKILL_DIRS.length).toBeGreaterThanOrEqual(9);
+    // Reduced from 9 to 6 with #135 (detect / integrate absorbed into setup,
+    // coverage deleted with the `coverage` CLI command).
+    expect(EXPECTED_SKILL_DIRS).toEqual([
+      "artgraph-bootstrap",
+      "artgraph-impact",
+      "artgraph-plan-coverage",
+      "artgraph-rename",
+      "artgraph-setup",
+      "artgraph-verify",
+    ]);
   });
 
   // SC-005 (spec 014): artgraph-impact description must NOT contain the
@@ -306,9 +314,6 @@ describe("templates/skills metatest", () => {
     // any of the four supported package managers without local rewriting.
     // Exempt:
     //   * artgraph-setup — the PM mapping table legitimately uses the runners.
-    //   * artgraph-detect Step 1 — the `command -v artgraph || npx --no-install
-    //     artgraph --version` probe is intentionally PM-fixed (it must run
-    //     before PM detection has happened).
     //   * table rows starting with `|`.
     //   * blockquote explainer lines starting with `>`.
     //   * lines where `artgraph` is inside inline backticks (e.g. prose
@@ -316,7 +321,7 @@ describe("templates/skills metatest", () => {
     it.each(EXPECTED_SKILL_DIRS)(
       "%s body uses `<PM-exec> <sub>` not bare `artgraph <sub>` (PR #112)",
       (dirName) => {
-        if (dirName === "artgraph-setup" || dirName === "artgraph-detect") {
+        if (dirName === "artgraph-setup") {
           return;
         }
         const skill = readSkill(dirName);
@@ -393,23 +398,25 @@ describe("templates/skills metatest", () => {
     );
   });
 
-  // PR #112 meta-followup #4: artgraph-detect must list all 8 canonical
-  // Skills (the regression test from FR-021 only counts directories on disk;
-  // this test pins the body text the user actually sees).
-  describe("artgraph-detect canonical Skill set (PR #112)", () => {
-    it("body lists artgraph-plan-coverage in the canonical set", () => {
-      const skill = readSkill("artgraph-detect");
-      expect(skill.body).toMatch(/artgraph-plan-coverage/);
+  // PR #112 meta-followup #4, moved to setup by #135: artgraph-setup carries
+  // the canonical Skill list (formerly in artgraph-detect; the regression test
+  // above only counts directories on disk — this pins the body text the user
+  // actually sees).
+  describe("artgraph-setup canonical Skill set (#135)", () => {
+    it("body lists all 6 canonical Skills", () => {
+      const skill = readSkill("artgraph-setup");
+      for (const name of EXPECTED_SKILL_DIRS) {
+        expect(skill.body, `canonical set must mention ${name}`).toMatch(new RegExp(name));
+      }
     });
 
-    it("body lists artgraph-bootstrap in the canonical set", () => {
-      const skill = readSkill("artgraph-detect");
-      expect(skill.body).toMatch(/artgraph-bootstrap/);
-    });
-
-    it("body summary template says 'N of 9 installed' (not 8)", () => {
-      const skill = readSkill("artgraph-detect");
-      expect(skill.body).toMatch(/N of 9 installed/);
+    it("body no longer references the deleted Skills (#135)", () => {
+      const skill = readSkill("artgraph-setup");
+      for (const gone of ["artgraph-detect", "artgraph-integrate", "artgraph-coverage"]) {
+        expect(skill.body, `deleted Skill ${gone} must not be referenced`).not.toMatch(
+          new RegExp(gone),
+        );
+      }
     });
   });
 

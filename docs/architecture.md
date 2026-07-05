@@ -135,6 +135,10 @@ Non-goals: 仕様文の意味的な正しさの判定、要求の良し悪し評
 - Green/Amber/Gray が欲しければ確信度でなく depth/エッジ型で決定的に振る（直接依存＝要レビュー、推移的＝参考）。
 - 効果: 要求→設計→詳細→コード→テストが1グラフになり、CoDD（doc で止まる）にも従来のトレーサビリティツール（仕様から始まり doc を扱わない）にも無い統合 impact が出せる。仕組みは D1（宣言リンク）＋ D4（hash drift）の一般化で新規機械ゼロ。
 
+### D8. CLI フラグの出荷規律
+
+- フラグは挙動と同時にしか出荷しない(「no effect yet」フラグの禁止)。
+
 ## 5. アーキテクチャ（L1–L3）
 
 - L1 グラフ構築: コード↔コードは TS AST（ts-morph / TS language service、将来 tsgo）。コード↔仕様/ドキュメントは ID タグ ＋ frontmatter `depends_on`。.md は remark でパース。symbol-level は barrel/re-export の貫通が要る（最難所）。
@@ -206,12 +210,12 @@ drift = 現在の hash ≠ lock の hash。
 | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | `artgraph init`                                                    | 設定・lock の雛形生成                                                                                 |
 | `artgraph scan`                                                    | 統合グラフ構築/更新（AST ＋ タグ ＋ frontmatter）、キャッシュ更新                                     |
-| `artgraph impact <files\|--diff> [--mode file\|symbol] [--type …]` | Plan 用: 変更から `{依存元 / 紐づく doc・仕様 / drift / 未カバー}` を出力                             |
+| `artgraph impact <files\|--diff>`                                  | Plan 用: 変更から `{依存元 / 紐づく doc・仕様 / drift / 未カバー}` を出力(粒度は config の `mode` で選択) |
 | `artgraph check [--gate] [--diff]`                                 | 検証: drift（コード・doc 両方）/ orphan / 未カバー-vs-Plan / 未テスト。`--gate` 時は問題で exit 2     |
 | `artgraph rename --from … --to … / --split / --merge`              | ID ライフサイクル（req・doc のタグ一括書換 ＋ lock 更新）                                             |
 | `artgraph mcp-server`                                              | `impact` を MCP ツールとして公開（Plan 時にエージェントが呼ぶ）                                       |
 
-共通フラグ: `--mode`, `--diff`, `--gate`, `--type req|doc|code|test`, `--format json|text`。
+共通フラグ: `--diff`, `--gate`, `--format json|text`(file/symbol の粒度は CLI フラグでなく `.artgraph.json` の `mode` で設定する — #135)。
 `impact`/`check` は全エッジ型（doc↔doc 含む）を辿る。
 
 **Update (spec 013, 2026-06)**: 当初の `artgraph mcp-server` 構想は spec 013 で再評価した結果スコープ外とし、5 エージェント (Claude Code / Codex CLI / Cursor / GitHub Copilot / Kiro) を **Tier 1** として位置づけ、Skills + AGENTS.md + 薄ラッパー方式でカバーする構成に転換した。`artgraph init --agents=<csv>` で各エージェントの canonical Skills パス (`.claude/skills/` / `.agents/skills/` / `.cursor/skills/` / `.github/skills/` / `.kiro/skills/`) に同一の SKILL.md を配布し、AGENTS.md を canonical agent-context として `CLAUDE.md` / `.github/copilot-instructions.md` から `@AGENTS.md` 取り込みのみで参照する。診断は新サブコマンド `artgraph doctor` が drift / 欠落 / extraneous-file を検出する。MCP サーバの差別化価値は将来検討事項として保留するが、§8 に示す通り Tier 1 (5 エージェント) を超える対応拡張は v0.x スコープ外であり、拡張前提の再評価は予定していない。詳細は [`specs/013-cross-agent-extensions/research.md`](../specs/013-cross-agent-extensions/research.md) R4 を参照。**§9 は spec 013 以前に書かれた `mcp-server` ベースの Hook 統合構想であり、現行スコープ (Tier 1: Skills + AGENTS.md) には含まれない。** 実装判断の根拠として §9 に沿った PR を出さないこと。

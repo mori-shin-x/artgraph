@@ -2,7 +2,7 @@
 
 ## 概要
 
-artgraph は仕様・実装・テストの整合性を追跡するツールで、9 つの Claude Code Skills を通じてエージェントのワークフローへネイティブ統合されます。SKILL.md 本体は cross-agent 対応と Claude Skills ベストプラクティスに従い英語で記述されていますが、本ドキュメントは人間の読者向けに日本語で維持しています。
+artgraph は仕様・実装・テストの整合性を追跡するツールで、6 つの Claude Code Skills を通じてエージェントのワークフローへネイティブ統合されます。SKILL.md 本体は cross-agent 対応と Claude Skills ベストプラクティスに従い英語で記述されていますが、本ドキュメントは人間の読者向けに日本語で維持しています。
 
 各 Skill は in-flight (会話中) での早期検出を担い、Stop hook (コミット時) と補完しあって整合性を担保します。
 
@@ -57,12 +57,14 @@ deno run -A npm:artgraph/cli init
 
 詳細は `artgraph init --help` を参照してください。
 
-## Skills 一覧 (全 9 種)
+## Skills 一覧 (全 6 種)
+
+> **#135 での統廃合**: 旧 `artgraph-detect` (導入状態レポート) と旧 `artgraph-integrate` (SDD ツール後付け統合) は `artgraph-setup` に吸収されました。旧 `artgraph-coverage` は `coverage` CLI コマンドの削除に伴い廃止 — 進捗・残作業の確認は `artgraph check` の出力 (`--format json` に per-requirement coverage rows を含む) で行います。
 
 ### artgraph-setup
 
-- トリガー: artgraph 未導入のプロジェクトで「artgraph を入れて」「セットアップして」と依頼された時
-- 動作: package manager 検出 (npm / pnpm / Bun / Deno、デフォルト と Yarn フォールバックは pnpm + 警告) → install → `artgraph init` (full setup) → `artgraph check`
+- トリガー: artgraph 未導入のプロジェクトで「artgraph を入れて」「セットアップして」と依頼された時。導入済みプロジェクトで「artgraph 入ってる？」「何が available？」と聞かれた時や、後から入れた SDD ツール (Spec Kit / Kiro) の統合依頼にも対応
+- 動作: package manager 検出 (npm / pnpm / Bun / Deno、デフォルト と Yarn フォールバックは pnpm + 警告) → install → `artgraph init` (full setup) → `artgraph check`。導入済みの場合は読み取り専用の state レポート (CLI 有無 / `.artgraph.json` / SDD 統合状態 / Skills 設置状況) を返し、未統合の SDD ツールがあれば `artgraph integrate <tool>` を案内する
 - 参照: `templates/skills/artgraph-setup/SKILL.md`
 
 ### artgraph-bootstrap
@@ -72,18 +74,6 @@ deno run -A npm:artgraph/cli init
 - トリガー: 「artgraph をブートストラップして」「既存リポに REQ を撒いて」「タグゼロから始めたい」等
 - 前提: `artgraph` インストール済み (未インストールなら `artgraph-setup` を先に案内)
 - 参照: `templates/skills/artgraph-bootstrap/SKILL.md`
-
-### artgraph-integrate
-
-- トリガー: artgraph 導入済みプロジェクトで SDD ツール統合を頼まれた時
-- 動作: `artgraph integrate list` で Spec Kit / Kiro を detect → ユーザー同意を取得 → `artgraph integrate <tool>` を実行
-- 参照: `templates/skills/artgraph-integrate/SKILL.md`
-
-### artgraph-detect
-
-- トリガー: 「artgraph 入ってる？」「何が available？」と聞かれた時
-- 動作: 読み取り専用。CLI 有無 / `.artgraph.json` 有無 / SDD ツール統合状態 / Skills 設置状況を一覧
-- 参照: `templates/skills/artgraph-detect/SKILL.md`
 
 ### artgraph-impact (旧 artgraph-plan)
 
@@ -156,12 +146,6 @@ artgraph plan-coverage --gate --ignore REQ-003,REQ-007
 - トリガー: 実装完了報告 / コードレビュー直前
 - 動作: `artgraph check --diff` を実行し drift / orphan / uncovered / coverage 不足をセルフチェック。Stop hook (`artgraph check --gate`) でブロックされる前の手戻り削減を目的とする
 - 参照: `templates/skills/artgraph-verify/SKILL.md`
-
-### artgraph-coverage
-
-- トリガー: 進捗・残作業確認の依頼時
-- 動作: `artgraph coverage` を実行し per-requirement の verified / impl-only / untagged 状態を集計
-- 参照: `templates/skills/artgraph-coverage/SKILL.md`
 
 ### artgraph-rename
 

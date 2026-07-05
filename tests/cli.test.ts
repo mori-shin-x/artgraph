@@ -705,10 +705,8 @@ describe("CLI: init", () => {
       // New directory-format Skill paths.
       expect(stdout).toContain(".claude/skills/artgraph-impact/SKILL.md");
       for (const dir of [
-        "artgraph-coverage",
-        "artgraph-detect",
+        "artgraph-bootstrap",
         "artgraph-impact",
-        "artgraph-integrate",
         "artgraph-plan-coverage",
         "artgraph-rename",
         "artgraph-setup",
@@ -733,7 +731,8 @@ describe("CLI: init", () => {
     expect(Array.isArray(result.skillsInstalled.skills)).toBe(true);
     // Bumped 7 -> 8 in spec 014 (artgraph-plan-coverage added).
     // Bumped 8 -> 9 in issue #123 (artgraph-bootstrap added).
-    expect(result.skillsInstalled.skills.length).toBe(9);
+    // Reduced 9 -> 6 in #135 (detect / integrate absorbed into setup, coverage deleted).
+    expect(result.skillsInstalled.skills.length).toBe(6);
     expect(result.skillsInstalled.fragments.length).toBeGreaterThanOrEqual(3);
     expect(result.skillsInstalled.skills).toContain(".claude/skills/artgraph-impact/SKILL.md");
   });
