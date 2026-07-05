@@ -291,10 +291,10 @@ export function buildGraph(
   }
 
   // Parse TypeScript files — incrementally when the parse cache holds valid
-  // fragments. The file set comes from globCodeFiles (the exact fast-glob
-  // call ts-morph makes inside addSourceFilesAtPaths), so hit and miss paths
-  // see the same files a full ts-morph scan would. Only changed files are
-  // handed to ts-morph; a fully-warm run never loads it at all.
+  // fragments. The file set comes from globCodeFiles (the same fast-glob
+  // call the parser's own file enumeration is built on), so hit and miss
+  // paths see the same files a full scan would. Only changed files are
+  // handed to the oxc parser; a fully-warm run never loads it at all.
   const codePatterns = [...config.include, ...config.testPatterns];
   const tsMode = config.mode ?? "file";
   const codeId = config.reqPatterns?.codeId;
@@ -302,9 +302,11 @@ export function buildGraph(
   const relCodeFiles = codeFiles.map((f) => relative(rootDir, f));
 
   // TS fragments are only reusable while the import-resolution environment is
-  // unchanged: tsconfig content, analysis mode, codeId token, and the matched
-  // file set (an added/removed file can change how an UNCHANGED file's import
-  // specifier resolves). Any difference invalidates every TS fragment.
+  // unchanged: tsconfig content (the parser's specifier resolver reads jsx /
+  // allowJs / resolveJsonModule from it — see parsers/typescript.ts), analysis
+  // mode, codeId token, and the matched file set (an added/removed file can
+  // change how an UNCHANGED file's import specifier resolves). Any difference
+  // invalidates every TS fragment.
   const tsconfigPath = resolve(rootDir, "tsconfig.json");
   const tsconfigHash = existsSync(tsconfigPath)
     ? hashContent(readFileSync(tsconfigPath, "utf-8"))
@@ -584,7 +586,7 @@ export function buildGraph(
   // contributing edges. Iteration is stable on the source `edges` array so
   // the kept edge always comes from the first occurrence (INV-T3 — final
   // order is determined by the post-dedup sort below, not by which path
-  // inserted first nor by globSync/ts-morph traversal order).
+  // inserted first nor by globSync/parser traversal order).
   const edgeKey = (e: GraphEdge) => `${e.source}|${e.target}|${e.kind}`;
   // Narrower replacement for the previous `as unknown as` cast: keeps the
   // NonEmpty invariant visible at the type level and asserts it at runtime
@@ -620,7 +622,7 @@ export function buildGraph(
 
   // PR#94 review B3: make edge order deterministic across OSes. Without this
   // step `dedupedEdges` reflects Map insertion order, which traces back to
-  // globSync / ts-morph / per-directory Map iteration (see inferConventionEdges
+  // globSync / TS parser / per-directory Map iteration (see inferConventionEdges
   // below — its `byDir` traversal is insertion-order, intentionally absorbed
   // here so the convention pass needs no internal sort). Use `<`/`>` rather
   // than `localeCompare` so the order is fixed UTF-16 codeunit comparison —
