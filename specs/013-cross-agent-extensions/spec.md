@@ -27,7 +27,7 @@ Tier 1 として指定された 5 エージェント (Claude Code / Codex CLI / 
 
 1. **Given** Tier 1 エージェント識別子 1 つ (例: `codex`)、**When** `artgraph init --agents=codex` を実行、**Then** Codex CLI が解釈する canonical Skills パス (`.agents/skills/<name>/SKILL.md`) に全 Skill が配置され、各 SKILL.md は `templates/skills/<name>/SKILL.md` とバイト一致する。
 2. **Given** `--agents=cursor`、**When** init 実行、**Then** `.cursor/skills/<name>/SKILL.md` 配下に同様にバイト一致で配置される。
-3. **Given** `--agents=copilot`、**When** init 実行、**Then** `.github/skills/<name>/SKILL.md` 配下に同様に配置される。
+3. **Given** `--agents=copilot`、**When** init 実行、**Then** Copilot は Skills 配布対象外のため `.github/skills/` は作成されず、`.github/copilot-instructions.md` (wrapper) + AGENTS.md 経由で Skill 一覧が伝達される (issue #130)。
 4. **Given** `--agents=kiro`、**When** init 実行、**Then** `.kiro/skills/<name>/SKILL.md` 配下に同様に配置される (`.kiro/steering/` への配布は別フラグの責務)。
 5. **Given** `--agents=claude`、**When** init 実行、**Then** `.claude/skills/<name>/SKILL.md` 配下に同様に配置される。
 6. **Given** `templates/skills/_shared/` 配下にファイルが存在 (各 SKILL.md が `../_shared/...` で参照)、**When** いずれかの `--agents` で init 実行、**Then** 配布先にも `<agent_skills_path>/_shared/` がバイト一致で配置され、SKILL.md からの相対参照が解決可能になる。
@@ -97,7 +97,7 @@ Tier 1 エージェント向けに配布された Skills および agent-context
 - **配布先と canonical の競合**: 配布先 (例: `.cursor/skills/artgraph-impact/SKILL.md`) を手動編集した後に `--force` 無しで再 init した場合、上書きせずに警告。`--force` で強制上書き。
 - **既存 AGENTS.md / CLAUDE.md / `.github/copilot-instructions.md` の保護**: ユーザー作成セクションは保持し、artgraph 管理範囲はマーカー (例: `<!-- artgraph:begin -->` 〜 `<!-- artgraph:end -->`) 境界で識別、再実行で冪等。
 - **Kiro: Skills と steering の同時呼出し**: `--agents=kiro --integrations=kiro` で Skills (`.kiro/skills/`) と steering (`.kiro/steering/artgraph.md`) を同 init で両方配布できる。両者は責務分離され、片方だけの指定も可能。
-- **GitHub Copilot 3 surface (IDE / CLI / Coding Agent) 並走**: `.github/skills/` と `.github/copilot-instructions.md` で 3 surface すべてを同時にカバーするため、surface 別配布は行わない。
+- **GitHub Copilot 3 surface (IDE / CLI / Coding Agent) 並走**: `.github/copilot-instructions.md` + AGENTS.md のみで 3 surface すべてをカバーする。`.github/skills/` は配布対象外とする — Copilot はこのパスを discovery しないため (issue #130)、surface 別配布も行わない。
 - **doctor 実行前に init 未実施**: Tier 1 配布が 1 件も無い場合は「対象 0 件」と明示し終了コード 0 (異常扱いしない)。
 
 ## Requirements *(mandatory)*
@@ -106,7 +106,7 @@ Tier 1 エージェント向けに配布された Skills および agent-context
 
 - **FR-001**: `artgraph init` は `--agents=<list>` オプションを受け付け、値は `claude` / `codex` / `cursor` / `copilot` / `kiro` のカンマ区切り集合のみを許容する。未知の値・空要素・大文字小文字違い・重複が含まれる場合は配布を行わず、サポート値一覧を含むエラーで非 0 終了する。
 - **FR-002**: `--agents=<list>` は、Skills 配布または agent-context 配布のいずれか少なくとも 1 stage が有効な経路で必須とする。未指定の場合は実行前バリデーションで非 0 終了し、エラーメッセージは (a) `--agents=<list>` を指定する、(b) `--no-skills --no-agent-context` で当該 stage を off にする、(c) `--minimal` で全 stage を off にする、の 3 つの対処法を提示する。プロジェクト内ファイル走査による自動推定は行わない。
-- **FR-003**: `artgraph init --agents=<list>` (Skills stage 有効時) は、`templates/skills/` を canonical source として、各エージェントの正規 Skills パス (Claude: `.claude/skills/`、Codex: `.agents/skills/`、Cursor: `.cursor/skills/`、Copilot: `.github/skills/`、Kiro: `.kiro/skills/`) へ SKILL.md ファイル群をバイト一致で配置する。frontmatter (`name` / `description`) と本文は全エージェント間で完全に共通とする。
+- **FR-003**: `artgraph init --agents=<list>` (Skills stage 有効時) は、`templates/skills/` を canonical source として、各エージェントの正規 Skills パス (Claude: `.claude/skills/`、Codex: `.agents/skills/`、Cursor: `.cursor/skills/`、Kiro: `.kiro/skills/`) へ SKILL.md ファイル群をバイト一致で配置する。frontmatter (`name` / `description`) と本文は全エージェント間で完全に共通とする。GitHub Copilot は Skills 配布対象外 — `.github/copilot-instructions.md` (wrapper) と AGENTS.md 経由で指示層を提供する (issue #130 参照)。
 - **FR-004**: `templates/skills/_shared/` 配下のファイル (DRY 用の install-check / output-schema / package-manager 等の部品) は、各 SKILL.md から `../_shared/<file>.md` 形式で相対参照されるため、SKILL.md と同じ配布先に**同じディレクトリ構造を保ったまま**配布する。`_shared/` 自体は SKILL.md を持たない部品ディレクトリであり、各エージェントの description-trigger 対象 (Skill エントリ) には認識されない (Skill 認識は `<name>/SKILL.md` の存在を要件とする慣習を前提)。
 - **FR-005**: `artgraph init --agents=<list>` (agent-context stage 有効時) は AGENTS.md を canonical な agent-context として書き出す。AGENTS.md の artgraph セクションは artgraph 管理マーカー境界付きで冪等更新可能とし、マーカー外のユーザー作成コンテンツは保持する。
 - **FR-006**: `--agents=<list>` に `claude` が含まれかつ agent-context stage が有効な場合、`CLAUDE.md` を生成または更新し、artgraph セクションとして `@AGENTS.md` 取り込み参照のみを含む薄ラッパーとする。本文の二重コピーを行わない。
@@ -142,9 +142,9 @@ Tier 1 エージェント向けに配布された Skills および agent-context
 
 ## Assumptions
 
-- **Tier 1 エージェントの canonical Skills パスは固定**: Claude `.claude/skills/`、Codex `.agents/skills/`、Cursor `.cursor/skills/`、Copilot `.github/skills/`、Kiro `.kiro/skills/`。各エージェント公式 docs の 2026-06 時点の仕様に基づく (本 spec 着手前の調査で確認済)。
+- **Tier 1 エージェントの canonical Skills パスは固定**: Claude `.claude/skills/`、Codex `.agents/skills/`、Cursor `.cursor/skills/`、Kiro `.kiro/skills/`。各エージェント公式 docs の 2026-06 時点の仕様に基づく (本 spec 着手前の調査で確認済)。GitHub Copilot は Skills 配布対象外 (`skillsPath: null`) — `.github/copilot-instructions.md` (wrapper) + AGENTS.md 経由で指示層を提供する (issue #130 参照)。
 - **5 エージェントすべてが AGENTS.md をネイティブ自動ロードする**: Claude Code (custom-instructions auto-detect)、Codex CLI (原典)、Cursor (公式対応)、GitHub Copilot (2025-08 から coding agent 対応、IDE も同様)、Kiro (custom agent が default resources として継承)。よって AGENTS.md 1 本で本文流通は実用上完結する。
-- **GitHub Copilot は 3 surface (IDE / CLI / Coding Agent) で `.github/skills/` と `.github/copilot-instructions.md` を共有する**: surface 別配布は不要。
+- **GitHub Copilot は 3 surface (IDE / CLI / Coding Agent) で `.github/copilot-instructions.md` のみを共有する**: Copilot は Skills 配布対象外であり `.github/skills/` は使用しない (issue #130)。surface 別配布は不要。
 - **`templates/skills/<name>/SKILL.md` は 5 エージェントで共通に成立する内容**: 既に Anthropic Skills フォーマット (`name` + `description` frontmatter) が Codex / Cursor / Copilot / Kiro でも採用されているため、本文・frontmatter の改造は不要。
 - **`templates/skills/_shared/` の扱い**: DRY 用の install-check / output-schema / package-manager 等の部品を保持するディレクトリ。各 SKILL.md から `../_shared/<file>.md` で参照されるため、配布対象に**含める** (FR-004)。Skill 認識は `<name>/SKILL.md` 存在を要件とする各エージェント慣習により、`_shared/` 自体は description-trigger 対象として誤認識されない。
 - **agent-context 注入機構は本 spec で新規実装する**: spec 012 P1 で計画されていた `--with-agent-context` は現状未実装 (cli.ts:120,152 で "P1 deliverable, no effect yet" の WARNING 付き)。本 spec が AGENTS.md / CLAUDE.md / `.github/copilot-instructions.md` の注入を最初に実装する。
