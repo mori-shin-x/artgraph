@@ -2,24 +2,23 @@
 
 Shared pre-flight check. Skills run this before invoking any `artgraph` command to confirm the CLI is reachable.
 
-Probe the CLI via a cascade so Deno-only / Bun-only / pnpm-only projects also succeed:
+Probe for the CLI by trying the commands below **in order, stopping at the first one that succeeds** (exit code 0). Trying all runners means Deno-only / Bun-only / pnpm-only projects also succeed. Compose each probe for your own shell; discard the probes' stdout/stderr — only the exit code matters. This checks reachability only; it does NOT verify that the installed CLI's version matches the project's expectations.
 
-```bash
-command -v artgraph >/dev/null 2>&1 \
-  || npx --no-install artgraph --version >/dev/null 2>&1 \
-  || pnpm exec artgraph --version >/dev/null 2>&1 \
-  || bunx --no-install artgraph --version >/dev/null 2>&1 \
-  || deno run -A npm:artgraph/cli --version >/dev/null 2>&1 \
-  || {
-    echo "artgraph not installed — install with one of these:"
-    echo "  npm install -D artgraph"
-    echo "  pnpm add -D artgraph"
-    echo "  bun add -d artgraph"
-    echo "  deno add npm:artgraph"
-    exit 1
-  }
+1. Check whether an `artgraph` executable is on `PATH` (e.g. run `artgraph --version`).
+2. `npx --no-install artgraph --version`
+3. `pnpm exec artgraph --version`
+4. `bunx --no-install artgraph --version`
+5. `deno run -A npm:artgraph/cli --version`
+
+If your Bun build does not accept `--no-install`, drop the flag (`bunx artgraph --version`); the probe order still works.
+
+If **every** probe fails, report that artgraph is not installed, show the user these install options, and STOP — do not proceed with the calling Skill (**exception**: `artgraph-setup` intentionally inverts this contract — probe failure is its expected case, and Steps 2 onward install artgraph, so setup ignores this STOP and continues):
+
+```
+npm install -D artgraph
+pnpm add -D artgraph
+bun add -d artgraph
+deno add npm:artgraph
 ```
 
-If your Bun build does not accept `--no-install`, drop the flag (`bunx artgraph --version`); the cascade still works.
-
-If the probe fails, do not run `npm install -D artgraph` directly. Invoke the `artgraph-setup` Skill, which detects the project's package manager (npm / pnpm / Bun / Deno) and installs accordingly.
+Do not run one of these installs directly. Invoke the `artgraph-setup` Skill instead, which detects the project's package manager (npm / pnpm / Bun / Deno) and installs accordingly.

@@ -4,6 +4,8 @@ description: "Task list for 015-pkg-mgr-agnostic — PM 非依存化の基盤 + 
 
 # Tasks: package manager 非依存化 (基盤 + 既存配布物 + Bun/Deno smoke)
 
+> **Superseded reference notice (post PR #151 / issue #141)**: 本ドキュメント内で「`_shared/package-manager.md` の bash スニペット」または「bash 検出順」等と参照している箇所は、issue #141 で shell 非依存の **prose ルール表** (`## Detection rules`) に置き換え済みです。SC-007 の同期契約はルールレベル (prose ↔ TS: 同じ優先順位・同じ結果・同じ warning/error 文言) で維持されており、`tests/package-manager-detection.test.ts` の prose↔TS meta-test が verbatim ワーディングを含めて検証します。詳細は [`contracts/package-manager.md`](contracts/package-manager.md) の "Note (issue #141)" ブロック参照。本文中の「bash」語は spec 015 起草時点の呼称としてそのまま保持しています (歴史的経緯の可読性のため)。
+
 **Input**: Design documents from `/specs/015-pkg-mgr-agnostic/`
 
 **Prerequisites**: [spec.md](./spec.md), [plan.md](./plan.md), [research.md](./research.md), [contracts/package-manager.md](./contracts/package-manager.md)

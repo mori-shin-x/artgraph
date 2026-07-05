@@ -76,14 +76,9 @@ describe("runDoctor — PASS path", () => {
 
   it("emits `agents-md-present` and `wrapper-present` for AGENTS.md + CLAUDE.md", () => {
     const report = runDoctor({ rootDir: proj.dir });
+    expect(findFinding(report.findings, (f) => f.kind === "agents-md-present")).toBeDefined();
     expect(
-      findFinding(report.findings, (f) => f.kind === "agents-md-present"),
-    ).toBeDefined();
-    expect(
-      findFinding(
-        report.findings,
-        (f) => f.kind === "wrapper-present" && f.agent === "claude",
-      ),
+      findFinding(report.findings, (f) => f.kind === "wrapper-present" && f.agent === "claude"),
     ).toBeDefined();
   });
 });
@@ -320,9 +315,7 @@ describe("formatDoctorReportJson — schema conformance", () => {
     const parsed = JSON.parse(json) as DoctorReport;
     expect(parsed.version).toBe(1);
     expect(parsed.summary.totalFindings).toBe(parsed.findings.length);
-    expect(parsed.summary.passCount + parsed.summary.failCount).toBe(
-      parsed.findings.length,
-    );
+    expect(parsed.summary.passCount + parsed.summary.failCount).toBe(parsed.findings.length);
     expect(Array.isArray(parsed.summary.agents)).toBe(true);
     for (const f of parsed.findings) {
       expect(typeof f.severity).toBe("string");
@@ -604,8 +597,7 @@ describe("runDoctor — D2: walk skips dot files", () => {
     const report = runDoctor({ rootDir: proj.dir });
     const extra = report.findings.filter(
       (x) =>
-        x.kind === "extraneous-file" &&
-        (x.path.includes(".DS_Store") || x.path.includes(".swp")),
+        x.kind === "extraneous-file" && (x.path.includes(".DS_Store") || x.path.includes(".swp")),
     );
     expect(extra.length, JSON.stringify(extra, null, 2)).toBe(0);
   });
@@ -660,7 +652,31 @@ describe("runDoctor — D-adj-1: throws on unknown agent id", () => {
   });
 });
 
-// Touch REPO_ROOT to silence the unused-binding lint while keeping the
-// reference handy for future tests that want to compare against the live
-// templates tree.
-void REPO_ROOT;
+describe("runDoctor — dogfood (this repo)", () => {
+  // Cheap standing guard for SC-002 byte-identical distribution: run the
+  // production doctor engine against the repo root itself. When template ↔
+  // dogfood drift happens (any of the 5 canonical agent skills paths falls
+  // out of sync with templates/skills/), the sha256 hash check inside
+  // `runDoctor` catches it here — no need to invoke the CLI or a fresh
+  // build.
+  //
+  // The scan test in tests/init.test.ts covers the same drift from a
+  // byte-comparison angle; this test complements it by exercising the exact
+  // codepath that `pnpm exec artgraph doctor` runs, so regressions in the
+  // doctor engine itself (missing agents, wrong path, hash logic) also
+  // surface here.
+  it("reports zero failures on the repo root (skills byte-identical across all 5 agents)", () => {
+    const report = runDoctor({ rootDir: REPO_ROOT });
+    // Failures are the actionable class (missing distribution, hash drift,
+    // permission bits gone). Warnings (info-only findings) are still
+    // allowed — this repo may legitimately have some at any given time.
+    expect(
+      report.summary.failCount,
+      `artgraph doctor reported ${report.summary.failCount} failure(s) on repo root; ` +
+        `failing findings:\n${report.findings
+          .filter((f) => f.severity === "fail")
+          .map((f) => `  - [${f.kind}] ${f.message}`)
+          .join("\n")}`,
+    ).toBe(0);
+  });
+});
