@@ -177,18 +177,40 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
       if (descriptor.skillsPath === null) {
         const wrapperAbs =
           descriptor.wrapperFile !== null ? resolve(rootAbs, descriptor.wrapperFile) : null;
+        // C1 (issue #130 follow-up review): distinguish artgraph-managed
+        // wrappers from hand-written Copilot custom instructions. Only
+        // treat the wrapper as an artgraph signal when it carries at least
+        // one of our marker lines. A broken/partial marker still counts as
+        // artgraph-managed so `wrapper-broken-marker` diagnostics can fire.
+        // Non-marker files (raw hand-written Copilot instructions) are NOT
+        // detected — otherwise doctor emits false-positive
+        // `wrapper-broken-marker` fails at users who never used artgraph.
         let wrapperExists = false;
         if (wrapperAbs !== null) {
           try {
-            wrapperExists = lstatSync(wrapperAbs).isFile();
+            if (lstatSync(wrapperAbs).isFile()) {
+              const content = readFileSync(wrapperAbs, "utf-8");
+              const health = inspectMarkerBlock(content);
+              wrapperExists = health.hasBegin || health.hasEnd;
+            }
           } catch {
             wrapperExists = false;
           }
         }
+        // B2 (issue #130 follow-up review): mirror the D5 canonical
+        // top-level guard used by other agents' auto-detect — a
+        // `.github/skills/` that contains only third-party Skills (e.g.
+        // speckit-*) must NOT be interpreted as artgraph residue. Detecting
+        // it would trigger a "safe to delete" nudge that would destroy
+        // unrelated tooling.
         let legacyResidueExists = false;
         if (descriptor.id === "copilot") {
+          const legacyDir = resolve(rootAbs, ".github", "skills");
           try {
-            legacyResidueExists = lstatSync(resolve(rootAbs, ".github", "skills")).isDirectory();
+            if (lstatSync(legacyDir).isDirectory()) {
+              const entries = readdirSync(legacyDir);
+              legacyResidueExists = entries.some((e) => canonicalTopLevels.has(e));
+            }
           } catch {
             legacyResidueExists = false;
           }
@@ -270,7 +292,7 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   // it as a fail-severity finding pointing the user at manual cleanup.
   for (const descriptor of detectedDescriptors) {
     if (descriptor.id !== "copilot") continue;
-    addLegacyCopilotSkillsFindings(rootAbs, findings);
+    addLegacyCopilotSkillsFindings(rootAbs, source, findings);
   }
 
   // Step 4 — AGENTS.md (single shared resource; `agent: null`).
@@ -473,7 +495,11 @@ function addExtraneousFindings(
  * user at manual cleanup without artgraph auto-deleting anything (per the
  * issue #130 user decision: warn only).
  */
-function addLegacyCopilotSkillsFindings(rootAbs: string, out: DoctorFinding[]): void {
+function addLegacyCopilotSkillsFindings(
+  rootAbs: string,
+  source: SkillSource,
+  out: DoctorFinding[],
+): void {
   const legacyDir = resolve(rootAbs, ".github", "skills");
   let isDir = false;
   try {
@@ -482,6 +508,22 @@ function addLegacyCopilotSkillsFindings(rootAbs: string, out: DoctorFinding[]): 
     return;
   }
   if (!isDir) return;
+
+  // B2 (issue #130 follow-up review): only flag as legacy artgraph residue
+  // when the directory contains at least one canonical top-level (artgraph-*
+  // or _shared). This mirrors the D5 guard in `addExtraneousFindings` and
+  // prevents a "safe to delete" nudge when `.github/skills/` holds only
+  // third-party tool Skills (e.g. speckit-*).
+  const canonicalTopLevels = new Set<string>(source.entries.map((e) => e.topLevel));
+  let hasCanonical = false;
+  try {
+    const entries = readdirSync(legacyDir);
+    hasCanonical = entries.some((e) => canonicalTopLevels.has(e));
+  } catch {
+    return;
+  }
+  if (!hasCanonical) return;
+
   out.push({
     severity: "fail",
     agent: "copilot",

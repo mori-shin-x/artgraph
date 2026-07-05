@@ -721,6 +721,40 @@ describe("runDoctor — issue #130: Copilot has no Skills distribution", () => {
     expect(text).not.toContain("[copilot] null/");
     expect(text).toContain("[copilot] (wrapper-only)");
   });
+
+  it("(C1) does NOT detect Copilot when `.github/copilot-instructions.md` is hand-written (no artgraph marker)", () => {
+    // False-positive guard: a Copilot user who wrote `.github/copilot-
+    // instructions.md` by hand (never used artgraph) must not have doctor
+    // flag their file as `wrapper-broken-marker`. Detection requires at
+    // least one artgraph marker line.
+    mkdirSync(join(proj.dir, ".github"), { recursive: true });
+    writeFileSync(
+      join(proj.dir, ".github", "copilot-instructions.md"),
+      "# My custom Copilot instructions\n\nHand-written prose, no artgraph markers here.\n",
+      "utf-8",
+    );
+    const report = runDoctor({ rootDir: proj.dir });
+    expect(report.summary.agents, JSON.stringify(report, null, 2)).not.toContain("copilot");
+    const copilotFindings = report.findings.filter((f) => f.agent === "copilot");
+    expect(copilotFindings.length).toBe(0);
+  });
+
+  it("(B2) does NOT flag `.github/skills/` as legacy residue when only third-party Skills are present", () => {
+    // False-positive guard: a repo that carries `.github/skills/speckit-*/`
+    // (some other tool's SKILL tree) but no artgraph canonical top-level
+    // must not receive a `legacy-copilot-skills-path` finding — otherwise
+    // the user is nudged to `rm -rf` third-party assets.
+    initProject(proj.dir, ["copilot"]);
+    mkdirSync(join(proj.dir, ".github", "skills", "speckit-implement"), { recursive: true });
+    writeFileSync(
+      join(proj.dir, ".github", "skills", "speckit-implement", "SKILL.md"),
+      "third-party skill body\n",
+      "utf-8",
+    );
+    const report = runDoctor({ rootDir: proj.dir });
+    const legacy = report.findings.filter((f) => f.kind === "legacy-copilot-skills-path");
+    expect(legacy.length, JSON.stringify(legacy, null, 2)).toBe(0);
+  });
 });
 
 describe("runDoctor — D-adj-1: throws on unknown agent id", () => {
