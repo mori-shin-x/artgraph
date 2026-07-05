@@ -59,8 +59,8 @@ export type Diagnostic =
     };
 
 /**
- * spec 014 (US1 / FR-018) — Task block surface info for `plan-coverage
- * --require-files-section`. Populated only when the input text has heading-
+ * spec 014 (US1 / FR-018) — Task block surface info for `plan-coverage`'s
+ * `requireFilesSection` option. Populated only when the input text has heading-
  * delimited task blocks (e.g. `### T013: ...`). Each entry records whether
  * the block declares a `Files:` section so the caller can emit a
  * `missingFilesSection` diagnostic. `taskId` is captured from the heading

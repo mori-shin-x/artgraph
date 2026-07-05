@@ -388,8 +388,7 @@ export interface PlanCoverageConfig {
    * When true, `artgraph plan-coverage` adds a `missingFilesSection`
    * diagnostic for each task block in tasks.md that does not declare a
    * `Files:` section. Defaults to false so existing projects without the
-   * `Files:` convention are not broken. The CLI `--require-files-section`
-   * flag overrides this on a per-run basis. See spec 014 FR-018.
+   * `Files:` convention are not broken. See spec 014 FR-018.
    */
   requireFilesSection?: boolean;
 }

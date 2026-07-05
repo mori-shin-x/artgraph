@@ -436,13 +436,12 @@ describe("templates/skills metatest", () => {
       expect(skill.body).toMatch(/unresolvedSymbol/);
     });
 
-    it("docs/skills-guide.md documents symbol mode, scan --mode symbol, and dual-axis", () => {
-      // AS#3: "scan --mode symbol を実行しないと無効" + "impactReqs / originReqs の二軸"
+    it("docs/skills-guide.md documents symbol mode via config and dual-axis", () => {
+      // AS#3: config-driven symbol mode + "impactReqs / originReqs の二軸"
       const docPath = resolve(import.meta.dirname, "..", "docs", "skills-guide.md");
       expect(existsSync(docPath), `Expected ${docPath} to exist`).toBe(true);
       const content = readFileSync(docPath, "utf8");
       expect(content).toMatch(/symbol mode/i);
-      expect(content).toMatch(/scan --mode symbol/);
       expect(content).toMatch(/impactReqs/);
       expect(content).toMatch(/originReqs/);
       // FR-028 (a) trade-off, (c) .artgraph.json mode example

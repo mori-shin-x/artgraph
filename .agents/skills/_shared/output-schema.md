@@ -23,7 +23,7 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
   "coverage": [                                        // per-requirement coverage rows
     { "reqId": "REQ-001", "status": "verified" }       // status: "verified" | "impl-only" | "untagged"
   ],
-  "testFailures": ["REQ-003"],                         // REQs whose tests ran and failed (only when --test-results supplied)
+  "testFailures": ["REQ-003"],                         // REQs whose tests ran and failed (only when `testResultPaths` is configured)
   "pass": true,                                        // true iff all four arrays above are empty
   "warnings": [                                        // BuildWarning[] from scan (always present, may be empty)
     {

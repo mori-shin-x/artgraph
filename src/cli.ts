@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Command, CommanderError, Option } from "commander";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -14,7 +14,7 @@ import { pathToFileURL } from "node:url";
 // compile time, so `import type` is free.
 import type { SymbolEntry } from "./parsers/sdd-files.js";
 
-// spec 016 (R-003) — direct CLI / hook-pretool / --diff inputs come in as raw
+// spec 016 (R-003) — direct CLI / --diff inputs come in as raw
 // strings (file paths or `path:symbol` declarations). lift each into the
 // `SymbolEntry` shape expected by `resolveStartIds`. Keep this regex in sync
 // with `src/parsers/sdd-files.ts:PATH_SYMBOL_RE` so direct CLI inputs accept
@@ -39,7 +39,7 @@ function pathsToEntries(paths: string[]): SymbolEntry[] {
     return { path: p, line: 1 };
   });
 }
-import type { NodeKind, ArtgraphConfig, TestResultMap } from "./types.js";
+import type { ArtgraphConfig, TestResultMap } from "./types.js";
 import type { BuildWarning } from "./graph/builder.js";
 import type { RenameResult } from "./rename-executor.js";
 import type { IntegrateResult, IntegrationProviderId } from "./types.js";
@@ -61,11 +61,6 @@ async function loadIntegrate(): Promise<typeof import("./integrate/index.js")> {
   return mod;
 }
 
-// Test seam: when set, hook-pretool reads this string instead of process.stdin.
-// Lets `runCli({stdin})` drive hook-pretool entirely in-process without having
-// to mock the global stdin stream.
-let _hookStdinOverride: string | undefined;
-
 function buildProgram(): Command {
   const program = new Command();
   program.name("artgraph").description("Typed artifact graph for TS/JS").version("0.1.0");
@@ -74,23 +69,14 @@ function buildProgram(): Command {
 }
 
 function registerCommands(program: Command): void {
-  function applyMode(config: ArtgraphConfig, modeFlag?: string): ArtgraphConfig {
-    if (modeFlag === "symbol" || modeFlag === "file") {
-      return { ...config, mode: modeFlag };
-    }
-    return config;
-  }
-
-  // Resolve test-result paths from the `--test-results` flag (preferred) or the
-  // `.artgraph.json` `testResultPaths` field, then load them. Returns undefined
-  // when neither is set so callers fall back to legacy (verifies-edge-only)
-  // coverage. Shared by `scan`, `check`, and `coverage`.
+  // Resolve test-result paths from the `.artgraph.json` `testResultPaths`
+  // field, then load them. Returns undefined when unset so callers fall back
+  // to legacy (verifies-edge-only) coverage. Shared by `scan` and `check`.
   async function resolveTestResults(
-    opts: { testResults?: string[] },
     config: ArtgraphConfig,
     rootDir: string,
   ): Promise<TestResultMap | undefined> {
-    const paths = opts.testResults ?? config.testResultPaths;
+    const paths = config.testResultPaths;
     if (paths && paths.length > 0) {
       const { loadTestResults } = await import("./test-results.js");
       return loadTestResults(paths, rootDir);
@@ -452,18 +438,16 @@ function registerCommands(program: Command): void {
 
   program
     .command("scan")
-    .description("Build the artifact graph and show summary")
+    .description("Build the artifact graph and show summary (JSON output includes the full graph)")
     .option("--format <format>", "Output format: json | text", "text")
-    .option("--test-results <paths...>", "Test result files (Vitest JSON / JUnit XML)")
-    .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
     .action(async (opts) => {
       const rootDir = process.cwd();
       const { loadConfig } = await import("./config.js");
       const { scan } = await import("./scan.js");
-      const config = applyMode(loadConfig(rootDir), opts.mode);
+      const config = loadConfig(rootDir);
       const result = scan(rootDir, config);
 
-      const testResults = await resolveTestResults(opts, config, rootDir);
+      const testResults = await resolveTestResults(config, rootDir);
       let testResultStats:
         | { totalTests: number; passedTests: number; failedTests: number }
         | undefined;
@@ -482,6 +466,10 @@ function registerCommands(program: Command): void {
       }
 
       if (opts.format === "json") {
+        // Full graph payload (nodes / edges) rides along with the count
+        // summary — `scan --format json` absorbed the old `graph` command.
+        const { graphToJSON } = await import("./graph/format.js");
+        const { nodes, edges } = graphToJSON(result.graph);
         const output: Record<string, unknown> = {
           nodeCount: result.nodeCount,
           edgeCount: result.edgeCount,
@@ -491,6 +479,8 @@ function registerCommands(program: Command): void {
           symbolCount: result.symbolCount,
           testCount: result.testCount,
           taskCount: result.taskCount,
+          nodes,
+          edges,
           warnings: result.warnings,
         };
         if (testResultStats) {
@@ -547,21 +537,19 @@ function registerCommands(program: Command): void {
     "error: REQ-ID inputs are not accepted by `artgraph impact`.",
     "use one of the following start sources:",
     "  artgraph impact <file>...          # explicit file paths",
-    "  artgraph impact --from-tasks <p>   # extract files from tasks.md",
-    "  artgraph impact --from-plan <p>    # extract files from plan.md",
     "  artgraph impact --diff             # use git diff",
+    "for tasks.md / plan.md analysis, use `artgraph plan-coverage`.",
   ].join("\n");
 
-  // `doc:` prefix is also rejected (FR-001 / FR-002). Surface the same 4
+  // `doc:` prefix is also rejected (FR-001 / FR-002). Surface the same
   // start sources so the user has a complete menu — the underlying mental
   // model is identical: `impact` is now file-only.
   const IMPACT_DOC_PREFIX_REJECTION = [
     "error: `doc:` prefix inputs are not accepted by `artgraph impact`.",
     "use one of the following start sources:",
     "  artgraph impact <file>...          # explicit file paths",
-    "  artgraph impact --from-tasks <p>   # extract files from tasks.md",
-    "  artgraph impact --from-plan <p>    # extract files from plan.md",
     "  artgraph impact --diff             # use git diff",
+    "for tasks.md / plan.md analysis, use `artgraph plan-coverage`.",
   ].join("\n");
 
   // spec 014 (UX-1): Broaden REQ-ID input detection so the navigational error
@@ -591,12 +579,8 @@ function registerCommands(program: Command): void {
       "[targets...]",
       "File paths or `path:symbol` entries — REQ-IDs and `doc:` prefix are rejected",
     )
-    .option("--from-tasks <path>", "Extract files from a tasks.md and use them as the start set")
-    .option("--from-plan <path>", "Extract files from a plan.md and use them as the start set")
     .option("--diff", "Use git diff to detect changed files")
-    .option("--depth <depth>", "Limit BFS traversal depth")
     .option("--format <format>", "Output format: json | text", "text")
-    .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
     .action(async (targets: string[], opts) => {
       const rootDir = process.cwd();
 
@@ -623,26 +607,17 @@ function registerCommands(program: Command): void {
         }
       }
 
-      // ----- Mutually exclusive start sources. Each of `targets[]`,
-      // `--from-tasks`, `--from-plan`, `--diff` counts as a single channel;
-      // contracts/cli-flags.md requires exactly one to be present.
-      const sourcesPicked = [
-        targets.length > 0 ? "targets" : null,
-        opts.fromTasks ? "--from-tasks" : null,
-        opts.fromPlan ? "--from-plan" : null,
-        opts.diff ? "--diff" : null,
-      ].filter((s): s is string => s !== null);
-
-      if (sourcesPicked.length > 1) {
+      // ----- Mutually exclusive start sources. `targets[]` and `--diff` each
+      // count as a single channel; contracts/cli-flags.md requires exactly one
+      // to be present.
+      if (targets.length > 0 && opts.diff) {
         console.error(
-          `error: start sources are mutually exclusive (specify only one): ${sourcesPicked.join(", ")}`,
+          "error: start sources are mutually exclusive (specify only one): targets, --diff",
         );
         process.exit(1);
       }
-      if (sourcesPicked.length === 0) {
-        console.error(
-          "error: no start source specified. pass file paths, --from-tasks, --from-plan, or --diff.",
-        );
+      if (targets.length === 0 && !opts.diff) {
+        console.error("error: no start source specified. pass file paths or --diff.");
         process.exit(1);
       }
 
@@ -650,13 +625,11 @@ function registerCommands(program: Command): void {
       const { scan } = await import("./scan.js");
       const { readLock } = await import("./lock.js");
       const { impact, resolveStartIds, resolveOriginReqs } = await import("./graph/traverse.js");
-      const config = applyMode(loadConfig(rootDir), opts.mode);
+      const config = loadConfig(rootDir);
       const { graph } = scan(rootDir, config);
       const lock = readLock(rootDir, config.lockFile);
 
       // ----- Build SymbolEntry[] from the chosen channel:
-      //   * --from-tasks / --from-plan → parser's ExtractResult.entries verbatim
-      //     (T028; symbol-unit declarations propagate through `resolveStartIds`).
       //   * --diff → file-unit only (contracts/cli-flags.md §1.3; git diff has
       //     no symbol resolution).
       //   * positional targets → CLI_PATH_SYMBOL_RE lift in `pathsToEntries`
@@ -664,37 +637,7 @@ function registerCommands(program: Command): void {
       //     so it happens after #1-#3 above per the validation order.
       let entries: SymbolEntry[];
       let inputDisplayLabels: string[]; // for "No matching nodes found" message
-      if (opts.fromTasks || opts.fromPlan) {
-        const sourcePath = (opts.fromTasks ?? opts.fromPlan) as string;
-        const sourceLabel = opts.fromTasks ? "--from-tasks" : "--from-plan";
-        if (!existsSync(sourcePath)) {
-          console.error(`error: ${sourceLabel} path not found: ${sourcePath}`);
-          process.exit(1);
-        }
-        const text = readFileSync(sourcePath, "utf-8");
-        const { extractFiles } = await import("./parsers/sdd-files.js");
-        const extracted = extractFiles(text, { graph, repoRoot: rootDir });
-        // SPEC-2: surface every `unresolvedFilePath` diagnostic as a warning so
-        // typos in a `Files:` section (e.g. `src/auht.ts`) don't silently fall
-        // through to an empty start set. Mirrors plan-coverage's diagnostic
-        // flattening so the two CLIs stay consistent.
-        for (const d of extracted.diagnostics) {
-          if (d.kind === "unresolvedFilePath") {
-            const loc = "line" in d && typeof d.line === "number" ? ` (line ${d.line})` : "";
-            console.error(`WARNING: unresolved file path "${d.path}"${loc} in ${sourcePath}`);
-          }
-        }
-        if (extracted.stage === "empty" || extracted.entries.length === 0) {
-          console.error(
-            `error: no files extracted from ${sourcePath}. add a \`Files: <path>\` section or reference existing file paths in the body.`,
-          );
-          process.exit(1);
-        }
-        // T028: hand `entries` straight to `resolveStartIds` so symbol-unit
-        // declarations propagate as `symbol:<path>#<name>` startIds.
-        entries = extracted.entries;
-        inputDisplayLabels = entries.map((e) => (e.symbol ? `${e.path}:${e.symbol}` : e.path));
-      } else if (opts.diff) {
+      if (opts.diff) {
         const { getGitDiffFiles } = await import("./diff.js");
         const diffFiles = getGitDiffFiles(rootDir);
         if (diffFiles.length === 0) {
@@ -751,9 +694,9 @@ function registerCommands(program: Command): void {
         if (!hasSymbolNode) {
           console.error(
             [
-              "ERROR: symbol-level input requires `artgraph scan --mode symbol`.",
-              '       Set `mode: "symbol"` in `.artgraph.json` and re-run scan to enable',
-              "       symbol-mode lookup.",
+              "ERROR: symbol-level input requires a symbol-mode graph.",
+              '       Set `mode: "symbol"` in `.artgraph.json` and re-run `artgraph scan`',
+              "       to enable symbol-mode lookup.",
             ].join("\n"),
           );
           process.exit(1);
@@ -783,20 +726,7 @@ function registerCommands(program: Command): void {
         process.exit(1);
       }
 
-      let maxDepth: number | undefined;
-      if (opts.depth !== undefined) {
-        const parsed = parseInt(opts.depth, 10);
-        if (isNaN(parsed)) {
-          console.error(`Invalid --depth value: "${opts.depth}". Must be a non-negative integer.`);
-          process.exit(1);
-        }
-        if (parsed < 0) {
-          console.error(`Invalid --depth value: "${opts.depth}". Must be a non-negative integer.`);
-          process.exit(1);
-        }
-        maxDepth = parsed;
-      }
-      const result = impact(graph, startIds, lock, maxDepth);
+      const result = impact(graph, startIds, lock);
 
       // T031 / FR-014 / INV-S6 — populate `originReqs` axis. `impact()` itself
       // stays purely forward-BFS; the origin axis is the union of each startId's
@@ -817,7 +747,7 @@ function registerCommands(program: Command): void {
   // trio — i.e. the SDD author silently dragged in side effects.
   //
   // All defaults follow contracts/cli-flags.md §plan-coverage:
-  //   --format text (default), --gate off, --ignore "", --require-files-section
+  //   --format text (default), --gate off, --ignore "", requireFilesSection
   //   off unless `.artgraph.json`'s `planCoverage.requireFilesSection` is true.
   program
     .command("plan-coverage")
@@ -835,10 +765,6 @@ function registerCommands(program: Command): void {
     )
     .option("--gate", "Exit 1 when implicit impacts or diagnostics are non-empty (CI use)")
     .option("--ignore <csv>", "Comma-separated REQ-IDs to drop from implicit list (one-shot)", "")
-    .option(
-      "--require-files-section",
-      "Emit a missingFilesSection diagnostic for every task block without a Files: header",
-    )
     .action(async (opts) => {
       const rootDir = process.cwd();
       const { resolveSpecDir } = await import("./plan-coverage/spec-resolver.js");
@@ -887,14 +813,10 @@ function registerCommands(program: Command): void {
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
 
-      // `--require-files-section` flag overrides config; absence means we
-      // fall back to the planCoverage section's requireFilesSection (default
-      // false).
+      // `.artgraph.json`'s planCoverage section drives requireFilesSection
+      // (default false).
       const config = loadConfig(rootDir);
-      const requireFilesSection: boolean =
-        opts.requireFilesSection === true
-          ? true
-          : (config.planCoverage?.requireFilesSection ?? false);
+      const requireFilesSection: boolean = config.planCoverage?.requireFilesSection ?? false;
 
       const format: "json" | "text" = opts.format === "json" ? "json" : "text";
 
@@ -931,19 +853,17 @@ function registerCommands(program: Command): void {
     .option("--gate", "Exit 2 on any issue (for Stop hook)")
     .option("--diff", "Scope check to files changed in git diff")
     .option("--format <format>", "Output format: json | text", "text")
-    .option("--test-results <paths...>", "Test result files (Vitest JSON / JUnit XML)")
-    .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
     .action(async (opts) => {
       const rootDir = process.cwd();
       const { loadConfig } = await import("./config.js");
       const { scan } = await import("./scan.js");
       const { readLock } = await import("./lock.js");
       const { check } = await import("./check.js");
-      const config = applyMode(loadConfig(rootDir), opts.mode);
+      const config = loadConfig(rootDir);
       const { graph, warnings } = scan(rootDir, config);
       const lock = readLock(rootDir, config.lockFile);
 
-      const testResults = await resolveTestResults(opts, config, rootDir);
+      const testResults = await resolveTestResults(config, rootDir);
 
       let scopedNodeIds: Set<string> | undefined;
       if (opts.diff) {
@@ -1049,185 +969,16 @@ function registerCommands(program: Command): void {
     });
 
   program
-    .command("coverage")
-    .description("Show coverage status for each requirement")
-    .addOption(
-      new Option("--format <format>", "Output format: json | text")
-        .choices(["json", "text"])
-        .default("text"),
-    )
-    .option("--test-results <paths...>", "Test result files (Vitest JSON / JUnit XML)")
-    .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
-    .action(async (opts) => {
-      const rootDir = process.cwd();
-      const { loadConfig } = await import("./config.js");
-      const { scan } = await import("./scan.js");
-      const { computeCoverage } = await import("./coverage.js");
-      const config = applyMode(loadConfig(rootDir), opts.mode);
-      const { graph } = scan(rootDir, config);
-
-      const testResults = await resolveTestResults(opts, config, rootDir);
-      const entries = computeCoverage(graph, testResults);
-
-      if (opts.format === "json") {
-        printCoverageJson(entries);
-      } else {
-        printCoverageText(entries);
-      }
-    });
-
-  program
     .command("reconcile")
     .description("Update the lock file to match current state")
-    .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
-    .action(async (opts) => {
+    .action(async () => {
       const rootDir = process.cwd();
       const { loadConfig } = await import("./config.js");
       const { scan, reconcile } = await import("./scan.js");
-      const config = applyMode(loadConfig(rootDir), opts.mode);
+      const config = loadConfig(rootDir);
       const { graph } = scan(rootDir, config);
       reconcile(rootDir, config, graph);
       console.log(`Lock file updated: ${config.lockFile}`);
-    });
-
-  program
-    .command("graph")
-    .description("Show the artifact graph")
-    .option("--format <format>", "Output format: text | json", "text")
-    .addOption(
-      new Option("--kind <kind>", "Filter by node kind").choices([
-        "doc",
-        "req",
-        "file",
-        "test",
-        "task",
-      ]),
-    )
-    .action(async (opts) => {
-      const rootDir = process.cwd();
-      const { loadConfig } = await import("./config.js");
-      const { scan } = await import("./scan.js");
-      const { formatGraphText, formatGraphJSON } = await import("./graph/format.js");
-      const config = loadConfig(rootDir);
-      const { graph } = scan(rootDir, config);
-
-      const kindFilter = opts.kind as NodeKind | undefined;
-
-      if (opts.format === "json") {
-        console.log(formatGraphJSON(graph, kindFilter));
-      } else {
-        console.log(formatGraphText(graph, kindFilter));
-      }
-    });
-
-  program
-    .command("hook-pretool")
-    .description("PreToolUse hook: analyze impact before Edit/Write/MultiEdit")
-    .action(async () => {
-      const startTime = process.hrtime.bigint();
-      const rootDir = process.cwd();
-      const {
-        parseHookInput,
-        extractFilePaths,
-        toRelativePath,
-        formatAdditionalContext,
-        buildHookOutput,
-      } = await import("./hook-pretool.js");
-
-      try {
-        let stdinText: string;
-        if (_hookStdinOverride !== undefined) {
-          stdinText = _hookStdinOverride;
-        } else {
-          const chunks: Buffer[] = [];
-          for await (const chunk of process.stdin) {
-            chunks.push(chunk);
-          }
-          stdinText = Buffer.concat(chunks).toString("utf-8");
-        }
-
-        const input = parseHookInput(stdinText);
-        if (!input) {
-          process.stderr.write("artgraph: failed to parse hook input\n");
-          process.stdout.write(JSON.stringify(buildHookOutput("")));
-          return;
-        }
-
-        const filePaths = extractFilePaths(input);
-        if (filePaths.length === 0) {
-          process.stdout.write(JSON.stringify(buildHookOutput("")));
-          return;
-        }
-
-        const relativePaths = filePaths.map((fp) => toRelativePath(fp, rootDir));
-
-        if (!existsSync(resolve(rootDir, ".artgraph.json"))) {
-          process.stdout.write(JSON.stringify(buildHookOutput("")));
-          return;
-        }
-
-        let config;
-        try {
-          const { loadConfig } = await import("./config.js");
-          config = loadConfig(rootDir);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          process.stderr.write(`artgraph: config load failed: ${msg}\n`);
-          process.stdout.write(JSON.stringify(buildHookOutput("")));
-          return;
-        }
-
-        let graph;
-        try {
-          const { scan } = await import("./scan.js");
-          const scanResult = scan(rootDir, config);
-          graph = scanResult.graph;
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          process.stderr.write(`artgraph: scan failed: ${msg}\n`);
-          process.stdout.write(JSON.stringify(buildHookOutput("")));
-          return;
-        }
-
-        const { impact, resolveStartIds } = await import("./graph/traverse.js");
-        const { startIds } = resolveStartIds(graph, pathsToEntries(relativePaths));
-        if (startIds.length === 0) {
-          process.stdout.write(JSON.stringify(buildHookOutput("artgraph impact: (none)")));
-          const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;
-          process.stderr.write(`artgraph: hook-pretool completed in ${Math.round(elapsed)}ms\n`);
-          return;
-        }
-
-        let lock;
-        try {
-          const { readLock } = await import("./lock.js");
-          lock = readLock(rootDir, config.lockFile);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          process.stderr.write(`artgraph: lock read failed: ${msg}\n`);
-          process.stdout.write(JSON.stringify(buildHookOutput("")));
-          return;
-        }
-
-        let result;
-        try {
-          result = impact(graph, startIds, lock);
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          process.stderr.write(`artgraph: impact failed: ${msg}\n`);
-          process.stdout.write(JSON.stringify(buildHookOutput("")));
-          return;
-        }
-
-        const additionalContext = formatAdditionalContext(result);
-        process.stdout.write(JSON.stringify(buildHookOutput(additionalContext)));
-
-        const elapsed = Number(process.hrtime.bigint() - startTime) / 1_000_000;
-        process.stderr.write(`artgraph: hook-pretool completed in ${Math.round(elapsed)}ms\n`);
-      } catch {
-        process.stderr.write("artgraph: failed to read stdin\n");
-        process.stdout.write(JSON.stringify(buildHookOutput("")));
-      }
     });
 
   function printWarnings(warnings: BuildWarning[]) {
@@ -1356,30 +1107,6 @@ function registerCommands(program: Command): void {
         `Summary: ${result.summary.docs} docs, ${result.summary.reqs} reqs, ${result.summary.files} files${taskPart}`,
       );
     }
-  }
-
-  function printCoverageJson(entries: { reqId: string; status: string }[]) {
-    const items = entries.map((e) => ({ reqId: e.reqId, status: e.status }));
-    const summary = {
-      total: entries.length,
-      verified: entries.filter((e) => e.status === "verified").length,
-      implOnly: entries.filter((e) => e.status === "impl-only").length,
-      untagged: entries.filter((e) => e.status === "untagged").length,
-    };
-    console.log(JSON.stringify({ items, summary }));
-  }
-
-  function printCoverageText(entries: { reqId: string; status: string }[]) {
-    console.log("COVERAGE:");
-    for (const e of entries) {
-      console.log(`  ${e.reqId}: ${e.status}`);
-    }
-    const verified = entries.filter((e) => e.status === "verified").length;
-    const implOnly = entries.filter((e) => e.status === "impl-only").length;
-    const untagged = entries.filter((e) => e.status === "untagged").length;
-    console.log(
-      `\nSummary: total=${entries.length} verified=${verified} impl-only=${implOnly} untagged=${untagged}`,
-    );
   }
 
   function printCheckText(result: any) {
@@ -1673,8 +1400,6 @@ function registerCommands(program: Command): void {
 export interface RunCliOptions {
   /** Working directory the CLI sees as `process.cwd()` for the duration of the call. */
   cwd?: string;
-  /** Optional stdin string injected into hook-pretool (replaces process.stdin reads). */
-  stdin?: string;
 }
 
 /** @internal */
@@ -1715,8 +1440,6 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
   const origErr = console.error;
   const origStdoutWrite = process.stdout.write.bind(process.stdout);
   const origStderrWrite = process.stderr.write.bind(process.stderr);
-  const hadStdinOverride = _hookStdinOverride !== undefined;
-  const prevStdinOverride = _hookStdinOverride;
   // Snapshot `process.exitCode` so we can restore it after this runCli call.
   // Commands may leave a non-zero exitCode (e.g. `init` on hooksInstall
   // failure) that would otherwise poison the surrounding vitest process's
@@ -1730,7 +1453,6 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
 
   try {
     if (opts.cwd) process.chdir(opts.cwd);
-    if (opts.stdin !== undefined) _hookStdinOverride = opts.stdin;
 
     console.log = (...args: unknown[]) => {
       pushStdout(args.map(formatLogArg).join(" ") + "\n");
@@ -1787,7 +1509,6 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
     console.error = origErr;
     process.stdout.write = origStdoutWrite;
     process.stderr.write = origStderrWrite;
-    _hookStdinOverride = hadStdinOverride ? prevStdinOverride : undefined;
     // Restore prior `process.exitCode` so a runCli call doesn't leak its
     // exit state into the surrounding test process.
     process.exitCode = origProcessExitCode;

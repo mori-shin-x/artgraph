@@ -372,13 +372,11 @@ for the formalisation.
 
 | Command                  | Purpose                                                                                             |
 | ------------------------ | --------------------------------------------------------------------------------------------------- |
-| `artgraph scan`          | Build the artifact graph and report counts                                                          |
+| `artgraph scan`          | Build the artifact graph and report counts (`--format json` includes the full graph)                |
 | `artgraph check`         | Report drift / orphans / uncovered (`--gate` to fail a hook)                                        |
-| `artgraph coverage`      | Per-requirement coverage status                                                                     |
-| `artgraph impact`        | File-only forward impact (file paths / `--from-tasks` / `--from-plan` / `--diff`)                   |
+| `artgraph impact`        | File-only forward impact (file paths / `--diff`)                                                    |
 | `artgraph plan-coverage` | Detect implicit REQ impacts: REQs touched by tasks.md `Files:` but not mentioned in tasks/plan/spec |
 | `artgraph reconcile`     | Rebuild `.trace.lock` from the current graph                                                        |
-| `artgraph graph`         | Emit the graph (dot / json)                                                                         |
 | `artgraph rename`        | Rename / split / merge requirement IDs (see below)                                                  |
 | `artgraph doctor`        | Diagnose Tier 1 cross-agent distributions (drift / missing / extraneous-file); see below           |
 
@@ -504,7 +502,7 @@ artgraph ships 9 Claude Code Skills that wire the CLI into the agent workflow:
 | `artgraph-bootstrap`        | n/a           | User wants to bootstrap / cold-start / seed initial REQs on an existing untagged (or partially-tagged) project                             |
 | `artgraph-integrate`        | n/a           | User wants to wire artgraph into an installed SDD tool (Spec Kit / Kiro)                                                                   |
 | `artgraph-detect`           | n/a           | User asks whether artgraph is set up / what's installed / what's available                                                                 |
-| `artgraph-impact`           | file + symbol | Forward impact analysis. Input is file paths or `path:symbol` pairs (REQ-IDs are rejected) — explicit args, `--from-tasks <path>`, `--from-plan <path>`, or `--diff` |
+| `artgraph-impact`           | file + symbol | Forward impact analysis. Input is file paths or `path:symbol` pairs (REQ-IDs are rejected) — explicit args or `--diff` |
 | `artgraph-plan-coverage`    | file + symbol | Detects implicit impacts: files / `path:symbol` declared in `tasks.md` may affect existing REQs not mentioned in `tasks.md` / `plan.md` / `spec.md`. Run after `/speckit-tasks` or before `/speckit-implement` |
 | `artgraph-verify`           | n/a           | User reports implementation completion or wants a consistency check                                                                        |
 | `artgraph-coverage`         | n/a           | User asks for progress, remaining work, or what's left to test                                                                             |

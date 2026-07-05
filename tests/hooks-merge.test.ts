@@ -116,9 +116,7 @@ describe("installHooks (Stop-hook merge)", () => {
     // {{...}} placeholders in the written file.
     expect(raw).not.toContain("{{");
     const parsed = JSON.parse(raw);
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
     expect(result.hooksInstall).toEqual({ action: "created", failure: false });
   });
 
@@ -133,9 +131,7 @@ describe("installHooks (Stop-hook merge)", () => {
 
     const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
     expect(parsed.permissions).toEqual({ allow: ["Bash"] });
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
     expect(result.hooksInstall?.action).toBe("merged-b");
     expect(result.hooksInstall?.failure).toBe(false);
   });
@@ -152,9 +148,7 @@ describe("installHooks (Stop-hook merge)", () => {
 
     const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
     expect(parsed.hooks.PreToolUse).toEqual(preToolUse);
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
     expect(result.hooksInstall?.action).toBe("merged-c");
     expect(result.hooksInstall?.failure).toBe(false);
   });
@@ -239,9 +233,7 @@ describe("installHooks (Stop-hook merge)", () => {
     const result = runInit(tmp, { noScan: true, force: true });
 
     const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
     expect(result.hooksInstall?.action).toBe("merged-b");
     expect(result.hooksInstall?.failure).toBe(false);
   });
@@ -292,7 +284,7 @@ describe("installHooks (Stop-hook merge)", () => {
       expect(result.hooksInstall?.failure).toBeFalsy();
       const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
       expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-        `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
+        `${execPrefix("pnpm")} check --gate --diff`,
       );
     });
   });
@@ -330,7 +322,7 @@ describe("installHooks (Stop-hook merge)", () => {
       const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
       const command: string = parsed.hooks.Stop[0].hooks[0].command;
       expect(command.startsWith(execPrefix(pm))).toBe(true);
-      expect(command).toBe(`${execPrefix(pm)} check --gate --diff --mode symbol`);
+      expect(command).toBe(`${execPrefix(pm)} check --gate --diff`);
     });
   });
 
@@ -373,9 +365,7 @@ describe("installHooks (Stop-hook merge)", () => {
     expect(result.hooksInstall?.action).toBe("created");
     expect(existsSync(settingsPath(tmp))).toBe(true);
     const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
   });
 
   // -- --no-hooks --------------------------------------------------------------------
@@ -405,9 +395,7 @@ describe("installHooks (Stop-hook merge)", () => {
     expect(existsSync(settingsPath(tmp))).toBe(true);
     expect(result.hooksInstall?.action).toBe("created");
     const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
   });
 
   // -- A3: Case D reason SSOT (rendered template body) -----------------------------
@@ -418,7 +406,7 @@ describe("installHooks (Stop-hook merge)", () => {
     // write, the user would be told to paste something different from what
     // artgraph actually wants — silently. Assert that the reason we emit is
     // literally the rendered template body, including whatever suffix the
-    // current template carries (--mode symbol today).
+    // current template carries.
     seedPm(tmp, "pnpm");
     mkdirSync(join(tmp, ".claude"), { recursive: true });
     writeFileSync(
@@ -431,9 +419,7 @@ describe("installHooks (Stop-hook merge)", () => {
     const result = runInit(tmp, { noScan: true, force: true });
 
     expect(result.hooksInstall?.action).toBe("conflict");
-    expect(result.hooksInstall?.reason).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(result.hooksInstall?.reason).toBe(`${execPrefix("pnpm")} check --gate --diff`);
   });
 
   // -- B1+B2: writeAtomic .tmp cleanup on rename failure --------------------------

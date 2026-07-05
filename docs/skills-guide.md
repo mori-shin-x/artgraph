@@ -90,14 +90,12 @@ deno run -A npm:artgraph/cli init
 - トリガー: file 起点で forward 影響範囲(波及する REQ / doc / file)を確認したいとき
 - 動作: 入力経路は file path のみで、次の 3 モードに整理されている
   - (a) git に変更あり → `artgraph impact --diff`
-  - (b) ユーザーが file path を明示 / または `--from-tasks <path>` / `--from-plan <path>` で SDD 文書から file 群を抽出 → `artgraph impact <files>` 等
-  - (c) どちらもなし → 「どの tasks.md / plan.md path、または file(s) を分析しますか？」とユーザーに確認
-- **REQ-ID 起点入力は spec 014 で撤去**: `artgraph impact REQ-001` のような REQ-ID / `doc:` prefix 入力は専用エラーで終了し、次の 4 経路を案内する:
+  - (b) ユーザーが file path / `path:symbol` を明示 → `artgraph impact <files>`
+  - (c) どちらもなし → 「どの file(s) を分析しますか？」とユーザーに確認
+- **REQ-ID 起点入力は spec 014 で撤去**: `artgraph impact REQ-001` のような REQ-ID / `doc:` prefix 入力は専用エラーで終了し、次の経路を案内する:
   - `artgraph impact <file>...` (file path 直指定)
-  - `artgraph impact --from-tasks <path>` (tasks.md から抽出)
-  - `artgraph impact --from-plan <path>` (plan.md から抽出)
   - `artgraph impact --diff` (git diff から抽出)
-- 抽出戦略 (`--from-tasks` / `--from-plan` 共通): (1) `Files: src/a.ts, src/b.ts` 形のセクションを優先抽出、(2) 無ければ全文 regex で path 形を拾い `graph.nodes` / `fs.existsSync` で実在検証したものを採用。両方ゼロなら警告 + exit 1。**tasks.md / plan.md の各タスクに `Files:` セクションを書く**ことを SDD 統合テンプレ (`templates/integrate/speckit/README.md`, `templates/integrate/kiro/artgraph.md`) で推奨している
+  - tasks.md / plan.md 分析は `artgraph plan-coverage` へ
 - リネーム理由: 旧名「plan」は "変更前の設計" を連想させたが `--diff` は変更後を見るため矛盾していた。3 モード化で diff の有無を問わず利用可能になり、spec 014 で file-only に絞ったことで CLI の mental model が「file → 波及」一方向に揃った
 - 使用例:
 
@@ -105,14 +103,11 @@ deno run -A npm:artgraph/cli init
 # 明示 file 起点
 artgraph impact src/auth.ts src/session.ts
 
-# tasks.md 起点 (推奨 — SDD workflow 親和的)
-artgraph impact --from-tasks specs/<latest>/tasks.md --format json
-
-# plan.md 起点
-artgraph impact --from-plan specs/<latest>/plan.md
-
 # git diff 起点 (既存)
-artgraph impact --diff --depth 3
+artgraph impact --diff
+
+# tasks.md / plan.md 起点の分析は plan-coverage へ
+artgraph plan-coverage
 ```
 
 - 参照: `templates/skills/artgraph-impact/SKILL.md`
@@ -134,7 +129,7 @@ artgraph impact --diff --depth 3
   2. **`--ignore REQ-003,REQ-007`**: one-shot suppression。当該実行限定で抑止し、**設定ファイルに永続化しない**。CI を一時的に通す緊急回避用
   3. **(将来) strict mode**: ラベル keyword (`Considered:` / `Affected:`) 強制。本 spec 014 ではスコープ外、spec 015 候補 [#105](https://github.com/ShintaroMorimoto/artgraph/issues/105) で扱う
 - exit code: デフォルト exit 0 + report (informational)。`--gate` 付きで `implicitImpacts` 非空 or `diagnostics` 非空のとき exit 1
-- `--require-files-section`: opt-in 厳格モード。tasks.md の各 task block に `Files:` セクションが無いものを `diagnostics[]` に `{ kind: "missingFilesSection", taskId, line }` 形で報告する。`.artgraph.json` の `{ "planCoverage": { "requireFilesSection": true } }` 経由でプロジェクト永続化も可能。デフォルト OFF なので既存プロジェクトを壊さない
+- `requireFilesSection`: opt-in 厳格モード。tasks.md の各 task block に `Files:` セクションが無いものを `diagnostics[]` に `{ kind: "missingFilesSection", taskId, line }` 形で報告する。`.artgraph.json` の `{ "planCoverage": { "requireFilesSection": true } }` で有効化する。デフォルト OFF なので既存プロジェクトを壊さない
 - 使用例:
 
 ```bash
@@ -150,8 +145,8 @@ artgraph plan-coverage --gate --format json
 # 一時的に suppress (one-shot)
 artgraph plan-coverage --gate --ignore REQ-003,REQ-007
 
-# Files: セクション強制 (opt-in 厳格モード)
-artgraph plan-coverage --require-files-section
+# Files: セクション強制は .artgraph.json で opt-in:
+#   { "planCoverage": { "requireFilesSection": true } }
 ```
 
 - 参照: `templates/skills/artgraph-plan-coverage/SKILL.md`
@@ -203,9 +198,9 @@ artgraph plan-coverage --require-files-section
 }
 ```
 
-設定変更後は `artgraph scan` を再実行してください (`mode: "symbol"` で初めて scan すると `symbol:<path>#<name>` ノードが graph に登録されます)。`mode: "file"` のまま `Files: src/auth.ts:validateToken` のような symbol 入力を渡すと、`artgraph plan-coverage` は `unresolvedSymbol` diagnostic を立て、`artgraph impact` は exit 1 で「symbol-level input requires `artgraph scan --mode symbol`」のガイダンスを返します。
+設定変更後は `artgraph scan` を再実行してください (`mode: "symbol"` で初めて scan すると `symbol:<path>#<name>` ノードが graph に登録されます)。`mode: "file"` のまま `Files: src/auth.ts:validateToken` のような symbol 入力を渡すと、`artgraph plan-coverage` は `unresolvedSymbol` diagnostic を立て、`artgraph impact` は exit 1 で「symbol-level input requires a symbol-mode graph」のガイダンスを返します。
 
-`artgraph init` のデフォルトは現在も `mode: "file"` です。symbol mode への切り替えは `.artgraph.json` の手動編集または `artgraph init --mode symbol` の明示 opt-in が必要です(`init` のデフォルト維持は spec 016 FR-024 で確定)。
+`artgraph init` が生成する `.artgraph.json` には `mode: "symbol"` が含まれます。`mode` を省略した既存 config のデフォルトは `mode: "file"` のままです。
 
 ### 二軸出力 (`impactReqs` / `originReqs`) によるドリフト追跡
 

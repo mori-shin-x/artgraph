@@ -189,6 +189,9 @@ export function generateConfig(detection: DetectionResult): ArtgraphConfig {
     specDirs,
     testPatterns: [...DEFAULT_CONFIG.testPatterns],
     lockFile: DEFAULT_CONFIG.lockFile,
+    // Newly-initialized projects get symbol-grain gate precision out of the
+    // box; configs that omit the field keep the "file" default (loadConfig).
+    mode: "symbol",
   };
 }
 
