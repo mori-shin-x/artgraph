@@ -524,14 +524,23 @@ function addLegacyCopilotSkillsFindings(
   }
   if (!hasCanonical) return;
 
+  // E1 + E7 (issue #130 follow-up review): downgraded to `pass` severity so
+  // an upgrade from a pre-fix artgraph version doesn't silently break
+  // existing users' CI (they set up `artgraph doctor` under the old
+  // severity contract and would see exit 1 without warning). The finding
+  // is still emitted with a clear NOTICE-style message so users know to
+  // clean up manually — matches the "warn only" decision recorded in
+  // issue #130 that `artgraph init` also follows (distributionWarnings,
+  // exit 0). Future work: introduce a dedicated `notice`/`warn` severity
+  // and cascade-migrate consumers.
   out.push({
-    severity: "fail",
+    severity: "pass",
     agent: "copilot",
     kind: "legacy-copilot-skills-path",
     path: ".github/skills",
-    expected: "not present",
-    actual: "present",
-    message: `.github/skills/ is a legacy artgraph distribution path that GitHub Copilot does not discover. Copilot now reads instructions from .github/copilot-instructions.md + AGENTS.md only. Remove .github/skills/ manually when convenient (safe to delete).`,
+    expected: null,
+    actual: null,
+    message: `NOTICE: .github/skills/ exists but GitHub Copilot does not discover that path. Copilot now reads instructions from .github/copilot-instructions.md + AGENTS.md only. Remove .github/skills/ manually when convenient (safe to delete; artgraph will not touch it).`,
   });
 }
 

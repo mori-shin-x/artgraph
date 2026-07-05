@@ -659,7 +659,7 @@ describe("runDoctor — issue #130: Copilot has no Skills distribution", () => {
     expect(report.summary.agents).toContain("copilot");
   });
 
-  it("flags a legacy .github/skills/ residue as `legacy-copilot-skills-path` (severity: fail)", () => {
+  it("flags a legacy .github/skills/ residue as `legacy-copilot-skills-path` (severity: pass — issue #130 warn-only)", () => {
     // Simulate a project that was initialized under an old artgraph
     // version that DID write `.github/skills/`. Current init leaves the
     // dir untouched (warn-only per issue #130's user decision), and
@@ -677,9 +677,12 @@ describe("runDoctor — issue #130: Copilot has no Skills distribution", () => {
     const report = runDoctor({ rootDir: proj.dir });
     const legacy = report.findings.find((f) => f.kind === "legacy-copilot-skills-path");
     expect(legacy, JSON.stringify(report.findings, null, 2)).toBeDefined();
-    expect(legacy!.severity).toBe("fail");
+    expect(legacy!.severity).toBe("pass");
     expect(legacy!.agent).toBe("copilot");
     expect(legacy!.path).toBe(".github/skills");
+    expect(legacy!.message).toContain("NOTICE:");
+    // E1 regression guard: legacy residue must NOT flip doctor exit code.
+    expect(report.summary.failCount).toBe(0);
   });
 
   it("does NOT flag anything under `.github/skills/` as skill-file-drift or extraneous-file", () => {
@@ -737,6 +740,24 @@ describe("runDoctor — issue #130: Copilot has no Skills distribution", () => {
     expect(report.summary.agents, JSON.stringify(report, null, 2)).not.toContain("copilot");
     const copilotFindings = report.findings.filter((f) => f.agent === "copilot");
     expect(copilotFindings.length).toBe(0);
+  });
+
+  it("(E1) legacy `.github/skills/` residue does not push doctor to exit code 1", () => {
+    // E1 regression guard: a repo that upgrades from pre-fix artgraph
+    // (with `.github/skills/` committed) must NOT see doctor flip to
+    // exit 1 — that would silently break CI pipelines that use
+    // `artgraph doctor` as a gate.
+    initProject(proj.dir, ["copilot"]);
+    mkdirSync(join(proj.dir, ".github", "skills", "artgraph-impact"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(proj.dir, ".github", "skills", "artgraph-impact", "SKILL.md"),
+      "leftover\n",
+      "utf-8",
+    );
+    const report = runDoctor({ rootDir: proj.dir });
+    expect(report.summary.failCount, JSON.stringify(report.findings, null, 2)).toBe(0);
   });
 
   it("(B2) does NOT flag `.github/skills/` as legacy residue when only third-party Skills are present", () => {
