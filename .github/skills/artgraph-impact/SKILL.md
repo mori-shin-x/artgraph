@@ -3,8 +3,10 @@ name: "artgraph-impact"
 description: "Runs `artgraph impact` to surface which requirements, docs, and files a proposed file or symbol edit touches (forward: files/symbols → REQs). Use when the user explicitly names file paths or `path:symbol` pairs, or wants the impact of files staged in `git diff` / declared in `tasks.md` / `plan.md`."
 allowed-tools:
   - "Bash(npx artgraph *)"
+  - "Bash(npx --no-install artgraph *)"
   - "Bash(pnpm exec artgraph *)"
   - "Bash(bunx artgraph *)"
+  - "Bash(bunx --no-install artgraph *)"
   - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
   - "Bash(git diff*)"
@@ -33,7 +35,7 @@ Pick one based on what the user supplied:
 
 ### 1. Prerequisite check
 
-See [install-check](../_shared/install-check.md) for the standard pre-flight check.
+See [install-check](../_shared/install-check.md) for the standard pre-flight check. If artgraph is not installed, stop and invoke the `artgraph-setup` Skill instead.
 
 > `<PM-exec>` is the project's package runner: `npx` (npm), `pnpm exec`, `bunx`, or `deno run -A npm:artgraph/cli`. Substitute the one detected by `_shared/package-manager.md` (or written in `.artgraph.json#packageManager`).
 

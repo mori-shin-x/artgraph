@@ -3,8 +3,10 @@ name: "artgraph-coverage"
 description: "Runs `artgraph coverage` to show per-requirement coverage status. Use when the user asks for progress, remaining work, or what's left to test. Make sure to use this skill whenever the user is reviewing progress against a spec."
 allowed-tools:
   - "Bash(npx artgraph *)"
+  - "Bash(npx --no-install artgraph *)"
   - "Bash(pnpm exec artgraph *)"
   - "Bash(bunx artgraph *)"
+  - "Bash(bunx --no-install artgraph *)"
   - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
 user-invocable: true
@@ -19,7 +21,7 @@ The agent runs `artgraph coverage` to surface per-requirement coverage status â€
 
 ### 1. Prerequisite check
 
-See [install-check](../_shared/install-check.md) for the standard pre-flight check.
+See [install-check](../_shared/install-check.md) for the standard pre-flight check. If artgraph is not installed, stop and invoke the `artgraph-setup` Skill instead.
 
 > `<PM-exec>` is the project's package runner: `npx` (npm), `pnpm exec`, `bunx`, or `deno run -A npm:artgraph/cli`. Substitute the one detected by `_shared/package-manager.md` (or written in `.artgraph.json#packageManager`).
 

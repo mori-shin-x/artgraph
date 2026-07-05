@@ -3,16 +3,14 @@ name: "artgraph-bootstrap"
 description: "Bootstraps spec ↔ code ↔ test traceability tags in an existing project by proposing spec entries, `@impl REQ-NNN` tags on code, and `[REQ-NNN]` markers on tests as a reviewable diff, then verifying deterministically with `artgraph scan && artgraph check`. Use when the user asks to bootstrap / cold-start / seed traceability / add initial REQs to an untagged or partially-tagged project. Make sure to use this skill whenever the user mentions bootstrap / cold-start / initial REQ seeding for artgraph."
 allowed-tools:
   - "Bash(npx artgraph *)"
+  - "Bash(npx --no-install artgraph *)"
   - "Bash(pnpm exec artgraph *)"
   - "Bash(bunx artgraph *)"
+  - "Bash(bunx --no-install artgraph *)"
   - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
   - "Bash(ls *)"
-  - "Bash(grep *)"
-  - "Bash(find *)"
-  - "Bash(wc *)"
   - "Bash(git diff *)"
-  - "Bash(command *)"
   - "Bash(test *)"
 user-invocable: true
 disable-model-invocation: false
@@ -36,28 +34,26 @@ See [install-check](../_shared/install-check.md) for the standard pre-flight che
 
 ### 2. Snapshot current graph state
 
-Scan the graph, noting node counts (`req`, `doc`, `file`, `test`), then grep for existing `@impl` claims:
+Scan the graph, noting node counts (`req`, `doc`, `file`, `test`):
 
-```bash
+```
 <PM-exec> scan --format json
 ```
 
-```bash
-grep -rl --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' --include='*.mjs' --include='*.cjs' --include='*.mts' --include='*.cts' --include='*.py' --include='*.go' --include='*.rs' --include='*.java' --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git '@impl REQ-' . 2>/dev/null | wc -l
-```
+Then, using your host's search tooling, count how many source files in the project already carry an `@impl REQ-` marker — search text files matching the project's source extensions (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.py`, `.go`, `.rs`, `.java`), excluding `node_modules/`, `dist/`, and `.git/`, for the literal string `@impl REQ-`. Silence "permission denied" / "no matches" noise; you only need the count of files with at least one match. Compose the search with whatever tool fits your environment (POSIX `grep -rl`, ripgrep, PowerShell `Select-String`, or your file-search API).
 
 Silently decide the path — **do not expose this as a mode flag**: **cold path** (`req == 0`, no `@impl REQ-` matches) proposes fresh IDs from `REQ-001`; **augment path** (REQs or `@impl` tags already present) allocates new IDs from `max(existing REQ-ID) + 1` — read the current spec first (Step 4) to preserve its existing sequence.
 
 ### 3. Scope gating
 
-The user may narrow scope with an argument such as `src/auth/`; otherwise use `.artgraph.json`'s `include` globs. Count candidate source files under that scope, then the existing spec files under `.artgraph.json#specDirs` (default `specs/`) — Step 4 reads every spec file regardless of the source scope gate:
+The user may narrow scope with an argument such as `src/auth/`; otherwise use `.artgraph.json`'s `include` globs. Count candidate source files under that scope, then the existing spec files under `.artgraph.json#specDirs` (default `specs/`) — Step 4 reads every spec file regardless of the source scope gate.
 
-```bash
-find <scope> -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' -o -name '*.mjs' -o -name '*.cjs' -o -name '*.mts' -o -name '*.cts' -o -name '*.py' -o -name '*.go' -o -name '*.rs' -o -name '*.java' \) -not -path '*/node_modules/*' -not -path '*/dist/*' -not -path '*/.git/*' | wc -l
-find <specDir> -type f -name '*.md' | wc -l
-```
+Using your host's file-listing tooling, count:
 
-If either count is > 50, do **not** proceed. Tell the user verbatim: "The scope is too broad for reliable single-pass estimation ({N} source files / {M} spec files); ask me again with a narrower target such as `src/<subdir>/`," naming the specific offending count, and stop. Do **not** attempt auto-partitioning in v1.
+- source files under `<scope>` matching the project's source extensions (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.py`, `.go`, `.rs`, `.java`), excluding `node_modules/`, `dist/`, and `.git/`.
+- spec files under `<specDir>` matching `*.md` (recursive).
+
+Report both counts. If either count is > 50, do **not** proceed. Tell the user verbatim: "The scope is too broad for reliable single-pass estimation ({N} source files / {M} spec files); ask me again with a narrower target such as `src/<subdir>/`," naming the specific offending count, and stop. Do **not** attempt auto-partitioning in v1.
 
 ### 4. Read & propose
 
