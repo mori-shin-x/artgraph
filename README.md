@@ -108,6 +108,8 @@ npm install -D artgraph && npx artgraph init --agents=claude       # pick your a
 
 `--agents=<list>` distributes the same canonical SKILL.md set (8 Skills + 3 `_shared/` fragments) to each agent's native discovery path. AGENTS.md is the single canonical agent-context body; the per-agent wrapper files only contain a `@AGENTS.md` import line so the body never duplicates.
 
+> **Support scope**: The 5 agents below are the entire supported set — artgraph has **no roadmap to expand beyond Tier 1 in v0.x**. See [docs/architecture.md §8 Support Scope](./docs/architecture.md#8-support-scope) for the full policy.
+
 | `--agents` value | Agent | Skills path | Agent context | Wrapper file |
 | --- | --- | --- | --- | --- |
 | `claude`   | Claude Code | `.claude/skills/`  | `AGENTS.md` | `CLAUDE.md` |
