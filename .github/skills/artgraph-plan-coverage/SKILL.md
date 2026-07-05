@@ -3,8 +3,10 @@ name: "artgraph-plan-coverage"
 description: "Detects implicit impacts: REQs reached by tasks.md `Files:` but not mentioned in `tasks.md` / `plan.md` / `spec.md` (reverse audit). Use after editing tasks.md / plan.md (e.g. after `/speckit-tasks`, or after updating `.kiro/specs/<name>/tasks.md`), before implementation."
 allowed-tools:
   - "Bash(npx artgraph plan-coverage *)"
+  - "Bash(npx --no-install artgraph plan-coverage *)"
   - "Bash(pnpm exec artgraph plan-coverage *)"
   - "Bash(bunx artgraph plan-coverage *)"
+  - "Bash(bunx --no-install artgraph plan-coverage *)"
   - "Bash(deno run -A npm:artgraph/cli plan-coverage *)"
   - "Bash(artgraph plan-coverage *)"
 user-invocable: true

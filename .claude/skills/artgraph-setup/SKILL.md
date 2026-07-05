@@ -8,14 +8,14 @@ allowed-tools:
   - "Bash(bun add*)"
   - "Bash(deno add*)"
   - "Bash(npx artgraph *)"
+  - "Bash(npx --no-install artgraph *)"
   - "Bash(pnpm exec artgraph *)"
   - "Bash(bunx artgraph *)"
+  - "Bash(bunx --no-install artgraph *)"
   - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
   - "Bash(test *)"
   - "Bash(ls *)"
-  - "Bash(command *)"
-  - "Bash(node -e *)"
 user-invocable: true
 disable-model-invocation: false
 ---

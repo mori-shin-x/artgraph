@@ -3,8 +3,10 @@ name: "artgraph-coverage"
 description: "Runs `artgraph coverage` to show per-requirement coverage status. Use when the user asks for progress, remaining work, or what's left to test. Make sure to use this skill whenever the user is reviewing progress against a spec."
 allowed-tools:
   - "Bash(npx artgraph *)"
+  - "Bash(npx --no-install artgraph *)"
   - "Bash(pnpm exec artgraph *)"
   - "Bash(bunx artgraph *)"
+  - "Bash(bunx --no-install artgraph *)"
   - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
 user-invocable: true
