@@ -25,7 +25,8 @@ import {
   type AgentId,
   findDescriptor,
 } from "./agents/descriptors.js";
-import { inspectMarkerBlock } from "./agents/agent-context.js";
+import { buildAgentsMdBody, inspectMarkerBlock } from "./agents/agent-context.js";
+import { detectPackageManager } from "./package-manager.js";
 import { readSkillSource, type SkillSource } from "./agents/source.js";
 
 /** Skip files larger than this when hashing / walking (C-adj-1). Prevents an
@@ -52,6 +53,7 @@ export type DoctorFindingKind =
   | "agents-md-present"
   | "agents-md-missing"
   | "agents-md-marker-broken"
+  | "agents-md-body-stale"
   | "wrapper-present"
   | "wrapper-missing"
   | "wrapper-no-import"
@@ -118,6 +120,12 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   // `Error: ...` (C1).
   const source: SkillSource = readSkillSource(SKILLS_TEMPLATE_DIR);
   const canonicalTopLevels = new Set<string>(source.entries.map((e) => e.topLevel));
+
+  // E3 (issue #130 follow-up review): detect the current PM up front so
+  // `addAgentsMdFindings` can compare the AGENTS.md marker body against the
+  // canonical `buildAgentsMdBody(detectedPm)`. Quiet mode — doctor never
+  // prints its own PM detection warning.
+  const detectedPm = detectPackageManager(rootAbs, { quiet: true });
 
   // Auto-detect can produce diagnostic findings before the main `findings`
   // array is created (e.g. EACCES on `.github/copilot-instructions.md`
@@ -347,7 +355,7 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   }
 
   // Step 4 — AGENTS.md (single shared resource; `agent: null`).
-  addAgentsMdFindings(rootAbs, findings);
+  addAgentsMdFindings(rootAbs, detectedPm, findings);
 
   // Step 5 — wrappers (claude / copilot only).
   for (const descriptor of detectedDescriptors) {
@@ -628,7 +636,11 @@ function addLegacyCopilotSkillsFindings(
   });
 }
 
-function addAgentsMdFindings(rootAbs: string, out: DoctorFinding[]): void {
+function addAgentsMdFindings(
+  rootAbs: string,
+  detectedPm: ReturnType<typeof detectPackageManager>,
+  out: DoctorFinding[],
+): void {
   const absPath = resolve(rootAbs, "AGENTS.md");
   // C3 / C-adj-4 — single defensive readFileSync so an ENOENT race with a
   // concurrent rm surfaces as `agents-md-missing`, and an EACCES surfaces as
@@ -677,6 +689,39 @@ function addAgentsMdFindings(rootAbs: string, out: DoctorFinding[]): void {
       message: `AGENTS.md artgraph marker block is broken. Re-run \`artgraph init --agents=<list> --force\` to repair.`,
     });
     return;
+  }
+  // E3 (issue #130 follow-up review): compare the marker-block body to the
+  // canonical rendering for the currently detected PM. If they differ, the
+  // user's AGENTS.md is running an outdated snippet (e.g. an older artgraph
+  // release still lists Copilot in `.github/skills/`) — flag it so they know
+  // to re-run `init --force`. Severity is `pass` (NOTICE-style) so a plain
+  // artgraph upgrade doesn't silently break CI gates; matches the "warn
+  // only" ethos used by legacy-copilot-skills-path.
+  const currentBody = health.bodyText ?? "";
+  let canonicalBody: string | null = null;
+  try {
+    canonicalBody = buildAgentsMdBody(detectedPm);
+  } catch {
+    // Packaging fault reading the template — do not synthesize a false
+    // stale finding. `readSkillSource` above will surface the packaging
+    // error on the same path elsewhere.
+    canonicalBody = null;
+  }
+  if (canonicalBody !== null) {
+    const currentHash = createHash("sha256").update(currentBody).digest("hex");
+    const canonicalHash = createHash("sha256").update(canonicalBody).digest("hex");
+    if (currentHash !== canonicalHash) {
+      out.push({
+        severity: "pass",
+        agent: null,
+        kind: "agents-md-body-stale",
+        path: "AGENTS.md",
+        expected: canonicalHash,
+        actual: currentHash,
+        message: `NOTICE: AGENTS.md artgraph marker block body is out of date. Re-run \`artgraph init --agents=<list> --force\` to refresh it against the current template.`,
+      });
+      return;
+    }
   }
   out.push({
     severity: "pass",
