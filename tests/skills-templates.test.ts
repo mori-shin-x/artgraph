@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { AGENT_DESCRIPTORS } from "../src/agents/descriptors.js";
 
 // Metatest: walks templates/skills/**/SKILL.md and verifies invariants
 // for the Claude Code Skills artgraph distributes.
@@ -69,6 +70,68 @@ function readSkill(dirName: string): SkillFile {
   const lines = body.trimStart().split("\n");
 
   return { raw, frontmatter, body, lines, filePath };
+}
+
+// Recursively lists every .md file under a directory, including _shared/
+// (unlike discoverSkillDirs(), which is scoped to Skill directories only and
+// deliberately excludes _shared/). Used by the issue #141 shell-portability
+// metatest below so newly added template files are automatically covered.
+function listAllTemplateMarkdownFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir).sort()) {
+    const full = join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      out.push(...listAllTemplateMarkdownFiles(full));
+    } else if (entry.endsWith(".md")) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+type FencedBlock = { lines: string[]; startLine: number };
+
+// Extracts the contents of fenced code blocks (``` ... ```) from markdown,
+// regardless of the fence's info string (```bash, ```json, plain ```, ...).
+// Only text inside fences is returned -- frontmatter and prose outside
+// fences are intentionally not inspected by callers of this helper.
+function extractFencedBlocks(content: string, sourcePath?: string): FencedBlock[] {
+  const rawLines = content.split("\n");
+  const blocks: FencedBlock[] = [];
+  let inFence = false;
+  let current: string[] = [];
+  let currentStart = 0;
+  let openLine = 0;
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+    if (/^\s*```/.test(line)) {
+      if (!inFence) {
+        inFence = true;
+        current = [];
+        currentStart = i + 2; // 1-indexed line number of the first line inside the fence
+        openLine = i + 1;
+      } else {
+        inFence = false;
+        blocks.push({ lines: current, startLine: currentStart });
+      }
+      continue;
+    }
+    if (inFence) {
+      current.push(line);
+    }
+  }
+  if (inFence) {
+    // Unclosed fence at EOF would silently drop the tail from every downstream
+    // scanner (POSIX-token check, etc.), letting shell literals sneak in below
+    // a missing closing ```. Fail loud so a typo is caught by CI rather than
+    // merged silently.
+    const where = sourcePath ? ` in ${sourcePath}` : "";
+    throw new Error(
+      `Unclosed fenced code block${where} (opened at line ${openLine}, no closing \`\`\` before EOF)`,
+    );
+  }
+  return blocks;
 }
 
 describe("templates/skills metatest", () => {
@@ -151,11 +214,12 @@ describe("templates/skills metatest", () => {
     });
   });
 
-  it("at least 8 Skill directories are present (regression guard)", () => {
+  it("at least 9 Skill directories are present (regression guard)", () => {
     // Pairs with the dynamic discoverSkillDirs() — if someone accidentally
     // moves a Skill out of templates/skills/, the count drops and this trips.
     // Bumped from 7 to 8 with spec 014 (artgraph-plan-coverage added).
-    expect(EXPECTED_SKILL_DIRS.length).toBeGreaterThanOrEqual(8);
+    // Bumped from 8 to 9 with issue #123 (artgraph-bootstrap added).
+    expect(EXPECTED_SKILL_DIRS.length).toBeGreaterThanOrEqual(9);
   });
 
   // SC-005 (spec 014): artgraph-impact description must NOT contain the
@@ -305,9 +369,11 @@ describe("templates/skills metatest", () => {
     // any of the four supported package managers without local rewriting.
     // Exempt:
     //   * artgraph-setup — the PM mapping table legitimately uses the runners.
-    //   * artgraph-detect Step 1 — the `command -v artgraph || npx --no-install
-    //     artgraph --version` probe is intentionally PM-fixed (it must run
-    //     before PM detection has happened).
+    //   * artgraph-detect Step 1 — describes probing the runner forms (npx /
+    //     pnpm exec / bunx / deno run) before PM detection has happened; since
+    //     issue #141 this is written as prose rather than a literal shell
+    //     probe, but the exemption still holds because the step legitimately
+    //     names every runner form ahead of PM detection.
     //   * table rows starting with `|`.
     //   * blockquote explainer lines starting with `>`.
     //   * lines where `artgraph` is inside inline backticks (e.g. prose
@@ -401,9 +467,14 @@ describe("templates/skills metatest", () => {
       expect(skill.body).toMatch(/artgraph-plan-coverage/);
     });
 
-    it("body summary template says 'N of 8 installed' (not 7)", () => {
+    it("body lists artgraph-bootstrap in the canonical set", () => {
       const skill = readSkill("artgraph-detect");
-      expect(skill.body).toMatch(/N of 8 installed/);
+      expect(skill.body).toMatch(/artgraph-bootstrap/);
+    });
+
+    it("body summary template says 'N of 9 installed' (not 8)", () => {
+      const skill = readSkill("artgraph-detect");
+      expect(skill.body).toMatch(/N of 9 installed/);
     });
   });
 
@@ -462,6 +533,96 @@ describe("templates/skills metatest", () => {
       const content = readFileSync(filePath, "utf8");
       const match = content.match(CJK_REGEX);
       expect(match, `CJK character "${match?.[0]}" found in _shared/${name}`).toBeNull();
+    });
+  });
+
+  // issue #141: SKILL.md templates were written Claude-only (`ls
+  // .claude/skills/`) and POSIX-bash-only (`||`, `2>/dev/null`, ...). These
+  // tests pin the "semantic prose" convention the templates are being
+  // migrated to: agent-agnostic path references and shell-portable command
+  // descriptions (no literal POSIX-only control tokens in fenced blocks).
+  describe("issue #141 — agent-agnostic, shell-portable templates", () => {
+    it("artgraph-detect body mentions all five canonical agent skills paths", () => {
+      const skill = readSkill("artgraph-detect");
+      const canonicalPaths = AGENT_DESCRIPTORS.map((d) => `${d.skillsPath}/`).sort();
+      for (const p of canonicalPaths) {
+        expect(
+          skill.body.includes(p),
+          `artgraph-detect/SKILL.md body must mention canonical skills path "${p}" (issue #141)`,
+        ).toBe(true);
+      }
+    });
+
+    it("artgraph-detect body has no shell-command enumeration literal for any single agent path", () => {
+      // Meta-review G5: the earlier check only pinned `ls .claude/skills/` and
+      // let equivalent shell-literals like `find .agents/skills/` or
+      // `dir .cursor\\skills\\` (PowerShell) slip through. Generalize to any
+      // enumeration-style shell command bound to a single canonical agent
+      // path.
+      const skill = readSkill("artgraph-detect");
+      const pattern =
+        /(?:^|\W)(?:ls|find|dir|list|Get-ChildItem)\s+\.(?:claude|agents|cursor|github|kiro)[\\/]skills[\\/]/i;
+      const offenders = skill.body
+        .split("\n")
+        .filter((line) => pattern.test(line))
+        .map((line) => line.trim());
+      expect(
+        offenders,
+        `artgraph-detect/SKILL.md body must not hardcode a shell enumeration bound to a single agent path — describe checking all five canonical skills paths in prose instead (issue #141):\n${offenders.join("\n")}`,
+      ).toEqual([]);
+    });
+
+    it("no fenced code block in templates/skills/**/*.md uses POSIX-only shell tokens", () => {
+      // Shell-portability metatest: future-proof against new template files,
+      // since it walks the filesystem directly rather than a static list.
+      // Frontmatter and prose (non-fenced text) are intentionally not
+      // checked here -- only fenced code blocks, which are what an agent
+      // would copy/paste or execute verbatim.
+      // Patterns absorb whitespace variance (`command  -v`, `test\t-f`,
+      // `> /dev/null`) and cover a wider set of POSIX-only constructs than
+      // the initial issue #141 landing did. See adversarial meta-review
+      // Cluster C3 for the bypass set that motivated each row.
+      const forbiddenTokens: { label: string; pattern: RegExp }[] = [
+        { label: "||", pattern: /\|\|/ },
+        { label: "&&", pattern: /&&/ },
+        { label: "2>", pattern: /2\s*>/ },
+        { label: ">/dev/null", pattern: />\s*\/dev\/(?:null|stderr|stdin|tty)/ },
+        { label: "command -v/-V", pattern: /\bcommand\s+-[vV]\b/ },
+        { label: "test -<flag>", pattern: /\btest\s+-[a-zA-Z]\b/ },
+        {
+          label: "node -e / --eval / -p / --print",
+          pattern: /\bnode\s+(?:-e|--eval|-p|--print)\b/,
+        },
+        { label: "$(", pattern: /\$\(/ },
+        { label: "if [ / elif [", pattern: /\b(?:if|elif)\s+\[/ },
+        { label: "[ -<flag>", pattern: /\[\s+-[a-zA-Z]\b/ },
+        { label: "[[ ... ]]", pattern: /\[\[/ },
+        { label: "set -e / -u / -o", pattern: /\bset\s+-[euoU]/ },
+      ];
+
+      const files = listAllTemplateMarkdownFiles(TEMPLATES_SKILLS_DIR);
+      expect(files.length).toBeGreaterThan(0);
+
+      const offenders: string[] = [];
+      for (const filePath of files) {
+        const content = readFileSync(filePath, "utf8");
+        const blocks = extractFencedBlocks(content, filePath);
+        for (const block of blocks) {
+          block.lines.forEach((line, idx) => {
+            for (const { label, pattern } of forbiddenTokens) {
+              if (pattern.test(line)) {
+                offenders.push(`${filePath}:${block.startLine + idx}: [${label}] ${line.trim()}`);
+              }
+            }
+          });
+        }
+      }
+
+      expect(
+        offenders,
+        `POSIX-only / shell-control tokens found in fenced code blocks; templates must be ` +
+          `shell-portable prose, not bash-only literals (issue #141):\n${offenders.join("\n")}`,
+      ).toEqual([]);
     });
   });
 });

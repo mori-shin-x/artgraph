@@ -1,7 +1,6 @@
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import type { ArtifactGraph, EdgeKind, ImpactResult, DriftEntry } from "../types.js";
+import type { ArtifactGraph, DriftEntry, EdgeKind, ImpactResult, SymbolEntry } from "../types.js";
 import type { LockFile } from "../types.js";
-import type { SymbolEntry } from "../parsers/sdd-files.js";
 
 /**
  * spec 007 / issue #155 — `findOrphans` output shape.

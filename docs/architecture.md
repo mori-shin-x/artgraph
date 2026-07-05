@@ -67,7 +67,7 @@ Non-goals: 仕様文の意味的な正しさの判定、要求の良し悪し評
 - LUUP 実測: SDD 導入で Vibe Coding 比、開発時間 43% 短縮・バグ 83% 削減
 - Zenn 15+ 記事がコード↔ドキュメント乖離を最大級のペインとして報告（2025–2026）
 
-反証として注意すべきデータ（→ §10 リスクで詳述）:
+反証として注意すべきデータ（→ §11 リスクで詳述）:
 
 - **Brenn Hill の実証研究**（SSRN、100,247 PR 分析）: 仕様の存在は欠陥率を**上げる**傾向（+1.4pp）。「仕様→品質向上」の因果は実証的に支持されていない
 - **ContextGit の牽引力のなさ**（10 stars）: 最も近いコンセプトのツールが普及していない＝「技術的に実現可能でも普及が難しい」リスク
@@ -137,7 +137,7 @@ Non-goals: 仕様文の意味的な正しさの判定、要求の良し悪し評
 
 ## 5. アーキテクチャ（L1–L3）
 
-- L1 グラフ構築: コード↔コードは TS AST（ts-morph / TS language service、将来 tsgo）。コード↔仕様/ドキュメントは ID タグ ＋ frontmatter `depends_on`。.md は remark でパース。symbol-level は barrel/re-export の貫通が要る（最難所）。
+- L1 グラフ構築: コード↔コードは TS AST（構想当初は ts-morph / TS language service、将来 tsgo。現在は oxc-parser ベースの軽量抽出層に置換済み — #159）。コード↔仕様/ドキュメントは ID タグ ＋ frontmatter `depends_on`。.md は remark でパース。symbol-level は barrel/re-export の貫通が要る（最難所）。
 - L2 インパクトクエリ: diff からの双方向トラバース（全エッジ型）。出力 = 依存元コード / 紐づくドキュメント・仕様 / drift / 未リンク新シンボル。
 - L3 表出: Plan 時 = MCP ツール。検証時 = Claude Code Hook。
 
@@ -214,11 +214,33 @@ drift = 現在の hash ≠ lock の hash。
 共通フラグ: `--mode`, `--diff`, `--gate`, `--type req|doc|code|test`, `--format json|text`。
 `impact`/`check` は全エッジ型（doc↔doc 含む）を辿る。
 
-**Update (spec 013, 2026-06)**: 当初の `artgraph mcp-server` 構想は spec 013 で再評価した結果スコープ外とし、5 エージェント (Claude Code / Codex CLI / Cursor / GitHub Copilot / Kiro) を **Tier 1** として位置づけ、Skills + AGENTS.md + 薄ラッパー方式でカバーする構成に転換した。`artgraph init --agents=<csv>` で各エージェントの canonical Skills パス (`.claude/skills/` / `.agents/skills/` / `.cursor/skills/` / `.github/skills/` / `.kiro/skills/`) に同一の SKILL.md を配布し、AGENTS.md を canonical agent-context として `CLAUDE.md` / `.github/copilot-instructions.md` から `@AGENTS.md` 取り込みのみで参照する。診断は新サブコマンド `artgraph doctor` が drift / 欠落 / extraneous-file を検出する。MCP サーバの差別化価値は将来 Tier 2 拡張時 (Cline / Goose / Continue 等) に再検討する。詳細は [`specs/013-cross-agent-extensions/research.md`](../specs/013-cross-agent-extensions/research.md) R4 を参照。**§8 は spec 013 以前に書かれた `mcp-server` ベースの Hook 統合構想であり、現行スコープ (Tier 1: Skills + AGENTS.md) には含まれない。** 実装判断の根拠として §8 に沿った PR を出さないこと。
+**Update (spec 013, 2026-06)**: 当初の `artgraph mcp-server` 構想は spec 013 で再評価した結果スコープ外とし、5 エージェント (Claude Code / Codex CLI / Cursor / GitHub Copilot / Kiro) を **Tier 1** として位置づけ、Skills + AGENTS.md + 薄ラッパー方式でカバーする構成に転換した。`artgraph init --agents=<csv>` で各エージェントの canonical Skills パス (`.claude/skills/` / `.agents/skills/` / `.cursor/skills/` / `.github/skills/` / `.kiro/skills/`) に同一の SKILL.md を配布し、AGENTS.md を canonical agent-context として `CLAUDE.md` / `.github/copilot-instructions.md` から `@AGENTS.md` 取り込みのみで参照する。診断は新サブコマンド `artgraph doctor` が drift / 欠落 / extraneous-file を検出する。MCP サーバの差別化価値は将来検討事項として保留するが、§8 に示す通り Tier 1 (5 エージェント) を超える対応拡張は v0.x スコープ外であり、拡張前提の再評価は予定していない。詳細は [`specs/013-cross-agent-extensions/research.md`](../specs/013-cross-agent-extensions/research.md) R4 を参照。**§9 は spec 013 以前に書かれた `mcp-server` ベースの Hook 統合構想であり、現行スコープ (Tier 1: Skills + AGENTS.md) には含まれない。** 実装判断の根拠として §9 に沿った PR を出さないこと。
 
-## 8. Claude Code 統合（spec 013 以前の構想 — 現行スコープ外、Tier 2 参考）
+## 8. Support Scope
 
-- ~~Plan 精緻化 → `mcp-server` を登録し、エージェントがプラン時に `impact` を呼ぶ。任意で SessionStart で現状を context 注入。~~ (spec 013 で見送り。Tier 1 では `artgraph-impact` Skill がこの役割を代替する。Tier 2 拡張時に再評価)
+artgraph が Skills / agent-context / `artgraph doctor` の配布・診断対象とする AI コーディングエージェントは、以下 5 種で確定している。この 5 種を **Tier 1** と呼び、`artgraph init --agents=<list>` の受理値と 1:1 で対応する。
+
+| `--agents` value | Agent |
+| --- | --- |
+| `claude`   | Claude Code |
+| `codex`    | Codex CLI (OpenAI) |
+| `cursor`   | Cursor |
+| `copilot`  | GitHub Copilot |
+| `kiro`     | Kiro |
+
+canonical Skills パス、agent-context ラッパー、`AgentDescriptor` の各値は `README.md` の Tier 1 cross-agent distribution 表、および `specs/013-cross-agent-extensions/contracts/distribution-paths.md` を参照。実装上の single source of truth は `src/agents/descriptors.ts` の table。
+
+### v0.x スコープ方針
+
+- **v0.x では Tier 1 を超える対応拡張の予定はない**。将来的な追加検討の可能性を否定はしないが、コミット済 roadmap には含まれず、個別エージェント (`AgentDescriptor` の追加候補) の調査・拡張 spec の起票は行わない。
+- サポート済プロダクトの EOL / discontinuation が発生した場合は、Tier 1 からの除外を都度検討する (静的な確定リストではなく、事後追従で維持)。
+- コミュニティからの追加要望は、単発の対応要望としてではなく **拡張方針そのものを再検討すべき事象** (例: 5 エージェントを上回るユーザー基盤を artgraph 内で獲得した実測データ) と併せて評価する。
+
+この節は README (Tier 1 cross-agent distribution) からリンクされる canonical anchor であり、Tier 分類に関する記述の一次情報源とする。spec 013 archive (`specs/013-cross-agent-extensions/`) に残る Tier 2 候補リストは着手当時の意思決定記録として保持するが、現在の方針としては本節が優先する。
+
+## 9. Claude Code 統合（spec 013 以前の構想 — 現行スコープ外・歴史的記述）
+
+- ~~Plan 精緻化 → `mcp-server` を登録し、エージェントがプラン時に `impact` を呼ぶ。任意で SessionStart で現状を context 注入。~~ (spec 013 で見送り。Tier 1 では `artgraph-impact` Skill がこの役割を代替する。§8 の方針により拡張前提の再評価は予定せず)
 - PreToolUse（`Edit|Write`）→ 助言。`tool_input.file_path` からインパクトを `additionalContext` で注入（exit 0 + JSON）。低遅延必須 → http ハンドラで常駐デーモンに POST。ブロック（exit 2）は orphan 化等の狭い場合のみ。
 - PostToolUse（`Edit|Write`）→ グラフ増分更新 ＋ 軽いナッジ（フィードバック可、取り消し不可）。
 - Stop（＝検証ゲート） → diff 全体を `check --gate`。drift（コード・ドキュメント両方）/ orphan / 未カバー / 未テストがあれば exit 2 で作業継続させる（stderr 再注入）。`stop_hook_active` を見て無限ループ回避。
@@ -249,9 +271,9 @@ drift = 現在の hash ≠ lock の hash。
 }
 ```
 
-## 9. 実装方針
+## 10. 実装方針
 
-- 言語: まず Node/TS（ts-morph ＋ TS language service ＋ remark ＋ glob）を常駐デーモンで。symbol 精度がタダ、出荷が速い、PreToolUse 遅延はデーモンで償却。
+- 言語: まず Node/TS（初期実装は ts-morph ＋ TS language service ＋ remark ＋ glob。TS 抽出層はその後 #159 で oxc-parser に置換）を常駐デーモンで。symbol 精度がタダ、出荷が速い、PreToolUse 遅延はデーモンで償却。
   - Rust/Go は profiling で file-level が律速と判明してからの最適化。その時の現実形は「fast core（Rust=oxc / Go）＋ tsgo（typescript-go）で意味解析」。TS セマンティクスを Rust で再実装しない（oxlint/rslint も tsgo に委譲している）。モード別に言語を分けてよい（file=Rust, symbol=TS コンパイラ）。
 - テスト結果の取り込み: Vitest JSON レポーター / JUnit XML を読み、REQ-ID で join → `verified` 判定。
 - npm 配布: Rust/Go コアでもプリビルドバイナリを npm 配布して `npx` 可能に（UX は JS ネイティブを維持）。
@@ -264,7 +286,7 @@ MVP: データモデルは最初から型付きアーティファクトグラフ
 - P2: doc↔doc（depends_on）＋ doc-drift ＋ 統合 impact、MCP サーバ／Plan 連携、rename/split/merge、depth/型ベースの影響 UX
 - P3: Rust(oxc) file-mode ＋ tsgo、barrel 強化、VS Code 可視化
 
-## 10. 未解決・リスク
+## 11. 未解決・リスク
 
 - リンクの自己申告問題: エージェントが `@impl` を自己 claim する。緩和 = 仕様所有 ID（捏造不可）＋ drift ハッシュ＋ impl＋通るテスト＋意味は人（D5）。ここが設計の根。
 - doc エッジも自己申告: `depends_on` は著者/エージェント宣言。貼り忘れ＝見えない影響。緩和は `@impl` と同じ（解決と drift を検証）。「prose で REQ/doc に言及あるが `depends_on` 無し→提案」lint は任意・既定オフ。
@@ -282,7 +304,7 @@ MVP: データモデルは最初から型付きアーティファクトグラフ
 - **市場牽引のリスク**: 最も近いコンセプトの ContextGit（Python + MCP Server で diff→影響 doc 検出）は 10 stars に留まる。「技術的に実現可能でも普及が難しい」典型例。技術勝負だけでなく、Skills / Hook 統合の摩擦をどこまで下げられるかが普及の鍵になる。
 - **Kiro 等 SDD ツール側の継続整合性**: 設計時点では「Kiro が公式に未解決と認めている」と捉えていたが、公式文書での明言は確認できず。実態は **Kiro 公式リポジトリ Issue #9435（コミュニティ起票）** ＋ **「手動/オンリクエスト同期」設計** が傍証として残るのみ。空白主張の根拠としては弱いので、市場検証は別の角度（DORA / Zenn / LUUP データ）で補強する。
 
-## 11. 先行事例（学ぶ点）
+## 12. 先行事例（学ぶ点）
 
 - **CoDD（Coherence-Driven Development）**（**現役で最も近い競合に浮上** — 2026-07 再調査）: 当初評価（doc 限定・LLM 伝播）は陳腐化。現在は要求↔設計↔コード↔設定↔テストの **5 層接続マップ＋影響分類（Green/Amber/Gray）＋コミットをブロックする pre-commit ゲート＋MCP 統合**を持ち、伝播ロジックは決定的（生成側に LLM）。108★・3.5 ヶ月で 16→108 と急成長。frontmatter スキーマ（node_id/depends_on/relation）は D7 のグラフ層としてそのまま採用、`extract`（ブラウンフィールド）、Skills/Hook/MCP の作法も引き続き参考。**残る差別化は「要求 ID 主キー」「AST シンボル精度」「TS ネイティブ CLI」の 3 点** — 成長速度からウォッチ最優先。
 - **StrictDoc**: Tree-sitter による AST 解析で要求↔コード（関数・クラス）↔テストを決定的にトレース。非 LLM。Apache 2.0、Python 製、v0.25.1 / 2026-07-02 リリースと活発だが、**2026-07 時点でも JS/TS 非対応のまま**（tree-sitter パーサーは Python / C/C++ のみ、関数レベルパース計画 Issue #1957 にも JS/TS への言及なし）。**artgraph との残る差別化は「JS/TS ネイティブ」と「AST 由来の自動エッジ（手動 `@relation` マーカー不要）」の2点に絞られる。** ここを明確に上回らないと優位性が崩れる（tsパーサー追加はアーキテクチャ上あり得る増分なので Issue #1957 を継続監視）。

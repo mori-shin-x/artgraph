@@ -106,7 +106,9 @@ npm install -D artgraph && npx artgraph init --agents=claude       # pick your a
 
 ### Tier 1 cross-agent distribution
 
-`--agents=<list>` distributes the same canonical SKILL.md set (8 Skills + 3 `_shared/` fragments) to each agent's native discovery path. AGENTS.md is the single canonical agent-context body; the per-agent wrapper files only contain a `@AGENTS.md` import line so the body never duplicates.
+`--agents=<list>` distributes the same canonical SKILL.md set (9 Skills + 3 `_shared/` fragments) to each agent's native discovery path. AGENTS.md is the single canonical agent-context body; the per-agent wrapper files only contain a `@AGENTS.md` import line so the body never duplicates.
+
+> **Support scope**: The 5 agents below are the entire supported set — artgraph has **no roadmap to expand beyond Tier 1 in v0.x**. See [docs/architecture.md §8 Support Scope](./docs/architecture.md#8-support-scope) for the full policy.
 
 | `--agents` value | Agent | Skills path | Agent context | Wrapper file |
 | --- | --- | --- | --- | --- |
@@ -127,7 +129,7 @@ If you use Claude Code, you can skip the manual install entirely — type `/artg
 
 ### Windows note
 
-**Native Windows (PowerShell / cmd) is not a supported platform.** The artgraph CLI, the generated Stop hook, and the distributed Skills all assume a POSIX environment. On Windows, run artgraph inside **WSL2** (recommended) — all supported package managers and Tier 1 agents work there. Git Bash may handle basic commands but is untested and unsupported. This is a deliberate v0.x scope decision ([#137](https://github.com/ShintaroMorimoto/artgraph/issues/137)); native Windows support may be revisited if there is demand.
+**Native Windows (PowerShell / cmd) is not a supported platform.** The artgraph CLI and the generated Stop hook assume a POSIX environment. Since [#141](https://github.com/ShintaroMorimoto/artgraph/issues/141), the distributed Skill instructions themselves are shell-agnostic prose — each host agent composes the actual commands for its own shell and locates its own Skills path — but the `artgraph` CLI commands those Skills invoke still require POSIX, so the overall platform posture is unchanged. On Windows, run artgraph inside **WSL2** (recommended) — all supported package managers and Tier 1 agents work there. Git Bash may handle basic commands but is untested and unsupported. This is a deliberate v0.x scope decision ([#137](https://github.com/ShintaroMorimoto/artgraph/issues/137)); native Windows support may be revisited if there is demand.
 
 Even when artgraph itself runs inside WSL2, teammates checking the repo out on native Windows still interact with the distributed files: artgraph distributes a `.gitattributes` file into each `<agent-skills-path>/` that forces LF for the tracked files. Do NOT set `core.autocrlf=true` globally — if `.gitattributes` is not committed, `artgraph doctor` may report drift after checkout. Alternatively add `.claude/skills/** text eol=lf` (and equivalents for other agents) to your repo's `.gitattributes`.
 
@@ -525,11 +527,12 @@ Notes:
 
 ## Claude Code skills
 
-artgraph ships 8 Claude Code Skills that wire the CLI into the agent workflow:
+artgraph ships 9 Claude Code Skills that wire the CLI into the agent workflow:
 
 | Skill                       | Input mode    | When it fires                                                                                                                              |
 | --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `artgraph-setup`            | n/a           | User wants to install / set up / add artgraph on a fresh project                                                                           |
+| `artgraph-bootstrap`        | n/a           | User wants to bootstrap / cold-start / seed initial REQs on an existing untagged (or partially-tagged) project                             |
 | `artgraph-integrate`        | n/a           | User wants to wire artgraph into an installed SDD tool (Spec Kit / Kiro)                                                                   |
 | `artgraph-detect`           | n/a           | User asks whether artgraph is set up / what's installed / what's available                                                                 |
 | `artgraph-impact`           | file + symbol | Forward impact analysis. Input is file paths or `path:symbol` pairs (REQ-IDs are rejected) — explicit args, `--from-tasks <path>`, `--from-plan <path>`, or `--diff` |

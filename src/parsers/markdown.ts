@@ -7,7 +7,12 @@ import { visit } from "unist-util-visit";
 import { toString } from "mdast-util-to-string";
 import { createHash } from "node:crypto";
 import type { GraphNode, GraphEdge, ReqPatternConfig, TaskConventionPreset } from "../types.js";
-import { NAMESPACED_ID_TOKEN } from "../req-id.js";
+import {
+  NAMESPACED_ID_TOKEN,
+  LIST_ITEM_RE,
+  KIRO_HEADING_RE,
+  DEFAULT_CODE_ID_RE,
+} from "../grammar/tokens.js";
 
 export interface ParseMarkdownOptions {
   rootDir?: string;
@@ -21,10 +26,6 @@ export interface ParseMarkdownOptions {
    */
   disableBuiltinTaskConventions?: string[];
 }
-
-const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
-const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*:/;
-const DEFAULT_CODE_ID_RE = /^[A-Z][A-Za-z]*-\d+$/;
 
 // Built-in task convention presets. spec-kit covers plan.md/tasks.md with the
 // `T\d+` ID shape + `@impl(...)` / `[REQ-...]` tag syntax. kiro covers tasks.md
@@ -117,7 +118,7 @@ export interface InlineLinkRef {
   rawHref: string;
 }
 
-interface ParsedSpec {
+export interface ParsedSpec {
   nodes: GraphNode[];
   edges: GraphEdge[];
   warnings: ParseWarning[];
@@ -125,13 +126,25 @@ interface ParsedSpec {
 }
 
 export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions): ParsedSpec {
+  return parseMarkdownContent(readFileSync(filePath, "utf-8"), filePath, options);
+}
+
+// Content-level entry point: identical to `parseMarkdown` but takes the file
+// text instead of reading it. The parse-cache path reads (and hashes) each
+// spec file once to decide hit/miss, so on a miss it hands the already-read
+// source here rather than paying a second read.
+export function parseMarkdownContent(
+  source: string,
+  filePath: string,
+  options?: ParseMarkdownOptions,
+): ParsedSpec {
   // Normalize line endings so downstream offsets, regexes, and hashes see a
   // single `\n` regardless of how the file was checked out (CRLF on Windows
   // git workspaces, lone CR from legacy editors). Without this, an authored
   // `(depends_on: X)\r\n` line bypasses ANNOTATION_RE_LINE in the rewriter
   // while still being parsed as an annotation here — i.e. parser/rewriter
   // parity breaks on CRLF files (meta-review additional F4).
-  const raw = readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const raw = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const rootDir = options?.rootDir;
   const specDirPrefix = options?.specDirPrefix;
   const relPath = rootDir ? relative(rootDir, filePath) : filePath;

@@ -857,7 +857,8 @@ describe("CLI: init", () => {
     expect(typeof result.skillsInstalled).toBe("object");
     expect(Array.isArray(result.skillsInstalled.skills)).toBe(true);
     // Bumped 7 -> 8 in spec 014 (artgraph-plan-coverage added).
-    expect(result.skillsInstalled.skills.length).toBe(8);
+    // Bumped 8 -> 9 in issue #123 (artgraph-bootstrap added).
+    expect(result.skillsInstalled.skills.length).toBe(9);
     expect(result.skillsInstalled.fragments.length).toBeGreaterThanOrEqual(3);
     expect(result.skillsInstalled.skills).toContain(".claude/skills/artgraph-impact/SKILL.md");
   });

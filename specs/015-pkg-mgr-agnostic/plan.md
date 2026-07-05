@@ -1,5 +1,7 @@
 # Implementation Plan: package manager 非依存化の基盤 + 既存配布物の PM 非依存化 + Bun/Deno smoke test
 
+> **Superseded reference notice (post PR #151 / issue #141)**: 本ドキュメント内で「`_shared/package-manager.md` の bash スニペット」または「bash 検出順」等と参照している箇所は、issue #141 で shell 非依存の **prose ルール表** (`## Detection rules`) に置き換え済みです。SC-007 の同期契約はルールレベル (prose ↔ TS: 同じ優先順位・同じ結果・同じ warning/error 文言) で維持されており、`tests/package-manager-detection.test.ts` の prose↔TS meta-test が verbatim ワーディングを含めて検証します。詳細は [`contracts/package-manager.md`](contracts/package-manager.md) の "Note (issue #141)" ブロック参照。本文中の「bash」語は spec 015 起草時点の呼称としてそのまま保持しています (歴史的経緯の可読性のため)。
+
 **Branch**: `claude/artgraph-issue-102-1dn27j` | **Date**: 2026-06-28 | **Spec**: [spec.md](./spec.md)
 
 **Input**: Feature specification from `/specs/015-pkg-mgr-agnostic/spec.md`
@@ -121,7 +123,7 @@ tests/
 └── skills-templates.test.ts             # 改修: 本文に裸の `npx artgraph <sub>` が 0 件 / allowed-tools に 4 PM exec
 ```
 
-**Structure Decision**: 単一プロジェクト (`src/` + `tests/` + `templates/` + `docs/`)。新規 `src/package-manager.ts` は既存 `src/config.ts` / `src/id.ts` と同列の root レベルモジュール (機能が config・init をまたぐ横断ユーティリティのため、特定サブディレクトリに置かず root に置く)。検出ロジックの bash (`_shared/package-manager.md`) と TS (`src/package-manager.ts`) は SSOT として検出順を一致させ、`contracts/package-manager.md` の真理値表を両者の正解とする。
+**Structure Decision**: 単一プロジェクト (`src/` + `tests/` + `templates/` + `docs/`)。新規 `src/package-manager.ts` は既存 `src/config.ts` / `src/rename-validate-id.ts` と同列の root レベルモジュール (機能が config・init をまたぐ横断ユーティリティのため、特定サブディレクトリに置かず root に置く)。検出ロジックの bash (`_shared/package-manager.md`) と TS (`src/package-manager.ts`) は SSOT として検出順を一致させ、`contracts/package-manager.md` の真理値表を両者の正解とする。
 
 **Skills 言語ポリシー** (spec 012 FR-029 継承): `templates/skills/*/SKILL.md` は英語のまま。README / `docs/skills-guide.md` への追記は現行言語 (日本語) を維持。
 
