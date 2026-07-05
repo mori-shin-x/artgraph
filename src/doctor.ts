@@ -664,7 +664,12 @@ export function formatDoctorReportText(report: DoctorReport): string {
     const agentFindings = report.findings.filter((f) => f.agent === agentId);
     if (agentFindings.length === 0) continue;
 
-    lines.push(`[${agentId}] ${descriptor.skillsPath}/`);
+    // issue #130 — Copilot has `skillsPath: null` (no on-disk Skills tree).
+    // Emit `(wrapper-only)` instead of the raw `null` so the header stays
+    // meaningful for text output consumers.
+    const pathLabel =
+      descriptor.skillsPath === null ? "(wrapper-only)" : `${descriptor.skillsPath}/`;
+    lines.push(`[${agentId}] ${pathLabel}`);
     const failures = agentFindings.filter((f) => f.severity === "fail");
     const passCount = agentFindings.length - failures.length;
     if (failures.length === 0) {

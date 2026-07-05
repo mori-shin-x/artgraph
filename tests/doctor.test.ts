@@ -710,6 +710,17 @@ describe("runDoctor — issue #130: Copilot has no Skills distribution", () => {
     const legacy = report.findings.filter((f) => f.kind === "legacy-copilot-skills-path");
     expect(legacy.length).toBe(0);
   });
+
+  it("(A1) formatDoctorReportText renders Copilot header as `(wrapper-only)`, never `null/`", () => {
+    // Regression guard: `descriptor.skillsPath` is `string | null` for
+    // Copilot; the text formatter must narrow the header instead of
+    // stringifying the `null` literal.
+    initProject(proj.dir, ["copilot"]);
+    const report = runDoctor({ rootDir: proj.dir });
+    const text = formatDoctorReportText(report);
+    expect(text).not.toContain("[copilot] null/");
+    expect(text).toContain("[copilot] (wrapper-only)");
+  });
 });
 
 describe("runDoctor — D-adj-1: throws on unknown agent id", () => {
