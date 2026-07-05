@@ -286,10 +286,10 @@ export function buildGraph(
   }
 
   // Parse TypeScript files — incrementally when the parse cache holds valid
-  // fragments. The file set comes from globCodeFiles (the exact fast-glob
-  // call ts-morph makes inside addSourceFilesAtPaths), so hit and miss paths
-  // see the same files a full ts-morph scan would. Only changed files are
-  // handed to ts-morph; a fully-warm run never loads it at all.
+  // fragments. The file set comes from globCodeFiles (the same fast-glob
+  // call the parser's own file enumeration is built on), so hit and miss
+  // paths see the same files a full scan would. Only changed files are
+  // handed to the oxc parser; a fully-warm run never loads it at all.
   const codePatterns = [...config.include, ...config.testPatterns];
   const tsMode = config.mode ?? "file";
   const codeId = config.reqPatterns?.codeId;
@@ -297,9 +297,11 @@ export function buildGraph(
   const relCodeFiles = codeFiles.map((f) => relative(rootDir, f));
 
   // TS fragments are only reusable while the import-resolution environment is
-  // unchanged: tsconfig content, analysis mode, codeId token, and the matched
-  // file set (an added/removed file can change how an UNCHANGED file's import
-  // specifier resolves). Any difference invalidates every TS fragment.
+  // unchanged: tsconfig content (the parser's specifier resolver reads jsx /
+  // allowJs / resolveJsonModule from it — see parsers/typescript.ts), analysis
+  // mode, codeId token, and the matched file set (an added/removed file can
+  // change how an UNCHANGED file's import specifier resolves). Any difference
+  // invalidates every TS fragment.
   const tsconfigPath = resolve(rootDir, "tsconfig.json");
   const tsconfigHash = existsSync(tsconfigPath)
     ? hashContent(readFileSync(tsconfigPath, "utf-8"))

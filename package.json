@@ -61,8 +61,8 @@
     "fast-glob": "^3.3.3",
     "glob": "^11.0.2",
     "mdast-util-to-string": "^4.0.0",
+    "oxc-parser": "^0.137.0",
     "remark-parse": "^11.0.0",
-    "ts-morph": "^25.0.0",
     "unified": "^11.0.5",
     "unist-util-visit": "^5.0.0",
     "yaml": "^2.9.0"
