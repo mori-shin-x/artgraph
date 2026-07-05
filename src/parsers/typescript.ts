@@ -1,9 +1,21 @@
-import { Project, type SourceFile } from "ts-morph";
+import type { Project, SourceFile } from "ts-morph";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { resolve, relative } from "node:path";
+import fastGlob from "fast-glob";
 import type { GraphNode, GraphEdge } from "../types.js";
 import { NAMESPACED_ID_TOKEN } from "../req-id.js";
+
+// ts-morph is a CJS package and by far the heaviest import in the CLI
+// (~300 ms module load). Loading it lazily via createRequire keeps this
+// module's import cheap and — combined with the parse cache — lets a
+// fully-warm scan skip ts-morph entirely. `require` of a CJS dep is
+// synchronous, so callers (buildGraph is sync) don't need to change shape.
+const requireCjs = createRequire(import.meta.url);
+function loadTsMorph(): typeof import("ts-morph") {
+  return requireCjs("ts-morph") as typeof import("ts-morph");
+}
 
 // Default requirement-ID *token* used when no custom `reqPatterns.codeId` is set.
 // The token matches the whole ID (e.g. `FR-001`, `auth/AUTH-2`, `Requirement-3`).
@@ -35,7 +47,7 @@ function buildIdMatchers(codeId?: string): IdMatchers {
   };
 }
 
-interface ParsedTS {
+export interface ParsedTS {
   nodes: GraphNode[];
   edges: GraphEdge[];
 }
@@ -46,17 +58,21 @@ interface SymbolRange {
   endLine: number;
 }
 
+function buildProjectOptions(rootDir: string) {
+  const tsconfigPath = resolve(rootDir, "tsconfig.json");
+  return existsSync(tsconfigPath)
+    ? { tsConfigFilePath: tsconfigPath, skipAddingFilesFromTsConfig: true }
+    : { skipAddingFilesFromTsConfig: true };
+}
+
 export function createTSParser(
   rootDir: string,
   patterns: string[],
   mode: "file" | "symbol" = "file",
   codeId?: string,
 ) {
-  const tsconfigPath = resolve(rootDir, "tsconfig.json");
-  const projectOpts = existsSync(tsconfigPath)
-    ? { tsConfigFilePath: tsconfigPath, skipAddingFilesFromTsConfig: true }
-    : { skipAddingFilesFromTsConfig: true };
-  const project = new Project(projectOpts);
+  const { Project: TsProject } = loadTsMorph();
+  const project = new TsProject(buildProjectOptions(rootDir));
 
   for (const pattern of patterns) {
     project.addSourceFilesAtPaths(resolve(rootDir, pattern));
@@ -64,6 +80,41 @@ export function createTSParser(
 
   const matchers = buildIdMatchers(codeId);
   return { project, parse: () => parseProject(project, rootDir, mode, matchers) };
+}
+
+// Resolve the code-file set for `patterns` with the exact glob call ts-morph's
+// RealFileSystemHost makes inside `addSourceFilesAtPaths` (fast-glob, cwd =
+// process.cwd(), absolute results). The parse-cache path discovers the file
+// set through this helper so warm runs see byte-for-byte the same set a full
+// ts-morph scan would, without loading ts-morph.
+export function globCodeFiles(rootDir: string, patterns: string[]): string[] {
+  return fastGlob.sync(
+    patterns.map((p) => resolve(rootDir, p).replace(/\\/g, "/")),
+    { cwd: resolve(), absolute: true },
+  );
+}
+
+// Parse exactly the given files (used by the parse-cache path to reparse only
+// changed files). Files are all added to one Project before parsing, mirroring
+// createTSParser's add-all-then-parse flow; import resolution consults the
+// real file system, so targets outside `filePaths` still resolve the same way
+// they do in a full scan. Returns a fragment per input path.
+export function parseTSFilePaths(
+  rootDir: string,
+  filePaths: string[],
+  mode: "file" | "symbol" = "file",
+  codeId?: string,
+): Map<string, ParsedTS> {
+  const { Project: TsProject } = loadTsMorph();
+  const project = new TsProject(buildProjectOptions(rootDir));
+  const matchers = buildIdMatchers(codeId);
+
+  const sourceFiles = filePaths.map((p) => project.addSourceFileAtPath(p));
+  const out = new Map<string, ParsedTS>();
+  for (let i = 0; i < filePaths.length; i++) {
+    out.set(filePaths[i], parseTSSourceFile(sourceFiles[i], rootDir, mode, matchers));
+  }
+  return out;
 }
 
 function parseProject(
@@ -76,30 +127,46 @@ function parseProject(
   const edges: GraphEdge[] = [];
 
   for (const sourceFile of project.getSourceFiles()) {
-    const filePath = sourceFile.getFilePath();
-    const relPath = relative(rootDir, filePath);
-
-    const fileContent = sourceFile.getFullText();
-    const fileHash = hash(fileContent);
-
-    const isTest = /\.(test|spec)\.(ts|tsx)$/.test(filePath);
-
-    nodes.push({
-      id: `file:${relPath}`,
-      kind: isTest ? "test" : "file",
-      filePath: relPath,
-      contentHash: fileHash,
-    });
-
-    let symbolRanges: SymbolRange[] = [];
-
-    if (mode === "symbol" && !isTest) {
-      symbolRanges = extractSymbols(sourceFile, relPath, nodes);
-    }
-
-    extractImports(sourceFile, relPath, rootDir, edges, mode, isTest);
-    extractImplTags(fileContent, relPath, isTest, edges, mode, symbolRanges, matchers);
+    const parsed = parseTSSourceFile(sourceFile, rootDir, mode, matchers);
+    nodes.push(...parsed.nodes);
+    edges.push(...parsed.edges);
   }
+
+  return { nodes, edges };
+}
+
+function parseTSSourceFile(
+  sourceFile: SourceFile,
+  rootDir: string,
+  mode: "file" | "symbol",
+  matchers: IdMatchers,
+): ParsedTS {
+  const nodes: GraphNode[] = [];
+  const edges: GraphEdge[] = [];
+
+  const filePath = sourceFile.getFilePath();
+  const relPath = relative(rootDir, filePath);
+
+  const fileContent = sourceFile.getFullText();
+  const fileHash = hash(fileContent);
+
+  const isTest = /\.(test|spec)\.(ts|tsx)$/.test(filePath);
+
+  nodes.push({
+    id: `file:${relPath}`,
+    kind: isTest ? "test" : "file",
+    filePath: relPath,
+    contentHash: fileHash,
+  });
+
+  let symbolRanges: SymbolRange[] = [];
+
+  if (mode === "symbol" && !isTest) {
+    symbolRanges = extractSymbols(sourceFile, relPath, nodes);
+  }
+
+  extractImports(sourceFile, relPath, rootDir, edges, mode, isTest);
+  extractImplTags(fileContent, relPath, isTest, edges, mode, symbolRanges, matchers);
 
   return { nodes, edges };
 }

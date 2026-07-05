@@ -19,6 +19,9 @@ importers:
       commander:
         specifier: ^13.1.0
         version: 13.1.0
+      fast-glob:
+        specifier: ^3.3.3
+        version: 3.3.3
       glob:
         specifier: ^11.0.2
         version: 11.1.0
