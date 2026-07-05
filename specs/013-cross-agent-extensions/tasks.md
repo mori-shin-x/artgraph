@@ -64,7 +64,7 @@ description: "Tasks for spec 013-cross-agent-extensions"
 
 **Goal**: 5 エージェント (Claude Code / Codex CLI / Cursor / GitHub Copilot / Kiro) いずれの単一識別子に対しても `artgraph init --agents=<one>` で canonical Skills パスへ正しく配布されること。
 
-**Independent Test**: 任意の Tier 1 エージェント値で init 実行 → 対応 canonical Skills パス (`.claude/skills/` / `.agents/skills/` / `.cursor/skills/` / `.github/skills/` / `.kiro/skills/`) に `templates/skills/` 配下と byte-equal な SKILL.md + `_shared/` がコピーされている (quickstart.md §1-1, §1-3 で検証)。
+**Independent Test**: 任意の Tier 1 配布対象エージェント値 (claude/codex/cursor/kiro) で init 実行 → 対応 canonical Skills パス (`.claude/skills/` / `.agents/skills/` / `.cursor/skills/` / `.kiro/skills/`) に `templates/skills/` 配下と byte-equal な SKILL.md + `_shared/` がコピーされている。GitHub Copilot は Skills 配布対象外 (wrapper-only) — `.github/skills/` は作成されず、`.github/copilot-instructions.md` (wrapper) + AGENTS.md 経由でのみ Skill 一覧が伝わる (issue #130) (quickstart.md §1-1, §1-3 で検証)。
 
 ### Implementation for User Story 1
 
@@ -83,7 +83,7 @@ description: "Tasks for spec 013-cross-agent-extensions"
 
 **Goal**: `--agents=<comma-separated-list>` で複数エージェントを一括指定し、各エージェントの canonical Skills パスへ byte-equal な配布が同期される。
 
-**Independent Test**: `init --agents=claude,codex,cursor,copilot,kiro` 実行 → 5 配布先が `diff -rq` で差分ゼロ。canonical 元を書き換えて `--force` 再実行 → 5 配布先すべてが新内容で同期 (quickstart §1-2, §1-5)。
+**Independent Test**: `init --agents=claude,codex,cursor,kiro` 実行 → 4 配布先 (`.claude/skills/` / `.agents/skills/` / `.cursor/skills/` / `.kiro/skills/`) が `diff -rq` で差分ゼロ。canonical 元を書き換えて `--force` 再実行 → 4 配布先すべてが新内容で同期。GitHub Copilot は Skills 配布対象外 (wrapper-only) — `--agents=...,copilot` を含めても `.github/skills/` は作成されない (issue #130) (quickstart §1-2, §1-5)。
 
 ### Implementation for User Story 2
 
@@ -141,7 +141,7 @@ description: "Tasks for spec 013-cross-agent-extensions"
 
 **Purpose**: ドッグフーディング、ドキュメント整備、最終整合チェック
 
-- [ ] T032 Dogfood — run `artgraph init --agents=claude,codex,cursor,copilot,kiro --force` in artgraph repo itself (verify SC-008). Commit resulting `.claude/skills/` + `.agents/skills/` + `.cursor/skills/` + `.github/skills/` + `.kiro/skills/` + `AGENTS.md` + `CLAUDE.md` + `.github/copilot-instructions.md` to demonstrate the feature working end-to-end on the canonical reference project.
+- [ ] T032 Dogfood — run `artgraph init --agents=claude,codex,cursor,kiro --force` in artgraph repo itself (verify SC-008). Commit resulting `.claude/skills/` + `.agents/skills/` + `.cursor/skills/` + `.kiro/skills/` + `AGENTS.md` + `CLAUDE.md` + `.github/copilot-instructions.md` to demonstrate the feature working end-to-end on the canonical reference project. (Copilot は issue #130 で Skills 配布対象外に変更 — wrapper-only: `.github/skills/` は生成しない)
 - [ ] T033 [P] Update `README.md` to document: (a) `--agents=<list>` required flag with 5 supported values, (b) Tier 1 agent list with canonical paths table (copy from contracts/distribution-paths.md), (c) new `artgraph doctor` subcommand with usage example
 - [ ] T034 Run `artgraph check --diff` for spec/code/test consistency self-check (catches missed `@impl FR-NNN` claims). **(C2 補強)** さらに以下を 1 コマンドで実行し、SC-007 (MCP / Plugin / 非 Claude hooks 不在) を機械化検証する:
   ```bash
