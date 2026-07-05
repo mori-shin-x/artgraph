@@ -78,7 +78,7 @@ export interface TaskConventionPreset {
 
 - spec-kit: checkbox は **optional** (T### prefix が十分 distinctive のため)
 - kiro: checkbox **required** (number-only listItem の false positive 防止、H1 fix)。verifiesTagRe は lookbehind で `Requirements:` ラベル後の `[\s\d.,]*` スコープに限定 → 散文中の数字は除外
-- spec-kit verifiesTagRe の `NAMESPACED_ID_TOKEN` は `(?:[\w-]+/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)` の展開 (req-id.ts 由来) + `REQ-` chained prefix の alternation
+- spec-kit verifiesTagRe の `NAMESPACED_ID_TOKEN` は `(?:[\w-]+/)?(?:[A-Z][A-Za-z]*-\d+|Requirement-\d+)` の展開 (grammar/tokens.ts 由来) + `REQ-` chained prefix の alternation
 
 ### Validation rules
 

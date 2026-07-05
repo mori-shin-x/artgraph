@@ -121,7 +121,7 @@ tests/
 └── skills-templates.test.ts             # 改修: 本文に裸の `npx artgraph <sub>` が 0 件 / allowed-tools に 4 PM exec
 ```
 
-**Structure Decision**: 単一プロジェクト (`src/` + `tests/` + `templates/` + `docs/`)。新規 `src/package-manager.ts` は既存 `src/config.ts` / `src/id.ts` と同列の root レベルモジュール (機能が config・init をまたぐ横断ユーティリティのため、特定サブディレクトリに置かず root に置く)。検出ロジックの bash (`_shared/package-manager.md`) と TS (`src/package-manager.ts`) は SSOT として検出順を一致させ、`contracts/package-manager.md` の真理値表を両者の正解とする。
+**Structure Decision**: 単一プロジェクト (`src/` + `tests/` + `templates/` + `docs/`)。新規 `src/package-manager.ts` は既存 `src/config.ts` / `src/rename-validate-id.ts` と同列の root レベルモジュール (機能が config・init をまたぐ横断ユーティリティのため、特定サブディレクトリに置かず root に置く)。検出ロジックの bash (`_shared/package-manager.md`) と TS (`src/package-manager.ts`) は SSOT として検出順を一致させ、`contracts/package-manager.md` の真理値表を両者の正解とする。
 
 **Skills 言語ポリシー** (spec 012 FR-029 継承): `templates/skills/*/SKILL.md` は英語のまま。README / `docs/skills-guide.md` への追記は現行言語 (日本語) を維持。
 

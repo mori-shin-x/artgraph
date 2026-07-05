@@ -14,7 +14,7 @@ import {
 import { buildGraph } from "../src/graph/builder.js";
 import type { ArtgraphConfig } from "../src/types.js";
 import { renameLockKey, splitLockKey, mergeLockKeys } from "../src/rename-lock.js";
-import { isValidTargetId } from "../src/id.js";
+import { isValidTargetId } from "../src/rename-validate-id.js";
 import type { LockFile } from "../src/types.js";
 
 // ── rewriteSpecListItem ─────────────────────────────────────────────

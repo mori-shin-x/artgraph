@@ -257,7 +257,7 @@ Checkpoint: 全テスト PASS、ビルド成功、手動検証完了。
 
 ## Phase 9: PR #30 レビュー対応 (敵対的レビュー指摘)
 
-- [x] R001 REQ タグ正規表現を `src/req-id.ts` の `REQ_ID_TOKEN` に共有化し、`src/parsers/typescript.ts` と `src/test-results.ts` で統一（`Requirement-N`・`Auth-1` の取りこぼし解消）
+- [x] R001 REQ タグ正規表現を `src/grammar/tokens.ts` の `REQ_ID_TOKEN` に共有化し、`src/parsers/typescript.ts` と `src/test-results.ts` で統一（`Requirement-N`・`Auth-1` の取りこぼし解消）
 - [x] R002 `parseVitestJson` の `ancestorTitles`/`title` 欠落ガード、`extractReqTags` の非文字列ガード
 - [x] R003 `loadConfig` で `testResultPaths` の配列・要素型を検証（`[123]` 等で明確なエラー）
 - [x] R004 `loadTestResults`: `globSync` の try/catch、glob 0 件マッチ警告、破損 JSON と「結果なし」を区別する警告

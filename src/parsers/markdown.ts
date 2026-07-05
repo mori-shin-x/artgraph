@@ -7,7 +7,12 @@ import { visit } from "unist-util-visit";
 import { toString } from "mdast-util-to-string";
 import { createHash } from "node:crypto";
 import type { GraphNode, GraphEdge, ReqPatternConfig, TaskConventionPreset } from "../types.js";
-import { NAMESPACED_ID_TOKEN } from "../req-id.js";
+import {
+  NAMESPACED_ID_TOKEN,
+  LIST_ITEM_RE,
+  KIRO_HEADING_RE,
+  DEFAULT_CODE_ID_RE,
+} from "../grammar/tokens.js";
 
 export interface ParseMarkdownOptions {
   rootDir?: string;
@@ -21,10 +26,6 @@ export interface ParseMarkdownOptions {
    */
   disableBuiltinTaskConventions?: string[];
 }
-
-const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
-const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*:/;
-const DEFAULT_CODE_ID_RE = /^[A-Z][A-Za-z]*-\d+$/;
 
 // Built-in task convention presets. spec-kit covers plan.md/tasks.md with the
 // `T\d+` ID shape + `@impl(...)` / `[REQ-...]` tag syntax. kiro covers tasks.md

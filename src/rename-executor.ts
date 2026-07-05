@@ -19,7 +19,7 @@ import { readLock } from "./lock.js";
 import { scan, reconcile } from "./scan.js";
 import { loadConfig } from "./config.js";
 import { getGitTrackedFiles } from "./diff.js";
-import { assertValidTargetId } from "./id.js";
+import { assertValidTargetId } from "./rename-validate-id.js";
 import type { ArtgraphConfig, LockFile } from "./types.js";
 
 // ── Types ────────────────────────────────────────────────────────────
