@@ -142,6 +142,51 @@ describe("distribute() — US2 multi-agent scenarios", () => {
   });
 
   // -------------------------------------------------------------------------
+  // D2-B (issue #130 follow-up review) — a leftover `.github/skills/` tree
+  // from a pre-fix artgraph install must survive `distribute(copilot)`
+  // byte-for-byte. `--force` semantics for other agents are "overwrite drift
+  // in canonical paths"; Copilot has no canonical Skills paths, so nothing
+  // it does should ever mutate `.github/skills/`.
+  // -------------------------------------------------------------------------
+  it("D2-B: distribute(copilot) leaves a pre-existing `.github/skills/` tree untouched", () => {
+    const { dir, cleanup } = createFreshProject();
+    try {
+      // Seed a residue tree that mimics what an older artgraph release would
+      // have written. Include both a canonical top-level and a bespoke file
+      // so the guarantee is broad.
+      const residueDir = join(dir, ".github", "skills");
+      mkdirSync(join(residueDir, "artgraph-impact"), { recursive: true });
+      writeFileSync(
+        join(residueDir, "artgraph-impact", "SKILL.md"),
+        "old release skill body\n",
+        "utf-8",
+      );
+      writeFileSync(join(residueDir, "user-note.txt"), "hand-written\n", "utf-8");
+
+      const beforeSnapshot = readDistributedTree(residueDir);
+      expect(beforeSnapshot.paths.length).toBe(2);
+
+      const source = readSkillSource(REPO_TEMPLATES_DIR);
+      const copilot = AGENT_DESCRIPTORS.find((d) => d.id === "copilot")!;
+      const result = distribute(copilot, source, { rootDir: dir, force: true });
+
+      // Distribute itself must be a no-op.
+      expect(result.targets.length).toBe(0);
+      expect(result.writtenPaths.length).toBe(0);
+      expect(result.noopPaths.length).toBe(0);
+
+      // The residue tree must be byte-identical to what we seeded.
+      const afterSnapshot = readDistributedTree(residueDir);
+      expect(afterSnapshot.paths).toEqual(beforeSnapshot.paths);
+      for (const p of beforeSnapshot.paths) {
+        expect(afterSnapshot.sha256[p]).toBe(beforeSnapshot.sha256[p]);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // T016 — incremental addition: first init `--agents=claude`, then re-init
   // `--agents=claude,codex --force`. The pre-existing claude tree must be
   // untouched (idempotent re-pass), and the new codex tree must appear and

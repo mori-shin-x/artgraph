@@ -797,6 +797,29 @@ describe("runDoctor — issue #130: Copilot has no Skills distribution", () => {
     expect(text).toContain("[copilot] (wrapper-only)");
   });
 
+  it("(D2-A) formatDoctorReportText still renders `(wrapper-only)` when Copilot has legacy residue findings", () => {
+    // A1 regression: the text formatter iterates per-agent and pushes the
+    // `[copilot] ${skillsPath}/` header for ANY agent with ≥1 finding. Copilot
+    // with a legacy `.github/skills/` residue always has ≥1 finding, so this
+    // path was the hottest broken codepath before A1 landed. Guard it
+    // explicitly.
+    initProject(proj.dir, ["copilot"]);
+    mkdirSync(join(proj.dir, ".github", "skills", "artgraph-impact"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(proj.dir, ".github", "skills", "artgraph-impact", "SKILL.md"),
+      "leftover\n",
+      "utf-8",
+    );
+    const report = runDoctor({ rootDir: proj.dir });
+    const text = formatDoctorReportText(report);
+    expect(text).not.toContain("[copilot] null/");
+    expect(text).toContain("[copilot] (wrapper-only)");
+    // Sanity: the legacy finding IS in the report (severity: pass after E1).
+    expect(report.findings.some((f) => f.kind === "legacy-copilot-skills-path")).toBe(true);
+  });
+
   it("(C1) does NOT detect Copilot when `.github/copilot-instructions.md` is hand-written (no artgraph marker)", () => {
     // False-positive guard: a Copilot user who wrote `.github/copilot-
     // instructions.md` by hand (never used artgraph) must not have doctor

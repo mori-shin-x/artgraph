@@ -18,7 +18,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DISTRIBUTED_AGENT_DESCRIPTORS } from "../../src/agents/descriptors.js";
 import { createFreshProject, readDistributedTree } from "../agents/helpers.js";
@@ -240,5 +240,46 @@ describe("e2e: artgraph init --agents validation errors", () => {
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain("windsurf");
     expect(r.stderr).toContain("claude");
+  });
+});
+
+describe("e2e: artgraph init --force preserves legacy `.github/skills/` residue (issue #130)", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  it("D2-C: a `.github/skills/` tree from a pre-fix release survives --agents=copilot --force byte-for-byte", () => {
+    // Seed a residue tree that mimics an older artgraph release.
+    const residueDir = join(proj.dir, ".github", "skills");
+    mkdirSync(join(residueDir, "artgraph-impact"), { recursive: true });
+    writeFileSync(
+      join(residueDir, "artgraph-impact", "SKILL.md"),
+      "pre-fix release skill body\n",
+      "utf-8",
+    );
+    writeFileSync(join(residueDir, "user-note.txt"), "hand-written\n", "utf-8");
+
+    const before = readDistributedTree(residueDir);
+    expect(before.paths.length).toBe(2);
+
+    // Now re-init with --force targeting Copilot (the upgrade scenario).
+    const r = runInit(proj.dir, ["--agents=copilot", "--no-scan", "--force"]);
+    expect(r.status, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+
+    // Residue survives byte-for-byte — init MUST NOT touch `.github/skills/`.
+    const after = readDistributedTree(residueDir);
+    expect(after.paths).toEqual(before.paths);
+    for (const p of before.paths) {
+      expect(after.sha256[p]).toBe(before.sha256[p]);
+    }
+    // And AGENTS.md + wrapper are still written normally.
+    expect(existsSync(join(proj.dir, "AGENTS.md"))).toBe(true);
+    expect(existsSync(join(proj.dir, ".github", "copilot-instructions.md"))).toBe(true);
   });
 });
