@@ -184,7 +184,7 @@ artgraph plan-coverage --require-files-section
 
 | 項目 | file mode | symbol mode |
 | --- | --- | --- |
-| 起動コスト (scan latency) | 低 — file 単位の content-hash | 高 — `ts-morph` で export 抽出 |
+| 起動コスト (scan latency) | 低 — file 単位の content-hash | やや高 — `oxc-parser` で export 抽出 |
 | `Files:` syntax | `src/auth.ts` | `src/auth.ts:validateToken` (file 単位も混在 OK) |
 | 想定ユーザー | 新規実装 / 大規模 refactor | 既存関数 1 個だけ修正する保守ケース |
 | 必要な scan 設定 | デフォルト (`mode: "file"`) | `.artgraph.json` で `"mode": "symbol"` |
