@@ -44,11 +44,12 @@ PM 解決優先度は hooks stage と共有: (1) live detection → (2) `.artgra
 <!-- artgraph: no package manager was detected at init time; commands below assume a globally installed `artgraph`. After adding a lockfile, re-run `artgraph init --force` to regenerate this block. -->
 ## artgraph — Cross-agent traceability
 
-artgraph manages the trace lock and provides 8 Skills for spec ↔ code ↔ test traceability.
+artgraph manages the trace lock and provides 9 Skills for spec ↔ code ↔ test traceability.
 
 ### Available Skills
 
 - `artgraph-setup` — install artgraph in this project
+- `artgraph-bootstrap` — bootstrap spec/@impl/test tags in an existing project (LLM proposes, artgraph check verifies)
 - `artgraph-detect` — report artgraph installation state
 - `artgraph-integrate` — wire artgraph into Spec Kit / Kiro
 - `artgraph-impact` — file/symbol → REQs impact

@@ -5,7 +5,7 @@
 // invariants used by US3 / SC-003:
 //   - marker block parse / replace is byte-stable (idempotent)
 //   - applyMarkerBlock preserves user content outside the block (FR-009/10)
-//   - AGENTS.md body contains the 8 Skill names + workflows + quickstart
+//   - AGENTS.md body contains the 9 Skill names + workflows + quickstart
 //   - wrappers contain `@AGENTS.md` literal AND a Markdown link AGENTS.md
 //   - wrappers do NOT duplicate the AGENTS.md body (SC-003)
 //   - copilot wrapper auto-creates `.github/` when missing
@@ -246,10 +246,11 @@ describe("inspectMarkerBlock (T018)", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildAgentsMdBody (T019)", () => {
-  it("contains all 8 Skill names from contracts/agent-context-format.md", () => {
+  it("contains all 9 Skill names from contracts/agent-context-format.md", () => {
     const body = buildAgentsMdBody("npm");
     for (const skill of [
       "artgraph-setup",
+      "artgraph-bootstrap",
       "artgraph-detect",
       "artgraph-integrate",
       "artgraph-impact",
