@@ -3,8 +3,10 @@ name: "artgraph-plan-coverage"
 description: "Detects implicit impacts: REQs reached by tasks.md `Files:` but not mentioned in `tasks.md` / `plan.md` / `spec.md` (reverse audit). Use after editing tasks.md / plan.md (e.g. after `/speckit-tasks`, or after updating `.kiro/specs/<name>/tasks.md`), before implementation."
 allowed-tools:
   - "Bash(npx artgraph plan-coverage *)"
+  - "Bash(npx --no-install artgraph plan-coverage *)"
   - "Bash(pnpm exec artgraph plan-coverage *)"
   - "Bash(bunx artgraph plan-coverage *)"
+  - "Bash(bunx --no-install artgraph plan-coverage *)"
   - "Bash(deno run -A npm:artgraph/cli plan-coverage *)"
   - "Bash(artgraph plan-coverage *)"
 user-invocable: true
@@ -21,7 +23,7 @@ Complementary to `artgraph-impact`: that Skill answers "what does this edit touc
 
 ### 1. Prerequisite check
 
-See [install-check](../_shared/install-check.md) for the standard pre-flight check.
+See [install-check](../_shared/install-check.md) for the standard pre-flight check. If artgraph is not installed, stop and invoke the `artgraph-setup` Skill instead.
 
 > `<PM-exec>` is the project's package runner: `npx` (npm), `pnpm exec`, `bunx`, or `deno run -A npm:artgraph/cli`. Substitute the one detected by `_shared/package-manager.md` (or written in `.artgraph.json#packageManager`).
 
