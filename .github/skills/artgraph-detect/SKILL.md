@@ -59,7 +59,7 @@ Enumerate all five canonical skills paths — each one maps to a fixed `--agents
 - the directory itself exists on disk, AND
 - it contains at least one `artgraph-<name>/SKILL.md` file (a bare-empty directory, or a directory created by an unrelated tool with the same name and no SKILL.md inside, does NOT count).
 
-Under each qualifying path, list the subdirectories whose names start with `artgraph-` and which contain a `SKILL.md`. Compare that list against the canonical set: `artgraph-coverage`, `artgraph-detect`, `artgraph-impact`, `artgraph-integrate`, `artgraph-plan-coverage`, `artgraph-rename`, `artgraph-setup`, `artgraph-verify`. If NO canonical path qualifies, report that no artgraph Skills are distributed anywhere in this project and skip the reinstall recommendation below — instead route the user to the "next steps" branch in Step 5 for that case.
+Under each qualifying path, list the subdirectories whose names start with `artgraph-` and which contain a `SKILL.md`. Compare that list against the canonical set: `artgraph-coverage`, `artgraph-detect`, `artgraph-impact`, `artgraph-integrate`, `artgraph-plan-coverage`, `artgraph-rename`, `artgraph-setup`, `artgraph-bootstrap`, `artgraph-verify`. If NO canonical path qualifies, report that no artgraph Skills are distributed anywhere in this project and skip the reinstall recommendation below — instead route the user to the "next steps" branch in Step 5 for that case.
 
 If at least one path qualifies but some canonical Skills are missing (the user ran `init --minimal` or `--no-skills`, or deleted Skills manually), recommend the **Skills-only** reinstall form:
 
@@ -91,7 +91,7 @@ Print a 4-line summary like:
 artgraph: installed | not installed
 config: present | missing
 integrations: speckit=[yes/no/not-detected] kiro=[yes/no/not-detected]
-skills: N of 8 installed (paths: <skills dirs found>; missing: <list>)
+skills: N of 9 installed (paths: <skills dirs found>; missing: <list>)
 ```
 
 Suggest next steps based on what's missing, in this priority order:

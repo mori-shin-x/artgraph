@@ -2,7 +2,7 @@
 
 ## 概要
 
-artgraph は仕様・実装・テストの整合性を追跡するツールで、8 つの Claude Code Skills を通じてエージェントのワークフローへネイティブ統合されます。SKILL.md 本体は cross-agent 対応と Claude Skills ベストプラクティスに従い英語で記述されていますが、本ドキュメントは人間の読者向けに日本語で維持しています。
+artgraph は仕様・実装・テストの整合性を追跡するツールで、9 つの Claude Code Skills を通じてエージェントのワークフローへネイティブ統合されます。SKILL.md 本体は cross-agent 対応と Claude Skills ベストプラクティスに従い英語で記述されていますが、本ドキュメントは人間の読者向けに日本語で維持しています。
 
 各 Skill は in-flight (会話中) での早期検出を担い、Stop hook (コミット時) と補完しあって整合性を担保します。
 
@@ -59,13 +59,21 @@ deno run -A npm:artgraph/cli init
 
 詳細は `artgraph init --help` を参照してください。
 
-## Skills 一覧 (全 8 種)
+## Skills 一覧 (全 9 種)
 
 ### artgraph-setup
 
 - トリガー: artgraph 未導入のプロジェクトで「artgraph を入れて」「セットアップして」と依頼された時
 - 動作: package manager 検出 (npm / pnpm / Bun / Deno、デフォルト と Yarn フォールバックは pnpm + 警告) → install → `artgraph init` (full setup) → `artgraph check`
 - 参照: `templates/skills/artgraph-setup/SKILL.md`
+
+### artgraph-bootstrap
+
+タグゼロ (または部分的にしかタグが無い) 既存リポジトリで、spec 追記 + `@impl REQ-NNN` + テストの `[REQ-NNN]` マーカーを Claude が一括提案し、ユーザー承認後に `artgraph scan && artgraph check` で決定的に検証する。生成は確率的、検証は決定的という役割分担で `docs/architecture.md` §4 D5 と両立する。
+
+- トリガー: 「artgraph をブートストラップして」「既存リポに REQ を撒いて」「タグゼロから始めたい」等
+- 前提: `artgraph` インストール済み (未インストールなら `artgraph-setup` を先に案内)
+- 参照: `templates/skills/artgraph-bootstrap/SKILL.md`
 
 ### artgraph-integrate
 

@@ -216,7 +216,7 @@ export function inspectMarkerBlock(content: string): MarkerBlockHealth {
 
 /**
  * Canonical artgraph block body that lives inside AGENTS.md. Rendered from
- * `templates/agent-context/agents-md-snippet.md` (8 Skills + workflows +
+ * `templates/agent-context/agents-md-snippet.md` (9 Skills + workflows +
  * quickstart — contracts/agent-context-format.md §AGENTS.md). The text is the
  * artgraph guide itself, NOT a wrapper.
  *

@@ -214,11 +214,12 @@ describe("templates/skills metatest", () => {
     });
   });
 
-  it("at least 8 Skill directories are present (regression guard)", () => {
+  it("at least 9 Skill directories are present (regression guard)", () => {
     // Pairs with the dynamic discoverSkillDirs() — if someone accidentally
     // moves a Skill out of templates/skills/, the count drops and this trips.
     // Bumped from 7 to 8 with spec 014 (artgraph-plan-coverage added).
-    expect(EXPECTED_SKILL_DIRS.length).toBeGreaterThanOrEqual(8);
+    // Bumped from 8 to 9 with issue #123 (artgraph-bootstrap added).
+    expect(EXPECTED_SKILL_DIRS.length).toBeGreaterThanOrEqual(9);
   });
 
   // SC-005 (spec 014): artgraph-impact description must NOT contain the
@@ -466,9 +467,14 @@ describe("templates/skills metatest", () => {
       expect(skill.body).toMatch(/artgraph-plan-coverage/);
     });
 
-    it("body summary template says 'N of 8 installed' (not 7)", () => {
+    it("body lists artgraph-bootstrap in the canonical set", () => {
       const skill = readSkill("artgraph-detect");
-      expect(skill.body).toMatch(/N of 8 installed/);
+      expect(skill.body).toMatch(/artgraph-bootstrap/);
+    });
+
+    it("body summary template says 'N of 9 installed' (not 8)", () => {
+      const skill = readSkill("artgraph-detect");
+      expect(skill.body).toMatch(/N of 9 installed/);
     });
   });
 
