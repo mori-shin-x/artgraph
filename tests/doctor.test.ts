@@ -273,6 +273,78 @@ describe("runDoctor — FAIL: agents-md-missing / agents-md-marker-broken", () =
   });
 });
 
+describe("runDoctor — agents-md-body-stale", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+    initProject(proj.dir, ["claude"]);
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  it("does NOT emit agents-md-body-stale on a fresh init (canonical body matches)", () => {
+    const report = runDoctor({ rootDir: proj.dir });
+    const stale = report.findings.filter((f) => f.kind === "agents-md-body-stale");
+    expect(stale.length, JSON.stringify(stale, null, 2)).toBe(0);
+    // And `agents-md-present` still fires as a pass.
+    expect(findFinding(report.findings, (f) => f.kind === "agents-md-present")).toBeDefined();
+  });
+
+  it("emits agents-md-body-stale (severity: pass, NOTICE) when the marker body drifts", () => {
+    // Simulate an outdated snippet from a previous artgraph release —
+    // marker structure intact, body content drifted.
+    const agentsMd = join(proj.dir, "AGENTS.md");
+    const body = readFileSync(agentsMd, "utf-8");
+    const drifted = body.replace(
+      /(<!--\s*artgraph:begin\s*-->)([\s\S]*?)(<!--\s*artgraph:end\s*-->)/,
+      "$1\n<!-- stale body from an older artgraph release -->\n$3",
+    );
+    writeFileSync(agentsMd, drifted, "utf-8");
+
+    const report = runDoctor({ rootDir: proj.dir });
+    const stale = findFinding(report.findings, (f) => f.kind === "agents-md-body-stale");
+    expect(stale, JSON.stringify(report.findings, null, 2)).toBeDefined();
+    // Severity is pass so a plain artgraph upgrade doesn't silently break CI
+    // gates that treat any `fail` finding as a hard stop.
+    expect(stale!.severity).toBe("pass");
+    expect(stale!.agent).toBeNull();
+    expect(stale!.path).toBe("AGENTS.md");
+    expect(stale!.message).toContain("NOTICE");
+    expect(stale!.message).toContain("--force");
+    // expected/actual are sha256 hex digests for downstream diffing.
+    expect(stale!.expected).toMatch(/^[0-9a-f]{64}$/);
+    expect(stale!.actual).toMatch(/^[0-9a-f]{64}$/);
+    expect(stale!.expected).not.toBe(stale!.actual);
+    // Regression guard: stale body MUST NOT flip doctor exit code.
+    expect(report.summary.failCount).toBe(0);
+    // And `agents-md-present` must NOT also fire — the stale finding is
+    // returned in its place (early return in addAgentsMdFindings).
+    expect(report.findings.filter((f) => f.kind === "agents-md-present").length).toBe(0);
+  });
+
+  it("does not emit agents-md-body-stale when AGENTS.md is missing or marker is broken", () => {
+    // Missing → agents-md-missing takes over.
+    rmSync(join(proj.dir, "AGENTS.md"));
+    const rMissing = runDoctor({ rootDir: proj.dir });
+    expect(rMissing.findings.filter((f) => f.kind === "agents-md-body-stale").length).toBe(0);
+    expect(findFinding(rMissing.findings, (f) => f.kind === "agents-md-missing")).toBeDefined();
+
+    // Broken marker → agents-md-marker-broken takes over.
+    initProject(proj.dir, ["claude"]);
+    const agentsMd = join(proj.dir, "AGENTS.md");
+    const body = readFileSync(agentsMd, "utf-8");
+    writeFileSync(agentsMd, body.replace(/<!--\s*artgraph:end\s*-->/g, ""), "utf-8");
+    const rBroken = runDoctor({ rootDir: proj.dir });
+    expect(rBroken.findings.filter((f) => f.kind === "agents-md-body-stale").length).toBe(0);
+    expect(
+      findFinding(rBroken.findings, (f) => f.kind === "agents-md-marker-broken"),
+    ).toBeDefined();
+  });
+});
+
 describe("runDoctor — empty / no distribution detected", () => {
   let proj: ReturnType<typeof createFreshProject>;
 
