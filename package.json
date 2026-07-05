@@ -15,6 +15,8 @@
     "templates"
   ],
   "scripts": {
+    "copy-vendor": "node scripts/copy-vendor.mjs",
+    "prebuild": "pnpm run copy-vendor",
     "build": "tsc",
     "dev": "tsc --watch",
     "artgraph": "node --enable-source-maps ./dist/cli.js",
@@ -27,12 +29,11 @@
     "typecheck": "tsc --noEmit",
     "knip": "knip",
     "check-versions": "node scripts/check-extension-version.mjs",
-    "prepare": "test -f dist/cli.js || tsc",
+    "prepare": "lefthook install > /dev/null 2>&1 || true",
     "demo:record": "node scripts/record-tag-zero-demo.mjs",
     "demo:svg": "svg-term --in docs/demo/tag-zero.cast --out docs/demo/tag-zero.svg --window --width 96 --height 45 --padding 12",
     "demo": "pnpm build && pnpm demo:record && pnpm demo:svg",
-    "prepare": "lefthook install > /dev/null 2>&1 || true",
-    "prepublishOnly": "rm -rf dist && tsc && pnpm check-versions && pnpm test:unit && pnpm test:e2e"
+    "prepublishOnly": "rm -rf dist && pnpm run build && pnpm check-versions && pnpm test:unit && pnpm test:e2e"
   },
   "repository": {
     "type": "git",
@@ -68,8 +69,10 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@types/cytoscape": "^3.31.0",
     "@types/node": "^22.15.0",
     "@vitest/coverage-v8": "^4.1.9",
+    "cytoscape": "^3.34.0",
     "knip": "^6.17.1",
     "lefthook": "^2.1.9",
     "oxfmt": "^0.55.0",

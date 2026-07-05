@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>artgraph — interactive graph</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel-bg: #161b22;
+      --panel-border: #30363d;
+      --text: #e6edf3;
+      --text-dim: #8b949e;
+      --accent: #58a6ff;
+      --drift: #f85149;
+      --orphan: #d29922;
+      --uncovered: #7d8590;
+      --ok: #3fb950;
+      --edge: #4a5560;
+      --highlight: #f1e05a;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+        Ubuntu, Cantarell, "Helvetica Neue", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    body {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+    }
+
+    aside.side-panel {
+      background: var(--panel-bg);
+      border-right: 1px solid var(--panel-border);
+      padding: 16px;
+      overflow-y: auto;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    aside.side-panel h1 {
+      font-size: 20px;
+      font-weight: 600;
+      margin: 0;
+      color: var(--text);
+      letter-spacing: -0.02em;
+    }
+
+    .meta {
+      font-size: 12px;
+      color: var(--text-dim);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .meta .meta-label {
+      text-transform: uppercase;
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+    }
+
+    .meta .meta-value {
+      color: var(--text);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .stat-tile {
+      background: var(--bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .stat-tile .stat-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+    }
+
+    .stat-tile .stat-value {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .stat-tile.stat-drift.has-drift .stat-value {
+      color: var(--drift);
+    }
+
+    .legend-section h2 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      margin: 0 0 8px 0;
+      font-weight: 500;
+    }
+
+    .legend-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .legend-swatch {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+      display: inline-block;
+    }
+
+    .legend-swatch.layer-req {
+      background: #58a6ff;
+      border-radius: 4px;
+    }
+    .legend-swatch.layer-doc {
+      background: #a371f7;
+    }
+    .legend-swatch.layer-code {
+      background: #3fb950;
+      border-radius: 50%;
+    }
+    .legend-swatch.layer-test {
+      background: #f0b849;
+      transform: rotate(45deg);
+      width: 14px;
+      height: 14px;
+      margin: 3px;
+    }
+
+    .legend-swatch.state-drift {
+      background: transparent;
+      border: 3px solid var(--drift);
+      border-radius: 4px;
+    }
+    .legend-swatch.state-orphan {
+      background: transparent;
+      border: 2px solid var(--orphan);
+      border-radius: 4px;
+    }
+    .legend-swatch.state-uncovered {
+      background: transparent;
+      border: 2px dashed var(--uncovered);
+      border-radius: 4px;
+    }
+
+    .search-section label {
+      display: block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+
+    .search-section input {
+      width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--panel-border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+
+    .search-section input:focus {
+      border-color: var(--accent);
+    }
+
+    main {
+      position: relative;
+      overflow: hidden;
+    }
+
+    #cy {
+      width: 100%;
+      height: 100vh;
+      background: var(--bg);
+    }
+
+    .empty-state {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-dim);
+      font-size: 14px;
+      text-align: center;
+      padding: 24px;
+    }
+
+    .empty-state code {
+      background: var(--panel-bg);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+        "Liberation Mono", Menlo, monospace;
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .details-card {
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      min-width: 260px;
+      max-width: 360px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+      display: none;
+      font-size: 12px;
+    }
+
+    .details-card.visible {
+      display: block;
+    }
+
+    .details-card .details-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 8px;
+      word-break: break-all;
+    }
+
+    .details-card dl {
+      margin: 0;
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 4px 8px;
+    }
+
+    .details-card dt {
+      color: var(--text-dim);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .details-card dd {
+      margin: 0;
+      color: var(--text);
+      font-size: 12px;
+      word-break: break-all;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas,
+        "Liberation Mono", Menlo, monospace;
+    }
+
+    .details-card .details-close {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 2px 6px;
+      line-height: 1;
+      border-radius: 4px;
+    }
+
+    .details-card .details-close:hover {
+      color: var(--text);
+      background: var(--bg);
+    }
+  </style>
+
+  <script id="artgraph-data" type="application/json">{{ARTGRAPH_DATA}}</script>
+  <script src="./vendor/cytoscape.min.js"></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <aside class="side-panel">
+    <h1>artgraph</h1>
+
+    <div class="meta">
+      <span class="meta-label">Root</span>
+      <span class="meta-value" id="meta-root" title="">—</span>
+      <span class="meta-label" style="margin-top: 4px;">Generated</span>
+      <span class="meta-value" id="meta-generated">—</span>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-tile">
+        <span class="stat-label">Total</span>
+        <span class="stat-value" id="stat-total">0</span>
+      </div>
+      <div class="stat-tile stat-drift" id="stat-drift-tile">
+        <span class="stat-label">Drift</span>
+        <span class="stat-value" id="stat-drift">0</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-label">Orphan</span>
+        <span class="stat-value" id="stat-orphan">0</span>
+      </div>
+      <div class="stat-tile">
+        <span class="stat-label">Uncovered</span>
+        <span class="stat-value" id="stat-uncovered">0</span>
+      </div>
+    </div>
+
+    <div class="legend-section">
+      <h2>Layers</h2>
+      <div class="legend-list">
+        <div class="legend-item">
+          <span class="legend-swatch layer-req"></span>
+          <span>req</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-swatch layer-doc"></span>
+          <span>doc</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-swatch layer-code"></span>
+          <span>code</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-swatch layer-test"></span>
+          <span>test</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="legend-section">
+      <h2>State</h2>
+      <div class="legend-list">
+        <div class="legend-item">
+          <span class="legend-swatch state-drift"></span>
+          <span>drift</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-swatch state-orphan"></span>
+          <span>orphan</span>
+        </div>
+        <div class="legend-item">
+          <span class="legend-swatch state-uncovered"></span>
+          <span>uncovered</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="search-section">
+      <label for="search-input">Search</label>
+      <input
+        id="search-input"
+        type="search"
+        placeholder="Filter by id or label…"
+        aria-label="Search nodes"
+        autocomplete="off"
+        spellcheck="false"
+      />
+    </div>
+  </aside>
+
+  <main>
+    <div id="cy"></div>
+    <div class="details-card" id="details-card" role="dialog" aria-label="Node details">
+      <button class="details-close" id="details-close" aria-label="Close details">×</button>
+      <div class="details-title" id="details-title">—</div>
+      <dl>
+        <dt>id</dt><dd id="details-id">—</dd>
+        <dt>label</dt><dd id="details-label">—</dd>
+        <dt>layer</dt><dd id="details-layer">—</dd>
+        <dt>kind</dt><dd id="details-kind">—</dd>
+        <dt>state</dt><dd id="details-state">—</dd>
+        <dt>path</dt><dd id="details-path">—</dd>
+      </dl>
+    </div>
+  </main>
+</body>
+</html>

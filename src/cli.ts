@@ -35,6 +35,8 @@ function pathsToEntries(paths: string[]): SymbolEntry[] {
   });
 }
 import { formatGraphText, formatGraphJSON } from "./graph/format.js";
+import { renderGraphData } from "./graph/render.js";
+import { startServer, writeStaticExport } from "./graph/serve.js";
 import type { NodeKind } from "./types.js";
 import type { BuildWarning } from "./graph/builder.js";
 import { check } from "./check.js";
@@ -1261,11 +1263,83 @@ function registerCommands(program: Command): void {
         "task",
       ]),
     )
-    .action((opts) => {
+    .option("--serve", "Start a local HTTP server rendering the graph interactively")
+    .option("--port <n>", "Port for --serve (default 3737)", (v) => Number.parseInt(v, 10))
+    .option("--host <h>", "Host for --serve (default 127.0.0.1)")
+    .option("--output <dir>", "Emit a static HTML export into <dir>")
+    .action(async (opts) => {
       const rootDir = process.cwd();
       const config = loadConfig(rootDir);
-      const { graph } = scan(rootDir, config);
 
+      // --serve and --output are mutually exclusive — both drive the same
+      // interactive HTML pipeline and combining them just papers over a
+      // misuse. Fail fast with a clear message.
+      if (opts.serve && opts.output) {
+        console.error(
+          "error: --serve and --output cannot be combined. Pick one (serve to preview locally, output for a static snapshot).",
+        );
+        process.exit(1);
+      }
+
+      if (opts.serve || opts.output) {
+        if (opts.kind) {
+          console.error(
+            "warning: --kind is ignored with --serve/--output; use the in-page search box to filter.",
+          );
+        }
+        const { graph } = scan(rootDir, config);
+
+        // Try to enrich the render with drift/orphan/uncovered state from the
+        // lock. Missing lock is fine (the file didn't exist yet); other read
+        // failures (LockSchemaError, permissions) should surface — silently
+        // swallowing them would hide real repo corruption.
+        let checkResult;
+        try {
+          const lock = readLock(rootDir, config.lockFile);
+          if (Object.keys(lock).length > 0) {
+            checkResult = check(graph, lock);
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error(`warning: could not read lock (${msg}); rendering without drift info.`);
+        }
+
+        const data = renderGraphData(graph, { rootDir, checkResult });
+
+        if (opts.output) {
+          const outputDir = resolve(rootDir, opts.output);
+          await writeStaticExport({ data, outputDir });
+          console.error(`artgraph graph: static export written to ${outputDir}`);
+          return;
+        }
+
+        // --serve: keep the process alive on the http.Server. SIGINT/SIGTERM
+        // trigger a graceful shutdown; without the handler Ctrl+C would still
+        // work but skip the server.close() drain.
+        const port = typeof opts.port === "number" && !Number.isNaN(opts.port) ? opts.port : 3737;
+        const host = typeof opts.host === "string" ? opts.host : "127.0.0.1";
+        try {
+          const handle = await startServer({ data, port, host });
+          console.error(`artgraph graph: serving at ${handle.url}`);
+          const shutdown = async () => {
+            try {
+              await handle.close();
+            } catch {
+              // Ignore close errors during shutdown — we're exiting anyway.
+            }
+            process.exit(0);
+          };
+          process.once("SIGINT", shutdown);
+          process.once("SIGTERM", shutdown);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error(`error: ${msg}`);
+          process.exit(1);
+        }
+        return;
+      }
+
+      const { graph } = scan(rootDir, config);
       const kindFilter = opts.kind as NodeKind | undefined;
 
       if (opts.format === "json") {
