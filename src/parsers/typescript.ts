@@ -5,7 +5,7 @@ import { existsSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import fastGlob from "fast-glob";
 import type { GraphNode, GraphEdge } from "../types.js";
-import { NAMESPACED_ID_TOKEN } from "../req-id.js";
+import { NAMESPACED_ID_TOKEN } from "../grammar/tokens.js";
 
 // ts-morph is a CJS package and by far the heaviest import in the CLI
 // (~300 ms module load). Loading it lazily via createRequire keeps this
@@ -16,14 +16,6 @@ const requireCjs = createRequire(import.meta.url);
 function loadTsMorph(): typeof import("ts-morph") {
   return requireCjs("ts-morph") as typeof import("ts-morph");
 }
-
-// Default requirement-ID *token* used when no custom `reqPatterns.codeId` is set.
-// The token matches the whole ID (e.g. `FR-001`, `auth/AUTH-2`, `Requirement-3`).
-// Shared with src/test-results.ts via src/req-id.ts so code tags and test-result
-// REQ tags recognize the same ID shapes. Exported so the rename rewriter and ID
-// validator track the exact same grammar the parser emits (avoids regex drift
-// between discovery and rewriting).
-export const DEFAULT_ID_TOKEN = NAMESPACED_ID_TOKEN;
 
 // Regexes that locate requirement IDs in code/test tags. When the project sets a
 // custom `reqPatterns.codeId`, these are rebuilt from that token so that @impl /
@@ -38,7 +30,7 @@ interface IdMatchers {
 // For codeId, the whole match is the ID, so the constructed matchers below rely
 // on the token having no significance beyond what it matches.
 function buildIdMatchers(codeId?: string): IdMatchers {
-  const token = codeId ?? DEFAULT_ID_TOKEN;
+  const token = codeId ?? NAMESPACED_ID_TOKEN;
   return {
     implRe: new RegExp(`//[^\\S\\n]*@impl[^\\S\\n]+((?:(?:${token})[^\\S\\n]*)+)`, "gm"),
     reqIdRe: new RegExp(token, "g"),

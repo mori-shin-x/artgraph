@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { globSync } from "glob";
 import type { TestResultRecord, TestResultMap } from "./types.js";
-import { REQ_ID_TOKEN } from "./req-id.js";
+import { REQ_ID_TOKEN } from "./grammar/tokens.js";
 
 function warn(message: string): void {
   console.error(`artgraph: warning: ${message}`);
