@@ -295,6 +295,10 @@ describe("SC-007 prose<->TS rule-level sync (meta-test)", () => {
       pattern: /absent, malformed[^\n]*continue to rule 2/,
     },
     {
+      label: "1: strip leading UTF-8 BOM before parsing (aligns with TS BOM guard, SC-007)",
+      pattern: /(?:BOM|U\+FEFF|EF BB BF)/,
+    },
+    {
       label: "2: bun.lockb or bun.lock selects bun",
       pattern: /`bun\.lockb` or `bun\.lock`[^\n]*\*\*bun\*\*/,
     },
@@ -370,21 +374,33 @@ describe("SC-007 prose<->TS rule-level sync (meta-test)", () => {
     });
   }
 
-  it("shared template quotes the TS warning/error messages verbatim", () => {
-    // The shared template tells agents to relay these messages with the same
-    // wording the TS detector writes to stderr. Assert the exact strings
-    // appear in BOTH files, so rewording either side breaks the sync here.
-    const template = readRepoFile("templates", "skills", "_shared", "package-manager.md");
+  it("SC-007 warning/error messages are quoted verbatim in every prose source that reproduces them", () => {
+    // The TS detector writes these strings to stderr; every prose copy that
+    // relays the same warning MUST use the identical wording so `grep` /
+    // support triage matches across bootstrap (Skill) and post-install (TS)
+    // runs. Asserted for both the shared canonical prose AND the inlined
+    // Step 2 in the artgraph-setup Skill (which paraphrased them before
+    // adversarial meta-review E2 tightened the contract).
     const tsSource = readRepoFile("src", "package-manager.ts");
-    const messages = [
+    const shared = readRepoFile("templates", "skills", "_shared", "package-manager.md");
+    const setup = readRepoFile("templates", "skills", "artgraph-setup", "SKILL.md");
+    const yarnMessages = [
       "packageManager=yarn but Yarn is not supported; falling back to pnpm",
       "yarn.lock found but Yarn is not supported; falling back to pnpm",
-      "Cannot detect package manager; ask the user which to use",
     ];
-    for (const message of messages) {
-      expect(tsSource).toContain(message);
-      expect(template).toContain(message);
+    for (const message of yarnMessages) {
+      expect(tsSource, `src/package-manager.ts must contain: ${message}`).toContain(message);
+      expect(shared, `_shared/package-manager.md must quote verbatim: ${message}`).toContain(
+        message,
+      );
+      expect(setup, `artgraph-setup/SKILL.md must quote verbatim: ${message}`).toContain(message);
     }
+    // The failure message stays verbatim in TS and shared. artgraph-setup
+    // intentionally uses its own imperative paraphrase (it interacts with
+    // the user directly), so we only pin the two Yarn warnings for setup.
+    const failureMessage = "Cannot detect package manager; ask the user which to use";
+    expect(tsSource).toContain(failureMessage);
+    expect(shared).toContain(failureMessage);
   });
 
   it("shared template declares the SC-007 sync contract against the TS source", () => {

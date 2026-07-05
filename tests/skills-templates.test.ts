@@ -95,12 +95,13 @@ type FencedBlock = { lines: string[]; startLine: number };
 // regardless of the fence's info string (```bash, ```json, plain ```, ...).
 // Only text inside fences is returned -- frontmatter and prose outside
 // fences are intentionally not inspected by callers of this helper.
-function extractFencedBlocks(content: string): FencedBlock[] {
+function extractFencedBlocks(content: string, sourcePath?: string): FencedBlock[] {
   const rawLines = content.split("\n");
   const blocks: FencedBlock[] = [];
   let inFence = false;
   let current: string[] = [];
   let currentStart = 0;
+  let openLine = 0;
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i];
     if (/^\s*```/.test(line)) {
@@ -108,6 +109,7 @@ function extractFencedBlocks(content: string): FencedBlock[] {
         inFence = true;
         current = [];
         currentStart = i + 2; // 1-indexed line number of the first line inside the fence
+        openLine = i + 1;
       } else {
         inFence = false;
         blocks.push({ lines: current, startLine: currentStart });
@@ -117,6 +119,16 @@ function extractFencedBlocks(content: string): FencedBlock[] {
     if (inFence) {
       current.push(line);
     }
+  }
+  if (inFence) {
+    // Unclosed fence at EOF would silently drop the tail from every downstream
+    // scanner (POSIX-token check, etc.), letting shell literals sneak in below
+    // a missing closing ```. Fail loud so a typo is caught by CI rather than
+    // merged silently.
+    const where = sourcePath ? ` in ${sourcePath}` : "";
+    throw new Error(
+      `Unclosed fenced code block${where} (opened at line ${openLine}, no closing \`\`\` before EOF)`,
+    );
   }
   return blocks;
 }
@@ -555,17 +567,26 @@ describe("templates/skills metatest", () => {
       // Frontmatter and prose (non-fenced text) are intentionally not
       // checked here -- only fenced code blocks, which are what an agent
       // would copy/paste or execute verbatim.
+      // Patterns absorb whitespace variance (`command  -v`, `test\t-f`,
+      // `> /dev/null`) and cover a wider set of POSIX-only constructs than
+      // the initial issue #141 landing did. See adversarial meta-review
+      // Cluster C3 for the bypass set that motivated each row.
       const forbiddenTokens: { label: string; pattern: RegExp }[] = [
         { label: "||", pattern: /\|\|/ },
         { label: "&&", pattern: /&&/ },
-        { label: "2>", pattern: /2>/ },
-        { label: ">/dev/null", pattern: />\/dev\/null/ },
-        { label: "command -v", pattern: /command -v/ },
-        { label: "test -f|-d", pattern: /\btest -[fd]\b/ },
-        { label: "node -e", pattern: /node -e/ },
+        { label: "2>", pattern: /2\s*>/ },
+        { label: ">/dev/null", pattern: />\s*\/dev\/(?:null|stderr|stdin|tty)/ },
+        { label: "command -v/-V", pattern: /\bcommand\s+-[vV]\b/ },
+        { label: "test -<flag>", pattern: /\btest\s+-[a-zA-Z]\b/ },
+        {
+          label: "node -e / --eval / -p / --print",
+          pattern: /\bnode\s+(?:-e|--eval|-p|--print)\b/,
+        },
         { label: "$(", pattern: /\$\(/ },
-        { label: "if [", pattern: /if \[/ },
-        { label: "[ -f", pattern: /\[ -f/ },
+        { label: "if [ / elif [", pattern: /\b(?:if|elif)\s+\[/ },
+        { label: "[ -<flag>", pattern: /\[\s+-[a-zA-Z]\b/ },
+        { label: "[[ ... ]]", pattern: /\[\[/ },
+        { label: "set -e / -u / -o", pattern: /\bset\s+-[euoU]/ },
       ];
 
       const files = listAllTemplateMarkdownFiles(TEMPLATES_SKILLS_DIR);
@@ -574,7 +595,7 @@ describe("templates/skills metatest", () => {
       const offenders: string[] = [];
       for (const filePath of files) {
         const content = readFileSync(filePath, "utf8");
-        const blocks = extractFencedBlocks(content);
+        const blocks = extractFencedBlocks(content, filePath);
         for (const block of blocks) {
           block.lines.forEach((line, idx) => {
             for (const { label, pattern } of forbiddenTokens) {

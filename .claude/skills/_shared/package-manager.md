@@ -8,7 +8,7 @@ The `artgraph-setup` Skill uses the rules below to pick the right install / exec
 
 Inspect the project root and apply these rules in order — first match wins. Compose whatever file checks your shell needs; only **regular files** count (a directory or dangling symlink named like a lockfile is not a match).
 
-1. If `package.json` exists, read its **top-level** `"packageManager"` field. It uses the Corepack-style `<pm>@<version>` shape (Corepack itself only ships npm/pnpm/yarn; artgraph extends the same shape to Bun). Parse the top-level field only — a nested `"packageManager"` key elsewhere in the JSON does not count — and ignore values without an `@version` suffix (a bare `"npm"` is malformed):
+1. If `package.json` exists, read it as UTF-8 and strip a leading UTF-8 BOM (`U+FEFF`, byte sequence `EF BB BF`) before parsing — some Windows editors write BOM-prefixed JSON and the TS detector strips the BOM too (SC-007 requires the same behaviour). Then read its **top-level** `"packageManager"` field. It uses the Corepack-style `<pm>@<version>` shape (Corepack itself only ships npm/pnpm/yarn; artgraph extends the same shape to Bun). Parse the top-level field only — a nested `"packageManager"` key elsewhere in the JSON does not count — and ignore values without an `@version` suffix (a bare `"npm"` is malformed):
    - `npm` / `pnpm` / `bun` -> use that PM.
    - `yarn` -> use **pnpm** and warn: `packageManager=yarn but Yarn is not supported; falling back to pnpm`.
    - Field absent, malformed, unknown PM, or unparseable JSON -> continue to rule 2.
