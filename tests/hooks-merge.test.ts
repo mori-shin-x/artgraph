@@ -345,27 +345,6 @@ describe("installHooks (Stop-hook merge)", () => {
     expect(result.hooksInstall?.failure).toBe(false);
   });
 
-  it("PM undetectable + --minimal --with-hooks (explicit opt-in) → skipped-no-pm, failure", () => {
-    const result = runInit(tmp, { minimal: true, withHooks: true });
-
-    expect(existsSync(settingsPath(tmp))).toBe(false);
-    expect(result.hooksInstall?.action).toBe("skipped-no-pm");
-    expect(result.hooksInstall?.failure).toBe(true);
-  });
-
-  it("E1: PM undetectable + default mode + --with-hooks → NOT a failure (redundant flag)", () => {
-    // Under default mode, --with-hooks is redundant (hooks are already on)
-    // and must NOT flip PM-missing into a failure. Before E1, passing
-    // `withHooks: true` in default mode escalated skipped-no-pm → exit 1,
-    // giving `init --with-hooks` and plain `init` opposite outcomes for
-    // identical on-disk state.
-    const result = runInit(tmp, { withHooks: true, noScan: true });
-
-    expect(existsSync(settingsPath(tmp))).toBe(false);
-    expect(result.hooksInstall?.action).toBe("skipped-no-pm");
-    expect(result.hooksInstall?.failure).toBe(false);
-  });
-
   // -- .artgraph.json#packageManager fallback ------------------------------------------
 
   it("falls back to the stored .artgraph.json#packageManager once the lockfile/package.json are gone", () => {
@@ -415,13 +394,13 @@ describe("installHooks (Stop-hook merge)", () => {
     expect(result.hooksInstall).toBeUndefined();
   });
 
-  // -- --minimal --with-hooks in an empty dir ------------------------------------------
+  // -- default mode in an empty dir -----------------------------------------------------
 
-  it("--minimal --with-hooks creates .claude/settings.json when .claude/ doesn't exist yet", () => {
+  it("default mode creates .claude/settings.json when .claude/ doesn't exist yet", () => {
     seedPm(tmp, "pnpm");
     expect(existsSync(join(tmp, ".claude"))).toBe(false);
 
-    const result = runInit(tmp, { minimal: true, withHooks: true });
+    const result = runInit(tmp, { noScan: true });
 
     expect(existsSync(settingsPath(tmp))).toBe(true);
     expect(result.hooksInstall?.action).toBe("created");
@@ -537,8 +516,8 @@ describe("installHooks (Stop-hook merge)", () => {
     // (root user / non-Unix FS), skip gracefully — the contract is still
     // enforced by the try/catch code path + tsc.
     //
-    // Uses `--minimal --with-hooks` so only the hooks stage runs; a full
-    // default init would hit the same chmod'd `.claude` in installSkills
+    // Runs without `agents` so the Skills / agent-context stages no-op; a
+    // Skills-stage run would hit the same chmod'd `.claude` in distribute()
     // first and throw before we can exercise the lstat path.
     if (typeof process.getuid === "function" && process.getuid() === 0) {
       return;
@@ -551,7 +530,7 @@ describe("installHooks (Stop-hook merge)", () => {
 
     let result;
     try {
-      result = runInit(tmp, { minimal: true, withHooks: true, force: true });
+      result = runInit(tmp, { noScan: true, force: true });
     } finally {
       // Always restore so afterEach's rmSync can descend into `.claude`.
       chmodSync(claudeDir, 0o755);
@@ -561,55 +540,5 @@ describe("installHooks (Stop-hook merge)", () => {
     // an escaped exception that took down the whole init.
     expect(result.hooksInstall?.action).toBe("io-error");
     expect(result.hooksInstall?.failure).toBe(true);
-  });
-});
-
-// -- E2-2: --no-integrate + --integrations conflict via CLI ------------------------
-
-describe("init CLI: --no-integrate + --integrations conflict (E2-2)", () => {
-  let tmp: string;
-  let errSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "artgraph-cli-conflicts-"));
-    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    errSpy.mockRestore();
-    rmSync(tmp, { recursive: true, force: true });
-  });
-
-  it("--no-integrate --integrations=speckit → exit 1 with 'mutually exclusive'", async () => {
-    // Before E2-2, this pair silently dropped `--integrations` in default
-    // mode and *reversed* into an opt-in under `--minimal`. Both surfaces
-    // must now be flagged as a hard error before any fs writes occur.
-    const r = await runCli(["init", "--no-integrate", "--integrations", "speckit"], { cwd: tmp });
-
-    expect(r.exitCode).toBe(1);
-    expect(r.stderr).toMatch(/mutually exclusive/);
-    // No writes happened because the check runs before runInit.
-    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
-  });
-
-  it("--no-integrate --integrations=all → exit 1 with 'mutually exclusive'", async () => {
-    const r = await runCli(["init", "--no-integrate", "--integrations", "all"], { cwd: tmp });
-
-    expect(r.exitCode).toBe(1);
-    expect(r.stderr).toMatch(/mutually exclusive/);
-    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
-  });
-
-  it("--no-integrate --integrations='' (empty) is NOT a conflict (parseInitIntegrations collapses to undefined)", async () => {
-    // Empty / whitespace / ",,," inputs collapse to undefined, which is
-    // semantically "no provider chosen" — indistinguishable from omitting
-    // the flag. Must not trigger the mutual-exclusion check.
-    const r = await runCli(["init", "--no-integrate", "--integrations", "", "--minimal"], {
-      cwd: tmp,
-    });
-
-    expect(r.exitCode).toBe(0);
-    expect(r.stderr).not.toMatch(/mutually exclusive/);
-    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
   });
 });

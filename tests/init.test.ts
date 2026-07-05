@@ -363,9 +363,9 @@ describe("runInit", () => {
       "user content\n",
     );
 
-    expect(() =>
-      runInit(tmp, { force: true, noScan: true, withSkills: true, agents: ["claude"] }),
-    ).toThrow(DistributionError);
+    expect(() => runInit(tmp, { force: true, noScan: true, agents: ["claude"] })).toThrow(
+      DistributionError,
+    );
 
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
     expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
@@ -414,7 +414,7 @@ describe("runInit Skills installation (directory format)", () => {
   // on the Skills stage specifically.
 
   it("copies every <name>/SKILL.md into .claude/skills/<name>/ when Skills stage runs", () => {
-    const result = runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] });
+    const result = runInit(tmp, { noScan: true, agents: ["claude"] });
 
     expect(result.skillsInstalled).toBeDefined();
     for (const dir of EXPECTED_SKILL_DIRS) {
@@ -427,7 +427,7 @@ describe("runInit Skills installation (directory format)", () => {
   });
 
   it("copies _shared/ fragments into .claude/skills/_shared/", () => {
-    runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] });
+    runInit(tmp, { noScan: true, agents: ["claude"] });
     for (const name of ["install-check.md", "output-schema.md", "package-manager.md"]) {
       expect(existsSync(join(tmp, ".claude", "skills", "_shared", name))).toBe(true);
     }
@@ -437,7 +437,7 @@ describe("runInit Skills installation (directory format)", () => {
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
     writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "user content\n");
 
-    expect(() => runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] })).toThrow(
+    expect(() => runInit(tmp, { noScan: true, agents: ["claude"] })).toThrow(
       /artgraph-impact[/\\]SKILL\.md.*--force/,
     );
 
@@ -453,7 +453,6 @@ describe("runInit Skills installation (directory format)", () => {
 
     const result = runInit(tmp, {
       noScan: true,
-      withSkills: true,
       force: true,
       agents: ["claude"],
     });
@@ -475,7 +474,7 @@ describe("runInit Skills installation (directory format)", () => {
 
     let caught: unknown;
     try {
-      runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] });
+      runInit(tmp, { noScan: true, agents: ["claude"] });
     } catch (e) {
       caught = e;
     }
@@ -491,7 +490,7 @@ describe("runInit Skills installation (directory format)", () => {
     mkdirSync(join(tmp, ".claude", "skills"), { recursive: true });
     writeFileSync(join(tmp, ".claude", "skills", "my-custom.md"), "user skill\n");
 
-    runInit(tmp, { noScan: true, withSkills: true, force: true, agents: ["claude"] });
+    runInit(tmp, { noScan: true, force: true, agents: ["claude"] });
 
     // Custom file untouched, even when --force overwrites artgraph-* templates.
     expect(readFileSync(join(tmp, ".claude", "skills", "my-custom.md"), "utf-8")).toBe(
@@ -503,9 +502,7 @@ describe("runInit Skills installation (directory format)", () => {
     mkdirSync(join(tmp, ".claude", "skills", "artgraph-impact"), { recursive: true });
     writeFileSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"), "preexisting\n");
 
-    expect(() => runInit(tmp, { noScan: true, withSkills: true, agents: ["claude"] })).toThrow(
-      DistributionError,
-    );
+    expect(() => runInit(tmp, { noScan: true, agents: ["claude"] })).toThrow(DistributionError);
 
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
     expect(
@@ -535,7 +532,6 @@ describe("runInit Skills installation (directory format)", () => {
     expect(() =>
       runInit(tmp, {
         noScan: true,
-        withSkills: true,
         agents: ["claude", "codex"],
       }),
     ).toThrow(DistributionError);
@@ -564,7 +560,6 @@ describe("runInit Skills installation (directory format)", () => {
   it("writes .gitattributes into every selected agent's skillsPath", () => {
     runInit(tmp, {
       noScan: true,
-      withSkills: true,
       agents: ["claude", "codex"],
     });
 
@@ -659,17 +654,15 @@ describe("runInit default behavior (P0)", () => {
     expect(existsSync(join(tmp, ".specify", "extensions"))).toBe(false);
   });
 
-  it("--minimal --with-skills + agents=claude enables only Skills on top of bare config", () => {
-    // spec 013 (FR-013): --minimal + --with-skills still produces Skills
-    // when called via the programmatic API with `agents` explicitly set.
-    // The CLI layer ignores --agents under --minimal (warning), so this
-    // path is unreachable from the command line; this test exercises the
-    // direct runInit contract that other internal callers rely on.
-    const result = runInit(tmp, { minimal: true, withSkills: true, agents: ["claude"] });
+  it("--minimal + agents=claude stays bare config (agents is ignored when every stage is off)", () => {
+    // spec 013 (FR-013) / issue #135: --minimal disables every stage with no
+    // opt-in path left; a programmatic caller passing `agents` alongside
+    // `minimal` still gets bare config only.
+    const result = runInit(tmp, { minimal: true, agents: ["claude"] });
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
     expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
-    expect(result.skillsInstalled).toBeDefined();
-    expect(existsSync(join(tmp, ".claude", "skills", "artgraph-impact", "SKILL.md"))).toBe(true);
+    expect(result.skillsInstalled).toBeUndefined();
+    expect(existsSync(join(tmp, ".claude"))).toBe(false);
   });
 
   it("integrate-auto is no-op (exit 0) when no SDD tools are detected", () => {
@@ -718,14 +711,14 @@ describe("runInit default behavior (P0)", () => {
     expect(() => runInit(tmp, { noAgentContext: true })).not.toThrow();
   });
 
-  it("--integrations <list> overrides auto-detect (only the requested tool runs)", () => {
+  it("integrate-auto passes gate-on to speckit (before_implement hook registered)", () => {
+    // Gate-on is the auto-integrate default for speckit (issue #135); the
+    // standalone `artgraph integrate speckit --no-gate` is the opt-out.
     mkdirSync(join(tmp, ".specify"));
-    mkdirSync(join(tmp, ".kiro"));
-    const result = runInit(tmp, { integrations: ["speckit"] });
-    const ids = (result.integrationResults ?? []).map((r) => r.providerId);
-    expect(ids).toEqual(["speckit"]);
-    // Kiro should NOT have been integrated even though .kiro/ is present
-    expect(existsSync(join(tmp, ".kiro", "steering", "artgraph.md"))).toBe(false);
+    runInit(tmp);
+    const yml = readFileSync(join(tmp, ".specify", "extensions.yml"), "utf-8");
+    expect(yml).toMatch(/before_implement:/);
+    expect(yml).toMatch(/command:\s*artgraph\.check-gate/);
   });
 });
 
@@ -783,8 +776,6 @@ describe("runInit — PR #114 Cluster C (B3 / B7 / OPS-14)", () => {
     expect(() =>
       runInit(tmp, {
         noScan: true,
-        withSkills: true,
-        withAgentContext: true,
         agents: ["claude"],
       }),
     ).toThrow();
@@ -807,8 +798,6 @@ describe("runInit — PR #114 Cluster C (B3 / B7 / OPS-14)", () => {
   it("[OPS-14 / B7] successful init leaves AGENTS.md + CLAUDE.md + .artgraph.json all present", () => {
     runInit(tmp, {
       noScan: true,
-      withSkills: true,
-      withAgentContext: true,
       agents: ["claude"],
     });
 
@@ -977,16 +966,6 @@ describe("computeStageGates (P0 flag matrix truth table)", () => {
     });
   });
 
-  it("--minimal --with-skills enables only Skills", () => {
-    expect(computeStageGates({ minimal: true, withSkills: true })).toEqual({
-      scan: false,
-      skills: true,
-      integrate: false,
-      hooks: false,
-      agentContext: false,
-    });
-  });
-
   it("--no-skills disables only Skills in default mode", () => {
     expect(computeStageGates({ noSkills: true })).toEqual({
       scan: true,
@@ -994,16 +973,6 @@ describe("computeStageGates (P0 flag matrix truth table)", () => {
       integrate: true,
       hooks: true,
       agentContext: true,
-    });
-  });
-
-  it("--minimal + explicit integrations enables integrate stage", () => {
-    expect(computeStageGates({ minimal: true, integrations: ["speckit"] })).toEqual({
-      scan: false,
-      skills: false,
-      integrate: true,
-      hooks: false,
-      agentContext: false,
     });
   });
 

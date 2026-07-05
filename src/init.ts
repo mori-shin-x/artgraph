@@ -14,7 +14,6 @@ import {
   type ArtgraphConfig,
   type ArtifactGraph,
   type IntegrateResult,
-  type IntegrationProviderId,
   type PackageManager,
   type ScanSummary,
   type SddToolInfo,
@@ -105,9 +104,9 @@ export interface InitResult {
    */
   agentContextWritten?: { path: string; written: boolean }[];
   /**
-   * Per-provider result for any one-shot integrations triggered by
-   * `--integrate=<tools>` (FR-022/023/024). Empty / undefined when the
-   * caller did not request any integration.
+   * Per-provider result for the auto-detect integrations run as part of
+   * `init` (FR-022/023/024). Empty / undefined when no SDD tool was
+   * detected or the integrate stage was gated off.
    *
    * `id` is included alongside the `IntegrateResult` so the formatter can
    * still report providers that were skipped (no IntegrateResult emitted)
@@ -115,16 +114,15 @@ export interface InitResult {
    */
   integrationResults?: IntegrateResult[];
   /**
-   * Human-readable warnings emitted while running `--integrate=<tools>`
-   * (e.g. "kiro not detected, skipping integration"). These never fail the
-   * init itself but are surfaced in the CLI output.
+   * Human-readable warnings emitted while running the auto-detect
+   * integrations. These never fail the init itself but are surfaced in the
+   * CLI output.
    */
   integrationWarnings?: string[];
   /**
    * Number of integration providers that threw an exception during
-   * `runRequestedIntegrations`. This is distinct from `integrationWarnings`
-   * (which also covers "not detected, skipping" no-ops); only hard provider
-   * failures are counted here. The CLI uses this to translate provider
+   * `runAutoIntegrations`. Only hard provider failures are counted here.
+   * The CLI uses this to translate provider
    * failures into a non-zero exit code, per
    * `specs/012-skills-expansion/contracts/cli-flags.md` ("statement step
    * failure" must exit 1).
@@ -136,8 +134,7 @@ export interface InitResult {
    * only returns this data — it never writes to stdout/stderr. Formatting
    * the text/JSON output (success messages, the Case D warning block, exit
    * code translation) is the CLI layer's job so init.ts stays print-free.
-   * Undefined when the hooks stage did not run (`--no-hooks` / `--minimal`
-   * without `--with-hooks`).
+   * Undefined when the hooks stage did not run (`--no-hooks` / `--minimal`).
    */
   hooksInstall?: {
     action:
@@ -200,9 +197,7 @@ export function generateConfig(detection: DetectionResult): ArtgraphConfig {
  * (spec 012-skills-expansion, contracts/cli-flags.md).
  *
  * Default (no flags) → every stage on. `--minimal` flips every gateable stage
- * off; `--with-*` flags re-enable individual stages on top of `--minimal`.
- * `--no-*` flags opt out of individual stages in the default mode.
- * Explicit `integrations` (non-empty) also acts as an opt-in under `--minimal`.
+ * off. `--no-*` flags opt out of individual stages in the default mode.
  */
 export function computeStageGates(opts: InitOptions): {
   scan: boolean;
@@ -211,24 +206,18 @@ export function computeStageGates(opts: InitOptions): {
   hooks: boolean;
   agentContext: boolean;
 } {
-  const explicitIntegrations =
-    opts.integrations !== undefined &&
-    (Array.isArray(opts.integrations) ? opts.integrations.length > 0 : true);
-
   if (opts.minimal) {
     return {
       scan: false,
-      skills: opts.withSkills === true,
-      integrate: opts.withIntegrate === true || explicitIntegrations,
-      hooks: opts.withHooks === true,
-      agentContext: opts.withAgentContext === true,
+      skills: false,
+      integrate: false,
+      hooks: false,
+      agentContext: false,
     };
   }
 
   return {
     scan: !opts.noScan,
-    // withSkills is a redundant opt-in under default mode but preserved so
-    // callers passing it explicitly behave the same as before.
     skills: !opts.noSkills,
     integrate: !opts.noIntegrate,
     hooks: !opts.noHooks,
@@ -251,19 +240,17 @@ export function computeStageGates(opts: InitOptions): {
  * install problem never aborts the rest of `init` (config + Skills already
  * landed by the time this runs).
  *
- * `options.force` is accepted for signature symmetry with the other stage
- * installers but is deliberately ignored on the Case D (conflict) branch —
- * see contract §--force フラグの扱い ("settings.json is the most sensitive
- * user config; artgraph never overwrites a pre-existing Stop hook, even with
- * --force").
+ * `--force` deliberately does not reach this stage — the Case D (conflict)
+ * branch always refuses; see contract §--force フラグの扱い ("settings.json
+ * is the most sensitive user config; artgraph never overwrites a
+ * pre-existing Stop hook, even with --force").
  */
 function installHooks(
   rootDir: string,
   detectedPm: PackageManager | null,
-  options: { force?: boolean; explicitOptIn?: boolean } = {},
 ): NonNullable<InitResult["hooksInstall"]> {
   if (detectedPm === null) {
-    return { action: "skipped-no-pm", failure: options.explicitOptIn === true };
+    return { action: "skipped-no-pm", failure: false };
   }
 
   // Narrow the parsed template shape so downstream lookups (Case D reason,
@@ -540,7 +527,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   //        `.kiro/steering/artgraph.md` is the integrate stage / KiroProvider's
   //        responsibility, NOT this distribute() call.
   //   4. scan + reconcile (writes .trace.lock)
-  //   5. one-shot integrations (`--integrations=<list>` / auto-detect)
+  //   5. auto-detect SDD-tool integrations
   //   6. hooks stub
   //   7. agent-context (AGENTS.md + wrappers) — before config (B7), so a
   //      wrapper write failure does NOT leave `.artgraph.json` on disk.
@@ -674,7 +661,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   }
 
   const integration = stages.integrate
-    ? runRequestedIntegrations(abs, detection, options)
+    ? runAutoIntegrations(abs, detection, options)
     : { failureCount: 0 };
 
   // PM resolution priority shared by the hooks and agent-context stages
@@ -683,18 +670,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   // removed/rotated after the initial init), (3) null → graceful skip for
   // hooks, bare-`artgraph` command examples for agent-context (#110).
   const resolvedPm = detectedPm ?? config.packageManager ?? null;
-  const hooksInstall = stages.hooks
-    ? installHooks(abs, resolvedPm, {
-        force: options.force,
-        // E1: `explicitOptIn` is only meaningful under `--minimal`, where the
-        // user has to opt IN to each stage. In default mode `--with-hooks` is
-        // redundant (hooks are already on) and MUST NOT escalate PM-missing
-        // to a failure — otherwise `init --with-hooks` in a repo without a
-        // detectable PM exits 1 while plain `init` exits 0 for the exact
-        // same on-disk state.
-        explicitOptIn: options.minimal === true && options.withHooks === true,
-      })
-    : undefined;
+  const hooksInstall = stages.hooks ? installHooks(abs, resolvedPm) : undefined;
 
   // spec 013 T021 — agent-context stage. AGENTS.md is canonical (always
   // written when any agent is selected); wrappers are emitted only for the
@@ -744,59 +720,40 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
 }
 
 /**
- * Apply integrate-auto for `init` (P0 redesign, contracts/cli-flags.md).
- *
- * Resolution order:
- *   1. Explicit array `options.integrations` → exactly those providers.
- *   2. `options.integrations === "all"` OR no `integrations` set → every
- *      detected provider (auto mode, the new default).
- *
- * Each provider runs via `runIntegrate` so the on-disk effect is identical
- * to the standalone `artgraph integrate <tool>` command. Tools that aren't
- * detected are warned about and skipped — `init` always exits 0.
+ * Apply integrate-auto for `init` (P0 redesign, contracts/cli-flags.md):
+ * every detected provider is integrated. Each provider runs via
+ * `runIntegrate` so the on-disk effect is identical to the standalone
+ * `artgraph integrate <tool>` command. Explicit tool selection and gate
+ * control live in `artgraph integrate <tool> [--gate|--no-gate]`.
  */
-function runRequestedIntegrations(
+function runAutoIntegrations(
   rootDir: string,
   detection: DetectionResult,
   options: InitOptions,
 ): { results?: IntegrateResult[]; warnings?: string[]; failureCount: number } {
-  // Resolve the requested ids. Empty array also triggers auto-mode.
   const statuses = detection.integrations ?? [];
-  let requested: IntegrationProviderId[];
-  if (Array.isArray(options.integrations) && options.integrations.length > 0) {
-    requested = options.integrations;
-  } else {
-    // Auto-detect (default behavior). "all" sentinel also lands here.
-    requested = statuses.filter((s) => s.detected).map((s) => s.providerId);
-  }
+  const requested = statuses.filter((s) => s.detected).map((s) => s.providerId);
   if (requested.length === 0) return { failureCount: 0 };
 
   const results: IntegrateResult[] = [];
   const warnings: string[] = [];
-  // Count only hard exceptions thrown by providers — NOT "not detected"
-  // warnings, which are an expected no-op. The CLI converts a non-zero
-  // failure count into a non-zero exit code per contracts/cli-flags.md.
+  // Count only hard exceptions thrown by providers. The CLI converts a
+  // non-zero failure count into a non-zero exit code per
+  // contracts/cli-flags.md.
   let failureCount = 0;
 
   for (const id of requested) {
-    const status = statuses.find((s) => s.providerId === id);
-    if (!status) {
-      warnings.push(`unknown integration provider: ${id}`);
-      continue;
-    }
-    if (!status.detected) {
-      warnings.push(`WARNING: ${status.displayName} not detected, skipping integration`);
-      continue;
-    }
     try {
       const r = runIntegrate(rootDir, id, {
         // Only speckit consumes `gate`; other providers ignore unknown opts.
-        gate: options.integrateGate,
+        // Gate-on is the auto-integrate default (contracts/cli-flags.md
+        // §integrate-gate, spec.md §FR-003) so a fresh Spec Kit repo gets
+        // the `before_implement` gate hook; `artgraph integrate speckit
+        // --no-gate` is the opt-out.
+        gate: true,
         // FR-024: --force on `init` must reach the integration provider so
         // that drifted extension/steering files are regenerated alongside
-        // the rest of the project. Previously this was dropped silently,
-        // which made `init --integrate=<tool> --force` indistinguishable
-        // from `init --integrate=<tool>` once any user edit existed.
+        // the rest of the project.
         force: options.force,
       });
       results.push(r);

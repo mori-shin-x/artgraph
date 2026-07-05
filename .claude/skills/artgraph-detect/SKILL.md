@@ -55,7 +55,7 @@ Also check for the tool markers themselves, to distinguish "tool not present" fr
 ls .claude/skills/ 2>/dev/null || echo "no .claude/skills/"
 ```
 
-Report which `artgraph-*` Skills are present. The canonical set is: `artgraph-coverage`, `artgraph-detect`, `artgraph-impact`, `artgraph-integrate`, `artgraph-plan-coverage`, `artgraph-rename`, `artgraph-setup`, `artgraph-bootstrap`, `artgraph-verify`. Missing entries suggest the user ran `init --minimal` or `--no-skills`, or deleted Skills manually. To reinstall only the Skills without touching config / hooks / integration, recommend `<PM-exec> init --minimal --with-skills --force` (where `<PM-exec>` is the project's package runner: `npx artgraph` / `pnpm exec artgraph` / `bunx artgraph` / `deno run -A npm:artgraph/cli`). `--force` is required because `.artgraph.json` already exists.
+Report which `artgraph-*` Skills are present. The canonical set is: `artgraph-coverage`, `artgraph-detect`, `artgraph-impact`, `artgraph-integrate`, `artgraph-plan-coverage`, `artgraph-rename`, `artgraph-setup`, `artgraph-bootstrap`, `artgraph-verify`. Missing entries suggest the user ran `init --minimal` or `--no-skills`, or deleted Skills manually. To reinstall only the Skills without touching hooks / integration, recommend `<PM-exec> init --force --agents=<list> --no-scan --no-integrate --no-hooks --no-agent-context` (where `<PM-exec>` is the project's package runner: `npx artgraph` / `pnpm exec artgraph` / `bunx artgraph` / `deno run -A npm:artgraph/cli`). `--force` is required because `.artgraph.json` already exists.
 
 ### 5. Summarize
 
@@ -68,4 +68,4 @@ integrations: speckit=[yes/no/not-detected] kiro=[yes/no/not-detected]
 skills: N of 9 installed (missing: <list>)
 ```
 
-Suggest next steps based on what's missing: invoke `artgraph-setup` if the CLI is not installed, `artgraph-integrate` if SDD tools are present but not yet integrated, and `<PM-exec> init --minimal --with-skills --force` if any canonical Skills are absent.
+Suggest next steps based on what's missing: invoke `artgraph-setup` if the CLI is not installed, `artgraph-integrate` if SDD tools are present but not yet integrated, and `<PM-exec> init --force --agents=<list> --no-scan --no-integrate --no-hooks --no-agent-context` if any canonical Skills are absent.

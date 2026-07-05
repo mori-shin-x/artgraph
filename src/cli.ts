@@ -117,24 +117,6 @@ function registerCommands(program: Command): void {
     .option("--no-integrate", "Skip SDD-tool auto-integration (default mode only)")
     .option("--no-hooks", "Skip Stop hook installation (default mode only)")
     .option("--no-agent-context", "Skip AGENTS.md / wrapper injection (default mode only)")
-    // Stage opt-ins (used with --minimal)
-    .option(
-      "--with-skills",
-      "Distribute Skills to the selected --agents canonical paths (use with --minimal)",
-    )
-    .option("--with-integrate", "Auto-integrate detected SDD tools (use with --minimal)")
-    .option("--with-hooks", "Install Stop hook into .claude/settings.json (use with --minimal)")
-    .option(
-      "--with-agent-context",
-      "Inject AGENTS.md + wrapper(s) for the selected --agents (use with --minimal)",
-    )
-    // Explicit integrate list (overrides auto-detect)
-    .option(
-      "--integrations <tools>",
-      "Comma-separated SDD tools to integrate (overrides auto-detect; e.g. speckit,kiro or 'all' (= auto-detect every installed SDD tool))",
-    )
-    .option("--integrate-gate", "Pass --gate to speckit during integration")
-    .option("--no-integrate-gate", "Pass --no-gate to speckit during integration")
     // spec 013 (FR-001 / FR-002) — Tier 1 agent ids the user wants to target.
     // Required when Skills or agent-context distribution runs; rejected
     // (with a "Did you mean ...?" hint) for unknown / uppercase / empty /
@@ -150,107 +132,8 @@ function registerCommands(program: Command): void {
     .option("--format <format>", "Output format: json | text", "text")
     .action(async (opts) => {
       const rootDir = process.cwd();
-      const { listProviders } = await loadIntegrate();
       const { runInit } = await import("./init.js");
       const { DistributionError } = await import("./agents/distribute.js");
-
-      // Parse --integrations first so the M24 conflict check below can also
-      // flag `--no-integrate` combined with a non-empty `--integrations=<list>`
-      // (or `--integrations=all`). Without this pre-parse, that pair silently
-      // dropped in default mode and reversed meaning under `--minimal`
-      // (explicit list acts as an integrate opt-in — see computeStageGates).
-      let integrations = parseInitIntegrations(opts.integrations);
-
-      // M24: detect mutually-exclusive --no-X + --with-X combinations before
-      // doing any work. commander otherwise silently lets --with-X "win"
-      // (last flag), which has bitten users in PR #103 review.
-      const conflicts: string[] = [];
-      if (opts.skills === false && opts.withSkills === true)
-        conflicts.push("--no-skills / --with-skills");
-      if (opts.integrate === false && opts.withIntegrate === true)
-        conflicts.push("--no-integrate / --with-integrate");
-      if (opts.hooks === false && opts.withHooks === true)
-        conflicts.push("--no-hooks / --with-hooks");
-      if (opts.agentContext === false && opts.withAgentContext === true)
-        conflicts.push("--no-agent-context / --with-agent-context");
-      // E2-2 (#140): `--no-integrate` is only really an opt-out if we also
-      // reject the silent-conflict pair `--no-integrate --integrations=<...>`.
-      // An empty list (`parseInitIntegrations` collapses to undefined) is a
-      // no-op and must NOT trigger the check.
-      if (opts.integrate === false && Array.isArray(integrations) && integrations.length > 0) {
-        conflicts.push("--no-integrate / --integrations=<non-empty>");
-      }
-      if (opts.integrate === false && integrations === "all") {
-        conflicts.push("--no-integrate / --integrations=all");
-      }
-      if (conflicts.length > 0) {
-        console.error(`Error: mutually exclusive flag combinations: ${conflicts.join("; ")}`);
-        process.exit(1);
-      }
-
-      // D3 / D-adj-3 / D-adj-6: `--minimal --with-skills` (or
-      // `--with-agent-context`) without `--agents` used to silently no-op —
-      // `agentsRequired` is false under `--minimal`, so the missing-`--agents`
-      // gate below never fired, and the distribution stage skipped itself
-      // with zero agents and zero warning. That's the same "no-op combination"
-      // family the mutex-conflict detector above already guards against.
-      // Treat it as a hard error, consistent with the AGENTS_REQUIRED_ERROR
-      // path used everywhere else --agents is missing. (`--with-hooks` is
-      // exempt: the hooks stage needs no --agents to land real output.)
-      if (
-        opts.minimal === true &&
-        (opts.withSkills === true || opts.withAgentContext === true) &&
-        !opts.agents
-      ) {
-        console.error(
-          "ERROR: --with-skills / --with-agent-context under --minimal requires --agents=<list>; otherwise this is a no-op.",
-        );
-        process.exit(1);
-      }
-
-      // M12: surface valid provider ids when the user fat-fingers an
-      // --integrations value, and do it *before* runInit runs.
-      //
-      // OUT-10: derive the valid-id set from the live provider registry
-      // (the same source `getProviderStatuses` reads) instead of a hardcoded
-      // `{"speckit","kiro"}` literal, so a newly-registered provider (e.g.
-      // openspec) doesn't silently fall through this check as "unknown".
-      const VALID_PROVIDER_IDS = new Set(listProviders().map((p) => p.id));
-      if (Array.isArray(integrations)) {
-        const invalid = integrations.filter(
-          (id) => !VALID_PROVIDER_IDS.has(id as IntegrationProviderId),
-        );
-        if (invalid.length > 0) {
-          const valid = [...VALID_PROVIDER_IDS].join(", ");
-          console.error(
-            `WARNING: unknown integration provider(s): ${invalid.join(", ")} (valid: ${valid})`,
-          );
-
-          // E2: drop the invalid ids before handing the list to runInit so
-          // its own `runRequestedIntegrations` unknown-provider warning
-          // doesn't fire a second time for the same id (previously the same
-          // "unknown provider" fact was reported twice, once here and once
-          // from init.ts). Only reassign when at least one valid id
-          // survives — an all-invalid list must still reach runInit as a
-          // non-empty array so it stays on the "explicit request, zero real
-          // integrations" path rather than falling through to the
-          // auto-detect branch (which an empty array would trigger).
-          const validOnly = integrations.filter((id) =>
-            VALID_PROVIDER_IDS.has(id as IntegrationProviderId),
-          );
-          if (validOnly.length > 0) {
-            integrations = validOnly;
-          }
-        }
-      }
-
-      // H2: commander stores --integrate-gate / --no-integrate-gate in
-      // `opts.integrateGate`. When neither was supplied, the contract
-      // (contracts/cli-flags.md:48, spec.md:258) says default to gate-on for
-      // speckit. Returning `undefined` here left speckit gateless by default.
-      const integrateGate: boolean = Object.prototype.hasOwnProperty.call(opts, "integrateGate")
-        ? (opts.integrateGate as boolean)
-        : true; // contract default
 
       // spec 013 (T005 / T006) — --agents=<csv> parsing + orthogonality.
       //
@@ -269,11 +152,6 @@ function registerCommands(program: Command): void {
       //   - --minimal:                  every cross-agent stage off, --agents ignored (warn if given)
       //   - --no-skills --no-agent-context: both off, --agents ignored (warn if given)
       //   - else:                       --agents required, error with 3-option UX if missing
-      //
-      // We deliberately key the "skip" decision on the user-facing flag
-      // intent (NOT computeStageGates) so that --with-skills under --minimal
-      // does NOT bypass the spec-013 requirement: --minimal stays "all off"
-      // for the cross-agent stages regardless of the legacy --with-* opt-ins.
       const skipDueToMinimal = opts.minimal === true;
       const skipDueToBothStagesOff =
         !skipDueToMinimal && opts.skills === false && opts.agentContext === false;
@@ -306,12 +184,6 @@ function registerCommands(program: Command): void {
           noIntegrate: opts.integrate === false,
           noHooks: opts.hooks === false,
           noAgentContext: opts.agentContext === false,
-          withSkills: opts.withSkills === true,
-          withIntegrate: opts.withIntegrate === true,
-          withHooks: opts.withHooks === true,
-          withAgentContext: opts.withAgentContext === true,
-          integrations,
-          integrateGate,
           agents: parsedAgents,
         });
 
@@ -500,11 +372,7 @@ function registerCommands(program: Command): void {
             }
           }
 
-          // Skip Tips entirely if the user already requested one-shot integration —
-          // the per-tool sections above already cover discovery.
-          if (!integrations) {
-            await printIntegrationTips(rootDir);
-          }
+          await printIntegrationTips(rootDir);
         }
 
         // H1: any integration that failed should surface as a non-zero exit
@@ -554,41 +422,6 @@ function registerCommands(program: Command): void {
       }
       throw e;
     }
-  }
-
-  /**
-   * Parse the comma-separated value passed to `--integrate`. Returns:
-   *   - undefined when the flag was not supplied
-   *   - "all" when the user passed the special sentinel
-   *   - an array of provider ids otherwise (no validation here; `runInit`
-   *     handles unknown / undetected tools with a warning)
-   */
-  function parseInitIntegrations(
-    raw: string | undefined,
-  ): IntegrationProviderId[] | "all" | undefined {
-    if (raw === undefined || raw === null) return undefined;
-    const trimmed = raw.trim();
-    if (trimmed === "") return undefined;
-    if (trimmed === "all") return "all";
-    // M11: ",,," / "," / etc. previously returned `[]` while "" returned
-    // undefined. The two are semantically equivalent ("no provider chosen")
-    // so collapse to undefined for consistent Tip suppression downstream.
-    const ids = trimmed
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-    if (ids.length === 0) {
-      // E-adj-A7: a non-empty value that still yields zero ids (",,," and
-      // friends) silently fell back to auto-detect with no signal that the
-      // flag's value was discarded. Warn so the user isn't left wondering why
-      // every SDD tool got auto-integrated instead of the (mistyped)
-      // explicit list they gave.
-      console.error(
-        `WARNING: invalid --integrations value '${raw}' — falling back to auto-detect.`,
-      );
-      return undefined;
-    }
-    return ids as IntegrationProviderId[];
   }
 
   /**
@@ -703,15 +536,6 @@ function registerCommands(program: Command): void {
     "       artgraph init --no-skills --no-agent-context",
     "  3. Skip every extra setup stage:",
     "       artgraph init --minimal",
-    "",
-    // E-adj-A6: --with-skills / --with-agent-context under --minimal is a
-    // no-op unless --agents is also given — spell that out here since option
-    // 3 above (--minimal) reads like a standalone fix, and D3 hard-errors on
-    // exactly this combination.
-    "Additional notes:",
-    "  --minimal requires --with-skills (or --with-agent-context) AND --agents",
-    "  together to opt back into Skills / agent-context distribution; either",
-    "  alone is a no-op.",
   ].join("\n");
 
   // spec 014 (FR-001 / FR-003): REQ-ID inputs are no longer accepted here.

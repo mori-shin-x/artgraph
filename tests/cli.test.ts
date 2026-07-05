@@ -859,52 +859,6 @@ describe("CLI: init", () => {
   );
 
   // -------------------------------------------------------------------------
-  // D3 / D-adj-3 / D-adj-6: `--minimal --with-skills` (or
-  // `--with-agent-context`) without `--agents` used to silently no-op with
-  // exit 0. It must now hard-error like the AGENTS_REQUIRED_ERROR path.
-  // -------------------------------------------------------------------------
-  it(
-    "--minimal --with-skills without --agents errors instead of silently no-op-ing",
-    { timeout: 30000 },
-    async () => {
-      const { existsSync } = require("node:fs");
-      const { join } = require("node:path");
-      const { exitCode, stderr } = await runInit(["--minimal", "--with-skills"]);
-      expect(exitCode).toBe(1);
-      expect(stderr).toContain("requires --agents=<list>");
-      expect(existsSync(join(initTmp, ".artgraph.json"))).toBe(false);
-    },
-  );
-
-  it(
-    "--minimal --with-agent-context without --agents errors instead of silently no-op-ing",
-    { timeout: 30000 },
-    async () => {
-      const { existsSync } = require("node:fs");
-      const { join } = require("node:path");
-      const { exitCode, stderr } = await runInit(["--minimal", "--with-agent-context"]);
-      expect(exitCode).toBe(1);
-      expect(stderr).toContain("requires --agents=<list>");
-      expect(existsSync(join(initTmp, ".artgraph.json"))).toBe(false);
-    },
-  );
-
-  // --agents IS supplied here, so the new D3 gate (which only fires when
-  // --agents is absent) must NOT trigger. The pre-existing FR-013 behavior
-  // — --minimal unconditionally overrides --agents with a WARNING and no
-  // install — is unrelated to this fix and stays exit 0.
-  it(
-    "--minimal --with-skills --agents=claude does not trigger D3's new error (agents given)",
-    { timeout: 30000 },
-    async () => {
-      const { exitCode, stderr } = await runInit(["--minimal", "--with-skills", "--agents=claude"]);
-      expect(exitCode).toBe(0);
-      expect(stderr).toMatch(/WARNING:\s*--minimal overrides --agents/);
-      expect(stderr).not.toContain("requires --agents=<list>");
-    },
-  );
-
-  // -------------------------------------------------------------------------
   // E-adj-A1 / E-adj-A2 / E-adj-A9 / BND-7: init --help text accuracy.
   // Commander word-wraps help text to terminal width, so normalize
   // whitespace before asserting on multi-word phrases.
@@ -919,13 +873,6 @@ describe("CLI: init", () => {
     expect(normalized).toContain("Refuses symlinks even with --force.");
   });
 
-  it("init --help clarifies --integrations=all means auto-detect", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await runInit(["--help"]);
-    expect(exitCode).toBe(0);
-    const normalized = stdout.replace(/\s+/g, " ");
-    expect(normalized).toContain("'all' (= auto-detect every installed SDD tool)");
-  });
-
   it(
     "init --help derives the --agents id list from AGENT_IDS (not a stale literal)",
     { timeout: 30000 },
@@ -934,35 +881,6 @@ describe("CLI: init", () => {
       expect(exitCode).toBe(0);
       const normalized = stdout.replace(/\s+/g, " ");
       expect(normalized).toContain("claude, codex, copilot, cursor, kiro");
-    },
-  );
-
-  // -------------------------------------------------------------------------
-  // E2 / OUT-10: --integrations=speckit,unknown warns exactly once (CLI M12
-  // is now the single source; runInit no longer duplicates the same
-  // "unknown provider" fact), and the valid-id list is sourced from the
-  // live provider registry rather than a hardcoded literal.
-  // -------------------------------------------------------------------------
-  it(
-    "--integrations=speckit,unknown warns about the unknown provider exactly once",
-    { timeout: 30000 },
-    async () => {
-      const { exitCode, stderr, stdout } = await runInit([
-        "--agents=claude",
-        "--no-scan",
-        "--integrations=speckit,unknown",
-      ]);
-      expect(exitCode).toBe(0);
-      const occurrences = (stderr + stdout).split("unknown").length - 1;
-      // "unknown" appears once as the invalid id token AND once again inside
-      // "unknown integration provider(s)" wording from the M12 warning itself
-      // — but must NOT additionally appear via runInit's own duplicate
-      // "unknown integration provider: unknown" warning.
-      expect(stderr).toContain(
-        "WARNING: unknown integration provider(s): unknown (valid: speckit, kiro)",
-      );
-      expect(stderr).not.toContain("unknown integration provider: unknown");
-      expect(occurrences).toBeLessThanOrEqual(2);
     },
   );
 });

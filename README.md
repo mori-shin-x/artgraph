@@ -116,7 +116,7 @@ npm install -D artgraph && npx artgraph init --agents=claude       # pick your a
 | `codex`    | Codex CLI (OpenAI) | `.agents/skills/`  | `AGENTS.md` | — (AGENTS.md native) |
 | `cursor`   | Cursor | `.cursor/skills/`  | `AGENTS.md` | — (AGENTS.md native) |
 | `copilot`  | GitHub Copilot (IDE / CLI / Coding Agent) | `.github/skills/`  | `AGENTS.md` | `.github/copilot-instructions.md` |
-| `kiro`     | Kiro | `.kiro/skills/`    | `AGENTS.md` | — (`.kiro/steering/artgraph.md` is handled separately by `--integrations=kiro`) |
+| `kiro`     | Kiro | `.kiro/skills/`    | `AGENTS.md` | — (`.kiro/steering/artgraph.md` is handled separately by `artgraph integrate kiro`) |
 
 ### Disabling the Stop hook (troubleshooting)
 
@@ -461,9 +461,8 @@ instead of relying on a manual call.
 | `artgraph integrate speckit`      | Generate `.specify/extensions/artgraph/` and register Spec Kit hooks (`after_tasks` / `after_implement`, optional `before_implement` via `--gate`)                 |
 | `artgraph integrate kiro`         | Write `.kiro/steering/artgraph.md` so the Kiro agent learns when to call `impact / check --diff / reconcile`                                                       |
 | `artgraph integrate list`         | Show every supported integration with detect / installed status                                                                                                     |
-| `artgraph init --integrations=<ids>` | One-shot: run `init` _and_ integrate the named tools (`speckit`, `kiro`, `all`); pass `--integrate-gate` to add Spec Kit's `before_implement` hook in the same call. The value-form flag was renamed from `--integrate=<ids>` to `--integrations=<ids>` so that `--integrate` / `--no-integrate` could be used as a boolean opt-out for the default auto-integrate stage. |
 
-Since `init` now auto-integrates every detected SDD tool by default, the `--integrations=<csv>` form is only needed when you want to override that selection (for example, install Spec Kit hooks only in a repo that also has `.kiro/`).
+`artgraph init` auto-integrates every detected SDD tool by default (Spec Kit gets the `before_implement` gate hook; pass `--no-integrate` to skip the stage). Use the standalone `artgraph integrate <tool>` command when you want to pick a specific tool or control the gate afterwards.
 
 ```bash
 # Inside a repo that already has .specify/
@@ -478,9 +477,6 @@ artgraph integrate kiro --force         # overwrite a hand-edited steering file
 
 # Discover what's available
 artgraph integrate list                 # detected / installed flags per tool
-
-# Bootstrap + integrate in one shot
-artgraph init --integrations=all --integrate-gate
 ```
 
 Notes:

@@ -140,16 +140,4 @@ describe("CLI: --agents error UX (spec 013 FR-001 / FR-002 / SC-006 / A1)", () =
     expect(stderr).toContain("Also duplicated once case is normalized");
     expect(stderr).toContain('"claude"');
   });
-
-  // ---------------------------------------------------------------------
-  // E-adj-A6: AGENTS_REQUIRED_ERROR must explain that --minimal only
-  // reactivates Skills / agent-context distribution when paired with both
-  // --with-skills (or --with-agent-context) AND --agents.
-  // ---------------------------------------------------------------------
-  it("the 3-option error explains the --minimal + --with-* + --agents interaction", async () => {
-    const { exitCode, stderr } = await runAt(initTmp, ["init"]);
-    expect(exitCode).not.toBe(0);
-    expect(stderr).toContain("Additional notes:");
-    expect(stderr).toMatch(/--minimal requires --with-skills.*AND --agents/s);
-  });
 });
