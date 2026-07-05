@@ -4,10 +4,15 @@ import { Command, CommanderError, Option } from "commander";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { loadConfig } from "./config.js";
-import { scan, reconcile } from "./scan.js";
-import { impact, resolveStartIds, resolveOriginReqs } from "./graph/traverse.js";
-import { extractFiles, type SymbolEntry } from "./parsers/sdd-files.js";
+
+// Command implementations are imported lazily (`await import(...)`) inside
+// each action handler instead of statically here. The scan/parse stack pulls
+// in ts-morph (~300 ms module load alone), which every invocation — including
+// `--version` and `--help` — used to pay up front. Only commander, node
+// builtins, and the two data-only modules needed to render help text
+// (agents/descriptors, agents/parse-agents) stay static. Types are erased at
+// compile time, so `import type` is free.
+import type { SymbolEntry } from "./parsers/sdd-files.js";
 
 // spec 016 (R-003) — direct CLI / hook-pretool / --diff inputs come in as raw
 // strings (file paths or `path:symbol` declarations). lift each into the
@@ -34,43 +39,27 @@ function pathsToEntries(paths: string[]): SymbolEntry[] {
     return { path: p, line: 1 };
   });
 }
-import { formatGraphText, formatGraphJSON } from "./graph/format.js";
-import type { NodeKind } from "./types.js";
+import type { NodeKind, ArtgraphConfig, TestResultMap } from "./types.js";
 import type { BuildWarning } from "./graph/builder.js";
-import { check } from "./check.js";
-import { computeCoverage } from "./coverage.js";
-import { readLock } from "./lock.js";
-import { getGitDiffFiles } from "./diff.js";
-import {
-  parseHookInput,
-  extractFilePaths,
-  toRelativePath,
-  formatAdditionalContext,
-  buildHookOutput,
-} from "./hook-pretool.js";
-import type { ArtgraphConfig, TestResultMap } from "./types.js";
-import { runInit } from "./init.js";
-import { DistributionError } from "./agents/distribute.js";
-import { runPlanCoverage } from "./plan-coverage/index.js";
-import { resolveSpecDir } from "./plan-coverage/spec-resolver.js";
-import { loadTestResults } from "./test-results.js";
-import { executeRename, executeSplit, executeMerge } from "./rename-executor.js";
 import type { RenameResult } from "./rename-executor.js";
-import {
-  getProviderStatuses,
-  listProviders,
-  registerBuiltinProviders,
-  runIntegrate,
-} from "./integrate/index.js";
 import type { IntegrateResult, IntegrationProviderId } from "./types.js";
 import { parseAgentsList, AgentsParseError } from "./agents/parse-agents.js";
 import { AGENT_IDS, type AgentId } from "./agents/descriptors.js";
-import { runDoctor, formatDoctorReportJson, formatDoctorReportText } from "./doctor.js";
 
-// Wire up the built-in integration providers (speckit / kiro) before
-// commander parses argv. Today the registration body is empty (T014); US1
-// / US2 fill it in.
-registerBuiltinProviders();
+// Lazily load the integrate surface and wire up the built-in providers
+// (speckit / kiro) exactly once per process. `registerProvider` throws on a
+// duplicate id, and `runCli` builds a fresh commander tree per call within
+// one process, so the once-guard preserves the old "register at module load"
+// semantics without paying the integrate/yaml import on every invocation.
+let builtinProvidersRegistered = false;
+async function loadIntegrate(): Promise<typeof import("./integrate/index.js")> {
+  const mod = await import("./integrate/index.js");
+  if (!builtinProvidersRegistered) {
+    mod.registerBuiltinProviders();
+    builtinProvidersRegistered = true;
+  }
+  return mod;
+}
 
 // Test seam: when set, hook-pretool reads this string instead of process.stdin.
 // Lets `runCli({stdin})` drive hook-pretool entirely in-process without having
@@ -96,13 +85,14 @@ function registerCommands(program: Command): void {
   // `.artgraph.json` `testResultPaths` field, then load them. Returns undefined
   // when neither is set so callers fall back to legacy (verifies-edge-only)
   // coverage. Shared by `scan`, `check`, and `coverage`.
-  function resolveTestResults(
+  async function resolveTestResults(
     opts: { testResults?: string[] },
     config: ArtgraphConfig,
     rootDir: string,
-  ): TestResultMap | undefined {
+  ): Promise<TestResultMap | undefined> {
     const paths = opts.testResults ?? config.testResultPaths;
     if (paths && paths.length > 0) {
+      const { loadTestResults } = await import("./test-results.js");
       return loadTestResults(paths, rootDir);
     }
     return undefined;
@@ -158,8 +148,11 @@ function registerCommands(program: Command): void {
       `Comma-separated Tier 1 agent ids to target (${[...AGENT_IDS].sort().join(", ")}). Required for Skills / agent-context distribution.`,
     )
     .option("--format <format>", "Output format: json | text", "text")
-    .action((opts) => {
+    .action(async (opts) => {
       const rootDir = process.cwd();
+      const { listProviders } = await loadIntegrate();
+      const { runInit } = await import("./init.js");
+      const { DistributionError } = await import("./agents/distribute.js");
 
       // Parse --integrations first so the M24 conflict check below can also
       // flag `--no-integrate` combined with a non-empty `--integrations=<list>`
@@ -510,7 +503,7 @@ function registerCommands(program: Command): void {
           // Skip Tips entirely if the user already requested one-shot integration —
           // the per-tool sections above already cover discovery.
           if (!integrations) {
-            printIntegrationTips(rootDir);
+            await printIntegrationTips(rootDir);
           }
         }
 
@@ -603,7 +596,8 @@ function registerCommands(program: Command): void {
    * detected but not yet installed (FR-012/013). Silent when nothing is
    * pending so a fully-integrated repo doesn't see stale hints.
    */
-  function printIntegrationTips(rootDir: string): void {
+  async function printIntegrationTips(rootDir: string): Promise<void> {
+    const { getProviderStatuses } = await loadIntegrate();
     const statuses = getProviderStatuses(rootDir);
     for (const s of statuses) {
       if (!s.detected || s.installed) continue;
@@ -629,12 +623,14 @@ function registerCommands(program: Command): void {
     .option("--format <format>", "Output format: json | text", "text")
     .option("--test-results <paths...>", "Test result files (Vitest JSON / JUnit XML)")
     .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
-    .action((opts) => {
+    .action(async (opts) => {
       const rootDir = process.cwd();
+      const { loadConfig } = await import("./config.js");
+      const { scan } = await import("./scan.js");
       const config = applyMode(loadConfig(rootDir), opts.mode);
       const result = scan(rootDir, config);
 
-      const testResults = resolveTestResults(opts, config, rootDir);
+      const testResults = await resolveTestResults(opts, config, rootDir);
       let testResultStats:
         | { totalTests: number; passedTests: number; failedTests: number }
         | undefined;
@@ -777,7 +773,7 @@ function registerCommands(program: Command): void {
     .option("--depth <depth>", "Limit BFS traversal depth")
     .option("--format <format>", "Output format: json | text", "text")
     .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
-    .action((targets: string[], opts) => {
+    .action(async (targets: string[], opts) => {
       const rootDir = process.cwd();
 
       // spec 016 T026 / contracts/cli-flags.md §2 — validation order:
@@ -826,6 +822,10 @@ function registerCommands(program: Command): void {
         process.exit(1);
       }
 
+      const { loadConfig } = await import("./config.js");
+      const { scan } = await import("./scan.js");
+      const { readLock } = await import("./lock.js");
+      const { impact, resolveStartIds, resolveOriginReqs } = await import("./graph/traverse.js");
       const config = applyMode(loadConfig(rootDir), opts.mode);
       const { graph } = scan(rootDir, config);
       const lock = readLock(rootDir, config.lockFile);
@@ -848,6 +848,7 @@ function registerCommands(program: Command): void {
           process.exit(1);
         }
         const text = readFileSync(sourcePath, "utf-8");
+        const { extractFiles } = await import("./parsers/sdd-files.js");
         const extracted = extractFiles(text, { graph, repoRoot: rootDir });
         // SPEC-2: surface every `unresolvedFilePath` diagnostic as a warning so
         // typos in a `Files:` section (e.g. `src/auht.ts`) don't silently fall
@@ -870,6 +871,7 @@ function registerCommands(program: Command): void {
         entries = extracted.entries;
         inputDisplayLabels = entries.map((e) => (e.symbol ? `${e.path}:${e.symbol}` : e.path));
       } else if (opts.diff) {
+        const { getGitDiffFiles } = await import("./diff.js");
         const diffFiles = getGitDiffFiles(rootDir);
         if (diffFiles.length === 0) {
           // E4: this used to always print plain text + exit 0, ignoring
@@ -1013,8 +1015,11 @@ function registerCommands(program: Command): void {
       "--require-files-section",
       "Emit a missingFilesSection diagnostic for every task block without a Files: header",
     )
-    .action((opts) => {
+    .action(async (opts) => {
       const rootDir = process.cwd();
+      const { resolveSpecDir } = await import("./plan-coverage/spec-resolver.js");
+      const { loadConfig } = await import("./config.js");
+      const { runPlanCoverage } = await import("./plan-coverage/index.js");
 
       // Resolve spec dir per the contract precedence.
       const resolved = resolveSpecDir({
@@ -1104,16 +1109,22 @@ function registerCommands(program: Command): void {
     .option("--format <format>", "Output format: json | text", "text")
     .option("--test-results <paths...>", "Test result files (Vitest JSON / JUnit XML)")
     .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
-    .action((opts) => {
+    .action(async (opts) => {
       const rootDir = process.cwd();
+      const { loadConfig } = await import("./config.js");
+      const { scan } = await import("./scan.js");
+      const { readLock } = await import("./lock.js");
+      const { check } = await import("./check.js");
       const config = applyMode(loadConfig(rootDir), opts.mode);
       const { graph, warnings } = scan(rootDir, config);
       const lock = readLock(rootDir, config.lockFile);
 
-      const testResults = resolveTestResults(opts, config, rootDir);
+      const testResults = await resolveTestResults(opts, config, rootDir);
 
       let scopedNodeIds: Set<string> | undefined;
       if (opts.diff) {
+        const { getGitDiffFiles } = await import("./diff.js");
+        const { impact, resolveStartIds } = await import("./graph/traverse.js");
         const diffFiles = getGitDiffFiles(rootDir);
         if (diffFiles.length === 0) {
           // E4: same fix as `impact --diff` — don't ignore `--format json` on
@@ -1185,8 +1196,10 @@ function registerCommands(program: Command): void {
     .addOption(
       new Option("--format <format>", "Output format").choices(["text", "json"]).default("text"),
     )
-    .action((opts) => {
+    .action(async (opts) => {
       const rootDir = process.cwd();
+      const { runDoctor, formatDoctorReportJson, formatDoctorReportText } =
+        await import("./doctor.js");
       // E-adj-A5: parseAgentsFlag centralizes the parseAgentsList catch — same
       // as init's --agents branch. `init` and `doctor` used to inline a byte-
       // identical try/catch; migrating doctor onto the helper keeps them in
@@ -1221,12 +1234,15 @@ function registerCommands(program: Command): void {
     )
     .option("--test-results <paths...>", "Test result files (Vitest JSON / JUnit XML)")
     .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
-    .action((opts) => {
+    .action(async (opts) => {
       const rootDir = process.cwd();
+      const { loadConfig } = await import("./config.js");
+      const { scan } = await import("./scan.js");
+      const { computeCoverage } = await import("./coverage.js");
       const config = applyMode(loadConfig(rootDir), opts.mode);
       const { graph } = scan(rootDir, config);
 
-      const testResults = resolveTestResults(opts, config, rootDir);
+      const testResults = await resolveTestResults(opts, config, rootDir);
       const entries = computeCoverage(graph, testResults);
 
       if (opts.format === "json") {
@@ -1240,8 +1256,10 @@ function registerCommands(program: Command): void {
     .command("reconcile")
     .description("Update the lock file to match current state")
     .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
-    .action((opts) => {
+    .action(async (opts) => {
       const rootDir = process.cwd();
+      const { loadConfig } = await import("./config.js");
+      const { scan, reconcile } = await import("./scan.js");
       const config = applyMode(loadConfig(rootDir), opts.mode);
       const { graph } = scan(rootDir, config);
       reconcile(rootDir, config, graph);
@@ -1261,8 +1279,11 @@ function registerCommands(program: Command): void {
         "task",
       ]),
     )
-    .action((opts) => {
+    .action(async (opts) => {
       const rootDir = process.cwd();
+      const { loadConfig } = await import("./config.js");
+      const { scan } = await import("./scan.js");
+      const { formatGraphText, formatGraphJSON } = await import("./graph/format.js");
       const config = loadConfig(rootDir);
       const { graph } = scan(rootDir, config);
 
@@ -1281,6 +1302,13 @@ function registerCommands(program: Command): void {
     .action(async () => {
       const startTime = process.hrtime.bigint();
       const rootDir = process.cwd();
+      const {
+        parseHookInput,
+        extractFilePaths,
+        toRelativePath,
+        formatAdditionalContext,
+        buildHookOutput,
+      } = await import("./hook-pretool.js");
 
       try {
         let stdinText: string;
@@ -1316,6 +1344,7 @@ function registerCommands(program: Command): void {
 
         let config;
         try {
+          const { loadConfig } = await import("./config.js");
           config = loadConfig(rootDir);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -1326,6 +1355,7 @@ function registerCommands(program: Command): void {
 
         let graph;
         try {
+          const { scan } = await import("./scan.js");
           const scanResult = scan(rootDir, config);
           graph = scanResult.graph;
         } catch (e) {
@@ -1335,6 +1365,7 @@ function registerCommands(program: Command): void {
           return;
         }
 
+        const { impact, resolveStartIds } = await import("./graph/traverse.js");
         const { startIds } = resolveStartIds(graph, pathsToEntries(relativePaths));
         if (startIds.length === 0) {
           process.stdout.write(JSON.stringify(buildHookOutput("artgraph impact: (none)")));
@@ -1345,6 +1376,7 @@ function registerCommands(program: Command): void {
 
         let lock;
         try {
+          const { readLock } = await import("./lock.js");
           lock = readLock(rootDir, config.lockFile);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -1572,13 +1604,14 @@ function registerCommands(program: Command): void {
     .addOption(
       new Option("--format <format>", "Output format").choices(["text", "json"]).default("text"),
     )
-    .action((tool: string, opts) => {
+    .action(async (tool: string, opts) => {
       const rootDir = process.cwd();
+      const { runIntegrate } = await loadIntegrate();
 
       // Sub-command dispatch: `integrate list` reuses the same option surface
       // (only --format applies; the rest are ignored for `list`).
       if (tool === "list") {
-        runIntegrateList(rootDir, opts.format);
+        await runIntegrateList(rootDir, opts.format);
         return;
       }
 
@@ -1615,7 +1648,8 @@ function registerCommands(program: Command): void {
       }
     });
 
-  function runIntegrateList(rootDir: string, format: string): void {
+  async function runIntegrateList(rootDir: string, format: string): Promise<void> {
+    const { getProviderStatuses } = await loadIntegrate();
     const statuses = getProviderStatuses(rootDir);
 
     if (format === "json") {
@@ -1721,8 +1755,9 @@ function registerCommands(program: Command): void {
     .addOption(
       new Option("--format <format>", "Output format").choices(["json", "text"]).default("text"),
     )
-    .action((opts) => {
+    .action(async (opts) => {
       const rootDir = process.cwd();
+      const { executeRename, executeSplit, executeMerge } = await import("./rename-executor.js");
       const format: "json" | "text" = opts.format;
       const baseOpts = { dryRun: !!opts.dryRun, format, rootDir };
 
@@ -1977,5 +2012,10 @@ function resolveEntryHref(): string {
 }
 if (import.meta.url === resolveEntryHref()) {
   const program = buildProgram();
-  program.parse();
+  // parseAsync (not parse): action handlers are async since the lazy-import
+  // refactor, and commander's sync parse() would return before they finish.
+  // Matches the parseAsync semantics runCli has always used. A rejected
+  // handler surfaces as a top-level-await rejection — stack trace + exit 1 —
+  // same outcome as the old sync-throw-through-parse() path.
+  await program.parseAsync();
 }
