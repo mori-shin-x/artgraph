@@ -57,7 +57,7 @@
   "author": "Shintaro Morimoto",
   "license": "MIT",
   "dependencies": {
-    "commander": "^13.1.0",
+    "commander": "^15.0.0",
     "fast-glob": "^3.3.3",
     "glob": "^11.0.2",
     "mdast-util-to-string": "^4.0.0",
