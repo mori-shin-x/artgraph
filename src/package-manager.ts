@@ -85,10 +85,12 @@ export function detectPackageManager(
 /**
  * Parse the Corepack-style `<pm>@<version>` `packageManager` field
  * (e.g. "pnpm@9.0.0") and return the bare PM name. Returns null when the field
- * is absent, the value lacks the required `@version` suffix (bare "npm" etc.),
- * or the JSON itself is unparseable. Strips a leading UTF-8 BOM before parsing
- * so the TS detector matches the template's top-level-field rule on
- * BOM-prefixed package.json files (SC-007).
+ * is absent, the value lacks a valid `@version` suffix (bare `"npm"`, trailing
+ * `"pnpm@"`, or uppercase name), or the JSON itself is unparseable. Strips a
+ * leading UTF-8 BOM before parsing so the TS detector matches the template's
+ * top-level-field rule on BOM-prefixed package.json files (SC-007). The regex
+ * requires the PM name to be lowercase AND the version to start with a digit
+ * so silent-accept quirks (`"pnpm@"` → pnpm) can't drift from the prose rules.
  */
 function readPackageManagerField(pkgJsonPath: string): string | null {
   let raw: string;
@@ -107,7 +109,7 @@ function readPackageManagerField(pkgJsonPath: string): string | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const value = (parsed as { packageManager?: unknown }).packageManager;
   if (typeof value !== "string") return null;
-  const match = /^([a-z]+)@/.exec(value);
+  const match = /^([a-z]+)@[0-9]/.exec(value);
   return match ? match[1] : null;
 }
 

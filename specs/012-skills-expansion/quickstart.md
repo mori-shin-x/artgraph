@@ -104,6 +104,10 @@ git init
 echo '{"name":"aw-us2","type":"module"}' > package.json
 mkdir -p specs && echo '- REQ-001: Test' > specs/test.md
 npm install -D /path/to/skills-expansion   # artgraph 導入
+# Deprecated (spec 013 以降): `init --with-skills` 単独 (agents 未指定) は
+# `--agents` 必須化により `AGENTS_REQUIRED_ERROR` を返す。現在は
+# `init --agents=claude` (default full setup) または
+# `init --minimal --with-skills --agents=claude` (Skills-only) を使う。
 npx artgraph init --with-skills
 
 # Spec Kit を後から導入
@@ -424,6 +428,8 @@ grep "Use when planning or scoping" ~/.claude/plugins/cache/*/skills/artgraph-im
 cd /tmp/aw-us6-target
 npm install -D /path/to/skills-expansion
 rm -rf .claude/skills
+# Deprecated (spec 013 以降): `init --with-skills` 単独は AGENTS_REQUIRED_ERROR。
+# 現在は `init --agents=claude` または `init --minimal --with-skills --agents=claude` を使う。
 npx artgraph init --with-skills
 grep "Use when planning or scoping" .claude/skills/artgraph-impact/SKILL.md
 # 反映あり
@@ -450,6 +456,8 @@ mkdir -p /tmp/aw-us7 && cd /tmp/aw-us7
 specify init --here --ai claude  # Spec Kit ≥ v0.11.0 (実測時は最新 v0.11.9 を使用)
 echo '{"name":"aw-us7","type":"module"}' > package.json
 npm install -D /path/to/skills-expansion
+# Deprecated (spec 013 以降): `init --with-skills` 単独は AGENTS_REQUIRED_ERROR。
+# 現在は `init --agents=claude --integrations=speckit` を使う。
 npx artgraph init --with-skills --integrations=speckit
 ```
 

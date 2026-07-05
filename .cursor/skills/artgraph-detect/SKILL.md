@@ -50,6 +50,8 @@ Also check for the tool markers themselves, to distinguish "tool not present" fr
 - `.specify/` exists -> Spec Kit detected
 - `.kiro/` exists -> Kiro detected
 
+Derive the Step 5 tri-state per tool: integration marker present → `yes`; only the tool marker present → `no`; neither present → `not-detected`. (The integration marker lives inside the tool marker's directory tree, so `yes` implies detected — the fourth combination is physically impossible.)
+
 ### 4. Check installed Skills
 
 Enumerate all five canonical skills paths — each one maps to a fixed `--agents` id: `.claude/skills/` -> `claude`, `.agents/skills/` -> `codex`, `.cursor/skills/` -> `cursor`, `.github/skills/` -> `copilot`, `.kiro/skills/` -> `kiro`. For each path, treat it as a "qualifying artgraph skills path" only when BOTH of the following hold:
@@ -74,11 +76,12 @@ where:
 
 **Caveats to relay to the user verbatim before they run it:**
 
-- This command overwrites every `SKILL.md` under the selected agents' skills paths. Any local edits to those files will be replaced with the canonical templates.
+- This command overwrites every `SKILL.md` under the selected agents' skills paths, and regenerates each path's `.gitattributes` (LF pin). Any local edits to those files will be replaced with the canonical templates.
 - Advise the user to run `git status` (and `git stash` if there are pending edits) beforehand so they can review or preserve local changes.
+- If only a subset of paths needs reinstalling (e.g. only `.cursor/skills/` fell out of sync), narrow `<detected>` to that subset — the caveats above still apply within the selected scope, but untouched agent paths stay bit-exact as they are.
 - **Do NOT execute this command yourself.** Print it, explain the caveats, and wait for the user's explicit confirmation.
 
-Only if the user explicitly asks to also re-provision `.artgraph.json`, `.trace.lock`, integration files, hooks, and the AGENTS.md wrapper, drop `--minimal --with-skills`. In that default-mode variant additionally warn: the run rewrites `.artgraph.json` (existing custom fields are preserved on merge, but `packageManager` is refreshed from current project state), re-scans and rewrites `.trace.lock`, overwrites Kiro `.kiro/steering/artgraph.md` and Spec Kit `.specify/extensions/artgraph/**` (including any manually tuned hook entries in `.specify/extensions.yml`), and refreshes the AGENTS.md wrapper's marker block (user content outside the marker is preserved). An existing `.claude/settings.json` Stop hook is NEVER overwritten, even with `--force` — that is a hard invariant of the `--force` contract.
+Only if the user explicitly asks to also re-provision `.artgraph.json`, `.trace.lock`, integration files, hooks, and the AGENTS.md wrapper, drop `--minimal --with-skills`. That default-mode variant additionally rewrites `.artgraph.json` (existing custom fields are preserved on merge, but `packageManager` is refreshed from current project state), re-scans and rewrites `.trace.lock`, overwrites Kiro `.kiro/steering/artgraph.md` and Spec Kit `.specify/extensions/artgraph/**` (including any manually tuned hook entries in `.specify/extensions.yml`), and refreshes the AGENTS.md wrapper's marker block (user content outside the marker is preserved). An existing `.claude/settings.json` Stop hook is NEVER overwritten, even with `--force` — that is a hard invariant of the `--force` contract.
 
 ### 5. Summarize
 

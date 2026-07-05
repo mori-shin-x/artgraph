@@ -36,7 +36,7 @@ See [install-check](../_shared/install-check.md). For this Skill the probe is ex
 
 Inspect the project root and apply these rules in order — first match wins. The Corepack `packageManager` field wins over lockfile sniffing (Corepack convention: an explicit `packageManager` field always overrides a lockfile signal, even when the two disagree — e.g. `packageManager: bun@*` with a stale `pnpm-lock.yaml` still selects bun). The canonical rules and rationale live in [package-manager](../_shared/package-manager.md), which must stay in sync with `src/package-manager.ts`.
 
-1. If `package.json` exists, read it as UTF-8 and strip a leading UTF-8 BOM (`U+FEFF`, byte sequence `EF BB BF`) before parsing (the TS detector strips the BOM too — SC-007). Then read its **top-level** `"packageManager"` field (Corepack-style `<pm>@<version>`, e.g. `pnpm@9.0.0`; a nested key does not count, and a value without an `@version` suffix is ignored):
+1. If `package.json` exists, read it as UTF-8 and strip a leading UTF-8 BOM (`U+FEFF`, byte sequence `EF BB BF`) before parsing (the TS detector strips the BOM too — SC-007). Then read its **top-level** `"packageManager"` field (Corepack-style `<pm>@<version>`, e.g. `pnpm@9.0.0`; a nested key does not count, the PM name must be lowercase, and the `@version` suffix must contain at least one digit — bare names or trailing `@` are ignored):
    - `npm` / `pnpm` / `bun` -> use that PM.
    - `yarn` -> use **pnpm** and warn the user with the verbatim wording `packageManager=yarn but Yarn is not supported; falling back to pnpm`.
    - Field absent, malformed, or any other value -> continue to rule 2.

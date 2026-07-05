@@ -241,8 +241,14 @@ function readRepoFile(...segments: string[]): string {
 // same level (end of file if none). Throws when the heading disappears, so a
 // template restructure cannot silently skip the sync checks.
 function extractSection(md: string, heading: string): string {
-  const start = md.indexOf(heading);
-  if (start === -1) throw new Error(`could not find heading in template: ${heading}`);
+  // Meta-review E6: use a line-start anchored search so a fence-quoted
+  // "## Detection rules" in an example block doesn't outrank the real
+  // heading, and rename it to something readable if the heading changes.
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const anchored = new RegExp(`^${escaped}\\s*$`, "m");
+  const startMatch = anchored.exec(md);
+  if (!startMatch) throw new Error(`could not find heading in template: ${heading}`);
+  const start = startMatch.index;
   const level = /^#+/.exec(heading)?.[0] ?? "#";
   const body = md.slice(start + heading.length);
   const next = body.search(new RegExp(`^${level} `, "m"));
@@ -354,7 +360,7 @@ describe("SC-007 prose<->TS rule-level sync (meta-test)", () => {
         // "signals disagree" example) stay tolerated. Lowercased to bridge
         // "Cannot"/"cannot" wording.
         const anchors = [
-          "packagemanager", // rule 1: field wins over lockfiles
+          "corepack-style", // rule 1: field wins over lockfiles (unique to rule 1 prose, not the intro)
           "`bun.lockb`", // rule 2, first lockfile branch
           "`deno.lock`",
           "`pnpm-lock.yaml`",

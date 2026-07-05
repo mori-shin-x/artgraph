@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
+import { AGENT_DESCRIPTORS } from "../src/agents/descriptors.js";
 
 // Metatest: walks templates/skills/**/SKILL.md and verifies invariants
 // for the Claude Code Skills artgraph distributes.
@@ -537,13 +538,7 @@ describe("templates/skills metatest", () => {
   describe("issue #141 — agent-agnostic, shell-portable templates", () => {
     it("artgraph-detect body mentions all five canonical agent skills paths", () => {
       const skill = readSkill("artgraph-detect");
-      const canonicalPaths = [
-        ".claude/skills/",
-        ".agents/skills/",
-        ".cursor/skills/",
-        ".github/skills/",
-        ".kiro/skills/",
-      ];
+      const canonicalPaths = AGENT_DESCRIPTORS.map((d) => `${d.skillsPath}/`).sort();
       for (const p of canonicalPaths) {
         expect(
           skill.body.includes(p),
@@ -552,13 +547,23 @@ describe("templates/skills metatest", () => {
       }
     });
 
-    it("artgraph-detect body has no Claude-only enumeration literal", () => {
+    it("artgraph-detect body has no shell-command enumeration literal for any single agent path", () => {
+      // Meta-review G5: the earlier check only pinned `ls .claude/skills/` and
+      // let equivalent shell-literals like `find .agents/skills/` or
+      // `dir .cursor\\skills\\` (PowerShell) slip through. Generalize to any
+      // enumeration-style shell command bound to a single canonical agent
+      // path.
       const skill = readSkill("artgraph-detect");
+      const pattern =
+        /(?:^|\W)(?:ls|find|dir|list|Get-ChildItem)\s+\.(?:claude|agents|cursor|github|kiro)[\\/]skills[\\/]/i;
+      const offenders = skill.body
+        .split("\n")
+        .filter((line) => pattern.test(line))
+        .map((line) => line.trim());
       expect(
-        skill.body.includes("ls .claude/skills/"),
-        `artgraph-detect/SKILL.md body must not hardcode "ls .claude/skills/"; ` +
-          `it must describe checking all five canonical agent skills paths, not just Claude's (issue #141)`,
-      ).toBe(false);
+        offenders,
+        `artgraph-detect/SKILL.md body must not hardcode a shell enumeration bound to a single agent path — describe checking all five canonical skills paths in prose instead (issue #141):\n${offenders.join("\n")}`,
+      ).toEqual([]);
     });
 
     it("no fenced code block in templates/skills/**/*.md uses POSIX-only shell tokens", () => {
