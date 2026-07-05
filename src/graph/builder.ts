@@ -1,15 +1,23 @@
 import { resolve, relative, basename, dirname } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { globSync } from "glob";
-import { parseMarkdown, type ParseWarning, type InlineLinkRef } from "../parsers/markdown.js";
-import { createTSParser } from "../parsers/typescript.js";
-import type {
-  ArtifactGraph,
-  GraphNode,
-  GraphEdge,
-  ArtgraphConfig,
-  EdgeProvenance,
-} from "../types.js";
+import {
+  parseMarkdownContent,
+  type ParseWarning,
+  type InlineLinkRef,
+} from "../parsers/markdown.js";
+import { globCodeFiles, parseTSFilePaths } from "../parsers/typescript.js";
+import {
+  computeCacheFingerprint,
+  hashContent,
+  importTargetsExist,
+  readParseCache,
+  writeParseCache,
+  type MdFragment,
+  type TsFragment,
+} from "../parse-cache.js";
+import { dedupEdges, sortNodesById } from "./canonical.js";
+import type { ArtifactGraph, GraphNode, GraphEdge, ArtgraphConfig } from "../types.js";
 
 export interface BuildWarning {
   type:
@@ -80,6 +88,14 @@ export function buildGraph(
   const RESERVED_PREFIXES = ["doc:", "file:", "test:", "symbol:"];
   const parseWarnings: ParseWarning[] = [];
 
+  // Incremental parse cache (see src/parse-cache.ts). Fragments are a pure
+  // memo of per-file parser output; every assembly step below (collision
+  // remap, dedup, sorting, warning conversion) still runs fresh each build,
+  // so a warm build is structurally identical to a cold one.
+  const cacheFingerprint = computeCacheFingerprint(config);
+  const prevCache = readParseCache(rootDir, cacheFingerprint);
+  const nextMd: Record<string, MdFragment> = {};
+
   // Pass 1: collect all req nodes and detect collisions
   const collected: CollectedReq[] = [];
   const nonReqNodes: GraphNode[] = [];
@@ -89,14 +105,30 @@ export function buildGraph(
   for (const specDirName of config.specDirs) {
     const specFiles = globSync(resolve(rootDir, specDirName, "**/*.md"));
     for (const file of specFiles) {
-      const result = parseMarkdown(file, {
-        rootDir,
-        specDirPrefix: specDirName,
-        reqPatterns: config.reqPatterns,
-        taskConventions: config.taskConventions,
-        disableBuiltinTaskConventions: config.disableBuiltinTaskConventions,
-      });
       const relFile = relative(rootDir, file);
+      const mdSource = readFileSync(file, "utf-8");
+      const mdHash = hashContent(mdSource);
+      // Key by specDir too: a file nested under two specDirs is parsed once
+      // per dir with a different `specDirPrefix` (and thus a different doc id).
+      const mdKey = `${specDirName}|${relFile}`;
+      const mdHit = prevCache?.data.md[mdKey];
+      const result =
+        mdHit && mdHit.contentHash === mdHash
+          ? mdHit
+          : parseMarkdownContent(mdSource, file, {
+              rootDir,
+              specDirPrefix: specDirName,
+              reqPatterns: config.reqPatterns,
+              taskConventions: config.taskConventions,
+              disableBuiltinTaskConventions: config.disableBuiltinTaskConventions,
+            });
+      nextMd[mdKey] = {
+        contentHash: mdHash,
+        nodes: result.nodes,
+        edges: result.edges,
+        warnings: result.warnings,
+        inlineLinks: result.inlineLinks,
+      };
       const specDir = extractSpecDir(relFile, config.specDirs);
       // Compute what the auto-generated doc ID would be for this file
       const specDirRelPath = relFile.startsWith(specDirName + "/")
@@ -253,15 +285,62 @@ export function buildGraph(
     edges.push({ ...edge, target: remappedTarget });
   }
 
-  // Parse TypeScript files
+  // Parse TypeScript files — incrementally when the parse cache holds valid
+  // fragments. The file set comes from globCodeFiles (the exact fast-glob
+  // call ts-morph makes inside addSourceFilesAtPaths), so hit and miss paths
+  // see the same files a full ts-morph scan would. Only changed files are
+  // handed to ts-morph; a fully-warm run never loads it at all.
   const codePatterns = [...config.include, ...config.testPatterns];
-  const tsParser = createTSParser(
-    rootDir,
-    codePatterns,
-    config.mode ?? "file",
-    config.reqPatterns?.codeId,
+  const tsMode = config.mode ?? "file";
+  const codeId = config.reqPatterns?.codeId;
+  const codeFiles = globCodeFiles(rootDir, codePatterns);
+  const relCodeFiles = codeFiles.map((f) => relative(rootDir, f));
+
+  // TS fragments are only reusable while the import-resolution environment is
+  // unchanged: tsconfig content, analysis mode, codeId token, and the matched
+  // file set (an added/removed file can change how an UNCHANGED file's import
+  // specifier resolves). Any difference invalidates every TS fragment.
+  const tsconfigPath = resolve(rootDir, "tsconfig.json");
+  const tsconfigHash = existsSync(tsconfigPath)
+    ? hashContent(readFileSync(tsconfigPath, "utf-8"))
+    : "no-tsconfig";
+  const tsEnvKey = hashContent(
+    JSON.stringify([tsconfigHash, tsMode, codeId ?? null, [...relCodeFiles].sort()]),
   );
-  const tsResult = tsParser.parse();
+  const tsFragmentsValid = prevCache !== undefined && prevCache.data.tsEnvKey === tsEnvKey;
+
+  const nextTs: Record<string, TsFragment> = {};
+  const fragmentByFile = new Map<string, TsFragment>();
+  const missPaths: string[] = [];
+  const missHashes = new Map<string, string>();
+  for (let i = 0; i < codeFiles.length; i++) {
+    const content = readFileSync(codeFiles[i], "utf-8");
+    const contentHash = hashContent(content);
+    const hit = tsFragmentsValid ? prevCache!.data.ts[relCodeFiles[i]] : undefined;
+    if (hit && hit.contentHash === contentHash && importTargetsExist(hit.edges, rootDir)) {
+      fragmentByFile.set(codeFiles[i], hit);
+    } else {
+      missPaths.push(codeFiles[i]);
+      missHashes.set(codeFiles[i], contentHash);
+    }
+  }
+  if (missPaths.length > 0) {
+    const parsed = parseTSFilePaths(rootDir, missPaths, tsMode, codeId);
+    for (const [abs, frag] of parsed) {
+      fragmentByFile.set(abs, {
+        contentHash: missHashes.get(abs)!,
+        nodes: frag.nodes,
+        edges: frag.edges,
+      });
+    }
+  }
+  const tsResult: { nodes: GraphNode[]; edges: GraphEdge[] } = { nodes: [], edges: [] };
+  for (let i = 0; i < codeFiles.length; i++) {
+    const frag = fragmentByFile.get(codeFiles[i])!;
+    tsResult.nodes.push(...frag.nodes);
+    tsResult.edges.push(...frag.edges);
+    nextTs[relCodeFiles[i]] = frag;
+  }
 
   for (const node of tsResult.nodes) {
     addNodeWithDupCheck(nodes, node, warnings);
@@ -495,66 +574,19 @@ export function buildGraph(
     }
   }
 
-  // T037 / Issue #35: Edge deduplication. Same (source, target, kind) is
-  // collapsed into one edge whose `provenances` is the sorted set-union of all
-  // contributing edges. Iteration is stable on the source `edges` array so
-  // the kept edge always comes from the first occurrence (INV-T3 — final
-  // order is determined by the post-dedup sort below, not by which path
-  // inserted first nor by globSync/ts-morph traversal order).
-  const edgeKey = (e: GraphEdge) => `${e.source}|${e.target}|${e.kind}`;
-  // Narrower replacement for the previous `as unknown as` cast: keeps the
-  // NonEmpty invariant visible at the type level and asserts it at runtime
-  // (defense-in-depth for B3/C2 from PR#94 review). A violation means the
-  // upstream parser handed us an edge with zero provenances — that is a bug
-  // in the caller, not user input, so we throw rather than swallow.
-  const assertNonEmpty = (
-    arr: readonly EdgeProvenance[],
-    edge: GraphEdge,
-  ): [EdgeProvenance, ...EdgeProvenance[]] => {
-    if (arr.length === 0) {
-      throw new Error(
-        `buildGraph: NonEmpty invariant violation — edge has empty provenances: ${JSON.stringify(edge)}`,
-      );
-    }
-    return arr as [EdgeProvenance, ...EdgeProvenance[]];
-  };
-  const dedupMap = new Map<string, GraphEdge>();
-  for (const edge of edges) {
-    const key = edgeKey(edge);
-    const existing = dedupMap.get(key);
-    if (!existing) {
-      // Defensive copy with sorted provenances so even a single-source edge
-      // satisfies INV-T2/T3.
-      const sorted = [...new Set(edge.provenances)].sort();
-      dedupMap.set(key, { ...edge, provenances: assertNonEmpty(sorted, edge) });
-    } else {
-      const merged = [...new Set([...existing.provenances, ...edge.provenances])].sort();
-      existing.provenances = assertNonEmpty(merged, edge);
-    }
-  }
-  const dedupedEdges = Array.from(dedupMap.values());
+  // Edge dedup + deterministic edge/node ordering (INV-T2/T3, INV-L4,
+  // INV-O1) are owned by canonical.ts — see dedupEdges / sortNodesById there
+  // for the full rationale (T037 / Issue #35, PR#94 review B3).
+  const dedupedEdges = dedupEdges(edges);
+  const sortedNodes = sortNodesById(nodes);
 
-  // PR#94 review B3: make edge order deterministic across OSes. Without this
-  // step `dedupedEdges` reflects Map insertion order, which traces back to
-  // globSync / ts-morph / per-directory Map iteration (see inferConventionEdges
-  // below — its `byDir` traversal is insertion-order, intentionally absorbed
-  // here so the convention pass needs no internal sort). Use `<`/`>` rather
-  // than `localeCompare` so the order is fixed UTF-16 codeunit comparison —
-  // locale-independent, byte-identical across Windows/macOS/Linux. This is
-  // load-bearing for INV-L4 (lock byte-identity) and INV-O1 family.
-  dedupedEdges.sort((a, b) => {
-    const ka = edgeKey(a);
-    const kb = edgeKey(b);
-    return ka < kb ? -1 : ka > kb ? 1 : 0;
-  });
-
-  // PR#94 review B3: sort the `nodes` Map by id ascending too. Map iteration
-  // is insertion-order, which here traces back to file traversal — fine for
-  // single-OS runs but observably divergent cross-OS (and exposed downstream
-  // via `for (const [id, node] of graph.nodes)` in lock.ts / format.ts).
-  // Rebuilding the Map with sorted entries is the minimal surface change.
-  const sortedNodes = new Map(
-    [...nodes.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  // Persist the fragments BEFORE returning so later mutation of the returned
+  // graph by a caller can never leak into the cache file. No-ops when the
+  // cache is disabled or nothing changed; never throws.
+  writeParseCache(
+    rootDir,
+    { fingerprint: cacheFingerprint, tsEnvKey, md: nextMd, ts: nextTs },
+    prevCache?.raw,
   );
 
   return { graph: { nodes: sortedNodes, edges: dedupedEdges }, warnings };
@@ -569,9 +601,9 @@ export function buildGraph(
 // PR#94 review Meta-C blind-spot 2: the internal `byDir` Map and inner CONVENTION_EDGES
 // loop emit edges in insertion order (dir -> file -> preset). That order is OS-
 // and traversal-dependent, but it is intentionally NOT defended here — every
-// pushed edge is folded into `buildGraph`'s post-dedup sort (see B3 there), so
-// the final `graph.edges` array is deterministic regardless of which order this
-// helper emits in. Adding a local sort would be dead code.
+// pushed edge is folded into the post-dedup sort owned by `dedupEdges`
+// (canonical.ts), so the final `graph.edges` array is deterministic regardless
+// of which order this helper emits in. Adding a local sort would be dead code.
 function inferConventionEdges(nodes: Map<string, GraphNode>): GraphEdge[] {
   // dir -> (file-name stem -> doc node id). The actual node id is used (honoring
   // frontmatter `node_id` overrides), not the raw path.

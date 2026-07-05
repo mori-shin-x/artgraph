@@ -1,0 +1,161 @@
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join, resolve } from "node:path";
+import { atomicWriteFile } from "./integrate/atomic-write.js";
+import type { ArtgraphConfig, GraphEdge, GraphNode } from "./types.js";
+import type { InlineLinkRef, ParseWarning } from "./parsers/markdown.js";
+
+// Incremental parse cache: memoizes per-file parser output (markdown fragments
+// and TypeScript fragments) keyed by content hash, so `scan`/`check`/`impact`
+// only re-parse files that actually changed. The cache is a pure memo of
+// parser results — graph assembly (collision remap, dedup, sorting) always
+// runs fresh in buildGraph, so a warm build is structurally identical to a
+// cold one (INV-L4 lock byte-identity is preserved by construction).
+//
+// Storage: <root>/node_modules/.cache/artgraph/parse-cache.json. The cache is
+// only written when <root>/node_modules already exists — a project without it
+// (Deno layouts, test fixtures copied to tmp dirs) silently runs the cold
+// path every time, exactly as before this cache existed. Set ARTGRAPH_CACHE=0
+// to disable reads and writes entirely.
+//
+// Invalidation:
+//   - whole cache: artgraph version / parser-relevant config fingerprint
+//   - all TS fragments: tsconfig.json content, mode, codeId, or the matched
+//     file set changing (add/remove can change import resolution of files
+//     whose own content did not change)
+//   - single fragment: content hash mismatch, or (TS) an import-edge target
+//     that no longer exists on disk
+//
+// Known limit (documented, vanishingly rare with explicit-extension ESM
+// specifiers): creating a NEW file outside the include/testPatterns set that
+// shadows how an unchanged file's import specifier resolves is not detected.
+// Deletions are caught by the existsSync validation; additions/removals
+// inside the matched set are caught by the file-set key.
+
+export interface MdFragment {
+  contentHash: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  warnings: ParseWarning[];
+  inlineLinks: InlineLinkRef[];
+}
+
+export interface TsFragment {
+  contentHash: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface ParseCacheData {
+  schemaVersion: number;
+  fingerprint: string;
+  tsEnvKey: string;
+  /** key: `${specDirName}|${relPath}` (a file nested under two specDirs parses per-dir) */
+  md: Record<string, MdFragment>;
+  /** key: rootDir-relative path */
+  ts: Record<string, TsFragment>;
+}
+
+const SCHEMA_VERSION = 1;
+const CACHE_RELDIR = join("node_modules", ".cache", "artgraph");
+const CACHE_FILENAME = "parse-cache.json";
+
+export function hashContent(content: string): string {
+  return createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+
+function cacheEnabled(rootDir: string): boolean {
+  if (process.env.ARTGRAPH_CACHE === "0") return false;
+  return existsSync(resolve(rootDir, "node_modules"));
+}
+
+function cachePath(rootDir: string): string {
+  return resolve(rootDir, CACHE_RELDIR, CACHE_FILENAME);
+}
+
+// Version stamp for the whole-cache fingerprint. Reading package.json (one
+// level above dist/) beats hardcoding a second copy of the version string;
+// on any read failure fall back to a constant that still yields a stable
+// fingerprint for this installation.
+function artgraphVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+    return typeof pkg.version === "string" ? pkg.version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+// Hash of every config field that changes PARSER output (graph-assembly-only
+// options like docGraph.* are deliberately excluded — they are re-applied to
+// the fragments on every build). mode/codeId/file-set live in the TS env key.
+export function computeCacheFingerprint(config: ArtgraphConfig): string {
+  return hashContent(
+    JSON.stringify([
+      SCHEMA_VERSION,
+      artgraphVersion(),
+      config.reqPatterns ?? null,
+      config.taskConventions ?? null,
+      config.disableBuiltinTaskConventions ?? null,
+    ]),
+  );
+}
+
+export interface LoadedParseCache {
+  data: ParseCacheData;
+  /** raw file text, kept so an unchanged cache skips the disk write */
+  raw: string;
+}
+
+export function readParseCache(rootDir: string, fingerprint: string): LoadedParseCache | undefined {
+  if (!cacheEnabled(rootDir)) return undefined;
+  try {
+    const raw = readFileSync(cachePath(rootDir), "utf-8");
+    const data = JSON.parse(raw) as ParseCacheData;
+    if (data.schemaVersion !== SCHEMA_VERSION) return undefined;
+    if (data.fingerprint !== fingerprint) return undefined;
+    if (typeof data.tsEnvKey !== "string" || !data.md || !data.ts) return undefined;
+    return { data, raw };
+  } catch {
+    // Missing or corrupt cache — cold path. Never let the cache break a scan.
+    return undefined;
+  }
+}
+
+export function writeParseCache(
+  rootDir: string,
+  cache: Omit<ParseCacheData, "schemaVersion">,
+  prevRaw?: string,
+): void {
+  if (!cacheEnabled(rootDir)) return;
+  try {
+    const serialized = JSON.stringify({ schemaVersion: SCHEMA_VERSION, ...cache });
+    if (serialized === prevRaw) return; // nothing changed — skip the write
+    mkdirSync(resolve(rootDir, CACHE_RELDIR), { recursive: true });
+    atomicWriteFile(cachePath(rootDir), serialized);
+  } catch {
+    // Cache persistence is best-effort; a failed write must not fail the scan.
+  }
+}
+
+// Validate a cached TS fragment's import edges against the file system: a
+// deleted import target changes what the parser would emit for this file even
+// though the file's own content is unchanged. `imports` edge targets are
+// `file:<rel>` or `symbol:<rel>#<name>`.
+export function importTargetsExist(edges: GraphEdge[], rootDir: string): boolean {
+  for (const edge of edges) {
+    if (edge.kind !== "imports") continue;
+    let rel: string;
+    if (edge.target.startsWith("file:")) {
+      rel = edge.target.slice("file:".length);
+    } else if (edge.target.startsWith("symbol:")) {
+      const body = edge.target.slice("symbol:".length);
+      const hashIdx = body.lastIndexOf("#");
+      rel = hashIdx === -1 ? body : body.slice(0, hashIdx);
+    } else {
+      continue;
+    }
+    if (!existsSync(resolve(rootDir, rel))) return false;
+  }
+  return true;
+}

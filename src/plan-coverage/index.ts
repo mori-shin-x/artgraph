@@ -41,7 +41,8 @@ import { loadConfig } from "../config.js";
 import { scan } from "../scan.js";
 import { readLock } from "../lock.js";
 import { impact, resolveStartIds, resolveOriginReqs } from "../graph/traverse.js";
-import { extractFiles, type SymbolEntry, type TaskBlock } from "../parsers/sdd-files.js";
+import { extractFiles, type TaskBlock } from "../parsers/sdd-files.js";
+import type { SymbolEntry } from "../types.js";
 import { detectMentions } from "./mention.js";
 
 export interface PlanCoverageOptions {
