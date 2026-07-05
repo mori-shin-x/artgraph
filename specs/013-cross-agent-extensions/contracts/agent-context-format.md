@@ -57,7 +57,7 @@ artgraph manages the trace lock and provides 8 Skills for spec ↔ code ↔ test
 - `artgraph-verify` — `artgraph check --diff` self-check
 - `artgraph-rename` — safe rename / split / merge of REQ IDs
 
-See `<agent_skills_path>/<skill-name>/SKILL.md` for each Skill's full description (where `<agent_skills_path>` is `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, or `.kiro/skills/` depending on your agent).
+See `<agent_skills_path>/<skill-name>/SKILL.md` for each Skill's full description (where `<agent_skills_path>` is `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, or `.kiro/skills/` depending on your agent). GitHub Copilot has no on-disk Skills tree — read the Skill list above directly.
 
 ### Common workflows
 

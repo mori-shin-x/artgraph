@@ -52,8 +52,9 @@ npx artgraph init --agents=claude,codex,cursor,copilot,kiro --force
 ```
 
 **期待結果**:
-- 5 つの canonical Skills パスすべてに同一内容で配布:
-  - `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, `.kiro/skills/`
+- 4 つの canonical Skills パスすべてに同一内容で配布:
+  - `.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.kiro/skills/`
+- Copilot は Skills 配布対象外 (wrapper-only): `.github/skills/` は作成されず、`.github/copilot-instructions.md` (wrapper) + AGENTS.md 経由でのみ Skill 一覧が伝わる (issue #130)
 - `AGENTS.md` の artgraph block は 1 つのみ (重複なし、冪等)
 - `CLAUDE.md`, `.github/copilot-instructions.md` の 2 wrapper のみ生成 (Codex/Cursor/Kiro はラッパー不要)
 
@@ -62,8 +63,8 @@ npx artgraph init --agents=claude,codex,cursor,copilot,kiro --force
 ```bash
 diff -rq .claude/skills/ .agents/skills/      # 差分ゼロ期待
 diff -rq .claude/skills/ .cursor/skills/      # 差分ゼロ期待
-diff -rq .claude/skills/ .github/skills/      # 差分ゼロ期待
 diff -rq .claude/skills/ .kiro/skills/        # 差分ゼロ期待
+test ! -d .github/skills/                     # Copilot は Skills 配布対象外 (issue #130)
 test ! -f .cursor/copilot-instructions.md      # ラッパー不要のエージェントには生成しない
 test -f .github/copilot-instructions.md
 ```
@@ -155,10 +156,10 @@ test ! -d .claude/skills    # 配布されないこと
 
 #### 2-4a. Copilot IDE (VS Code)
 
-1. fixture プロジェクトで `artgraph init --agents=copilot` を実行。
+1. fixture プロジェクトで `artgraph init --agents=copilot` を実行 (Copilot は Skills 配布対象外のため `.github/skills/` は作成されない)。
 2. VS Code で開き、Copilot Chat を起動。
-3. プロンプト: `What artgraph skills are configured for this repo?` → `.github/skills/` の Skills が発見されること。
-4. プロンプト: `Run impact analysis` → `artgraph-impact` が選ばれること。
+3. プロンプト: `What artgraph skills are configured for this repo?` → Copilot は `.github/copilot-instructions.md` (wrapper) を読み込み、その `@AGENTS.md` 参照を経由して AGENTS.md に列挙された Skill 一覧を答えられること。Copilot は on-disk の Skill ファイルを直接 discovery しない (issue #130)。
+4. プロンプト: `Run impact analysis` → AGENTS.md 記載の `artgraph-impact` の使い方に沿って案内されること。
 
 #### 2-4b. Copilot CLI
 
