@@ -79,8 +79,7 @@ const APPLY_BOOTSTRAP_TOOL = {
                   file: { type: "string" },
                   insert_before_line_matching: {
                     type: "string",
-                    description:
-                      "regex or literal substring; the @impl comment goes on the line before",
+                    description: "literal substring; the @impl comment goes on the line before",
                   },
                 },
                 required: ["file", "insert_before_line_matching"],
@@ -249,13 +248,7 @@ function escapeRegExp(s: string): string {
 }
 
 function findMatchingLineIndex(lines: string[], pattern: string): number {
-  let re: RegExp | undefined;
-  try {
-    re = new RegExp(pattern);
-  } catch {
-    re = undefined;
-  }
-  return lines.findIndex((line) => (re !== undefined && re.test(line)) || line.includes(pattern));
+  return lines.findIndex((line) => line.includes(pattern));
 }
 
 function applyProposal(tmpDir: string, proposal: BootstrapProposal): void {
@@ -288,9 +281,16 @@ function applyProposal(tmpDir: string, proposal: BootstrapProposal): void {
       const testPath = join(tmpDir, site.file);
       const content = readFileSync(testPath, "utf-8");
       const nameRe = new RegExp(`(it\\((["'\`]))(${escapeRegExp(site.match_it_name)})`);
-      if (!nameRe.test(content)) {
+      const globalRe = new RegExp(nameRe.source, "g");
+      const hits = content.match(globalRe) ?? [];
+      if (hits.length === 0) {
         throw new Error(
           `test_site match_it_name not found for ${req.id} in ${site.file}: ${site.match_it_name}`,
+        );
+      }
+      if (hits.length > 1) {
+        throw new Error(
+          `test_site match_it_name matches ${hits.length} it() blocks for ${req.id} in ${site.file}: ${site.match_it_name}. LLM must return a more specific pattern.`,
         );
       }
       const updated = content.replace(nameRe, `$1[${req.id}] $3`);
@@ -351,9 +351,39 @@ describe("artgraph-bootstrap Skill: LLM -> deterministic verification (issue #12
         const reqNodes = graph.nodes.filter((n) => n.kind === "req");
         const implEdges = graph.edges.filter((e) => e.kind === "implements");
         const verifiesEdges = graph.edges.filter((e) => e.kind === "verifies");
+        // Sanity checks only — the exact-count assertions below (from
+        // `check --format json`) are what actually pins the per-REQ contract.
         expect(reqNodes.length, `graph: ${graphResult.stdout}`).toBeGreaterThanOrEqual(1);
         expect(implEdges.length, `graph: ${graphResult.stdout}`).toBeGreaterThanOrEqual(1);
         expect(verifiesEdges.length, `graph: ${graphResult.stdout}`).toBeGreaterThanOrEqual(1);
+
+        // 10. Structural per-REQ contract from EXPECTED.md: the fixture
+        // defines EXACTLY 2 latent REQs — REQ-001 (implementable, must end up
+        // verified) and REQ-002 (intentionally uncovered, MUST NOT have an
+        // `@impl` synthesized for it). Collection-level `>=1` checks above
+        // would pass even if the LLM silently dropped REQ-002 or fabricated
+        // an impl for it, so pin the exact counts via `check --format json`.
+        const checkResult2 = runCli(tmp, ["check", "--format", "json"]);
+        expect(checkResult2.status, cliFailureMessage(checkResult2)).toBe(0);
+        const checkJson = JSON.parse(checkResult2.stdout) as {
+          coverage?: Array<{ reqId: string; status: string }>;
+        };
+        const coverage = checkJson.coverage ?? [];
+        // Weak assertion by design keeps ID-name/wording drift from failing
+        // the test; structural counts are strict.
+        const verifiedCount = coverage.filter((c) => c.status === "verified").length;
+        const untaggedCount = coverage.filter(
+          (c) => c.status === "untagged" || c.status === "impl-only",
+        ).length;
+        expect(reqNodes.length, "expected exactly 2 REQ nodes per fixture EXPECTED.md").toBe(2);
+        expect(
+          verifiedCount,
+          `expected exactly 1 verified REQ (the implementable one): ${checkResult2.stdout}`,
+        ).toBe(1);
+        expect(
+          untaggedCount,
+          `expected exactly 1 uncovered REQ (fixture's intentional untagged case): ${checkResult2.stdout}`,
+        ).toBe(1);
       } finally {
         rmSync(tmp, { recursive: true, force: true });
       }

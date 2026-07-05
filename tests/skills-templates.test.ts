@@ -402,9 +402,14 @@ describe("templates/skills metatest", () => {
       expect(skill.body).toMatch(/artgraph-plan-coverage/);
     });
 
-    it("body summary template says 'N of 8 installed' (not 7)", () => {
+    it("body lists artgraph-bootstrap in the canonical set", () => {
       const skill = readSkill("artgraph-detect");
-      expect(skill.body).toMatch(/N of 8 installed/);
+      expect(skill.body).toMatch(/artgraph-bootstrap/);
+    });
+
+    it("body summary template says 'N of 9 installed' (not 8)", () => {
+      const skill = readSkill("artgraph-detect");
+      expect(skill.body).toMatch(/N of 9 installed/);
     });
   });
 
