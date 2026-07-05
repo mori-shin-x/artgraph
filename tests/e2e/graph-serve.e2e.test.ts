@@ -137,12 +137,24 @@ describe("e2e: graph --serve", () => {
       const notFound = await fetchOnce(`http://127.0.0.1:${PORT}/does-not-exist`);
       expect(notFound.status).toBe(404);
 
+      // Regression: `/index.html` must resolve to the same rendered HTML as
+      // `/`. Browsers and static-host mirrors sometimes canonicalize to
+      // /index.html, and pre-refactor the route was covered by handler code
+      // but never exercised by a test.
+      const indexHtml = await fetchOnce(`http://127.0.0.1:${PORT}/index.html`);
+      expect(indexHtml.status).toBe(200);
+      expect(indexHtml.contentType).toMatch(/text\/html/);
+      expect(indexHtml.body.toString("utf-8")).toContain('id="artgraph-data"');
+
       child.kill("SIGINT");
       const code = await waitExit(child, 3000);
-      // 0 on graceful shutdown, 130 (128 + SIGINT) if a race lets the default
-      // handler fire before ours drains. Both are acceptable "server stopped
-      // cleanly" outcomes.
-      expect([0, 130]).toContain(code);
+      // Tightened from `expect([0, 130]).toContain(code)`: prior to the
+      // A2 fix, keep-alive sockets pinned `server.close()` open past our
+      // 3s waitExit budget, so the child got SIGKILLed and exited 130
+      // — the test accepted that as "cleanly stopped" and silently
+      // masked the bug. `closeIdleConnections` + `closeAllConnections`
+      // in `startServer` now guarantee a graceful exit 0.
+      expect(code).toBe(0);
     },
   );
 });

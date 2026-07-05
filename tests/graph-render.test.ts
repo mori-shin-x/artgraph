@@ -170,7 +170,8 @@ describe("renderGraphData: state precedence", () => {
   it("drift wins over orphan and uncovered", () => {
     const checkResult: CheckResult = {
       drifted: [{ nodeId: "REQ-A", kind: "req", lockedHash: "old", currentHash: "new" }],
-      orphans: ["REQ-A"],
+      orphans: [],
+      orphanNodeIds: ["REQ-A"],
       uncovered: ["REQ-A"],
       coverage: [],
       testFailures: [],
@@ -189,7 +190,8 @@ describe("renderGraphData: state precedence", () => {
   it("orphan wins over uncovered when node is not drifted", () => {
     const checkResult: CheckResult = {
       drifted: [],
-      orphans: ["REQ-B"],
+      orphans: [],
+      orphanNodeIds: ["REQ-B"],
       uncovered: ["REQ-B"],
       coverage: [],
       testFailures: [],
@@ -209,6 +211,7 @@ describe("renderGraphData: state precedence", () => {
     const checkResult: CheckResult = {
       drifted: [],
       orphans: [],
+      orphanNodeIds: [],
       uncovered: ["REQ-C"],
       coverage: [],
       testFailures: [],
@@ -244,7 +247,8 @@ describe("renderGraphData: stats counting", () => {
         { nodeId: "REQ-1", kind: "req", lockedHash: "a", currentHash: "b" },
         { nodeId: "REQ-2", kind: "req", lockedHash: "a", currentHash: "b" },
       ],
-      orphans: ["REQ-3"],
+      orphans: [],
+      orphanNodeIds: ["REQ-3"],
       uncovered: ["REQ-4"],
       coverage: [],
       testFailures: [],

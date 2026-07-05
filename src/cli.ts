@@ -1127,6 +1127,7 @@ function registerCommands(program: Command): void {
               JSON.stringify({
                 drifted: [],
                 orphans: [],
+                orphanNodeIds: [],
                 uncovered: [],
                 coverage: [],
                 testFailures: [],

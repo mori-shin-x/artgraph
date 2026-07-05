@@ -1,7 +1,27 @@
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import type { ArtifactGraph, ImpactResult, DriftEntry } from "../types.js";
+import type { ArtifactGraph, EdgeKind, ImpactResult, DriftEntry } from "../types.js";
 import type { LockFile } from "../types.js";
 import type { SymbolEntry } from "../parsers/sdd-files.js";
+
+/**
+ * spec 007 / issue #155 — `findOrphans` output shape.
+ *
+ * Prior to the B1 fix `findOrphans` returned pre-formatted descriptor
+ * strings (`"file:src/foo.ts -> REQ-999 (implements)"`), which the
+ * `--serve` renderer then mistook for bare node ids and silently failed
+ * to mark orphan nodes. Structured entries let both text output (via
+ * `check.ts` -> `printCheckText`) and the render layer keep their own
+ * projections of the same data (source id vs. descriptor line) without
+ * re-parsing.
+ */
+export interface OrphanEntry {
+  /** Bare id of the edge source (the file/symbol/test node that carries the orphan `@impl` / `@verifies` tag). */
+  source: string;
+  /** Bare id of the edge target — a REQ id that does NOT resolve to any node in the graph. */
+  target: string;
+  /** Which claim kind produced the orphan edge (`implements` or `verifies`). */
+  kind: EdgeKind;
+}
 
 // spec 016 (R-006, data-model.md §2.3) — `impact()` BFS body is **unchanged
 // from spec 014**. The redesign reroutes the startId construction (now via
@@ -120,8 +140,8 @@ export function impact(
   };
 }
 
-export function findOrphans(graph: ArtifactGraph): string[] {
-  const orphans: string[] = [];
+export function findOrphans(graph: ArtifactGraph): OrphanEntry[] {
+  const orphans: OrphanEntry[] = [];
 
   for (const edge of graph.edges) {
     if (edge.kind === "implements" || edge.kind === "verifies") {
@@ -131,7 +151,7 @@ export function findOrphans(graph: ArtifactGraph): string[] {
       // task-source の orphan は警告対象外。code-claim な orphan のみ拾う。
       if (graph.nodes.get(edge.source)?.kind === "task") continue;
       if (!graph.nodes.has(edge.target)) {
-        orphans.push(`${edge.source} -> ${edge.target} (${edge.kind})`);
+        orphans.push({ source: edge.source, target: edge.target, kind: edge.kind });
       }
     }
   }

@@ -59,8 +59,14 @@ export function renderGraphData(graph: ArtifactGraph, options: RenderOptions): R
   // Build state lookup sets. Precedence is enforced later at assignment time
   // (drift > orphan > uncovered) so a node appearing in multiple sets still
   // gets its highest-severity state.
+  //
+  // issue #155 (B1) — orphans are indexed by `orphanNodeIds` (bare source
+  // node ids), NOT by `orphans` (which is the descriptor-string form used
+  // by the text CLI). Using `orphans` here would compare `"file:X -> Y
+  // (implements)"` against `node.id` and never match — silent false-clean
+  // in the `--serve` UI.
   const driftIds = new Set<string>(checkResult?.drifted.map((d) => d.nodeId) ?? []);
-  const orphanIds = new Set<string>(checkResult?.orphans ?? []);
+  const orphanIds = new Set<string>(checkResult?.orphanNodeIds ?? []);
   const uncoveredIds = new Set<string>(checkResult?.uncovered ?? []);
 
   const nodes: RenderNode[] = [];

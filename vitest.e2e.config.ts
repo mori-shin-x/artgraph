@@ -13,7 +13,10 @@ export default defineConfig({
     pool: "forks",
     forks: { singleFork: true },
     fileParallelism: false,
-    globalSetup: ["./tests/e2e/global-setup.ts"],
+    // Cold `pnpm install && pnpm test:e2e` has no built vendor asset yet
+    // (that's normally produced by the `prebuild` hook); populate it before
+    // the dist-build setup below runs.
+    globalSetup: ["./tests/global-setup-vendor.ts", "./tests/e2e/global-setup.ts"],
     retry: 1,
   },
 });

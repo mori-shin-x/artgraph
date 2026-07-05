@@ -376,9 +376,36 @@ for the formalisation.
 | `artgraph impact`        | File-only forward impact (file paths / `--from-tasks` / `--from-plan` / `--diff`)                   |
 | `artgraph plan-coverage` | Detect implicit REQ impacts: REQs touched by tasks.md `Files:` but not mentioned in tasks/plan/spec |
 | `artgraph reconcile`     | Rebuild `.trace.lock` from the current graph                                                        |
-| `artgraph graph`         | Emit the graph (dot / json)                                                                         |
+| `artgraph graph`         | Show the artifact graph (text / json / interactive HTML — see below)                                |
 | `artgraph rename`        | Rename / split / merge requirement IDs (see below)                                                  |
 | `artgraph doctor`        | Diagnose Tier 1 cross-agent distributions (drift / missing / extraneous-file); see below           |
+
+## `artgraph graph` — interactive visualization
+
+By default `artgraph graph` prints the req/doc/code/test graph as `text`
+(or `--format json` for machine consumption). `--serve` and `--output` instead
+render the same graph as an interactive HTML page (Cytoscape.js), with node
+border color/style encoding `drift` / `orphan` / `uncovered` state so you can
+spot problem areas without reading `check` output line by line.
+
+```bash
+# Print the graph as text (default) or JSON
+artgraph graph
+artgraph graph --format json
+artgraph graph --kind req            # filter by node kind (doc/req/file/test/task)
+
+# Open an interactive HTML view in a local server (default 127.0.0.1:3737)
+artgraph graph --serve
+artgraph graph --serve --port 4000 --host 0.0.0.0
+
+# Write a static HTML export instead (e.g. to publish as a CI artifact)
+artgraph graph --output ./graph-out
+```
+
+`--serve` and `--output` are mutually exclusive and ignore `--kind` (use the
+in-page search box to filter instead). Both read `.trace.lock` when present to
+color drift/orphan/uncovered nodes; a missing lock just renders without that
+extra state.
 
 ## `artgraph doctor` — cross-agent distribution health check
 
