@@ -62,26 +62,29 @@ describe("check --gate non-regression (FR-012 後段)", () => {
     }
   });
 
-  it("src/cli.ts `check` action does not invoke runDoctor / DoctorFinding", () => {
-    const cliSource = readFileSync(resolve(REPO_ROOT, "src/cli.ts"), "utf-8");
-    // Slice out just the `check` subcommand action handler. We find the
-    // `.command("check")` line and read until the next top-level `program`
-    // declaration so the doctor block (which lives separately) doesn't
-    // pollute the grep.
+  it("src/commands/check.ts `check` action does not invoke runDoctor / DoctorFinding", () => {
+    // issue #162: the `check` subcommand moved from src/cli.ts into its own
+    // module. That module registers exactly one command, so — unlike the
+    // old single-file cli.ts — there is no second `program.command(...)`
+    // block to bound the slice against; the check block runs to EOF.
+    const cliSource = readFileSync(resolve(REPO_ROOT, "src/commands/check.ts"), "utf-8");
     const checkStart = cliSource.indexOf('.command("check")');
-    expect(checkStart, "could not locate check subcommand in cli.ts").toBeGreaterThan(0);
+    expect(
+      checkStart,
+      "could not locate check subcommand in src/commands/check.ts",
+    ).toBeGreaterThan(0);
     // Accept both top-level (`\nprogram`) and indented-inside-registerCommands
     // (`\n  program`) — oxfmt normalises whichever style the surrounding scope
     // uses, so pinning to one indentation would be a maintenance trap.
     const nextProgramMatch = cliSource.slice(checkStart + 1).search(/\n[ \t]*program(\s|\.|\r?\n)/);
-    const checkEnd = nextProgramMatch >= 0 ? checkStart + 1 + nextProgramMatch : -1;
+    const checkEnd = nextProgramMatch >= 0 ? checkStart + 1 + nextProgramMatch : cliSource.length;
     expect(checkEnd).toBeGreaterThan(checkStart);
     const checkBlock = cliSource.slice(checkStart, checkEnd);
 
     for (const needle of ["runDoctor", "DoctorFinding", "formatDoctorReport"]) {
       expect(
         checkBlock.includes(needle),
-        `cli.ts check subcommand must not call "${needle}" (FR-012)`,
+        `check subcommand must not call "${needle}" (FR-012)`,
       ).toBe(false);
     }
   });

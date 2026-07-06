@@ -21,7 +21,8 @@ const ROOT = resolve(import.meta.dirname, "..");
 
 const readme = readFileSync(resolve(ROOT, "README.md"), "utf8");
 const skillsGuide = readFileSync(resolve(ROOT, "docs", "skills-guide.md"), "utf8");
-const cliSource = readFileSync(resolve(ROOT, "src", "cli.ts"), "utf8");
+// issue #162: `init` moved from src/cli.ts into its own module.
+const cliSource = readFileSync(resolve(ROOT, "src", "commands", "init.ts"), "utf8");
 
 type Stage = {
   id: string;
@@ -160,11 +161,11 @@ function skillsGuideStageBullets(): string {
   return bullets.join("\n");
 }
 
-/** Source text of one commander command block in src/cli.ts. */
+/** Source text of one commander command block in src/commands/init.ts. */
 function cliCommandBlock(name: string): string {
   const start = cliSource.indexOf(`.command("${name}")`);
   if (start === -1) {
-    throw new Error(`src/cli.ts: .command("${name}") not found`);
+    throw new Error(`src/commands/init.ts: .command("${name}") not found`);
   }
   const next = cliSource.indexOf('.command("', start + 1);
   return cliSource.slice(start, next === -1 ? undefined : next);
@@ -174,7 +175,9 @@ function cliCommandBlock(name: string): string {
 function cliInitDescription(): string {
   const match = cliCommandBlock("init").match(/\.description\(\s*"((?:[^"\\]|\\.)*)"/);
   if (!match) {
-    throw new Error('src/cli.ts: init .description("...") not found or not a plain string');
+    throw new Error(
+      'src/commands/init.ts: init .description("...") not found or not a plain string',
+    );
   }
   return match[1];
 }
@@ -251,7 +254,7 @@ describe("docs-trio consistency: README / docs/skills-guide.md / src/cli.ts (#13
     const sources: Array<[string, () => string]> = [
       ["README.md", () => readme],
       ["docs/skills-guide.md", () => skillsGuide],
-      ["src/cli.ts", () => cliSource],
+      ["src/commands/init.ts", () => cliSource],
     ];
     for (const [label, read] of sources) {
       for (const marker of STALE_MARKERS) {
