@@ -5,10 +5,7 @@ import { registerImpactCommand } from "./commands/impact.js";
 import { registerPlanCoverageCommand } from "./commands/plan-coverage.js";
 import { registerCheckCommand } from "./commands/check.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
-import { registerCoverageCommand } from "./commands/coverage.js";
 import { registerReconcileCommand } from "./commands/reconcile.js";
-import { registerGraphCommand } from "./commands/graph.js";
-import { registerHookPretoolCommand } from "./commands/hook-pretool.js";
 import { registerIntegrateCommand } from "./commands/integrate.js";
 import { registerRenameCommand } from "./commands/rename.js";
 
@@ -26,10 +23,7 @@ export function buildProgram(): Command {
   registerPlanCoverageCommand(program);
   registerCheckCommand(program);
   registerDoctorCommand(program);
-  registerCoverageCommand(program);
   registerReconcileCommand(program);
-  registerGraphCommand(program);
-  registerHookPretoolCommand(program);
   registerIntegrateCommand(program);
   registerRenameCommand(program);
 

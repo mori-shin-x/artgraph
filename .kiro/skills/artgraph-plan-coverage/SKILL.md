@@ -69,7 +69,7 @@ Compare per-entry `impactReqs` against `originReqs`:
 
 - `unresolvedSymbol` (`{ sourceFile, symbol, line }`): the file exists but no exported symbol of that name was found in the symbol-mode graph. The entry is excluded from `implicitImpacts`. Ask the user whether to (a) fix the typo, (b) drop the `:symbol` suffix to fall back to file unit, or (c) re-run `<PM-exec> scan` if the symbol was just added.
 - `emptyExtraction`: nothing was extracted — warn "add a `Files:` section."
-- `missingFilesSection` (opt-in via `--require-files-section`): some task blocks lack a `Files:` section.
+- `missingFilesSection` (opt-in via `planCoverage.requireFilesSection` in `.artgraph.json`): some task blocks lack a `Files:` section.
 
 If `implicitImpacts` is empty and no warnings fire, report "No implicit impacts." and stop.
 

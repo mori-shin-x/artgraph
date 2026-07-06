@@ -10,7 +10,7 @@ import { resolve } from "node:path";
 // trio — i.e. the SDD author silently dragged in side effects.
 //
 // All defaults follow contracts/cli-flags.md §plan-coverage:
-//   --format text (default), --gate off, --ignore "", --require-files-section
+//   --format text (default), --gate off, --ignore "", requireFilesSection
 //   off unless `.artgraph.json`'s `planCoverage.requireFilesSection` is true.
 export function registerPlanCoverageCommand(program: Command): void {
   program
@@ -29,10 +29,6 @@ export function registerPlanCoverageCommand(program: Command): void {
     )
     .option("--gate", "Exit 1 when implicit impacts or diagnostics are non-empty (CI use)")
     .option("--ignore <csv>", "Comma-separated REQ-IDs to drop from implicit list (one-shot)", "")
-    .option(
-      "--require-files-section",
-      "Emit a missingFilesSection diagnostic for every task block without a Files: header",
-    )
     .action(async (opts) => {
       const rootDir = process.cwd();
       const { resolveSpecDir } = await import("../plan-coverage/spec-resolver.js");
@@ -81,14 +77,10 @@ export function registerPlanCoverageCommand(program: Command): void {
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
 
-      // `--require-files-section` flag overrides config; absence means we
-      // fall back to the planCoverage section's requireFilesSection (default
-      // false).
+      // `.artgraph.json`'s planCoverage section drives requireFilesSection
+      // (default false).
       const config = loadConfig(rootDir);
-      const requireFilesSection: boolean =
-        opts.requireFilesSection === true
-          ? true
-          : (config.planCoverage?.requireFilesSection ?? false);
+      const requireFilesSection: boolean = config.planCoverage?.requireFilesSection ?? false;
 
       const format: "json" | "text" = opts.format === "json" ? "json" : "text";
 

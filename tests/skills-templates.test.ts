@@ -29,7 +29,6 @@ const SKILLS_LINKING_INSTALL_CHECK = [
   "artgraph-impact",
   "artgraph-plan-coverage",
   "artgraph-verify",
-  "artgraph-coverage",
   "artgraph-rename",
 ] as const;
 
@@ -214,12 +213,21 @@ describe("templates/skills metatest", () => {
     });
   });
 
-  it("at least 9 Skill directories are present (regression guard)", () => {
+  it("exactly 6 Skill directories are present (regression guard)", () => {
     // Pairs with the dynamic discoverSkillDirs() — if someone accidentally
     // moves a Skill out of templates/skills/, the count drops and this trips.
     // Bumped from 7 to 8 with spec 014 (artgraph-plan-coverage added).
     // Bumped from 8 to 9 with issue #123 (artgraph-bootstrap added).
-    expect(EXPECTED_SKILL_DIRS.length).toBeGreaterThanOrEqual(9);
+    // Reduced from 9 to 6 with #135 (detect / integrate absorbed into setup,
+    // coverage deleted with the `coverage` CLI command).
+    expect(EXPECTED_SKILL_DIRS).toEqual([
+      "artgraph-bootstrap",
+      "artgraph-impact",
+      "artgraph-plan-coverage",
+      "artgraph-rename",
+      "artgraph-setup",
+      "artgraph-verify",
+    ]);
   });
 
   // SC-005 (spec 014): artgraph-impact description must NOT contain the
@@ -369,11 +377,6 @@ describe("templates/skills metatest", () => {
     // any of the four supported package managers without local rewriting.
     // Exempt:
     //   * artgraph-setup — the PM mapping table legitimately uses the runners.
-    //   * artgraph-detect Step 1 — describes probing the runner forms (npx /
-    //     pnpm exec / bunx / deno run) before PM detection has happened; since
-    //     issue #141 this is written as prose rather than a literal shell
-    //     probe, but the exemption still holds because the step legitimately
-    //     names every runner form ahead of PM detection.
     //   * table rows starting with `|`.
     //   * blockquote explainer lines starting with `>`.
     //   * lines where `artgraph` is inside inline backticks (e.g. prose
@@ -381,7 +384,7 @@ describe("templates/skills metatest", () => {
     it.each(EXPECTED_SKILL_DIRS)(
       "%s body uses `<PM-exec> <sub>` not bare `artgraph <sub>` (PR #112)",
       (dirName) => {
-        if (dirName === "artgraph-setup" || dirName === "artgraph-detect") {
+        if (dirName === "artgraph-setup") {
           return;
         }
         const skill = readSkill(dirName);
@@ -458,23 +461,25 @@ describe("templates/skills metatest", () => {
     );
   });
 
-  // PR #112 meta-followup #4: artgraph-detect must list all 8 canonical
-  // Skills (the regression test from FR-021 only counts directories on disk;
-  // this test pins the body text the user actually sees).
-  describe("artgraph-detect canonical Skill set (PR #112)", () => {
-    it("body lists artgraph-plan-coverage in the canonical set", () => {
-      const skill = readSkill("artgraph-detect");
-      expect(skill.body).toMatch(/artgraph-plan-coverage/);
+  // PR #112 meta-followup #4, moved to setup by #135: artgraph-setup carries
+  // the canonical Skill list (formerly in artgraph-detect; the regression test
+  // above only counts directories on disk — this pins the body text the user
+  // actually sees).
+  describe("artgraph-setup canonical Skill set (#135)", () => {
+    it("body lists all 6 canonical Skills", () => {
+      const skill = readSkill("artgraph-setup");
+      for (const name of EXPECTED_SKILL_DIRS) {
+        expect(skill.body, `canonical set must mention ${name}`).toMatch(new RegExp(name));
+      }
     });
 
-    it("body lists artgraph-bootstrap in the canonical set", () => {
-      const skill = readSkill("artgraph-detect");
-      expect(skill.body).toMatch(/artgraph-bootstrap/);
-    });
-
-    it("body summary template says 'N of 9 installed' (not 8)", () => {
-      const skill = readSkill("artgraph-detect");
-      expect(skill.body).toMatch(/N of 9 installed/);
+    it("body no longer references the deleted Skills (#135)", () => {
+      const skill = readSkill("artgraph-setup");
+      for (const gone of ["artgraph-detect", "artgraph-integrate", "artgraph-coverage"]) {
+        expect(skill.body, `deleted Skill ${gone} must not be referenced`).not.toMatch(
+          new RegExp(gone),
+        );
+      }
     });
   });
 
@@ -501,13 +506,12 @@ describe("templates/skills metatest", () => {
       expect(skill.body).toMatch(/unresolvedSymbol/);
     });
 
-    it("docs/skills-guide.md documents symbol mode, scan --mode symbol, and dual-axis", () => {
-      // AS#3: "scan --mode symbol を実行しないと無効" + "impactReqs / originReqs の二軸"
+    it("docs/skills-guide.md documents symbol mode via config and dual-axis", () => {
+      // AS#3: config-driven symbol mode + "impactReqs / originReqs の二軸"
       const docPath = resolve(import.meta.dirname, "..", "docs", "skills-guide.md");
       expect(existsSync(docPath), `Expected ${docPath} to exist`).toBe(true);
       const content = readFileSync(docPath, "utf8");
       expect(content).toMatch(/symbol mode/i);
-      expect(content).toMatch(/scan --mode symbol/);
       expect(content).toMatch(/impactReqs/);
       expect(content).toMatch(/originReqs/);
       // FR-028 (a) trade-off, (c) .artgraph.json mode example
@@ -541,25 +545,27 @@ describe("templates/skills metatest", () => {
   // tests pin the "semantic prose" convention the templates are being
   // migrated to: agent-agnostic path references and shell-portable command
   // descriptions (no literal POSIX-only control tokens in fenced blocks).
+  // #135 absorbed artgraph-detect's "report installed state" duty into
+  // artgraph-setup, so the two dir-specific checks below moved with it.
   describe("issue #141 — agent-agnostic, shell-portable templates", () => {
-    it("artgraph-detect body mentions all five canonical agent skills paths", () => {
-      const skill = readSkill("artgraph-detect");
+    it("artgraph-setup body mentions all five canonical agent skills paths", () => {
+      const skill = readSkill("artgraph-setup");
       const canonicalPaths = AGENT_DESCRIPTORS.map((d) => `${d.skillsPath}/`).sort();
       for (const p of canonicalPaths) {
         expect(
           skill.body.includes(p),
-          `artgraph-detect/SKILL.md body must mention canonical skills path "${p}" (issue #141)`,
+          `artgraph-setup/SKILL.md body must mention canonical skills path "${p}" (issue #141)`,
         ).toBe(true);
       }
     });
 
-    it("artgraph-detect body has no shell-command enumeration literal for any single agent path", () => {
+    it("artgraph-setup body has no shell-command enumeration literal for any single agent path", () => {
       // Meta-review G5: the earlier check only pinned `ls .claude/skills/` and
       // let equivalent shell-literals like `find .agents/skills/` or
       // `dir .cursor\\skills\\` (PowerShell) slip through. Generalize to any
       // enumeration-style shell command bound to a single canonical agent
       // path.
-      const skill = readSkill("artgraph-detect");
+      const skill = readSkill("artgraph-setup");
       const pattern =
         /(?:^|\W)(?:ls|find|dir|list|Get-ChildItem)\s+\.(?:claude|agents|cursor|github|kiro)[\\/]skills[\\/]/i;
       const offenders = skill.body
@@ -568,7 +574,7 @@ describe("templates/skills metatest", () => {
         .map((line) => line.trim());
       expect(
         offenders,
-        `artgraph-detect/SKILL.md body must not hardcode a shell enumeration bound to a single agent path — describe checking all five canonical skills paths in prose instead (issue #141):\n${offenders.join("\n")}`,
+        `artgraph-setup/SKILL.md body must not hardcode a shell enumeration bound to a single agent path — describe checking all five canonical skills paths in prose instead (issue #141):\n${offenders.join("\n")}`,
       ).toEqual([]);
     });
 
