@@ -8,14 +8,12 @@ allowed-tools:
   - "Bash(bun add*)"
   - "Bash(deno add*)"
   - "Bash(npx artgraph *)"
+  - "Bash(npx --no-install artgraph *)"
   - "Bash(pnpm exec artgraph *)"
   - "Bash(bunx artgraph *)"
+  - "Bash(bunx --no-install artgraph *)"
   - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
-  - "Bash(test *)"
-  - "Bash(ls *)"
-  - "Bash(command *)"
-  - "Bash(node -e *)"
 user-invocable: true
 disable-model-invocation: false
 ---
@@ -34,27 +32,22 @@ See [install-check](../_shared/install-check.md). For this Skill the probe is ex
 
 ### 2. Detect the package manager
 
-Run this whole block as one Bash call. The Corepack `packageManager` field wins over lockfile sniffing; the canonical rules and rationale live in [package-manager](../_shared/package-manager.md). If both signals disagree (e.g. `packageManager: bun@*` with a `pnpm-lock.yaml`), ask the user.
+Inspect the project root and apply these rules in order — first match wins. The Corepack `packageManager` field wins over lockfile sniffing (Corepack convention: an explicit `packageManager` field always overrides a lockfile signal, even when the two disagree — e.g. `packageManager: bun@*` with a stale `pnpm-lock.yaml` still selects bun). The canonical rules and rationale live in [package-manager](../_shared/package-manager.md), which must stay in sync with `src/package-manager.ts`.
 
-```bash
-if [ -f package.json ]; then
-  pm_field=$(node -e 'try{const p=require("./package.json").packageManager;if(typeof p==="string"){const m=p.match(/^([a-z]+)@/);process.stdout.write(m?m[1]:"")}}catch{}' 2>/dev/null)
-  case "$pm_field" in
-    npm|pnpm|bun) echo "Detected: $pm_field"; exit 0 ;;
-    yarn) echo "WARN: packageManager=yarn; falling back to pnpm (Yarn not supported)" >&2; echo "Detected: pnpm"; exit 0 ;;
-  esac
-fi
-if [ -f bun.lockb ] || [ -f bun.lock ]; then echo "Detected: bun"
-elif { [ -f deno.lock ] || [ -f deno.json ] || [ -f deno.jsonc ]; } && [ ! -f package.json ]; then echo "Detected: deno"
-elif [ -f pnpm-lock.yaml ]; then echo "Detected: pnpm"
-elif [ -f yarn.lock ]; then echo "WARN: yarn.lock found; falling back to pnpm (Yarn not supported)" >&2; echo "Detected: pnpm"
-elif [ -f package-lock.json ]; then echo "Detected: npm"
-elif [ -f package.json ]; then echo "Detected: pnpm"
-else echo "ERROR: cannot detect package manager; ask the user which to use (npm / pnpm / bun / deno)" >&2; exit 1
-fi
-```
+1. If `package.json` exists, read it as UTF-8 and strip a leading UTF-8 BOM (`U+FEFF`, byte sequence `EF BB BF`) before parsing (the TS detector strips the BOM too — SC-007). Then read its **top-level** `"packageManager"` field (Corepack-style `<pm>@<version>`, e.g. `pnpm@9.0.0`; a nested key does not count, the PM name must be lowercase, and the `@version` suffix must contain at least one digit — bare names or trailing `@` are ignored):
+   - `npm` / `pnpm` / `bun` -> use that PM.
+   - `yarn` -> use **pnpm** and warn the user with the verbatim wording `packageManager=yarn but Yarn is not supported; falling back to pnpm`.
+   - Field absent, malformed, or any other value -> continue to rule 2.
+2. Lockfile / config sniffing — first matching **regular file** wins, in this order:
+   - `bun.lockb` or `bun.lock` -> **bun**
+   - `deno.lock`, `deno.json`, or `deno.jsonc`, and **no** `package.json` -> **deno**
+   - `pnpm-lock.yaml` -> **pnpm**
+   - `yarn.lock` -> **pnpm**, warn the user with the verbatim wording `yarn.lock found but Yarn is not supported; falling back to pnpm`.
+   - `package-lock.json` -> **npm**
+3. `package.json` exists but nothing above matched -> default to **pnpm**.
+4. Nothing matched at all -> detection fails: tell the user you cannot detect the package manager and ask which to use (npm / pnpm / bun / deno).
 
-Pass any `WARN:` / `ERROR:` line to the user verbatim. On error, ask which PM (npm / pnpm / bun / deno) and use that answer for the rest of the steps. Remember the chosen PM for steps 3-6.
+Relay any warning to the user verbatim (see the backticked wording above — the TS detector writes the same strings to stderr, and CI enforces the match). On detection failure, ask which PM (npm / pnpm / bun / deno) and use that answer for the rest of the steps. Remember the chosen PM for steps 3-6.
 
 ### 3. Get explicit user consent
 
@@ -87,16 +80,12 @@ Report the result to the user.
 
 ## Already installed? Report the state
 
-When the Step 1 probe succeeds, inspect and report instead of reinstalling (read-only, one Bash call):
+When the Step 1 probe succeeds, inspect and report instead of reinstalling. The steps below describe intent, not literal shell commands — compose each check with your own shell's syntax or file-inspection tools, whichever fits your environment:
 
-```bash
-test -f .artgraph.json && echo "config: present" || echo "config: missing"
-test -d .specify && echo "speckit: detected" || echo "speckit: not detected"
-test -d .specify/extensions/artgraph && echo "speckit: integrated" || echo "speckit: not integrated"
-test -d .kiro && echo "kiro: detected" || echo "kiro: not detected"
-test -f .kiro/steering/artgraph.md && echo "kiro: integrated" || echo "kiro: not integrated"
-ls .claude/skills/ 2>/dev/null || echo "no .claude/skills/"
-```
+- Whether `.artgraph.json` exists at the project root -> `config: present` or `config: missing`.
+- Whether `.specify/` exists -> Spec Kit detected; whether `.specify/extensions/artgraph/` exists -> Spec Kit integrated.
+- Whether `.kiro/` exists -> Kiro detected; whether `.kiro/steering/artgraph.md` exists -> Kiro integrated.
+- Which `artgraph-*` Skills are installed: enumerate all five canonical skills paths (`.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, `.kiro/skills/` — a project may have any subset) and list the subdirectories that contain a `SKILL.md`.
 
 Report which `artgraph-*` Skills are present. The canonical set is: `artgraph-bootstrap`, `artgraph-impact`, `artgraph-plan-coverage`, `artgraph-rename`, `artgraph-setup`, `artgraph-verify`. Missing entries suggest the user ran `init --minimal` or `--no-skills`, or deleted Skills manually. To reinstall only the Skills without touching hooks / integration, run the **init** command from the Step 3 table with `--force --agents=<list> --no-scan --no-integrate --no-hooks --no-agent-context` appended (`--force` is required because `.artgraph.json` already exists).
 

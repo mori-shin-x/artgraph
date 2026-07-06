@@ -20,6 +20,7 @@ import {
 } from "../src/init.js";
 import { DistributionError } from "../src/agents/distribute.js";
 import { readSkillSource } from "../src/agents/source.js";
+import { AGENT_DESCRIPTORS } from "../src/agents/descriptors.js";
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), "artgraph-init-"));
@@ -878,67 +879,78 @@ describe("readSkillSource (packaging-fault surface)", () => {
 
 describe("skill template <-> dogfood sync", () => {
   // Guards against drift between templates/skills/ (the distributed source
-  // of truth) and .claude/skills/ (this repo's dogfood copy). If one is
-  // updated without the other, this test fails.
+  // of truth) and every distributed on-disk copy under this repo's canonical
+  // agent skills paths. If one is updated without the other, this test
+  // fails.
   //
-  // The check normalises line endings (CRLF → LF) and per-line trailing
-  // whitespace before comparing so an editor that silently re-saves with a
-  // different EOL convention or a stray trailing space doesn't break CI. The
-  // intent — "every byte that semantically matters must match" — is preserved.
-  function normalize(content: string): string {
-    return content
-      .replace(/\r\n/g, "\n")
-      .split("\n")
-      .map((line) => line.replace(/[\t ]+$/, ""))
-      .join("\n")
-      .replace(/\n+$/, "");
-  }
-  function readNormalized(path: string): string {
-    return normalize(readFileSync(path, "utf-8"));
-  }
+  // Compares raw bytes (not normalized) so CRLF injection, trailing
+  // whitespace, or BOM insertion is caught — the SC-002 contract for
+  // spec 013 requires byte-identical distribution across all 5 canonical
+  // agent paths, verifiable by `diff -r`. A LF-pin `.gitattributes` under
+  // each skills path is expected to keep Windows checkouts in line.
 
-  const templateDir = resolve(import.meta.dirname, "..", "templates", "skills");
-  // From tests/ up one level to repo root, then into .claude/.
-  const dogfoodDir = resolve(import.meta.dirname, "..", ".claude", "skills");
+  const REPO_ROOT = resolve(import.meta.dirname, "..");
+  const templateDir = resolve(REPO_ROOT, "templates", "skills");
+  // Every canonical agent path, not just Claude. See AGENT_DESCRIPTORS.
+  const dogfoodDirs = AGENT_DESCRIPTORS.map((d) => resolve(REPO_ROOT, d.skillsPath));
 
-  it("every template file has a matching dogfood file with identical content", () => {
-    // Only run when the dogfood directory actually exists (i.e. inside this
-    // repo). Consumers of the published package won't have it.
-    if (!existsSync(dogfoodDir)) {
-      return;
+  function walk(dir: string, out: string[]): void {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      const stat = statSync(full);
+      if (stat.isDirectory()) walk(full, out);
+      else if (stat.isFile()) out.push(full);
     }
+  }
 
-    // Walk templates/skills/ recursively. Each .md file (SKILL.md under a
-    // skill directory, or fragments under _shared/) must mirror exactly into
-    // .claude/skills/ at the same relative path.
-    function walk(dir: string, out: string[]): void {
-      for (const entry of readdirSync(dir)) {
-        const full = join(dir, entry);
-        const stat = statSync(full);
-        if (stat.isDirectory()) walk(full, out);
-        else if (stat.isFile()) out.push(full);
-      }
-    }
+  it("every template file has a matching dogfood file with byte-identical content in all 5 agent paths", () => {
+    // Sanity: all 5 canonical dogfood paths must exist in this repo. If one
+    // is missing (e.g. someone rm'd a dir), fail loud instead of silently
+    // skipping — the previous silent-skip behaviour let drift merge to main
+    // without CI catching it.
+    const missing = dogfoodDirs.filter((d) => !existsSync(d));
+    expect(
+      missing,
+      `dogfood skills path(s) missing from repo (SC-002 requires byte-identical distribution to every canonical agent path): ${missing.join(", ")}`,
+    ).toEqual([]);
+
     const files: string[] = [];
     walk(templateDir, files);
     expect(files.length).toBeGreaterThan(0);
 
     for (const tPath of files) {
       const rel = tPath.substring(templateDir.length + 1);
-      const dPath = join(dogfoodDir, rel);
-      expect(existsSync(dPath), `dogfood file missing: ${dPath}`).toBe(true);
-      expect(readNormalized(dPath), `content drift in ${rel}`).toBe(readNormalized(tPath));
+      const tBytes = readFileSync(tPath);
+      for (const dogfoodDir of dogfoodDirs) {
+        const dPath = join(dogfoodDir, rel);
+        expect(existsSync(dPath), `dogfood file missing: ${dPath}`).toBe(true);
+        const dBytes = readFileSync(dPath);
+        // Raw byte comparison — no CRLF/whitespace normalization. SC-002
+        // demands `diff -r` clean, not "semantically identical".
+        expect(
+          dBytes.equals(tBytes),
+          `byte drift in ${dogfoodDir.substring(REPO_ROOT.length + 1)}/${rel} (canonical templates/skills/${rel} differs)`,
+        ).toBe(true);
+      }
     }
 
-    // Reverse direction: every dogfood file must have a matching template (no stale files)
-    const dogfoodFiles: string[] = [];
-    walk(dogfoodDir, dogfoodFiles);
-    for (const dPath of dogfoodFiles) {
-      const rel = dPath.substring(dogfoodDir.length + 1);
-      // Skip speckit-* directories (managed by Spec Kit, not artgraph templates)
-      if (rel.startsWith("speckit-")) continue;
-      const tPath = join(templateDir, rel);
-      expect(existsSync(tPath), `stale dogfood file (no template): ${rel}`).toBe(true);
+    // Reverse direction: every dogfood file (in every canonical path) must
+    // have a matching template file (no stale files left behind by a rename
+    // or removal).
+    for (const dogfoodDir of dogfoodDirs) {
+      const dogfoodFiles: string[] = [];
+      walk(dogfoodDir, dogfoodFiles);
+      for (const dPath of dogfoodFiles) {
+        const rel = dPath.substring(dogfoodDir.length + 1);
+        // Skip speckit-* directories (managed by Spec Kit under .claude/
+        // specifically, not artgraph templates).
+        if (rel.startsWith("speckit-")) continue;
+        const tPath = join(templateDir, rel);
+        expect(
+          existsSync(tPath),
+          `stale dogfood file (no template): ${dogfoodDir.substring(REPO_ROOT.length + 1)}/${rel}`,
+        ).toBe(true);
+      }
     }
   });
 });

@@ -7,8 +7,8 @@ import { pathToFileURL } from "node:url";
 
 // Command implementations are imported lazily (`await import(...)`) inside
 // each action handler instead of statically here. The scan/parse stack pulls
-// in ts-morph (~300 ms module load alone), which every invocation — including
-// `--version` and `--help` — used to pay up front. Only commander, node
+// in the native oxc-parser binding and the remark toolchain, which every
+// invocation — including `--version` and `--help` — used to pay up front. Only commander, node
 // builtins, and the two data-only modules needed to render help text
 // (agents/descriptors, agents/parse-agents) stay static. Types are erased at
 // compile time, so `import type` is free.
@@ -1421,7 +1421,7 @@ class CliExitError extends Error {
  * @internal
  * Run the artgraph CLI in-process and capture its stdout/stderr/exitCode.
  * Used by the test suite to avoid the ~150–300 ms per-spawn Node startup +
- * ts-morph reload cost. Behaves like a fresh `artgraph <argv>` invocation:
+ * parser-stack reload cost. Behaves like a fresh `artgraph <argv>` invocation:
  * builds a new commander tree, redirects console/process.stdout/process.stderr,
  * intercepts `process.exit`, and temporarily chdirs into `opts.cwd`.
  *
