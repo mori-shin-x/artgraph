@@ -36,6 +36,13 @@ export const testfailKey = (id: string): string => `testfail:${id}`;
 // SIGINT before `finally` ran) can be recognised and reclaimed.
 const WORKTREE_PREFIX = "artgraph-baseline-";
 
+// spec 017 — baseline computation is base-ref-parameterised (Phase 1 pins
+// "HEAD"), side-effect-free, and distinguishes the unborn-HEAD "empty" case
+// from the "unavailable" error case.
+// @impl 017-check-gate-baseline-diff/FR-002
+// @impl 017-check-gate-baseline-diff/FR-004
+// @impl 017-check-gate-baseline-diff/FR-012
+// @impl 017-check-gate-baseline-diff/FR-014
 export function computeBaselineIssues(
   rootDir: string,
   baseRef: string,
@@ -78,6 +85,7 @@ export function computeBaselineIssues(
 // orphans and uncovered REQs. Test failures are intentionally excluded — they
 // belong to "this test run" and can't be reconstructed from a static ref, so
 // current test failures always count as new (baseline-diff.md §1.3).
+// @impl 017-check-gate-baseline-diff/FR-011
 function collectIssueKeys(graph: ArtifactGraph, currentLock: LockFile): Set<string> {
   const keys = new Set<string>();
 

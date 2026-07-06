@@ -24,7 +24,15 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
     { "reqId": "REQ-001", "status": "verified" }       // status: "verified" | "impl-only" | "untagged"
   ],
   "testFailures": ["REQ-003"],                         // REQs whose tests ran and failed (only when --test-results supplied)
-  "pass": true,                                        // true iff all four arrays above are empty
+  "pass": true,                                        // spec 017: true iff `newIssues` is empty (NO issue is new vs the baseline). The scoped arrays above may still be non-empty (all pre-existing debt).
+  "newIssues": {                                       // spec 017 (FR-009): the `current \ baseline` subset that decides the gate. Same shapes as the scoped arrays.
+    "drifted": [],
+    "orphans": [],
+    "uncovered": [],
+    "testFailures": []
+  },
+  "suppressedCount": 155,                              // count of scoped issues suppressed as pre-existing (in blast radius but not newly introduced)
+  "baselineStatus": "computed",                        // "computed" | "empty" (unborn HEAD → all current is new) | "skipped" (clean scope, no baseline built) | "unavailable" (could not establish a baseline → gate undetermined)
   "warnings": [                                        // BuildWarning[] from scan (always present, may be empty)
     {
       "type": "duplicate-id",                          // see "Warning types" table below
@@ -35,6 +43,8 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
   ]
 }
 ```
+
+An issue is **new** (introduced by this change) iff it appears in `newIssues`; anything only in the scoped arrays is pre-existing. When `baselineStatus` is `"unavailable"`, `newIssues` is empty and `pass` is forced `false` — read `baselineStatus`, not `pass` alone, to tell "gate fail" (`--gate` → exit 2) from "undetermined" (`--gate` → exit 1).
 
 `warnings[].type` is one of: `"duplicate-id" | "ambiguous-id" | "orphan-doc" | "orphan-edge" | "invalid-relation" | "reserved-prefix" | "unresolved-link" | "out-of-scope-link" | "invalid-annotation-id" | "empty-annotation" | "self-reference-annotation"`.
 
@@ -142,6 +152,6 @@ On error, the CLI writes the following to stderr (NOT stdout) and exits 1:
 
 | code | meaning |
 | ---- | ------- |
-| 0    | success / clean |
-| 1    | error (invalid input, I/O, validation) |
-| 2    | drift / orphans / uncovered / test-failures detected (only when `--gate` is set on `check`) |
+| 0    | success / clean (or `--gate` with no NEW issue) |
+| 1    | error (invalid input, I/O, validation); for `check --diff --gate`, also "baseline could not be established" (spec 017, gate undetermined) |
+| 2    | `check --gate`: a NEW issue (drift / orphan / uncovered / test-failure) was introduced by the change. With `--diff`, pre-existing debt in the blast radius is excluded from the gate (spec 017 / issue #174) |

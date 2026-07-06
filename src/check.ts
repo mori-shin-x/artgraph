@@ -11,6 +11,10 @@ import { findOrphans, formatOrphan, findUncovered } from "./graph/traverse.js";
 import { computeCoverage } from "./coverage.js";
 import { driftKey, orphanKey, uncoveredKey, testfailKey, type BaselineIssues } from "./baseline.js";
 
+// spec 017 — the gate is decided by the NEW issues only (current \ baseline),
+// and orphan scoping is a strict source-id match (not a substring test).
+// @impl 017-check-gate-baseline-diff/FR-001
+// @impl 017-check-gate-baseline-diff/FR-006
 export function check(
   graph: ArtifactGraph,
   lock: LockFile,

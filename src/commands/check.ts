@@ -83,17 +83,22 @@ export function registerCheckCommand(program: Command): void {
       // Preliminary scoped result — no baseline applied yet.
       let result = check(graph, lock, scopedNodeIds, testResults);
 
-      // spec 017 (data-model §5, R6) — lazy baseline diff for the gate. Only
-      // build the base-ref worktree when gating a diff that actually has a
-      // scoped issue: a fully clean scope cannot contain any NEW issue, so the
-      // worktree cost is skipped and `baselineStatus` stays "skipped" (SC-005).
+      // spec 017 (data-model §5, R6) — lazy baseline diff. Only build the
+      // base-ref worktree when a `--diff` run actually has a scoped issue: a
+      // fully clean scope cannot contain any NEW issue, so the worktree cost is
+      // skipped and `baselineStatus` stays "skipped" (SC-005). The baseline is
+      // computed regardless of `--gate` because the new/pre-existing split
+      // drives BOTH the gate decision and the display / json `newIssues` the
+      // `artgraph-verify` Skill reads (which runs `check --diff` WITHOUT
+      // `--gate`). `--gate` only governs the exit code below.
+      // @impl 017-check-gate-baseline-diff/FR-005
       const hasScopedIssue =
         result.drifted.length > 0 ||
         result.orphans.length > 0 ||
         result.uncovered.length > 0 ||
         result.testFailures.length > 0;
 
-      if (opts.gate && opts.diff && hasScopedIssue) {
+      if (opts.diff && hasScopedIssue) {
         const { computeBaselineIssues } = await import("../baseline.js");
         // Phase 1 pins the base ref to HEAD (FR-002); the internal API already
         // takes a `baseRef` parameter so Phase 2 can expose `--base` (FR-012).
@@ -104,17 +109,26 @@ export function registerCheckCommand(program: Command): void {
       if (opts.format === "json") {
         console.log(JSON.stringify({ ...result, warnings }));
       } else {
-        printCheckText(result);
+        printCheckText(result, { diff: !!opts.diff, gate: !!opts.gate });
         printWarnings(warnings);
       }
 
-      // Exit codes (contract cli-check-gate §2): 1 = baseline undeterminable
-      // (FR-010, distinct from a gate fail); 2 = a NEW issue was introduced.
-      if (opts.gate && result.baselineStatus === "unavailable") {
-        console.error("ERROR: could not establish a baseline (git worktree unavailable).");
-        console.error("       gate result is undetermined; not treating as pass.");
-        process.exit(1);
+      // spec 017 (contract cli-check-gate §4.4 / §4.5, §3 note) — baseline
+      // undeterminable. Never silently pass (FR-010): with `--gate` this is a
+      // dedicated exit 1 (distinct from a gate fail's exit 2); without `--gate`
+      // it is display-only, so warn on stderr and exit 0.
+      // @impl 017-check-gate-baseline-diff/FR-010
+      if (result.baselineStatus === "unavailable") {
+        if (opts.gate) {
+          console.error("ERROR: could not establish a baseline (git worktree unavailable).");
+          console.error("       gate result is undetermined; not treating as pass.");
+          process.exit(1);
+        }
+        console.error("WARNING: could not establish a baseline; showing all issues without");
+        console.error("         new/pre-existing distinction.");
       }
+
+      // Exit code 2 (contract §2): `--gate` and a NEW issue was introduced.
       if (opts.gate && !result.pass) {
         process.exit(2);
       }

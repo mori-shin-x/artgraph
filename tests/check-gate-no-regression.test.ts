@@ -89,11 +89,15 @@ describe("check --gate non-regression (FR-012 後段)", () => {
     }
   });
 
-  it("check() exit decision is purely a function of (graph, lock, scope, testResults)", () => {
+  it("check() exit decision is a pure function of (graph, lock, scope, testResults, baseline)", () => {
     // Behavioural proof: `check()` produces the same `pass` result twice in
-    // a row on byte-identical inputs. The signature literally has no
-    // `rootDir` / `agents` knob — spec 013 distribution files therefore
-    // CANNOT alter the outcome, regardless of whether they exist on disk.
+    // a row on byte-identical inputs. spec 017 added an OPTIONAL `baseline`
+    // parameter (issue #174); when it is omitted `check()` is still doctor-
+    // independent and pure — the signature has no `rootDir` / `agents` knob,
+    // so spec 013 distribution files CANNOT alter the outcome regardless of
+    // whether they exist on disk. With an empty graph there are zero scoped
+    // issues, so `newIssues` is empty and the new `pass` semantics (no NEW
+    // issue) collapse to `true`, matching the pre-017 "all clear" meaning.
     const emptyGraph: ArtifactGraph = {
       nodes: new Map(),
       edges: [],

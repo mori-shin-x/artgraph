@@ -150,6 +150,26 @@ describe("computeBaselineIssues", () => {
     ).toBe(true);
   });
 
+  it("(T033) multiple interrupted runs leave several stale worktrees → all reclaimed next run", () => {
+    const dir = track(makeRepoWithDebt("artgraph-debt-interrupt-"));
+    const config = loadConfig(dir);
+    // Simulate two prior runs that crashed before their `finally` removed the
+    // worktree: two registered `artgraph-baseline-` worktrees left stranded.
+    const stale1 = track(mkdtempSync(join(tmpdir(), "artgraph-baseline-")));
+    const stale2 = track(mkdtempSync(join(tmpdir(), "artgraph-baseline-")));
+    for (const s of [stale1, stale2]) {
+      execFileSync("git", ["worktree", "add", "--detach", s, "HEAD"], { cwd: dir, stdio: "pipe" });
+    }
+    expect(baselineWorktrees(dir).length).toBeGreaterThanOrEqual(2);
+
+    const result = computeBaselineIssues(dir, "HEAD", {}, config);
+    expect(result.status).toBe("computed");
+    // The best-effort prefix sweep reclaimed BOTH strays plus this run's own.
+    expect(baselineWorktrees(dir)).toEqual([]);
+    expect(existsSync(stale1)).toBe(false);
+    expect(existsSync(stale2)).toBe(false);
+  });
+
   it("exports orphanKey/uncoveredKey/driftKey as the SSOT identity keys", () => {
     expect(uncoveredKey("REQ-1")).toBe("uncovered:REQ-1");
     expect(orphanKey({ source: "file:a.ts", target: "REQ-9", kind: "implements" })).toBe(

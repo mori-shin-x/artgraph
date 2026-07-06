@@ -68,13 +68,13 @@
 **Goal**: 変更が実際に導入した drift/orphan/uncovered を exit 2 で捕まえる (fail-open 防止)。
 **Independent Test**: 新規 orphan/uncovered/drift をそれぞれ 1 件導入 → exit 2 + `newIssues` に該当。
 
-- [ ] T016 [P] [US2] Red: `tests/check-baseline-diff.test.ts` に、(a) 存在しない REQ を指す `@impl` 追加 → 新規 orphan で exit 2、(b) 新 REQ 追加で未実装 → 新規 uncovered で exit 2、(c) spec 編集で lock 未更新 → 新規 drift で exit 2、(d) pre-existing のみ → exit 0、を検証 (一部失敗)。〔観点: 条件分岐の組み合わせ〕
-- [ ] T017 [US2] Green: drift の baseline を **現在の lock** 基準で算出する差分を確定 (FR-011)。3 種の issue すべてが `current \ baseline` で正しく new 判定されることを通す。
-- [ ] T018 [P] [US2] Red: `tests/check-orphan-scope.test.ts` を新規作成。FR-006 の回帰 — 変更ファイルと **部分文字列は一致するが無関係** な fixture の orphan 行 (issue #174 の 48 誤マッチ相当) が `newIssues` にも scoped 判定にも入らないことを検証 (失敗する)。〔観点: 実運用事故 (誤爆の再発防止)・変更外影響〕
-- [ ] T019 [US2] Green: T012 の orphan 厳密化で T018 を通す (source の厳密一致)。
-- [ ] T020 [P] [US2] Red→Green: 例外系 — `tests/baseline.test.ts` / `check-baseline-diff.test.ts` に、`--gate` かつ baseline `unavailable` → **exit 1** + 明示メッセージ (contracts §4.4)、`--gate` なし かつ `unavailable` → 警告 + 全表示 exit 0 (contracts §4.5) を検証・実装。`src/commands/check.ts` の exit code 分岐 (0/1/2) を確定。〔観点: 例外系・条件分岐の組み合わせ〕
-- [ ] T021 [P] [US2] Red→Green: 不正な状態遷移 — `baselineStatus` の不変条件 (data-model §1.1: `skipped`⇒全空、`empty`⇒newIssues==既存配列、`pass==newIssues全空`) を assert するテストを追加し満たす。〔観点: 不正な状態遷移〕
-- [ ] T022 [P] [US2] Red→Green: エッジケース — (a) spec.md 自身を編集 → その doc/req の new drift/uncovered が正しく検出、(b) HEAD 無し初回コミット前 → `baselineStatus:"empty"` で全 current が new、(c) 変更がグラフ外ファイルのみ (startIds 空) → 現状挙動維持 (FR-013)、を検証・実装。〔観点: エッジケース・境界条件〕
+- [X] T016 [P] [US2] Red: `tests/check-baseline-diff.test.ts` に、(a) 存在しない REQ を指す `@impl` 追加 → 新規 orphan で exit 2、(b) 新 REQ 追加で未実装 → 新規 uncovered で exit 2、(c) spec 編集で lock 未更新 → 新規 drift で exit 2、(d) pre-existing のみ → exit 0、を検証 (一部失敗)。〔観点: 条件分岐の組み合わせ〕
+- [X] T017 [US2] Green: drift の baseline を **現在の lock** 基準で算出する差分を確定 (FR-011)。3 種の issue すべてが `current \ baseline` で正しく new 判定されることを通す。
+- [X] T018 [P] [US2] Red: `tests/check-orphan-scope.test.ts` を新規作成。FR-006 の回帰 — 変更ファイルと **部分文字列は一致するが無関係** な fixture の orphan 行 (issue #174 の 48 誤マッチ相当) が `newIssues` にも scoped 判定にも入らないことを検証 (失敗する)。〔観点: 実運用事故 (誤爆の再発防止)・変更外影響〕
+- [X] T019 [US2] Green: T012 の orphan 厳密化で T018 を通す (source の厳密一致)。
+- [X] T020 [P] [US2] Red→Green: 例外系 — `tests/baseline.test.ts` / `check-baseline-diff.test.ts` に、`--gate` かつ baseline `unavailable` → **exit 1** + 明示メッセージ (contracts §4.4)、`--gate` なし かつ `unavailable` → 警告 + 全表示 exit 0 (contracts §4.5) を検証・実装。`src/commands/check.ts` の exit code 分岐 (0/1/2) を確定。〔観点: 例外系・条件分岐の組み合わせ〕
+- [X] T021 [P] [US2] Red→Green: 不正な状態遷移 — `baselineStatus` の不変条件 (data-model §1.1: `skipped`⇒全空、`empty`⇒newIssues==既存配列、`pass==newIssues全空`) を assert するテストを追加し満たす。〔観点: 不正な状態遷移〕
+- [X] T022 [P] [US2] Red→Green: エッジケース — (a) spec.md 自身を編集 → その doc/req の new drift/uncovered が正しく検出、(b) HEAD 無し初回コミット前 → `baselineStatus:"empty"` で全 current が new、(c) 変更がグラフ外ファイルのみ (startIds 空) → 現状挙動維持 (FR-013)、を検証・実装。〔観点: エッジケース・境界条件〕
 
 **Checkpoint**: US1 (誤爆解消) と US2 (見逃し防止) が両立。ゲートの意味論が正しい。
 
@@ -85,10 +85,10 @@
 **Goal**: 出力量が blast radius の広さでなく new issue の実数に比例。サマリ + 新規詳細 + pre-existing 抑制。
 **Independent Test**: 50 ファイル純粋リファクタ → 新規ゼロの簡潔出力、pre-existing 全件を吐かない。
 
-- [ ] T023 [P] [US3] Red: `tests/check-gate-output.test.ts` を新規作成。text 出力の (a) new あり → 先頭サマリ + 新規詳細 + 抑制件数 + `impact --diff` 誘導 (contracts §4.1)、(b) new なし pre-existing あり → 簡潔 + 全件非列挙 (§4.2, SC-004)、(c) skipped → 簡潔 (§4.3)、を検証 (失敗する)。〔観点: 境界条件 (0件/N件)〕
-- [ ] T024 [US3] Green: `src/commands/presenters/check.ts` を刷新。`newIssues` ベースのサマリ + 詳細、`suppressedCount` の抑制表示、誘導行。pre-existing の全件列挙を廃止。
-- [ ] T025 [P] [US3] Red→Green: json 出力 — 既存フィールド維持 + `newIssues`/`suppressedCount`/`baselineStatus` 追加 (R8, FR-009)、`unavailable` 時の json 形 (contracts §3 注記: `pass:false` + `baselineStatus:"unavailable"`)、no-diff ショートサーキットの新フィールド追加。`src/commands/check.ts` の json 分岐を更新。〔観点: 条件分岐の組み合わせ (format × baselineStatus マトリクス)〕
-- [ ] T026 [P] [US3] Red→Green: 条件分岐マトリクス網羅 — `--gate` {あり/なし} × `--format` {json/text} × `baselineStatus` {computed/empty/skipped/unavailable} の代表組み合わせを表駆動テストで検証。〔観点: 条件分岐の組み合わせ〕
+- [X] T023 [P] [US3] Red: `tests/check-gate-output.test.ts` を新規作成。text 出力の (a) new あり → 先頭サマリ + 新規詳細 + 抑制件数 + `impact --diff` 誘導 (contracts §4.1)、(b) new なし pre-existing あり → 簡潔 + 全件非列挙 (§4.2, SC-004)、(c) skipped → 簡潔 (§4.3)、を検証 (失敗する)。〔観点: 境界条件 (0件/N件)〕
+- [X] T024 [US3] Green: `src/commands/presenters/check.ts` を刷新。`newIssues` ベースのサマリ + 詳細、`suppressedCount` の抑制表示、誘導行。pre-existing の全件列挙を廃止。
+- [X] T025 [P] [US3] Red→Green: json 出力 — 既存フィールド維持 + `newIssues`/`suppressedCount`/`baselineStatus` 追加 (R8, FR-009)、`unavailable` 時の json 形 (contracts §3 注記: `pass:false` + `baselineStatus:"unavailable"`)、no-diff ショートサーキットの新フィールド追加。`src/commands/check.ts` の json 分岐を更新。〔観点: 条件分岐の組み合わせ (format × baselineStatus マトリクス)〕
+- [X] T026 [P] [US3] Red→Green: 条件分岐マトリクス網羅 — `--gate` {あり/なし} × `--format` {json/text} × `baselineStatus` {computed/empty/skipped/unavailable} の代表組み合わせを表駆動テストで検証。〔観点: 条件分岐の組み合わせ〕
 
 **Checkpoint**: 出力が実運用で読める。
 
@@ -99,7 +99,7 @@
 **Goal**: `impact --diff` と `check --diff` (ゲートなし表示) の影響範囲がこの feature 前後で不変。
 **Independent Test**: `impact --diff` の影響 REQ/doc/file 件数が feature 前後で同一。
 
-- [ ] T027 [P] [US4] Red→Green: `tests/check-baseline-diff.test.ts` に、`impact --diff` の `summary` 件数が baseline 差分導入の影響を受けない (縮小しない) ことの回帰テストを追加 (SC-006, FR-007)。impact 側コードは変更しないことをテストで固定。〔観点: 変更外影響 (impact を壊さない)〕
+- [X] T027 [P] [US4] Red→Green: `tests/check-baseline-diff.test.ts` に、`impact --diff` の `summary` 件数が baseline 差分導入の影響を受けない (縮小しない) ことの回帰テストを追加 (SC-006, FR-007)。impact 側コードは変更しないことをテストで固定。〔観点: 変更外影響 (impact を壊さない)〕
 
 **Checkpoint**: 「知る」機能が温存されていることを保証。
 
@@ -109,22 +109,22 @@
 
 ### 7A. 変更外ファイル (既存テスト・ドキュメントの追随)
 
-- [ ] T028 `tests/check-gate-no-regression.test.ts` を更新。`check()` に `baseline` 引数を追加したことに伴い、`:92` の「purely a function of (graph, lock, scope, testResults)」の主張を「baseline は optional で未指定なら doctor 非依存の純粋関数」に更新。`r1.pass` 系アサーション (`:104`) が新 pass 意味論 (empty graph → new ゼロ → pass:true) で通ることを確認。doctor 非混入の静的 grep 検査は維持。〔観点: 変更外影響〕
-- [ ] T029 [P] `tests/check.test.ts` の既存 `check(graph, lock, ...)` 呼び出し (baseline 引数なし) が後方互換で通ることを確認・必要なら pass 意味論変更に合わせて期待値更新。〔観点: 変更外影響〕
-- [ ] T030 [P] `tests/cli.test.ts` の check --diff スモーク (`:217`) と no-diff json テスト (`:229`) を新フィールド (`newIssues`/`baselineStatus`) 前提に更新。〔観点: 変更外影響〕
-- [ ] T031 [P] `docs/architecture.md:210` の `check [--gate] [--diff]` 説明を「新規に導入した問題で exit 2 (pre-existing はゲート対象外)」の意味論に更新。〔観点: 変更外影響 (SSOT: exit code 定義)〕
-- [ ] T032 `templates/skills/artgraph-verify/SKILL.md` と `templates/skills/_shared/output-schema.md` を、`pass` の新意味論 + `newIssues`/`baselineStatus` フィールドに合わせて更新。**5 agent 複製** (`.claude/`, `.agents/`, `.cursor/`, `.github/`, `.kiro/` 配下) もミラー更新し、`tests/skills-templates.test.ts` の同期検査を通す。〔観点: 変更外影響 (dogfood parity #157)〕
+- [X] T028 `tests/check-gate-no-regression.test.ts` を更新。`check()` に `baseline` 引数を追加したことに伴い、`:92` の「purely a function of (graph, lock, scope, testResults)」の主張を「baseline は optional で未指定なら doctor 非依存の純粋関数」に更新。`r1.pass` 系アサーション (`:104`) が新 pass 意味論 (empty graph → new ゼロ → pass:true) で通ることを確認。doctor 非混入の静的 grep 検査は維持。〔観点: 変更外影響〕
+- [X] T029 [P] `tests/check.test.ts` の既存 `check(graph, lock, ...)` 呼び出し (baseline 引数なし) が後方互換で通ることを確認・必要なら pass 意味論変更に合わせて期待値更新。〔観点: 変更外影響〕
+- [X] T030 [P] `tests/cli.test.ts` の check --diff スモーク (`:217`) と no-diff json テスト (`:229`) を新フィールド (`newIssues`/`baselineStatus`) 前提に更新。〔観点: 変更外影響〕
+- [X] T031 [P] `docs/architecture.md:210` の `check [--gate] [--diff]` 説明を「新規に導入した問題で exit 2 (pre-existing はゲート対象外)」の意味論に更新。〔観点: 変更外影響 (SSOT: exit code 定義)〕
+- [X] T032 `templates/skills/artgraph-verify/SKILL.md` と `templates/skills/_shared/output-schema.md` を、`pass` の新意味論 + `newIssues`/`baselineStatus` フィールドに合わせて更新。**5 agent 複製** (`.claude/`, `.agents/`, `.cursor/`, `.github/`, `.kiro/` 配下) もミラー更新し、`tests/skills-templates.test.ts` の同期検査を通す。〔観点: 変更外影響 (dogfood parity #157)〕
 
 ### 7B. 実運用事故・パフォーマンス
 
-- [ ] T033 [P] `tests/baseline.test.ts` に実運用事故の統合確認 — 中断相当 (finally 未実行を模したケース) の残骸が次回実行の prefix 掃除で回収されることを検証。〔観点: 実運用事故〕
-- [ ] T034 baseline 算出 (worktree cold scan) のレイテンシを dogfood repo で実測し、Stop hook 用途として許容範囲か plan の Performance Goals と突き合わせる。過大なら将来最適化を follow-up issue 化 (本 feature スコープ外)。〔観点: 実運用事故 (レイテンシ)〕
+- [X] T033 [P] `tests/baseline.test.ts` に実運用事故の統合確認 — 中断相当 (finally 未実行を模したケース) の残骸が次回実行の prefix 掃除で回収されることを検証。〔観点: 実運用事故〕
+- [X] T034 baseline 算出 (worktree cold scan) のレイテンシを dogfood repo で実測し、Stop hook 用途として許容範囲か plan の Performance Goals と突き合わせる。過大なら将来最適化を follow-up issue 化 (本 feature スコープ外)。〔観点: 実運用事故 (レイテンシ)〕
 
 ### 7C. dogfood 最終確認
 
-- [ ] T035 `quickstart.md` の S1〜S7 を手動実行し全期待値を確認。特に S1 (doctor.ts touch → exit 0) と S3 (副作用ゼロ + worktree 撤去)。
-- [ ] T036 この spec の FR にコード側 `@impl 017-check-gate-baseline-diff/FR-NNN` タグを付与 (dogfood、原則 III)。`src/baseline.ts` / `src/check.ts` / `src/commands/check.ts` の該当関数に claim。新規 REQ-ID の既存衝突なしを再確認 (Cat6)。〔観点: 変更外影響〕
-- [ ] T037 `pnpm build && pnpm test` (unit+e2e+perf) 全通過、`pnpm knip` / `pnpm typecheck` クリーン、本 repo で `node dist/cli.js check --diff --gate` が exit 0 (pre-existing 債務で赤くならない) を確認。
+- [X] T035 `quickstart.md` の S1〜S7 を手動実行し全期待値を確認。特に S1 (doctor.ts touch → exit 0) と S3 (副作用ゼロ + worktree 撤去)。
+- [X] T036 この spec の FR にコード側 `@impl 017-check-gate-baseline-diff/FR-NNN` タグを付与 (dogfood、原則 III)。`src/baseline.ts` / `src/check.ts` / `src/commands/check.ts` の該当関数に claim。新規 REQ-ID の既存衝突なしを再確認 (Cat6)。〔観点: 変更外影響〕
+- [X] T037 `pnpm build && pnpm test` (unit+e2e+perf) 全通過、`pnpm knip` / `pnpm typecheck` クリーン、本 repo で `node dist/cli.js check --diff --gate` が exit 0 (pre-existing 債務で赤くならない) を確認。
 
 ---
 
@@ -158,9 +158,9 @@ Phase 1 (Setup)
 
 ## Definition of Done (実装時 Engineering Hygiene)
 
-- [ ] 全テスト green (TDD: 各ユニットで Red を先に確認してから Green)。
-- [ ] `check --diff --gate` の exit code (0/2/1) が対称・決定的 (Cat5)。
-- [ ] issue 同一性キー / orphan 文字列 / exit code / `pass` 意味の SSOT が単一箇所 + 従属の等価性テスト (Cat2, data-model §6)。
-- [ ] baseline の走査方向 (global forward) と dedup key、current の scope 境界 (blast radius 不変) が実装と一致 (Cat7)。
-- [ ] 副作用ゼロ (作業ツリー・index・lock・parse-cache 不変) をテストで固定 (SC-003)。
-- [ ] 変更外ファイル (findOrphans 呼び出し元 / pass 消費者 / docs / skills 5 複製) の追随完了。
+- [X] 全テスト green (TDD: 各ユニットで Red を先に確認してから Green)。 — unit 1572 / e2e 36 / perf 3 pass
+- [X] `check --diff --gate` の exit code (0/2/1) が対称・決定的 (Cat5)。 — dogfood exit 0、S2/S7 で 2/1 検証
+- [X] issue 同一性キー / orphan 文字列 / exit code / `pass` 意味の SSOT が単一箇所 + 従属の等価性テスト (Cat2, data-model §6)。
+- [X] baseline の走査方向 (global forward) と dedup key、current の scope 境界 (blast radius 不変) が実装と一致 (Cat7)。 — T027 で blast radius 不変を回帰テスト
+- [X] 副作用ゼロ (作業ツリー・index・lock・parse-cache 不変) をテストで固定 (SC-003)。
+- [X] 変更外ファイル (findOrphans 呼び出し元 / pass 消費者 / docs / skills 5 複製) の追随完了。

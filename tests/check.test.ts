@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { buildGraph } from "../src/graph/builder.js";
 import { buildLockFromGraph } from "../src/lock.js";
 import { check } from "../src/check.js";
+import { uncoveredKey } from "../src/baseline.js";
 import type { ArtgraphConfig, LockFile, TestResultMap, ArtifactGraph } from "../src/types.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
@@ -135,6 +136,37 @@ describe("check", () => {
     const result = check(graph, lock);
     expect(result.testFailures).toEqual([]);
     expect(result.pass).toBe(true);
+  });
+
+  // spec 017 (T029) — legacy `check(graph, lock, ...)` calls with no `baseline`
+  // stay back-compatible: with an empty key set every scoped issue is "new",
+  // so `pass` still means "all scoped issues clear" and `baselineStatus` is
+  // reported as "skipped".
+  it("omitting the baseline argument treats every scoped issue as new (back-compat)", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    const result = check(graph, {});
+    expect(result.baselineStatus).toBe("skipped");
+    // uncovered AUTH-003 is scoped and, without a baseline, also new.
+    expect(result.uncovered).toContain("AUTH-003");
+    expect(result.newIssues.uncovered).toEqual(result.uncovered);
+    expect(result.pass).toBe(false);
+  });
+
+  // spec 017 (T029) — a supplied baseline subtracts pre-existing issues, so a
+  // scoped issue whose identity key is in the baseline is NOT counted as new.
+  it("a baseline key set suppresses matching scoped issues from newIssues", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    // AUTH-003 is uncovered in the fixture. Put its key in the baseline → it
+    // becomes pre-existing (suppressed), so the gate passes on it.
+    const baseline = {
+      keys: new Set([uncoveredKey("AUTH-003")]),
+      status: "computed" as const,
+    };
+    const result = check(graph, {}, undefined, undefined, baseline);
+    expect(result.uncovered).toContain("AUTH-003"); // still in scoped output
+    expect(result.newIssues.uncovered).not.toContain("AUTH-003"); // but not new
+    expect(result.suppressedCount).toBeGreaterThanOrEqual(1);
+    expect(result.baselineStatus).toBe("computed");
   });
 
   // SC-006: annotation churn (added/removed `(depends_on: …)` notes) must not

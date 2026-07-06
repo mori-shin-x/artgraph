@@ -1,5 +1,12 @@
 import { resolve, join } from "node:path";
-import { existsSync, unlinkSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  unlinkSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  appendFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { runCli } from "../src/cli.js";
@@ -93,4 +100,59 @@ export function makeRepoWithDebt(prefix: string): string {
   gitInit(dir);
   gitCommitAll(dir, "init with pre-existing debt");
   return dir;
+}
+
+/**
+ * spec 017 — introduce a brand-new orphan: an `@impl` claim on an in-scope
+ * file pointing at a REQ that does not exist. The literal tag string lives
+ * HERE (a non-`.test.ts` helper, outside the `src/**` include set) rather than
+ * in the test files, so artgraph's OWN dogfood scan never mistakes the fixture
+ * text for a real code tag (which would fail `check --diff --gate` on this repo).
+ */
+export function introduceNewOrphan(dir: string): void {
+  appendFileSync(join(dir, "src", "hub.ts"), "// @impl REQ-999\n");
+}
+
+/**
+ * spec 017 (T022b / T026) — an **unborn HEAD** repo: `git init` with an
+ * uncommitted, untracked spec + impl carrying a scoped issue. `git rev-parse
+ * HEAD` fails, so `computeBaselineIssues` returns `status:"empty"` and every
+ * current issue counts as new (FR-014). The untracked files show up in the
+ * `--diff` set via `git ls-files --others`.
+ */
+export function makeUnbornRepo(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(dir, ".gitignore"), ".trace.lock\nnode_modules/\n");
+  writeFileSync(
+    join(dir, ".artgraph.json"),
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.ts"],
+      lockFile: ".trace.lock",
+    }),
+  );
+  mkdirSync(join(dir, "specs"), { recursive: true });
+  mkdirSync(join(dir, "src"), { recursive: true });
+  // REQ-300 has no @impl anywhere → uncovered (a scoped issue that makes the
+  // lazy-eval build a baseline). No commit is made: HEAD is unborn.
+  writeFileSync(join(dir, "specs", "new.md"), "# New\n\n- REQ-300: brand-new uncovered\n");
+  writeFileSync(join(dir, "src", "feature.ts"), "export const feature = 1;\n");
+  gitInit(dir); // repo exists, but there is no commit → unborn HEAD
+  return dir;
+}
+
+/**
+ * spec 017 (T020 / T026) — force the baseline build to fail *after* `git diff`
+ * has already succeeded, so the run reaches `baselineStatus:"unavailable"`
+ * (contract cli-check-gate §4.4 / §4.5). Writing a regular file where git
+ * wants to create the `worktrees/` admin directory makes `git worktree add`
+ * fail with ENOTDIR while leaving `rev-parse` / `diff` fully functional. This
+ * is the only path that reliably reaches "unavailable" through `check --diff`
+ * (a non-git dir would instead throw inside `git diff` before any baseline).
+ */
+export function blockWorktreeAdd(dir: string): void {
+  // `.git` is a directory for a freshly `git init`'d repo; `.git/worktrees`
+  // does not exist yet, so planting a file there is safe and deterministic.
+  writeFileSync(join(dir, ".git", "worktrees"), "block");
 }

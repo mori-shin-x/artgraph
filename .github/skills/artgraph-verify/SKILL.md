@@ -37,15 +37,19 @@ See [install-check](../_shared/install-check.md) for the standard pre-flight che
 
 ### 3. Interpret the JSON output
 
-See [output schema](../_shared/output-schema.md) for the shape of `artgraph check`. The result has `drift`, `orphans`, `uncovered`, `coverage`.
+See [output schema](../_shared/output-schema.md) for the shape of `artgraph check`. The scoped arrays (`drifted`, `orphans`, `uncovered`, `coverage`, `testFailures`) list everything in the change's blast radius. `newIssues` is the subset this change actually introduced relative to the baseline (base ref); `suppressedCount` counts pre-existing debt that was in range but not introduced here. `pass` is true only when `newIssues` is empty, and `baselineStatus` is `computed` / `empty` / `skipped` / `unavailable`.
 
-Report each category:
+Focus the report on `newIssues` — what this change broke. Because `pass` now means "no NEW issue", the scoped arrays can be non-empty (all pre-existing) while `pass` is still true; report that debt as a count, not a list.
+
+Report each new-issue category:
 - **drift**: nodes whose hash differs from the lock — spec changed but impl/lock not yet reconciled. Action: align impl with spec then `artgraph reconcile`.
 - **orphans**: `@impl` / `@verify` tags pointing to unknown IDs. Action: remove the stale tag or add the missing spec.
 - **uncovered**: requirement IDs with no `@impl` tag. Action: add `@impl <id>` near the implementing symbol.
-- **coverage**: per-requirement status (`verified` / `impl-only` / `untagged`). Summarize counts.
+- **coverage**: per-requirement status (`verified` / `impl-only` / `untagged`). Display-only — not part of the gate. Summarize counts.
+
+If `baselineStatus` is `unavailable`, the baseline could not be built: treat the result as undetermined (do NOT report "passed") and investigate git / worktree state.
 
 ### 4. Conclude
 
-- If all four categories are clean: report "check passed — safe to proceed".
-- Otherwise: list the specific actions needed before re-running.
+- If `pass` is true (no new issues): report "check passed — safe to proceed", noting any suppressed pre-existing debt count.
+- Otherwise: list the specific `newIssues` and the actions needed before re-running.
