@@ -24,7 +24,7 @@
 //   5. assemble two output axes — by-(sourceFile, sourceSymbol?)
 //      (`implicitImpacts`) and by-REQ (`implicitImpactsByReq` with
 //      `sourceLocations` that retains symbol attribution). Sort INV-S3/S4.
-//   6. `--require-files-section` emits `missingFilesSection` per task block
+//   6. `requireFilesSection` emits `missingFilesSection` per task block
 //      lacking a `Files:` header (unchanged from spec 014).
 //   7. unresolvedSymbol diagnostics from the parser are flattened into
 //      `diagnostics[]` and their entries are excluded from `implicitImpacts`
@@ -58,7 +58,7 @@ export interface PlanCoverageOptions {
   gate: boolean;
   /** Parsed `--ignore` REQ-IDs (one-shot suppression). */
   ignore: string[];
-  /** `--require-files-section` or `.artgraph.json` planCoverage override. */
+  /** `.artgraph.json`'s planCoverage.requireFilesSection (default false). */
   requireFilesSection: boolean;
 }
 
@@ -374,14 +374,14 @@ function formatText(
   }
 
   // Hints (spec 014 UX-4): silent-green report needs a nudge so the user
-  // understands why the report came back empty / whether `--require-files-
-  // section` is in effect.
+  // understands why the report came back empty / whether requireFilesSection
+  // is in effect.
   const hints: string[] = [];
   if (!formatOptions.requireFilesSection) {
     hints.push(
-      "Hint: --require-files-section is OFF; tasks without a `Files:` section are not flagged. " +
-        "Enable in .artgraph.json (planCoverage.requireFilesSection: true) or pass " +
-        "--require-files-section to catch missing Files: sections.",
+      "Hint: requireFilesSection is OFF; tasks without a `Files:` section are not flagged. " +
+        "Enable in .artgraph.json (planCoverage.requireFilesSection: true) to catch " +
+        "missing Files: sections.",
     );
   }
   if (result.diagnostics.some((d) => d.kind === "emptyExtraction")) {
@@ -493,7 +493,7 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
   flattenParserDiagnostics(tasksExtract);
   if (planExtract) flattenParserDiagnostics(planExtract);
 
-  // --require-files-section: emit `missingFilesSection` for every task
+  // requireFilesSection: emit `missingFilesSection` for every task
   // block in tasks.md (heading-delimited) that lacks a `Files:` header.
   if (requireFilesSection && tasksExtract.taskBlocks) {
     const missing = tasksExtract.taskBlocks.filter((b: TaskBlock) => !b.hasFilesSection);

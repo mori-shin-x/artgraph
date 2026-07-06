@@ -22,8 +22,8 @@
 //   (f) --gate + implicit > 0 → exit 1
 //   (g) --gate + implicit == 0 → exit 0
 //   (h) --gate + --ignore drains implicit → exit 0
-//   (i) --require-files-section OFF → no missingFilesSection diagnostics
-//   (j) --require-files-section ON → diagnostics non-empty
+//   (i) requireFilesSection OFF → no missingFilesSection diagnostics
+//   (j) requireFilesSection ON (config) → diagnostics non-empty
 //   (k) JSON output shape matches plan-coverage-json.md contract
 //   (l) text output contains "By source file:" and "By requirement:"
 //   (m) unresolvedFilePath from Stage A surfaces in top-level diagnostics[]
@@ -352,10 +352,10 @@ describe("plan-coverage E2E — (e/f/g/h) --gate + --ignore exit code matrix", (
 });
 
 // ---------------------------------------------------------------------------
-// (i) (j) — --require-files-section ON / OFF
+// (i) (j) — planCoverage.requireFilesSection ON / OFF
 // ---------------------------------------------------------------------------
 
-describe("plan-coverage E2E — (i/j) --require-files-section toggle", () => {
+describe("plan-coverage E2E — (i/j) requireFilesSection config toggle", () => {
   let fx: Fixture;
   afterEach(() => {
     if (fx) rmSync(fx.root, { recursive: true, force: true });
@@ -406,15 +406,19 @@ describe("plan-coverage E2E — (i/j) --require-files-section toggle", () => {
         "",
       ].join("\n"),
     });
+    // requireFilesSection is config-only: flip it on in `.artgraph.json`.
+    writeFileSync(
+      join(fx.root, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        testPatterns: ["tests/**/*.test.ts"],
+        lockFile: ".trace.lock",
+        planCoverage: { requireFilesSection: true },
+      }),
+    );
     const { stdout } = await runCli(
-      [
-        "plan-coverage",
-        "--spec",
-        fx.specDirAbsolute,
-        "--require-files-section",
-        "--format",
-        "json",
-      ],
+      ["plan-coverage", "--spec", fx.specDirAbsolute, "--format", "json"],
       { cwd: fx.root },
     );
     const result = JSON.parse(stdout);

@@ -13,7 +13,7 @@ import type { LockFile } from "../types.js";
 //   - From a doc node, traversal reaches child reqs (via forward contains edge)
 //   - Starting from any req, the blast radius includes sibling reqs in the same doc
 //     (req -> parent doc -> sibling reqs -> their implementations)
-// Use --depth to limit traversal when contains edges cause unexpectedly wide reach.
+// Pass maxDepth to limit traversal when contains edges cause unexpectedly wide reach.
 //
 // File→symbol expansion (the `node.kind === "file"` branch below) is the
 // reason a file startId still drags in same-file symbols; for symbol startIds
@@ -160,7 +160,7 @@ export function findUncovered(graph: ArtifactGraph): string[] {
 
 /**
  * spec 016 (R-004, R-005, data-model.md §2.1) — single resolver for
- * `impact()` / `check()` / `hook-pretool` / `plan-coverage` start ids.
+ * `impact()` / `check()` / `plan-coverage` start ids.
  * Replaces spec 014's `resolveFileStartIds` (now removed). Behavior per
  * entry:
  *

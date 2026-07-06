@@ -400,7 +400,10 @@ describe("E2E: artgraph init — integrate Tip lines (Scenario 5)", () => {
 
   it("shows a Tip when Spec Kit is detected but not yet integrated (--no-integrate)", async () => {
     mkdirSync(join(tmp, ".specify"));
-    const r = await runCli(["init", "--no-scan", "--no-integrate", "--no-skills", "--no-agent-context"], tmp);
+    const r = await runCli(
+      ["init", "--no-scan", "--no-integrate", "--no-skills", "--no-agent-context"],
+      tmp,
+    );
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/Tip:\s*Spec Kit detected\..*artgraph integrate speckit/);
   });
@@ -410,7 +413,10 @@ describe("E2E: artgraph init — integrate Tip lines (Scenario 5)", () => {
     // Install artgraph into the Spec Kit project first.
     await runCli(["integrate", "speckit"], tmp);
     // Now re-run init — the Tip line must not appear (already installed).
-    const r = await runCli(["init", "--no-scan", "--no-integrate", "--no-skills", "--no-agent-context", "--force"], tmp);
+    const r = await runCli(
+      ["init", "--no-scan", "--no-integrate", "--no-skills", "--no-agent-context", "--force"],
+      tmp,
+    );
     expect(r.exitCode).toBe(0);
     expect(r.stdout).not.toMatch(/Tip:\s*Spec Kit detected/);
   });
@@ -418,7 +424,10 @@ describe("E2E: artgraph init — integrate Tip lines (Scenario 5)", () => {
   it("shows separate Tip lines for both Spec Kit and Kiro when both are detected (--no-integrate)", async () => {
     mkdirSync(join(tmp, ".specify"));
     mkdirSync(join(tmp, ".kiro"));
-    const r = await runCli(["init", "--no-scan", "--no-integrate", "--no-skills", "--no-agent-context"], tmp);
+    const r = await runCli(
+      ["init", "--no-scan", "--no-integrate", "--no-skills", "--no-agent-context"],
+      tmp,
+    );
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/Tip:\s*Spec Kit detected/);
     expect(r.stdout).toMatch(/Tip:\s*Kiro detected/);
@@ -426,10 +435,10 @@ describe("E2E: artgraph init — integrate Tip lines (Scenario 5)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// US3 — Scenario 4: init --integrate=<tools> one-shot
+// US3 — Scenario 4: init auto-integrates every detected SDD tool
 // ---------------------------------------------------------------------------
 
-describe("E2E: artgraph init --integrations — one-shot integration (Scenario 4)", () => {
+describe("E2E: artgraph init — auto-detect integration (Scenario 4)", () => {
   let tmp: string;
 
   beforeEach(() => {
@@ -440,9 +449,9 @@ describe("E2E: artgraph init --integrations — one-shot integration (Scenario 4
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("runs only the requested provider with --integrate=speckit", async () => {
+  it("runs only the detected provider when only .specify/ is present", async () => {
     seedSpecKitRepo(tmp);
-    const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context", "--integrations", "speckit"], tmp);
+    const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context"], tmp);
     expect(r.exitCode).toBe(0);
     // Section heading
     expect(r.stdout).toMatch(/=== Integration: speckit ===/);
@@ -452,19 +461,19 @@ describe("E2E: artgraph init --integrations — one-shot integration (Scenario 4
     expect(r.stdout).not.toMatch(/=== Integration: kiro ===/);
   });
 
-  it("runs only the requested provider with --integrate=kiro", async () => {
+  it("runs only the detected provider when only .kiro/ is present", async () => {
     mkdirSync(join(tmp, ".kiro"));
-    const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context", "--integrations", "kiro"], tmp);
+    const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context"], tmp);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/=== Integration: kiro ===/);
     expect(existsSync(join(tmp, ".kiro/steering/artgraph.md"))).toBe(true);
     expect(r.stdout).not.toMatch(/=== Integration: speckit ===/);
   });
 
-  it("runs every detected provider with --integrate=all and shows per-tool sections", async () => {
+  it("runs every detected provider and shows per-tool sections", async () => {
     seedSpecKitRepo(tmp);
     mkdirSync(join(tmp, ".kiro"));
-    const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context", "--integrations", "all"], tmp);
+    const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context"], tmp);
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/=== Integration: speckit ===/);
     expect(r.stdout).toMatch(/=== Integration: kiro ===/);
@@ -478,46 +487,31 @@ describe("E2E: artgraph init --integrations — one-shot integration (Scenario 4
     expect(ki).toBeGreaterThan(sp);
   });
 
-  it("warns and skips (but still exits 0) when an unrequested provider is missing", async () => {
-    // Only kiro on disk; ask for both → kiro succeeds, speckit warns.
-    mkdirSync(join(tmp, ".kiro"));
-    const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context", "--integrations", "speckit,kiro"], tmp);
-    expect(r.exitCode).toBe(0);
-    // Warning is surfaced for the missing tool (either id or displayName).
-    expect(`${r.stdout}\n${r.stderr}`).toMatch(/WARNING.*(speckit|Spec Kit).*not detected/i);
-    // kiro still runs successfully.
-    expect(r.stdout).toMatch(/=== Integration: kiro ===/);
-    expect(existsSync(join(tmp, ".kiro/steering/artgraph.md"))).toBe(true);
-  });
-
-  it("propagates --integrate-gate to the speckit provider", async () => {
+  it("applies the speckit before_implement gate by default (issue #135)", async () => {
+    // Gate-on is the auto-integrate default; `artgraph integrate speckit
+    // --no-gate` remains the opt-out.
     seedSpecKitRepo(tmp);
-    const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context", "--integrations", "speckit", "--integrate-gate"], tmp);
+    const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context"], tmp);
     expect(r.exitCode).toBe(0);
     const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
     expect(yml).toMatch(/before_implement:/);
     expect(yml).toMatch(/command:\s*artgraph\.check-gate/);
   });
 
-  it("ignores --integrate-gate for non-speckit providers without warning or error", async () => {
-    mkdirSync(join(tmp, ".kiro"));
-    const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context", "--integrations", "kiro", "--integrate-gate"], tmp);
-    expect(r.exitCode).toBe(0);
-    // kiro still installed normally
-    expect(existsSync(join(tmp, ".kiro/steering/artgraph.md"))).toBe(true);
-  });
-
   // M-H2 regression: `--force` on the outer `init` command must reach the
   // integration provider, otherwise a drifted extension/steering file silently
   // survives. This violates FR-024 (`--force` is supposed to overwrite
-  // anything the init touches, including the one-shot integrations).
+  // anything the init touches, including the auto-detect integrations).
   it("propagates --force to the integration provider (overwrites drifted extension.yml)", async () => {
     cpSync(join(FIXTURES, "specify-with-drift"), tmp, { recursive: true });
     const extYmlPath = join(tmp, ".specify/extensions/artgraph/extension.yml");
     // Sanity: fixture really is drifted.
     expect(readFileSync(extYmlPath, "utf-8")).toMatch(/USER EDITED/);
 
-    const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context", "--integrations", "speckit", "--force"], tmp);
+    const r = await runCli(
+      ["init", "--no-scan", "--no-skills", "--no-agent-context", "--force"],
+      tmp,
+    );
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/=== Integration: speckit ===/);
 
@@ -623,8 +617,8 @@ describe("E2E: SpecKitProvider rollback on partial failure — quickstart Scenar
 // ---------------------------------------------------------------------------
 // Phase 7 — T063: SC-006 / FR-017 gate halt verification
 //
-// After `artgraph integrate speckit --gate` registers the before_implement
-// hook, calling the actual `artgraph check --gate` command on a repo that
+// After init's auto-integrate registers the before_implement hook (gate-on
+// default), calling the actual `artgraph check --gate` command on a repo that
 // has uncovered REQs must exit with code 2 and surface a reconcile hint —
 // this is the exact condition that stops Spec Kit's /speckit-implement
 // workflow.
@@ -641,16 +635,14 @@ describe("E2E: artgraph check --gate halts on uncovered REQs (SC-006 / FR-017)",
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("exits 2 from `check --gate` after `integrate speckit --gate` registers the hook", async () => {
+  it("exits 2 from `check --gate` after init's auto-integrate registers the hook", async () => {
     // (a) Stage the gate-failure fixture (uncovered REQs + seeded extensions.yml).
     cpSync(join(FIXTURES, "specify-with-gate-failure"), tmp, { recursive: true });
 
-    // (b) Install the artgraph gate via `integrate speckit --gate`. We also
-    // run `init --no-scan` so .artgraph.json exists for subsequent scan/check.
-    const integrate = await runCli(
-      ["init", "--no-scan", "--no-skills", "--no-agent-context", "--integrations", "speckit", "--integrate-gate"],
-      tmp,
-    );
+    // (b) Install the artgraph gate via init's auto-integrate (gate-on is
+    // the default). We also run `init --no-scan` so .artgraph.json exists
+    // for subsequent scan/check.
+    const integrate = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context"], tmp);
     expect(integrate.exitCode).toBe(0);
     // The gate hook is registered in extensions.yml.
     const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
@@ -671,7 +663,7 @@ describe("E2E: artgraph check --gate halts on uncovered REQs (SC-006 / FR-017)",
 
   it("`check --gate` JSON output exposes the failing artifacts for downstream hook consumers", async () => {
     cpSync(join(FIXTURES, "specify-with-gate-failure"), tmp, { recursive: true });
-    await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context", "--integrations", "speckit", "--integrate-gate"], tmp);
+    await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context"], tmp);
     const gate = await runCli(["check", "--gate", "--format", "json"], tmp);
     expect(gate.exitCode).toBe(2);
     const parsed = JSON.parse(gate.stdout);

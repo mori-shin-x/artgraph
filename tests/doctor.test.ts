@@ -493,7 +493,7 @@ describe("runDoctor — C3: TOCTOU race on skill file read", () => {
     // and would surface a raw ENOENT if a concurrent process removed a file
     // between the two syscalls; the fix uses `try { hashFile } catch (ENOENT)`.
     rmSync(join(proj.dir, ".claude/skills/artgraph-verify/SKILL.md"));
-    rmSync(join(proj.dir, ".claude/skills/artgraph-detect/SKILL.md"));
+    rmSync(join(proj.dir, ".claude/skills/artgraph-impact/SKILL.md"));
     expect(() => runDoctor({ rootDir: proj.dir })).not.toThrow();
     const report = runDoctor({ rootDir: proj.dir });
     const missing = report.findings.filter((x) => x.kind === "skill-file-missing");

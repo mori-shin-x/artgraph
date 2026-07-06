@@ -4,7 +4,7 @@ import { resolve, dirname } from "node:path";
 import { buildGraph } from "../src/graph/builder.js";
 import { buildLockFromGraph } from "../src/lock.js";
 import { rewriteFile, rewriteAnnotationIds } from "../src/rename.js";
-import { formatGraphJSON } from "../src/graph/format.js";
+import { graphToJSON } from "../src/graph/format.js";
 import type { ArtgraphConfig, ArtifactGraph } from "../src/types.js";
 
 // Regression suite for meta-review remediation (Blocker + Major findings).
@@ -251,7 +251,7 @@ describe("req-req invariants (meta-review remediation)", () => {
         },
       ],
     };
-    const json = JSON.parse(formatGraphJSON(fakeGraph));
+    const json = graphToJSON(fakeGraph);
     expect(json.edges).toHaveLength(1);
     expect(json.edges[0].provenances).toEqual(["annotation"]);
     // Legacy `provenance` field MUST NOT appear (INV-O4).
