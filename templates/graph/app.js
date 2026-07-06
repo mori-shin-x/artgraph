@@ -260,7 +260,7 @@
     const cy = cytoscape({
       container: container,
       elements: elements,
-      wheelSensitivity: 0.2,
+      wheelSensitivity: 2, // larger = more zoom per scroll notch (cytoscape default is 1)
       style: STYLE,
       layout: {
         name: "cose",
