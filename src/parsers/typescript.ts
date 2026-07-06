@@ -312,10 +312,10 @@ function parseTSFile(
 
   let symbolRanges: SymbolRange[] = [];
   if (parsed && mode === "symbol" && !isTest) {
-    symbolRanges = extractSymbols(parsed.program, content, relPath, nodes);
+    symbolRanges = extractSymbols(parsed.program, content, relPath, nodes, parsed.comments);
   }
   if (parsed) {
-    extractImports(parsed, content, relPath, filePath, rootDir, edges, mode, isTest, ctx);
+    extractImports(parsed, content, relPath, filePath, rootDir, nodes, edges, mode, isTest, ctx);
   }
   extractImplTags(content, relPath, isTest, edges, mode, symbolRanges, matchers);
 
@@ -369,11 +369,14 @@ function declTextStart(stmtStart: number, decl: unknown): number {
   return start;
 }
 
+type OxcComment = OxcParseResult["comments"][number];
+
 function extractSymbols(
   program: OxcProgram,
   content: string,
   relPath: string,
   nodes: GraphNode[],
+  comments: readonly OxcComment[] = [],
 ): SymbolRange[] {
   const declMap = collectTopLevelDecls(program);
   const lookup = (name: string): LocalDecl | undefined => {
@@ -461,6 +464,21 @@ function extractSymbols(
   }
 
   const lineStarts = buildLineStarts(content);
+  // Leading-trivia attribution (issue #177). A `// @impl REQ` written on the
+  // line(s) directly above `export …` (idiomatic, and what `bootstrap` emits)
+  // must bind to the symbol, not the file — otherwise symbol-mode gate/impact
+  // fail-opens for named imports. We widen only the symbol's ATTRIBUTION range
+  // (`startLine`) upward over contiguous comment-only / blank lines, stopping
+  // at the first line carrying code. The node `contentHash` still hashes the
+  // ORIGINAL declaration span, so symbol lock bytes are unchanged (only the
+  // `implements` edge SOURCE moves file:x -> symbol:x#name). Working at line
+  // granularity — not the raw `entry.start` offset — is essential: for a
+  // `export const x = …` the entry offset is the DECLARATOR (`x`, after
+  // `const`), so an offset walk would hit code immediately; the line above the
+  // declaration is what carries the tag. JSDoc blocks are spanned line-by-line
+  // (each interior line is comment-only) so a `// @impl` above the JSDoc is
+  // still reached.
+  const lineHasCode = computeLineHasCode(content, comments, lineStarts);
   const ranges: SymbolRange[] = [];
   for (const entry of entries) {
     nodes.push({
@@ -469,13 +487,45 @@ function extractSymbols(
       filePath: relPath,
       contentHash: hash(content.slice(entry.start, entry.end)),
     });
+    let startLine = lineOf(lineStarts, entry.start);
+    while (startLine > 1 && !lineHasCode[startLine - 1]) startLine--;
     ranges.push({
       name: entry.name,
-      startLine: lineOf(lineStarts, entry.start),
+      startLine,
       endLine: lineOf(lineStarts, entry.end),
     });
   }
   return ranges;
+}
+
+// Per-line (1-based) "does this line contain a non-whitespace character that
+// is NOT inside a comment?" A blank line and a comment-only line both yield
+// false; any real token yields true. Used by extractSymbols to bound the
+// upward leading-trivia walk at the first code line (issue #177).
+function computeLineHasCode(
+  content: string,
+  comments: readonly OxcComment[],
+  lineStarts: number[],
+): boolean[] {
+  const inComment = new Uint8Array(content.length);
+  for (const c of comments) {
+    const end = Math.min(c.end, content.length);
+    for (let i = Math.max(c.start, 0); i < end; i++) inComment[i] = 1;
+  }
+  const numLines = lineStarts.length;
+  const hasCode: boolean[] = new Array(numLines + 1).fill(false);
+  for (let line = 1; line <= numLines; line++) {
+    const start = lineStarts[line - 1];
+    const end = line < numLines ? lineStarts[line] : content.length;
+    for (let i = start; i < end; i++) {
+      const ch = content[i];
+      if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n") continue;
+      if (inComment[i]) continue;
+      hasCode[line] = true;
+      break;
+    }
+  }
+  return hasCode;
 }
 
 function collectTopLevelDecls(program: OxcProgram): Map<string, LocalDecl[]> {
@@ -653,19 +703,31 @@ interface ImportRef {
   named: string[];
 }
 
+// A `export … from "./x"` re-export. `named` carries the per-specifier
+// `{ local, exported }` name pairs for `export { local as exported } from`
+// (empty for `export *` / `export * as ns`, which have no enumerable names at
+// parse time and stay file-grain). `statementText` hashes the materialized
+// barrel symbol node so its lock byte is deterministic (issue #177).
+interface ReexportRef {
+  specifier: string;
+  named: Array<{ local: string; exported: string }>;
+  statementText: string;
+}
+
 function extractImports(
   parsed: OxcParseResult,
   content: string,
   relPath: string,
   filePath: string,
   rootDir: string,
+  nodes: GraphNode[],
   edges: GraphEdge[],
   mode: "file" | "symbol",
   isTest: boolean,
   ctx: ResolverContext,
 ): void {
   const importRefs: ImportRef[] = [];
-  const reexportSpecifiers: string[] = [];
+  const reexportRefs: ReexportRef[] = [];
 
   if (parsed.program.body.length > 0) {
     for (const stmt of parsed.program.body) {
@@ -683,15 +745,35 @@ function extractImports(
         }
         importRefs.push(ref);
       } else if (stmt.type === "ExportNamedDeclaration" && stmt.source) {
-        reexportSpecifiers.push(stmt.source.value);
+        // `export { a as b } from "./x"` — capture the local (origin export
+        // name) → exported (barrel export name) pairs so the barrel can be
+        // materialized per-symbol. `export type { … } from` re-exports the
+        // same way (origin type symbols exist), so it is NOT filtered out.
+        const named: Array<{ local: string; exported: string }> = [];
+        for (const spec of stmt.specifiers ?? []) {
+          const local = moduleExportName(spec.local);
+          const exported = moduleExportName(spec.exported);
+          if (local !== undefined && exported !== undefined) named.push({ local, exported });
+        }
+        reexportRefs.push({
+          specifier: stmt.source.value,
+          named,
+          statementText: content.slice(stmt.start, stmt.end),
+        });
       } else if (stmt.type === "ExportAllDeclaration") {
-        reexportSpecifiers.push(stmt.source.value);
+        // `export *` / `export * as ns` — no per-name specifiers; stays
+        // file-grain. Named imports through a star barrel are closed at file
+        // grain by the builder's phantom-repair pass (issue #177 follow-up
+        // tracks true per-symbol star precision).
+        reexportRefs.push({ specifier: stmt.source.value, named: [], statementText: "" });
       }
     }
   } else {
     // Fatal syntax error: the AST is empty but oxc's module record still
     // carries the import/export shape — use it so import edges survive for
-    // files that are temporarily unparseable.
+    // files that are temporarily unparseable. Re-export names are not
+    // recovered here (best-effort), so barrels in a broken file stay
+    // file-grain until the file parses again.
     for (const staticImport of parsed.module.staticImports) {
       const ref: ImportRef = {
         specifier: staticImport.moduleRequest.value,
@@ -714,7 +796,7 @@ function extractImports(
     }
     for (const staticExport of parsed.module.staticExports) {
       const request = staticExport.entries.find((e) => e.moduleRequest != null)?.moduleRequest;
-      if (request) reexportSpecifiers.push(request.value);
+      if (request) reexportRefs.push({ specifier: request.value, named: [], statementText: "" });
     }
   }
 
@@ -773,17 +855,50 @@ function extractImports(
     }
   }
 
-  for (const specifier of reexportSpecifiers) {
-    if (!specifier.startsWith(".")) continue;
-    const resolved = resolveRelativeImport(filePath, specifier, ctx);
+  // Names already declared locally in this file win over a same-name
+  // re-export (legal shadowing / illegal duplicate export) — never overwrite a
+  // real symbol node with a re-export pass-through of the same id.
+  const localSymbolIds = new Set(nodes.filter((n) => n.kind === "symbol").map((n) => n.id));
+
+  for (const rex of reexportRefs) {
+    if (!rex.specifier.startsWith(".")) continue;
+    const resolved = resolveRelativeImport(filePath, rex.specifier, ctx);
     if (!resolved) continue;
     const targetRel = relative(rootDir, resolved);
-    edges.push({
-      source: sourceId,
-      target: `file:${targetRel}`,
-      kind: "imports",
-      provenances: ["ts-import"],
-    });
+
+    if (useSymbol && rex.named.length > 0) {
+      // Materialize the barrel's re-exported symbols and point each at the
+      // origin symbol, so `file:consumer --imports--> symbol:barrel#name`
+      // (emitted by the consumer's import loop above) resolves to a real node
+      // and forward BFS chains barrel -> origin -> REQ. Multi-level barrels
+      // chain naturally because each origin file materializes its own nodes.
+      const barrelHash = hash(rex.statementText);
+      for (const { local, exported } of rex.named) {
+        const barrelSymId = `symbol:${relPath}#${exported}`;
+        if (!localSymbolIds.has(barrelSymId)) {
+          nodes.push({
+            id: barrelSymId,
+            kind: "symbol",
+            filePath: relPath,
+            contentHash: barrelHash,
+          });
+          localSymbolIds.add(barrelSymId);
+        }
+        edges.push({
+          source: barrelSymId,
+          target: `symbol:${targetRel}#${local}`,
+          kind: "imports",
+          provenances: ["ts-import"],
+        });
+      }
+    } else {
+      edges.push({
+        source: sourceId,
+        target: `file:${targetRel}`,
+        kind: "imports",
+        provenances: ["ts-import"],
+      });
+    }
   }
 }
 

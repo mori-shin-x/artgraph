@@ -374,6 +374,30 @@ export function buildGraph(
     }
   }
 
+  // Issue #177 — fail-safe repair for residual dangling symbol-import edges.
+  // A named import through an `export *` barrel (`import { x } from "./barrel"`
+  // where the barrel does `export * from "./origin"`) leaves
+  // `file:consumer --imports--> symbol:barrel#x` pointing at a symbol node the
+  // parser never materialized (star re-exports have no enumerable names at
+  // parse time). The same shape arises from a typo'd import name or a
+  // re-export of a name the origin does not actually export. Degrade any such
+  // dangling `symbol:M#name` import target to `file:M` (when that file node
+  // exists) so forward BFS reaches the barrel's file-grain re-export chain
+  // instead of dead-ending — closing the fail-open at file granularity.
+  // Per-symbol `export *` precision is deferred to a follow-up issue. Runs only
+  // in symbol mode (file mode never emits `symbol:` targets).
+  if (tsMode === "symbol") {
+    for (const edge of edges) {
+      if (edge.kind !== "imports" || !edge.target.startsWith("symbol:")) continue;
+      if (nodes.has(edge.target)) continue;
+      const body = edge.target.slice("symbol:".length);
+      const hashIdx = body.lastIndexOf("#");
+      const rel = hashIdx === -1 ? body : body.slice(0, hashIdx);
+      const fileId = `file:${rel}`;
+      if (nodes.has(fileId)) edge.target = fileId;
+    }
+  }
+
   // T045 / Issue #28: Generate contains edges (doc -> req|task within the same file).
   // Use autoContains alone; doc nodes with explicit node_id exist even when autoNodes=false.
   if (autoContains) {
