@@ -7,7 +7,7 @@ import type { ArtgraphConfig, SymbolEntry, TestResultMap } from "../types.js";
 import { parseAgentsList, AgentsParseError } from "../agents/parse-agents.js";
 import { AGENT_IDS, type AgentId } from "../agents/descriptors.js";
 
-// spec 016 (R-003) — direct CLI / hook-pretool / --diff inputs come in as raw
+// spec 016 (R-003) — direct CLI / --diff inputs come in as raw
 // strings (file paths or `path:symbol` declarations). lift each into the
 // `SymbolEntry` shape expected by `resolveStartIds`. Keep this regex in sync
 // with `src/parsers/sdd-files.ts:PATH_SYMBOL_RE` so direct CLI inputs accept
@@ -33,23 +33,14 @@ export function pathsToEntries(paths: string[]): SymbolEntry[] {
   });
 }
 
-export function applyMode(config: ArtgraphConfig, modeFlag?: string): ArtgraphConfig {
-  if (modeFlag === "symbol" || modeFlag === "file") {
-    return { ...config, mode: modeFlag };
-  }
-  return config;
-}
-
-// Resolve test-result paths from the `--test-results` flag (preferred) or the
-// `.artgraph.json` `testResultPaths` field, then load them. Returns undefined
-// when neither is set so callers fall back to legacy (verifies-edge-only)
-// coverage. Shared by `scan`, `check`, and `coverage`.
+// Resolve test-result paths from the `.artgraph.json` `testResultPaths`
+// field, then load them. Returns undefined when unset so callers fall back
+// to legacy (verifies-edge-only) coverage. Shared by `scan` and `check`.
 export async function resolveTestResults(
-  opts: { testResults?: string[] },
   config: ArtgraphConfig,
   rootDir: string,
 ): Promise<TestResultMap | undefined> {
-  const paths = opts.testResults ?? config.testResultPaths;
+  const paths = config.testResultPaths;
   if (paths && paths.length > 0) {
     const { loadTestResults } = await import("../test-results.js");
     return loadTestResults(paths, rootDir);
@@ -112,13 +103,4 @@ export const AGENTS_REQUIRED_ERROR = [
   "       artgraph init --no-skills --no-agent-context",
   "  3. Skip every extra setup stage:",
   "       artgraph init --minimal",
-  "",
-  // E-adj-A6: --with-skills / --with-agent-context under --minimal is a
-  // no-op unless --agents is also given — spell that out here since option
-  // 3 above (--minimal) reads like a standalone fix, and D3 hard-errors on
-  // exactly this combination.
-  "Additional notes:",
-  "  --minimal requires --with-skills (or --with-agent-context) AND --agents",
-  "  together to opt back into Skills / agent-context distribution; either",
-  "  alone is a no-op.",
 ].join("\n");

@@ -1,13 +1,12 @@
 // `artgraph impact` — extracted verbatim from `src/cli.ts` (issue #162).
 
-import { Command, Option } from "commander";
-import { existsSync, readFileSync } from "node:fs";
+import { Command } from "commander";
 import type { SymbolEntry } from "../types.js";
-import { applyMode, pathsToEntries } from "./shared.js";
+import { pathsToEntries } from "./shared.js";
 import { printImpactText } from "./presenters/impact.js";
 
 // spec 014 (FR-001 / FR-003): REQ-ID inputs are no longer accepted here.
-// The four supported start sources are listed in this error so the user is
+// The supported start sources are listed in this error so the user is
 // pushed onto the right tool for their actual intent. Kept as a const at
 // module scope so the wording stays in sync with the contract file and the
 // CLI tests can assert against a single canonical string.
@@ -15,21 +14,19 @@ const IMPACT_REQ_ID_REJECTION = [
   "error: REQ-ID inputs are not accepted by `artgraph impact`.",
   "use one of the following start sources:",
   "  artgraph impact <file>...          # explicit file paths",
-  "  artgraph impact --from-tasks <p>   # extract files from tasks.md",
-  "  artgraph impact --from-plan <p>    # extract files from plan.md",
   "  artgraph impact --diff             # use git diff",
+  "for tasks.md / plan.md analysis, use `artgraph plan-coverage`.",
 ].join("\n");
 
-// `doc:` prefix is also rejected (FR-001 / FR-002). Surface the same 4
+// `doc:` prefix is also rejected (FR-001 / FR-002). Surface the same
 // start sources so the user has a complete menu — the underlying mental
 // model is identical: `impact` is now file-only.
 const IMPACT_DOC_PREFIX_REJECTION = [
   "error: `doc:` prefix inputs are not accepted by `artgraph impact`.",
   "use one of the following start sources:",
   "  artgraph impact <file>...          # explicit file paths",
-  "  artgraph impact --from-tasks <p>   # extract files from tasks.md",
-  "  artgraph impact --from-plan <p>    # extract files from plan.md",
   "  artgraph impact --diff             # use git diff",
+  "for tasks.md / plan.md analysis, use `artgraph plan-coverage`.",
 ].join("\n");
 
 // spec 014 (UX-1): Broaden REQ-ID input detection so the navigational error
@@ -60,12 +57,8 @@ export function registerImpactCommand(program: Command): void {
       "[targets...]",
       "File paths or `path:symbol` entries — REQ-IDs and `doc:` prefix are rejected",
     )
-    .option("--from-tasks <path>", "Extract files from a tasks.md and use them as the start set")
-    .option("--from-plan <path>", "Extract files from a plan.md and use them as the start set")
     .option("--diff", "Use git diff to detect changed files")
-    .option("--depth <depth>", "Limit BFS traversal depth")
     .option("--format <format>", "Output format: json | text", "text")
-    .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
     .action(async (targets: string[], opts) => {
       const rootDir = process.cwd();
 
@@ -92,26 +85,17 @@ export function registerImpactCommand(program: Command): void {
         }
       }
 
-      // ----- Mutually exclusive start sources. Each of `targets[]`,
-      // `--from-tasks`, `--from-plan`, `--diff` counts as a single channel;
-      // contracts/cli-flags.md requires exactly one to be present.
-      const sourcesPicked = [
-        targets.length > 0 ? "targets" : null,
-        opts.fromTasks ? "--from-tasks" : null,
-        opts.fromPlan ? "--from-plan" : null,
-        opts.diff ? "--diff" : null,
-      ].filter((s): s is string => s !== null);
-
-      if (sourcesPicked.length > 1) {
+      // ----- Mutually exclusive start sources. `targets[]` and `--diff` each
+      // count as a single channel; contracts/cli-flags.md requires exactly one
+      // to be present.
+      if (targets.length > 0 && opts.diff) {
         console.error(
-          `error: start sources are mutually exclusive (specify only one): ${sourcesPicked.join(", ")}`,
+          "error: start sources are mutually exclusive (specify only one): targets, --diff",
         );
         process.exit(1);
       }
-      if (sourcesPicked.length === 0) {
-        console.error(
-          "error: no start source specified. pass file paths, --from-tasks, --from-plan, or --diff.",
-        );
+      if (targets.length === 0 && !opts.diff) {
+        console.error("error: no start source specified. pass file paths or --diff.");
         process.exit(1);
       }
 
@@ -119,13 +103,11 @@ export function registerImpactCommand(program: Command): void {
       const { scan } = await import("../scan.js");
       const { readLock } = await import("../lock.js");
       const { impact, resolveStartIds, resolveOriginReqs } = await import("../graph/traverse.js");
-      const config = applyMode(loadConfig(rootDir), opts.mode);
+      const config = loadConfig(rootDir);
       const { graph } = scan(rootDir, config);
       const lock = readLock(rootDir, config.lockFile);
 
       // ----- Build SymbolEntry[] from the chosen channel:
-      //   * --from-tasks / --from-plan → parser's ExtractResult.entries verbatim
-      //     (T028; symbol-unit declarations propagate through `resolveStartIds`).
       //   * --diff → file-unit only (contracts/cli-flags.md §1.3; git diff has
       //     no symbol resolution).
       //   * positional targets → CLI_PATH_SYMBOL_RE lift in `pathsToEntries`
@@ -133,37 +115,7 @@ export function registerImpactCommand(program: Command): void {
       //     so it happens after #1-#3 above per the validation order.
       let entries: SymbolEntry[];
       let inputDisplayLabels: string[]; // for "No matching nodes found" message
-      if (opts.fromTasks || opts.fromPlan) {
-        const sourcePath = (opts.fromTasks ?? opts.fromPlan) as string;
-        const sourceLabel = opts.fromTasks ? "--from-tasks" : "--from-plan";
-        if (!existsSync(sourcePath)) {
-          console.error(`error: ${sourceLabel} path not found: ${sourcePath}`);
-          process.exit(1);
-        }
-        const text = readFileSync(sourcePath, "utf-8");
-        const { extractFiles } = await import("../parsers/sdd-files.js");
-        const extracted = extractFiles(text, { graph, repoRoot: rootDir });
-        // SPEC-2: surface every `unresolvedFilePath` diagnostic as a warning so
-        // typos in a `Files:` section (e.g. `src/auht.ts`) don't silently fall
-        // through to an empty start set. Mirrors plan-coverage's diagnostic
-        // flattening so the two CLIs stay consistent.
-        for (const d of extracted.diagnostics) {
-          if (d.kind === "unresolvedFilePath") {
-            const loc = "line" in d && typeof d.line === "number" ? ` (line ${d.line})` : "";
-            console.error(`WARNING: unresolved file path "${d.path}"${loc} in ${sourcePath}`);
-          }
-        }
-        if (extracted.stage === "empty" || extracted.entries.length === 0) {
-          console.error(
-            `error: no files extracted from ${sourcePath}. add a \`Files: <path>\` section or reference existing file paths in the body.`,
-          );
-          process.exit(1);
-        }
-        // T028: hand `entries` straight to `resolveStartIds` so symbol-unit
-        // declarations propagate as `symbol:<path>#<name>` startIds.
-        entries = extracted.entries;
-        inputDisplayLabels = entries.map((e) => (e.symbol ? `${e.path}:${e.symbol}` : e.path));
-      } else if (opts.diff) {
+      if (opts.diff) {
         const { getGitDiffFiles } = await import("../diff.js");
         const diffFiles = getGitDiffFiles(rootDir);
         if (diffFiles.length === 0) {
@@ -220,9 +172,9 @@ export function registerImpactCommand(program: Command): void {
         if (!hasSymbolNode) {
           console.error(
             [
-              "ERROR: symbol-level input requires `artgraph scan --mode symbol`.",
-              '       Set `mode: "symbol"` in `.artgraph.json` and re-run scan to enable',
-              "       symbol-mode lookup.",
+              "ERROR: symbol-level input requires a symbol-mode graph.",
+              '       Set `mode: "symbol"` in `.artgraph.json` and re-run `artgraph scan`',
+              "       to enable symbol-mode lookup.",
             ].join("\n"),
           );
           process.exit(1);
@@ -252,20 +204,7 @@ export function registerImpactCommand(program: Command): void {
         process.exit(1);
       }
 
-      let maxDepth: number | undefined;
-      if (opts.depth !== undefined) {
-        const parsed = parseInt(opts.depth, 10);
-        if (isNaN(parsed)) {
-          console.error(`Invalid --depth value: "${opts.depth}". Must be a non-negative integer.`);
-          process.exit(1);
-        }
-        if (parsed < 0) {
-          console.error(`Invalid --depth value: "${opts.depth}". Must be a non-negative integer.`);
-          process.exit(1);
-        }
-        maxDepth = parsed;
-      }
-      const result = impact(graph, startIds, lock, maxDepth);
+      const result = impact(graph, startIds, lock);
 
       // T031 / FR-014 / INV-S6 — populate `originReqs` axis. `impact()` itself
       // stays purely forward-BFS; the origin axis is the union of each startId's
