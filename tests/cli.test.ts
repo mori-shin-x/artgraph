@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import {
   existsSync,
+  readFileSync,
   unlinkSync,
   cpSync,
   writeFileSync,
@@ -340,6 +341,65 @@ describe("CLI: scan graph payload", () => {
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Nodes:");
     expect(stdout).not.toContain("file:src/auth/login.ts");
+  });
+
+  // Wave 2 (issue #125): `--output <dir>` writes a static HTML export with the
+  // rendered graph data embedded in a JSON script tag. Verifies both the
+  // filesystem layout (index.html + app.js + vendor bundle) and the payload
+  // shape so a regression in `renderGraphData` or the template injection
+  // pipeline surfaces here rather than only in visual QA.
+  it("T-graph-serve-1: --output writes a static HTML export with embedded data", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "artgraph-graph-output-"));
+    try {
+      const { exitCode, stderr } = await run(["scan", "--output", outDir]);
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain("static export written to");
+
+      const indexPath = join(outDir, "index.html");
+      const appPath = join(outDir, "app.js");
+      const vendorPath = join(outDir, "vendor", "cytoscape.min.js");
+      expect(existsSync(indexPath)).toBe(true);
+      expect(existsSync(appPath)).toBe(true);
+      expect(existsSync(vendorPath)).toBe(true);
+
+      const html = readFileSync(indexPath, "utf-8");
+      // Payload lives inside `<script id="artgraph-data" type="application/json">…</script>`.
+      // Extract that block and JSON.parse it — this catches both a missing
+      // injection (payload still contains the `{{ARTGRAPH_DATA}}` placeholder)
+      // and a malformed payload.
+      const match = html.match(
+        /<script id="artgraph-data" type="application\/json">([\s\S]*?)<\/script>/,
+      );
+      expect(match).not.toBeNull();
+      const rawJson = match![1]!;
+      const data = JSON.parse(rawJson);
+      expect(Array.isArray(data.nodes)).toBe(true);
+      expect(Array.isArray(data.edges)).toBe(true);
+      expect(data.meta).toBeDefined();
+      expect(data.meta.stats).toBeDefined();
+
+      // `<` characters in the payload must be escaped so a payload containing
+      // `</script>` can't break out of the script tag. The fixture always has
+      // filePaths (`src/…`) with no `<`, but any label containing `<` would
+      // appear as `<` — sanity-check the escape is applied whenever
+      // a raw `<` sneaks in.
+      if (rawJson.includes("\\u003c")) {
+        expect(rawJson).not.toMatch(/<\/script>/);
+      }
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  it("T-graph-serve-2: --serve + --output errors out", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "artgraph-graph-both-"));
+    try {
+      const { exitCode, stderr } = await run(["scan", "--serve", "--output", outDir]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toMatch(/--serve.*--output.*cannot be combined/i);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
   });
 });
 

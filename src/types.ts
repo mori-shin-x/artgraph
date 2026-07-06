@@ -134,7 +134,23 @@ export interface DriftEntry {
 
 export interface CheckResult {
   drifted: DriftEntry[];
+  /**
+   * Human-readable descriptor strings, one per orphan edge, in the format
+   * `"<source> -> <target> (<kind>)"` (e.g.
+   * `"file:src/auth/login.ts -> FAKE-9999 (implements)"`). Consumed by the
+   * text CLI (`printCheckText`) and by JSON pipelines that mirror the CLI
+   * text output. Do NOT treat entries as node ids — use `orphanNodeIds`
+   * for that. See issue #155 (B1).
+   */
   orphans: string[];
+  /**
+   * Deduplicated + ascending-sorted bare source node ids of every orphan
+   * edge — the nodes the `--serve` UI should mark with the `orphan` state.
+   * Derived from the SAME underlying `OrphanEntry[]` that `orphans`
+   * descriptors are formatted from, but stripped down to just the source
+   * ids so `Set.has(node.id)` works directly. See issue #155 (B1).
+   */
+  orphanNodeIds: string[];
   uncovered: string[];
   coverage: { reqId: string; status: CoverageStatus }[];
   // REQs whose tests ran and failed (only populated when test results are
