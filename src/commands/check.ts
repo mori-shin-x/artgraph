@@ -35,7 +35,9 @@ export function registerCheckCommand(program: Command): void {
           // E4: same fix as `impact --diff` — don't ignore `--format json` on
           // the "no changes" case. Shape matches the normal `check
           // --format json` output (`CheckResult` + `warnings`), just all-clear,
-          // plus a `message` field flagging the no-diff short-circuit.
+          // plus a `message` field flagging the no-diff short-circuit. spec 017
+          // adds the baseline-diff fields so the shape never depends on the
+          // presence of a diff (baselineStatus "skipped" = no baseline built).
           if (opts.format === "json") {
             console.log(
               JSON.stringify({
@@ -45,6 +47,9 @@ export function registerCheckCommand(program: Command): void {
                 coverage: [],
                 testFailures: [],
                 pass: true,
+                newIssues: { drifted: [], orphans: [], uncovered: [], testFailures: [] },
+                suppressedCount: 0,
+                baselineStatus: "skipped",
                 warnings,
                 message: "No changes detected in git diff.",
               }),
@@ -74,7 +79,27 @@ export function registerCheckCommand(program: Command): void {
           }
         }
       }
-      const result = check(graph, lock, scopedNodeIds, testResults);
+
+      // Preliminary scoped result — no baseline applied yet.
+      let result = check(graph, lock, scopedNodeIds, testResults);
+
+      // spec 017 (data-model §5, R6) — lazy baseline diff for the gate. Only
+      // build the base-ref worktree when gating a diff that actually has a
+      // scoped issue: a fully clean scope cannot contain any NEW issue, so the
+      // worktree cost is skipped and `baselineStatus` stays "skipped" (SC-005).
+      const hasScopedIssue =
+        result.drifted.length > 0 ||
+        result.orphans.length > 0 ||
+        result.uncovered.length > 0 ||
+        result.testFailures.length > 0;
+
+      if (opts.gate && opts.diff && hasScopedIssue) {
+        const { computeBaselineIssues } = await import("../baseline.js");
+        // Phase 1 pins the base ref to HEAD (FR-002); the internal API already
+        // takes a `baseRef` parameter so Phase 2 can expose `--base` (FR-012).
+        const baseline = computeBaselineIssues(rootDir, "HEAD", lock, config);
+        result = check(graph, lock, scopedNodeIds, testResults, baseline);
+      }
 
       if (opts.format === "json") {
         console.log(JSON.stringify({ ...result, warnings }));
@@ -83,6 +108,13 @@ export function registerCheckCommand(program: Command): void {
         printWarnings(warnings);
       }
 
+      // Exit codes (contract cli-check-gate §2): 1 = baseline undeterminable
+      // (FR-010, distinct from a gate fail); 2 = a NEW issue was introduced.
+      if (opts.gate && result.baselineStatus === "unavailable") {
+        console.error("ERROR: could not establish a baseline (git worktree unavailable).");
+        console.error("       gate result is undetermined; not treating as pass.");
+        process.exit(1);
+      }
       if (opts.gate && !result.pass) {
         process.exit(2);
       }

@@ -6,6 +6,7 @@ import {
   resolveStartIds,
   resolveOriginReqs,
   findOrphans,
+  formatOrphan,
   findUncovered,
 } from "../src/graph/traverse.js";
 import type { ArtgraphConfig, ArtifactGraph, GraphNode, LockFile } from "../src/types.js";
@@ -79,7 +80,7 @@ describe("impact traversal", () => {
 });
 
 describe("findOrphans", () => {
-  it("should detect @impl pointing to nonexistent REQ", () => {
+  it("should detect @impl pointing to nonexistent REQ (structured OrphanEdge)", () => {
     const { graph } = buildGraph(FIXTURE_DIR, config);
     graph.edges.push({
       source: "file:src/auth/login.ts",
@@ -88,9 +89,26 @@ describe("findOrphans", () => {
       provenances: ["code-tag"],
     });
 
+    // spec 017 (FR-006, data-model §2): findOrphans returns structured
+    // { source, target, kind } so callers can do strict source matching.
     const orphans = findOrphans(graph);
     expect(orphans.length).toBeGreaterThanOrEqual(1);
-    expect(orphans.some((o) => o.includes("FAKE-9999"))).toBe(true);
+    const fake = orphans.find((o) => o.target === "FAKE-9999");
+    expect(fake).toBeDefined();
+    expect(fake).toEqual({
+      source: "file:src/auth/login.ts",
+      target: "FAKE-9999",
+      kind: "implements",
+    });
+  });
+
+  it("formatOrphan renders the canonical `source -> target (kind)` string", () => {
+    expect(
+      formatOrphan({ source: "file:src/auth/login.ts", target: "FAKE-9999", kind: "implements" }),
+    ).toBe("file:src/auth/login.ts -> FAKE-9999 (implements)");
+    expect(formatOrphan({ source: "test:src/a.test.ts", target: "REQ-1", kind: "verifies" })).toBe(
+      "test:src/a.test.ts -> REQ-1 (verifies)",
+    );
   });
 });
 
@@ -336,7 +354,7 @@ describe("task-source edge semantics (meta-review remediation)", () => {
   it("findOrphans does not warn for task-source verifies with missing target", () => {
     const graph = makeTaskGraph();
     const orphans = findOrphans(graph as any);
-    expect(orphans.some((o) => o.includes("T001 -> 1.1"))).toBe(false);
+    expect(orphans.some((o) => o.source === "T001" && o.target === "1.1")).toBe(false);
   });
 
   it("impact() places task nodes into affectedTasks and summary.tasks", () => {

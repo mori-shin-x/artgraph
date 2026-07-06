@@ -119,8 +119,26 @@ export function impact(
   };
 }
 
-export function findOrphans(graph: ArtifactGraph): string[] {
-  const orphans: string[] = [];
+// spec 017 (FR-006, data-model §2) — an `@impl`/`@verifies` edge whose target
+// REQ/doc node does not exist in the graph. Structured (rather than a flat
+// string) so `check()` can strict-match `source` against the diff scope
+// instead of the old substring `includes` heuristic.
+export interface OrphanEdge {
+  source: string; // e.g. "file:src/foo.ts" / "test:src/foo.test.ts"
+  target: string; // the REQ/doc id that did not resolve
+  kind: "implements" | "verifies";
+}
+
+// SSOT: the canonical `source -> target (kind)` rendering used everywhere an
+// orphan is shown or turned into an identity key (spec 017 R4). Keeping this
+// in one place means `CheckResult.orphans`, the baseline key set, and the
+// presenter never drift on formatting.
+export function formatOrphan(o: OrphanEdge): string {
+  return `${o.source} -> ${o.target} (${o.kind})`;
+}
+
+export function findOrphans(graph: ArtifactGraph): OrphanEdge[] {
+  const orphans: OrphanEdge[] = [];
 
   for (const edge of graph.edges) {
     if (edge.kind === "implements" || edge.kind === "verifies") {
@@ -130,7 +148,7 @@ export function findOrphans(graph: ArtifactGraph): string[] {
       // task-source の orphan は警告対象外。code-claim な orphan のみ拾う。
       if (graph.nodes.get(edge.source)?.kind === "task") continue;
       if (!graph.nodes.has(edge.target)) {
-        orphans.push(`${edge.source} -> ${edge.target} (${edge.kind})`);
+        orphans.push({ source: edge.source, target: edge.target, kind: edge.kind });
       }
     }
   }

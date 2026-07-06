@@ -140,8 +140,39 @@ export interface CheckResult {
   // REQs whose tests ran and failed (only populated when test results are
   // supplied). These fail the gate in addition to drift/orphans/uncovered.
   testFailures: string[];
+  // spec 017 (R8, data-model §1.1) — **meaning changed**: `pass` used to mean
+  // "every scoped issue is clear"; it now means "no issue is NEW relative to
+  // the baseline" (= gate 合否). The scoped issue arrays above are unchanged
+  // (they still list all in-scope issues for display / json back-compat), so a
+  // `pass:true` result can coexist with a non-empty `orphans`/`uncovered` (all
+  // pre-existing). See spec 017 FR-001.
   pass: boolean;
+
+  // ── spec 017 baseline-diff additions (back-compat, append-only) ──
+  // `newIssues` is the `current \ baseline` subset that decides the gate.
+  newIssues: NewIssues;
+  // Count of scoped issues suppressed as pre-existing (not surfaced as new).
+  suppressedCount: number;
+  baselineStatus: BaselineStatus;
 }
+
+// spec 017 (data-model §1.1) — the subset of scoped issues that are NEW
+// relative to the baseline. Each array is a subset (by identity key) of the
+// matching `CheckResult` field, so `orphans`/`uncovered` keep their `string[]`
+// shape for json back-compat (R8).
+export interface NewIssues {
+  drifted: DriftEntry[];
+  orphans: string[];
+  uncovered: string[];
+  testFailures: string[];
+}
+
+// spec 017 (data-model §1.1) — lifecycle of the baseline used to diff issues.
+export type BaselineStatus =
+  | "computed" // worktree で base graph を算出し差分を取った
+  | "empty" // HEAD 無し初回コミット前 — baseline 空、全 current が new (FR-014)
+  | "skipped" // 遅延評価: current issue ゼロで baseline 未算出 (new もゼロ, R6)
+  | "unavailable"; // 構築不能な異常系 (--gate 時は exit 1 の原因, FR-010)
 
 export interface ScanSummary {
   nodeCount: number;
