@@ -39,6 +39,7 @@ export function registerCheckCommand(program: Command): void {
               JSON.stringify({
                 drifted: [],
                 orphans: [],
+                orphanNodeIds: [],
                 uncovered: [],
                 coverage: [],
                 testFailures: [],

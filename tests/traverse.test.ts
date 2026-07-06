@@ -79,7 +79,7 @@ describe("impact traversal", () => {
 });
 
 describe("findOrphans", () => {
-  it("should detect @impl pointing to nonexistent REQ", () => {
+  it("should detect @impl pointing to nonexistent REQ (structured entry — issue #155 B1)", () => {
     const { graph } = buildGraph(FIXTURE_DIR, config);
     graph.edges.push({
       source: "file:src/auth/login.ts",
@@ -90,7 +90,13 @@ describe("findOrphans", () => {
 
     const orphans = findOrphans(graph);
     expect(orphans.length).toBeGreaterThanOrEqual(1);
-    expect(orphans.some((o) => o.includes("FAKE-9999"))).toBe(true);
+    // Post-B1: findOrphans returns { source, target, kind } — assert against
+    // structured fields so a descriptor-format change never silently regresses
+    // downstream consumers (render.ts / printCheckText) again.
+    const match = orphans.find((o) => o.target === "FAKE-9999");
+    expect(match).toBeDefined();
+    expect(match!.source).toBe("file:src/auth/login.ts");
+    expect(match!.kind).toBe("implements");
   });
 });
 
@@ -336,7 +342,8 @@ describe("task-source edge semantics (meta-review remediation)", () => {
   it("findOrphans does not warn for task-source verifies with missing target", () => {
     const graph = makeTaskGraph();
     const orphans = findOrphans(graph as any);
-    expect(orphans.some((o) => o.includes("T001 -> 1.1"))).toBe(false);
+    // task-source orphans must not appear in the structured result at all.
+    expect(orphans.some((o) => o.source === "T001" && o.target === "1.1")).toBe(false);
   });
 
   it("impact() places task nodes into affectedTasks and summary.tasks", () => {

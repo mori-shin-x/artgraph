@@ -373,7 +373,7 @@ for the formalisation.
 | Command                  | Purpose                                                                                             |
 | ------------------------ | --------------------------------------------------------------------------------------------------- |
 | `artgraph init`          | Full agent-native setup: config + scan + Skills + SDD auto-integrate + Stop hook + agent context    |
-| `artgraph scan`          | Build the artifact graph and report counts (`--format json` includes the full graph)                |
+| `artgraph scan`          | Build the artifact graph and report counts (`--format json` includes the full graph; `--serve` / `--output` render it as interactive HTML — see below) |
 | `artgraph check`         | Report drift / orphans / uncovered (`--gate` to fail a hook)                                        |
 | `artgraph impact`        | File-only forward impact (file paths / `--diff`)                                                    |
 | `artgraph plan-coverage` | Detect implicit REQ impacts: REQs touched by tasks.md `Files:` but not mentioned in tasks/plan/spec |
@@ -381,6 +381,32 @@ for the formalisation.
 | `artgraph rename`        | Rename / split / merge requirement IDs (see below)                                                  |
 | `artgraph integrate`     | Wire artgraph into an installed SDD tool (Spec Kit / Kiro); see [SDD tool integration](#sdd-tool-integration) |
 | `artgraph doctor`        | Diagnose Tier 1 cross-agent distributions (drift / missing / extraneous-file); see below           |
+
+## `artgraph scan --serve` — interactive visualization
+
+By default `artgraph scan` prints a node/edge count summary as text
+(`--format json` emits the full req/doc/code/test graph for machine
+consumption). `--serve` and `--output` instead render that graph as an
+interactive HTML page (Cytoscape.js), with node border color/style encoding
+`drift` / `orphan` / `uncovered` state so you can spot problem areas without
+reading `check` output line by line.
+
+```bash
+# Print a count summary (default) or the full graph as JSON
+artgraph scan
+artgraph scan --format json
+
+# Open an interactive HTML view in a local server (default 127.0.0.1:3737)
+artgraph scan --serve
+artgraph scan --serve --port 4000 --host 0.0.0.0
+
+# Write a static HTML export instead (e.g. to publish as a CI artifact)
+artgraph scan --output ./graph-out
+```
+
+`--serve` and `--output` are mutually exclusive. Both read `.trace.lock` when
+present to color drift/orphan/uncovered nodes; a missing lock just renders
+without that extra state.
 
 ## `artgraph doctor` — cross-agent distribution health check
 
