@@ -124,7 +124,7 @@ describe("e2e: tag-zero brownfield (issue #122)", () => {
   });
 
   it("`artgraph impact --diff` returns the ts-import closure of the changed file", () => {
-    const r = spawnSync("node", [CLI, "impact", "--diff", "--depth", "3"], {
+    const r = spawnSync("node", [CLI, "impact", "--diff"], {
       encoding: "utf-8",
       cwd: workDir,
       timeout: 30000,
@@ -139,7 +139,7 @@ describe("e2e: tag-zero brownfield (issue #122)", () => {
   });
 
   it("`artgraph impact --diff` in JSON mode lists a.ts in affectedFiles", () => {
-    const r = spawnSync("node", [CLI, "impact", "--diff", "--depth", "3", "--format", "json"], {
+    const r = spawnSync("node", [CLI, "impact", "--diff", "--format", "json"], {
       encoding: "utf-8",
       cwd: workDir,
       timeout: 30000,

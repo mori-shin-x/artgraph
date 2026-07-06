@@ -106,7 +106,7 @@ npm install -D artgraph && npx artgraph init --agents=claude       # pick your a
 
 ### Tier 1 cross-agent distribution
 
-`--agents=<list>` distributes the same canonical SKILL.md set (9 Skills + 3 `_shared/` fragments) to each agent's native discovery path. AGENTS.md is the single canonical agent-context body; the per-agent wrapper files only contain a `@AGENTS.md` import line so the body never duplicates.
+`--agents=<list>` distributes the same canonical SKILL.md set (6 Skills + 3 `_shared/` fragments) to each agent's native discovery path. AGENTS.md is the single canonical agent-context body; the per-agent wrapper files only contain a `@AGENTS.md` import line so the body never duplicates.
 
 > **Support scope**: The 5 agents below are the entire supported set — artgraph has **no roadmap to expand beyond Tier 1 in v0.x**. See [docs/architecture.md §8 Support Scope](./docs/architecture.md#8-support-scope) for the full policy.
 
@@ -116,7 +116,7 @@ npm install -D artgraph && npx artgraph init --agents=claude       # pick your a
 | `codex`    | Codex CLI (OpenAI) | `.agents/skills/`  | `AGENTS.md` | — (AGENTS.md native) |
 | `cursor`   | Cursor | `.cursor/skills/`  | `AGENTS.md` | — (AGENTS.md native) |
 | `copilot`  | GitHub Copilot (IDE / CLI / Coding Agent) | `.github/skills/`  | `AGENTS.md` | `.github/copilot-instructions.md` |
-| `kiro`     | Kiro | `.kiro/skills/`    | `AGENTS.md` | — (`.kiro/steering/artgraph.md` is handled separately by `--integrations=kiro`) |
+| `kiro`     | Kiro | `.kiro/skills/`    | `AGENTS.md` | — (`.kiro/steering/artgraph.md` is handled separately by `artgraph integrate kiro`) |
 
 ### Disabling the Stop hook (troubleshooting)
 
@@ -361,8 +361,8 @@ for the formalisation.
 
 > **Note on lock `dependsOn` consumers.** The structured `dependsOn` field in
 > `.trace.lock` is currently not consumed by runtime code paths: `artgraph
-> check` decides drift purely from `contentHash`, and `coverage` / `impact` /
-> `traverse` walk `graph.edges` directly. Its present value is (a) a
+> check` decides drift purely from `contentHash`, and coverage computation /
+> `impact` / `traverse` walk `graph.edges` directly. Its present value is (a) a
 > presentational diff target when reviewers read `git diff .trace.lock`, and
 > (b) the input that `artgraph rename` rewrites when an ID changes. A
 > first-class consumer (e.g. an `artgraph diff` subcommand surfacing
@@ -372,42 +372,41 @@ for the formalisation.
 
 | Command                  | Purpose                                                                                             |
 | ------------------------ | --------------------------------------------------------------------------------------------------- |
-| `artgraph scan`          | Build the artifact graph and report counts                                                          |
+| `artgraph init`          | Full agent-native setup: config + scan + Skills + SDD auto-integrate + Stop hook + agent context    |
+| `artgraph scan`          | Build the artifact graph and report counts (`--format json` includes the full graph; `--serve` / `--output` render it as interactive HTML — see below) |
 | `artgraph check`         | Report drift / orphans / uncovered (`--gate` to fail a hook)                                        |
-| `artgraph coverage`      | Per-requirement coverage status                                                                     |
-| `artgraph impact`        | File-only forward impact (file paths / `--from-tasks` / `--from-plan` / `--diff`)                   |
+| `artgraph impact`        | File-only forward impact (file paths / `--diff`)                                                    |
 | `artgraph plan-coverage` | Detect implicit REQ impacts: REQs touched by tasks.md `Files:` but not mentioned in tasks/plan/spec |
 | `artgraph reconcile`     | Rebuild `.trace.lock` from the current graph                                                        |
-| `artgraph graph`         | Show the artifact graph (text / json / interactive HTML — see below)                                |
 | `artgraph rename`        | Rename / split / merge requirement IDs (see below)                                                  |
+| `artgraph integrate`     | Wire artgraph into an installed SDD tool (Spec Kit / Kiro); see [SDD tool integration](#sdd-tool-integration) |
 | `artgraph doctor`        | Diagnose Tier 1 cross-agent distributions (drift / missing / extraneous-file); see below           |
 
-## `artgraph graph` — interactive visualization
+## `artgraph scan --serve` — interactive visualization
 
-By default `artgraph graph` prints the req/doc/code/test graph as `text`
-(or `--format json` for machine consumption). `--serve` and `--output` instead
-render the same graph as an interactive HTML page (Cytoscape.js), with node
-border color/style encoding `drift` / `orphan` / `uncovered` state so you can
-spot problem areas without reading `check` output line by line.
+By default `artgraph scan` prints a node/edge count summary as text
+(`--format json` emits the full req/doc/code/test graph for machine
+consumption). `--serve` and `--output` instead render that graph as an
+interactive HTML page (Cytoscape.js), with node border color/style encoding
+`drift` / `orphan` / `uncovered` state so you can spot problem areas without
+reading `check` output line by line.
 
 ```bash
-# Print the graph as text (default) or JSON
-artgraph graph
-artgraph graph --format json
-artgraph graph --kind req            # filter by node kind (doc/req/file/test/task)
+# Print a count summary (default) or the full graph as JSON
+artgraph scan
+artgraph scan --format json
 
 # Open an interactive HTML view in a local server (default 127.0.0.1:3737)
-artgraph graph --serve
-artgraph graph --serve --port 4000 --host 0.0.0.0
+artgraph scan --serve
+artgraph scan --serve --port 4000 --host 0.0.0.0
 
 # Write a static HTML export instead (e.g. to publish as a CI artifact)
-artgraph graph --output ./graph-out
+artgraph scan --output ./graph-out
 ```
 
-`--serve` and `--output` are mutually exclusive and ignore `--kind` (use the
-in-page search box to filter instead). Both read `.trace.lock` when present to
-color drift/orphan/uncovered nodes; a missing lock just renders without that
-extra state.
+`--serve` and `--output` are mutually exclusive. Both read `.trace.lock` when
+present to color drift/orphan/uncovered nodes; a missing lock just renders
+without that extra state.
 
 ## `artgraph doctor` — cross-agent distribution health check
 
@@ -432,11 +431,11 @@ yet), non-zero when at least one finding is `fail` (drift / missing / wrapper
 missing the import / extraneous file). Example text output:
 
 ```text
-[claude] .claude/skills/      12 pass
-[codex]  .agents/skills/      12 pass
+[claude] .claude/skills/      11 pass
+[codex]  .agents/skills/      10 pass
 AGENTS.md: ✓ marker block intact
 
-Summary: 24 pass, 0 fail
+Summary: 22 pass, 0 fail
 ```
 
 ## `artgraph rename` — ID lifecycle
@@ -488,9 +487,8 @@ instead of relying on a manual call.
 | `artgraph integrate speckit`      | Generate `.specify/extensions/artgraph/` and register Spec Kit hooks (`after_tasks` / `after_implement`, optional `before_implement` via `--gate`)                 |
 | `artgraph integrate kiro`         | Write `.kiro/steering/artgraph.md` so the Kiro agent learns when to call `impact / check --diff / reconcile`                                                       |
 | `artgraph integrate list`         | Show every supported integration with detect / installed status                                                                                                     |
-| `artgraph init --integrations=<ids>` | One-shot: run `init` _and_ integrate the named tools (`speckit`, `kiro`, `all`); pass `--integrate-gate` to add Spec Kit's `before_implement` hook in the same call. The value-form flag was renamed from `--integrate=<ids>` to `--integrations=<ids>` so that `--integrate` / `--no-integrate` could be used as a boolean opt-out for the default auto-integrate stage. |
 
-Since `init` now auto-integrates every detected SDD tool by default, the `--integrations=<csv>` form is only needed when you want to override that selection (for example, install Spec Kit hooks only in a repo that also has `.kiro/`).
+`artgraph init` auto-integrates every detected SDD tool by default (Spec Kit gets the `before_implement` gate hook; pass `--no-integrate` to skip the stage). Use the standalone `artgraph integrate <tool>` command when you want to pick a specific tool or control the gate afterwards.
 
 ```bash
 # Inside a repo that already has .specify/
@@ -505,9 +503,6 @@ artgraph integrate kiro --force         # overwrite a hand-edited steering file
 
 # Discover what's available
 artgraph integrate list                 # detected / installed flags per tool
-
-# Bootstrap + integrate in one shot
-artgraph init --integrations=all --integrate-gate
 ```
 
 Notes:
@@ -527,19 +522,18 @@ Notes:
 
 ## Claude Code skills
 
-artgraph ships 9 Claude Code Skills that wire the CLI into the agent workflow:
+artgraph ships 6 Claude Code Skills that wire the CLI into the agent workflow:
 
 | Skill                       | Input mode    | When it fires                                                                                                                              |
 | --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `artgraph-setup`            | n/a           | User wants to install / set up / add artgraph on a fresh project                                                                           |
+| `artgraph-setup`            | n/a           | User wants to install / set up / add artgraph, asks what's installed, or needs to wire in an SDD tool added after artgraph                 |
 | `artgraph-bootstrap`        | n/a           | User wants to bootstrap / cold-start / seed initial REQs on an existing untagged (or partially-tagged) project                             |
-| `artgraph-integrate`        | n/a           | User wants to wire artgraph into an installed SDD tool (Spec Kit / Kiro)                                                                   |
-| `artgraph-detect`           | n/a           | User asks whether artgraph is set up / what's installed / what's available                                                                 |
-| `artgraph-impact`           | file + symbol | Forward impact analysis. Input is file paths or `path:symbol` pairs (REQ-IDs are rejected) — explicit args, `--from-tasks <path>`, `--from-plan <path>`, or `--diff` |
+| `artgraph-impact`           | file + symbol | Forward impact analysis. Input is file paths or `path:symbol` pairs (REQ-IDs are rejected) — explicit args or `--diff` |
 | `artgraph-plan-coverage`    | file + symbol | Detects implicit impacts: files / `path:symbol` declared in `tasks.md` may affect existing REQs not mentioned in `tasks.md` / `plan.md` / `spec.md`. Run after `/speckit-tasks` or before `/speckit-implement` |
 | `artgraph-verify`           | n/a           | User reports implementation completion or wants a consistency check                                                                        |
-| `artgraph-coverage`         | n/a           | User asks for progress, remaining work, or what's left to test                                                                             |
 | `artgraph-rename`           | n/a           | User wants to rename / split / merge requirement IDs                                                                                       |
+
+Installation-state questions and post-hoc SDD-tool wiring (formerly the `artgraph-detect` / `artgraph-integrate` Skills) are handled by `artgraph-setup`; progress questions (formerly `artgraph-coverage`) are answered by `artgraph check` output (`--format json` includes per-requirement coverage rows).
 
 Skills marked `file + symbol` accept either `src/auth.ts` (file unit) or `src/auth.ts:validateToken` (symbol unit). Symbol-level input additionally requires `.artgraph.json` to be set to `"mode": "symbol"` and the graph re-scanned — see [docs/skills-guide.md](docs/skills-guide.md#file-mode-vs-symbol-mode) for the trade-off, config example, and the `impactReqs` / `originReqs` dual-axis drift guide.
 

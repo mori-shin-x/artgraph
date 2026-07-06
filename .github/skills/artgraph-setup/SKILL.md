@@ -1,6 +1,6 @@
 ---
 name: "artgraph-setup"
-description: "Installs artgraph in the current project, detects the package manager (npm / pnpm / Bun / Deno; default and Yarn fallback are pnpm), and wires up Skills, hooks, agent-context snippet, and any detected SDD-tool integration in one turn. Use when the user asks to install / set up / add artgraph. Make sure to use this skill whenever the user mentions artgraph for the first time and `artgraph` CLI is not yet available."
+description: "Installs artgraph in the current project, detects the package manager (npm / pnpm / Bun / Deno; default and Yarn fallback are pnpm), and wires up Skills, hooks, agent-context snippet, and any detected SDD-tool integration in one turn. Use when the user asks to install / set up / add artgraph, asks whether artgraph is set up or what is installed, or wants to wire artgraph into an SDD tool (Spec Kit / Kiro) added after artgraph. Make sure to use this skill whenever the user mentions artgraph for the first time and `artgraph` CLI is not yet available."
 allowed-tools:
   - "Bash(npm install*)"
   - "Bash(npm i*)"
@@ -14,8 +14,6 @@ allowed-tools:
   - "Bash(bunx --no-install artgraph *)"
   - "Bash(deno run -A npm:artgraph/cli *)"
   - "Bash(artgraph *)"
-  - "Bash(test *)"
-  - "Bash(ls *)"
 user-invocable: true
 disable-model-invocation: false
 ---
@@ -30,7 +28,7 @@ Every Bash tool call is a **fresh shell** — variables do not persist across ca
 
 ### 1. Confirm CLI is not yet installed
 
-See [install-check](../_shared/install-check.md). For this Skill the probe is expected to FAIL — if it succeeds (CLI already on PATH or installed locally), tell the user "artgraph is already installed" and stop. They probably wanted the `artgraph-detect` Skill instead.
+See [install-check](../_shared/install-check.md). For this Skill the probe is expected to FAIL — if it succeeds (CLI already on PATH or installed locally), tell the user "artgraph is already installed", skip steps 2-6, and report the current state instead (see "Already installed? Report the state" below).
 
 ### 2. Detect the package manager
 
@@ -79,3 +77,18 @@ Run the **check** command from the same row as one Bash call. A clean exit confi
 If the `init` output from Step 5 included `Zero-tag ready:` (no specs or `@impl` claims detected yet), a clean `check` here is expected but not meaningful — there are no req/doc nodes yet for it to reconcile. Note that to the user and recommend `artgraph impact --diff` instead (or in addition): it already works off the project's TS imports and demonstrates value before any tagging is done.
 
 Report the result to the user.
+
+## Already installed? Report the state
+
+When the Step 1 probe succeeds, inspect and report instead of reinstalling. The steps below describe intent, not literal shell commands — compose each check with your own shell's syntax or file-inspection tools, whichever fits your environment:
+
+- Whether `.artgraph.json` exists at the project root -> `config: present` or `config: missing`.
+- Whether `.specify/` exists -> Spec Kit detected; whether `.specify/extensions/artgraph/` exists -> Spec Kit integrated.
+- Whether `.kiro/` exists -> Kiro detected; whether `.kiro/steering/artgraph.md` exists -> Kiro integrated.
+- Which `artgraph-*` Skills are installed: enumerate all five canonical skills paths (`.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, `.kiro/skills/` — a project may have any subset) and list the subdirectories that contain a `SKILL.md`.
+
+Report which `artgraph-*` Skills are present. The canonical set is: `artgraph-bootstrap`, `artgraph-impact`, `artgraph-plan-coverage`, `artgraph-rename`, `artgraph-setup`, `artgraph-verify`. Missing entries suggest the user ran `init --minimal` or `--no-skills`, or deleted Skills manually. To reinstall only the Skills without touching hooks / integration, run the **init** command from the Step 3 table with `--force --agents=<list> --no-scan --no-integrate --no-hooks --no-agent-context` appended (`--force` is required because `.artgraph.json` already exists).
+
+## SDD tool installed after artgraph
+
+`init` auto-integrates every SDD tool detected at init time, so the only manual case is a Spec Kit / Kiro marker (`.specify/` / `.kiro/`) that appeared **after** artgraph was set up — i.e. the state report above says "detected" but "not integrated". Confirm with `integrate list` (run via the PM runner from the Step 3 table), then run `integrate speckit` or `integrate kiro` the same way. Spec Kit accepts `--gate` / `--no-gate` to add / remove the `before_implement` gate hook, and `--uninstall` removes an integration.

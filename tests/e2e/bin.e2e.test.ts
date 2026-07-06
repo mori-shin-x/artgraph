@@ -1,13 +1,8 @@
 // End-to-end smoke tests that spawn the *built* `dist/cli.js`. The rest
 // of the suite invokes `runCli` in-process from src — that's fast but
-// blind to:
-//   - whether the bin-entry guard (`import.meta.url === entryHref`) fires
-//     when Node resolves a symlink to the real script (PR #99 regression
-//     surface — npm/pnpm install hands users a symlinked bin shim).
-//   - whether hook-pretool actually reads from process.stdin when a real
-//     pipe is attached. The in-process tests stub that path via
-//     `_hookStdinOverride`, so a regression in the real stdin read loop
-//     is invisible to them.
+// blind to whether the bin-entry guard (`import.meta.url === entryHref`)
+// fires when Node resolves a symlink to the real script (PR #99 regression
+// surface — npm/pnpm install hands users a symlinked bin shim).
 //
 // These tests reuse the perf suite's vitest config (singleFork +
 // fileParallelism:false) via tests/e2e/vitest config, so the spawned bin
@@ -54,29 +49,6 @@ describe("e2e: real bin invocation", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
-
-  it("hook-pretool reads stdin from a real pipe and emits hookSpecificOutput", () => {
-    // The in-process suite stubs stdin via `_hookStdinOverride`, so the
-    // real `for await (const chunk of process.stdin)` loop is unexercised.
-    // Restore one smoke test that actually pipes JSON through the OS.
-    const stdin = JSON.stringify({
-      tool_name: "Edit",
-      tool_input: { file_path: "README.md", old_string: "x", new_string: "y" },
-    });
-    const fixtureDir = resolve(REPO_ROOT, "tests/fixtures");
-    const r = spawnSync("node", [CLI, "hook-pretool"], {
-      encoding: "utf-8",
-      input: stdin,
-      cwd: fixtureDir,
-      timeout: 15000,
-    });
-    expect(r.status).toBe(0);
-    const parsed = JSON.parse(r.stdout);
-    expect(parsed.hookSpecificOutput).toBeDefined();
-    expect(parsed.hookSpecificOutput.hookEventName).toBe("PreToolUse");
-    // README.md is not tracked → additionalContext should be "(none)".
-    expect(parsed.hookSpecificOutput.additionalContext).toBe("artgraph impact: (none)");
   });
 });
 

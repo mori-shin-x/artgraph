@@ -35,7 +35,7 @@ Files:
 
 規約の詳細(文法、Stage A / B parser、絶対 path の扱い等)は [`contracts/sdd-files-parser.md`](https://github.com/ShintaroMorimoto/artgraph/blob/main/specs/014-reinvent-impact-cli/contracts/sdd-files-parser.md) を参照。
 
-強制したいプロジェクトは `.artgraph.json` に以下を設定するか、CLI に `--require-files-section` を渡してください:
+強制したいプロジェクトは `.artgraph.json` に以下を設定してください:
 
 ```json
 { "planCoverage": { "requireFilesSection": true } }
@@ -43,11 +43,11 @@ Files:
 
 デフォルトは lenient (`Files:` が無くても regex フォールバックで path 抽出を試みる)。
 
-**Note**: `--require-files-section` のデフォルトは OFF。`Files:` セクションが
+**Note**: `requireFilesSection` のデフォルトは OFF。`Files:` セクションが
 無いタスクが多い tasks.md でも diagnostics は出ず、Stage B の regex fallback で
 1 つでも実在 file を拾えば `--gate` を通る silent green が起こり得る。CI で
-網羅性ガードとして使う場合は `--require-files-section` を **強く推奨**
-(`.artgraph.json` の `{"planCoverage":{"requireFilesSection":true}}` で永続化可)。
+網羅性ガードとして使う場合は `{"planCoverage":{"requireFilesSection":true}}` を
+**強く推奨**。
 
 ---
 

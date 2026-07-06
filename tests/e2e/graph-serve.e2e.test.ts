@@ -1,7 +1,7 @@
-// Wave 2 (issue #125): end-to-end smoke test for `artgraph graph --serve`.
+// Wave 2 (issue #125): end-to-end smoke test for `artgraph scan --serve`.
 // Spawns the built bin so we exercise the real http.Server + signal handling
 // path — the in-process unit suite can't drive that because runCli intercepts
-// process.exit and the graph subcommand keeps the event loop alive on the
+// process.exit and the scan subcommand keeps the event loop alive on the
 // server socket.
 
 import { afterAll, describe, expect, it } from "vitest";
@@ -79,7 +79,7 @@ function waitExit(
   });
 }
 
-describe("e2e: graph --serve", () => {
+describe("e2e: scan --serve", () => {
   let child: ChildProcessWithoutNullStreams | undefined;
 
   afterAll(() => {
@@ -94,7 +94,7 @@ describe("e2e: graph --serve", () => {
     "serves /, /app.js, /vendor/cytoscape.min.js and 404s unknown paths",
     { timeout: 15000 },
     async () => {
-      child = spawn("node", [CLI, "graph", "--serve", "--port", String(PORT)], {
+      child = spawn("node", [CLI, "scan", "--serve", "--port", String(PORT)], {
         cwd: FIXTURE_DIR,
         stdio: ["ignore", "pipe", "pipe"],
       });

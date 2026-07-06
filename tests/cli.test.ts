@@ -4,28 +4,15 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import {
   existsSync,
-  unlinkSync,
   readFileSync,
+  unlinkSync,
+  cpSync,
   writeFileSync,
   mkdtempSync,
   mkdirSync,
   rmSync,
 } from "node:fs";
-import {
-  run,
-  runAt,
-  runWithStdin as runWithStdinHelper,
-  cleanup,
-  FIXTURE_DIR,
-  LOCK_PATH,
-  type RunResult,
-} from "./helpers.js";
-
-const HOOKS_DIR = resolve(import.meta.dirname, "fixtures/hooks");
-
-function runWithStdin(args: string[], stdin: string, cwd?: string): Promise<RunResult> {
-  return runWithStdinHelper(args, stdin, cwd);
-}
+import { run, runAt, cleanup, FIXTURE_DIR, LOCK_PATH, type RunResult } from "./helpers.js";
 
 // E4 (issue #122 follow-up): build a temp repo with a fully-committed,
 // clean working tree so `getGitDiffFiles` deterministically returns `[]`.
@@ -322,34 +309,38 @@ describe("CLI: reconcile then check (no drift)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// graph
+// scan --format json graph payload (absorbed the old `graph` command)
 // ---------------------------------------------------------------------------
-describe("CLI: graph", () => {
-  it("T054: should output text format by default", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await run(["graph"]);
+describe("CLI: scan graph payload", () => {
+  it(
+    "should include nodes and edges arrays alongside the count summary",
+    { timeout: 30000 },
+    async () => {
+      const { stdout, exitCode } = await run(["scan", "--format", "json"]);
+      expect(exitCode).toBe(0);
+
+      const parsed = JSON.parse(stdout);
+      expect(Array.isArray(parsed.nodes)).toBe(true);
+      expect(Array.isArray(parsed.edges)).toBe(true);
+      expect(parsed.nodes.length).toBe(parsed.nodeCount);
+      for (const node of parsed.nodes) {
+        expect(node.id).toBeDefined();
+        expect(node.kind).toBeDefined();
+        expect(node.filePath).toBeDefined();
+      }
+      for (const edge of parsed.edges) {
+        expect(edge.source).toBeDefined();
+        expect(edge.target).toBeDefined();
+        expect(edge.kind).toBeDefined();
+      }
+    },
+  );
+
+  it("text output stays a count summary without node/edge dumps", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await run(["scan"]);
     expect(exitCode).toBe(0);
-    expect(stdout.length).toBeGreaterThan(0);
-  });
-
-  it("T054b: should output JSON format with --format json", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await run(["graph", "--format", "json"]);
-    expect(exitCode).toBe(0);
-
-    const parsed = JSON.parse(stdout);
-    expect(parsed.nodes).toBeDefined();
-    expect(parsed.edges).toBeDefined();
-    expect(Array.isArray(parsed.nodes)).toBe(true);
-    expect(Array.isArray(parsed.edges)).toBe(true);
-  });
-
-  it("T054c: should filter by --kind doc", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await run(["graph", "--format", "json", "--kind", "doc"]);
-    expect(exitCode).toBe(0);
-
-    const parsed = JSON.parse(stdout);
-    for (const node of parsed.nodes) {
-      expect(node.kind).toBe("doc");
-    }
+    expect(stdout).toContain("Nodes:");
+    expect(stdout).not.toContain("file:src/auth/login.ts");
   });
 
   // Wave 2 (issue #125): `--output <dir>` writes a static HTML export with the
@@ -360,7 +351,7 @@ describe("CLI: graph", () => {
   it("T-graph-serve-1: --output writes a static HTML export with embedded data", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "artgraph-graph-output-"));
     try {
-      const { exitCode, stderr } = await run(["graph", "--output", outDir]);
+      const { exitCode, stderr } = await run(["scan", "--output", outDir]);
       expect(exitCode).toBe(0);
       expect(stderr).toContain("static export written to");
 
@@ -403,7 +394,7 @@ describe("CLI: graph", () => {
   it("T-graph-serve-2: --serve + --output errors out", async () => {
     const outDir = mkdtempSync(join(tmpdir(), "artgraph-graph-both-"));
     try {
-      const { exitCode, stderr } = await run(["graph", "--serve", "--output", outDir]);
+      const { exitCode, stderr } = await run(["scan", "--serve", "--output", outDir]);
       expect(exitCode).toBe(1);
       expect(stderr).toMatch(/--serve.*--output.*cannot be combined/i);
     } finally {
@@ -413,24 +404,9 @@ describe("CLI: graph", () => {
 });
 
 // ---------------------------------------------------------------------------
-// impact --depth
+// impact text summary
 // ---------------------------------------------------------------------------
-describe("CLI: impact --depth", () => {
-  it("T058: should accept --depth option (file input)", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await run([
-      "impact",
-      "src/auth/login.ts",
-      "--depth",
-      "1",
-      "--format",
-      "json",
-    ]);
-    expect(exitCode).toBe(0);
-
-    const result = JSON.parse(stdout);
-    expect(result.impactReqs).toContain("AUTH-001");
-  });
-
+describe("CLI: impact text summary", () => {
   it("T059: should show summary in text output", { timeout: 30000 }, async () => {
     const { stdout, exitCode } = await run(["impact", "src/auth/login.ts"]);
     expect(exitCode).toBe(0);
@@ -438,34 +414,6 @@ describe("CLI: impact --depth", () => {
     expect(stdout).toMatch(/\d+ docs/);
     expect(stdout).toMatch(/\d+ reqs/);
     expect(stdout).toMatch(/\d+ files/);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// impact --depth validation
-// ---------------------------------------------------------------------------
-describe("CLI: impact --depth validation", () => {
-  it("should error on NaN --depth value", { timeout: 30000 }, async () => {
-    const { exitCode, stderr } = await run(["impact", "src/auth/login.ts", "--depth", "abc"]);
-    expect(exitCode).toBe(1);
-    expect(stderr).toContain("Invalid --depth value");
-  });
-
-  it("should error on negative --depth value", { timeout: 30000 }, async () => {
-    const { exitCode, stderr } = await run(["impact", "src/auth/login.ts", "--depth", "-1"]);
-    expect(exitCode).toBe(1);
-    expect(stderr).toContain("Invalid --depth value");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// graph --kind validation
-// ---------------------------------------------------------------------------
-describe("CLI: graph --kind validation", () => {
-  it("should error on invalid --kind value", { timeout: 30000 }, async () => {
-    const { exitCode, stderr } = await run(["graph", "--kind", "invalid"]);
-    expect(exitCode).not.toBe(0);
-    expect(stderr).toMatch(/allowed choices|invalid/i);
   });
 });
 
@@ -500,27 +448,14 @@ describe("CLI: impact spec-file traversal", () => {
     },
   );
 
-  it(
-    "should reach req from spec file via contains within depth limit",
-    { timeout: 30000 },
-    async () => {
-      // specs/auth.md → doc:auth-design + AUTH-001/002/003 (filePath match).
-      // From there, AUTH-001 is depth 0, so --depth 1 is enough to reach
-      // implementation files (depth 1).
-      const { stdout, exitCode } = await run([
-        "impact",
-        "specs/auth.md",
-        "--depth",
-        "1",
-        "--format",
-        "json",
-      ]);
-      expect(exitCode).toBe(0);
+  it("should reach req from spec file via contains", { timeout: 30000 }, async () => {
+    // specs/auth.md → doc:auth-design + AUTH-001/002/003 (filePath match).
+    const { stdout, exitCode } = await run(["impact", "specs/auth.md", "--format", "json"]);
+    expect(exitCode).toBe(0);
 
-      const result = JSON.parse(stdout);
-      expect(result.impactReqs).toContain("AUTH-001");
-    },
-  );
+    const result = JSON.parse(stdout);
+    expect(result.impactReqs).toContain("AUTH-001");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -644,7 +579,7 @@ describe("CLI: warning output", () => {
       writeFileSync(join(tmpRoot, "specs", "target.md"), `# Target\n`);
 
       try {
-        const proc = await runAt(tmpRoot, ["graph", "--format", "json"]);
+        const proc = await runAt(tmpRoot, ["scan", "--format", "json"]);
         expect(proc.exitCode).toBe(0);
         const out = JSON.parse(proc.stdout);
         const edge = out.edges.find(
@@ -830,10 +765,8 @@ describe("CLI: init", () => {
       // New directory-format Skill paths.
       expect(stdout).toContain(".claude/skills/artgraph-impact/SKILL.md");
       for (const dir of [
-        "artgraph-coverage",
-        "artgraph-detect",
+        "artgraph-bootstrap",
         "artgraph-impact",
-        "artgraph-integrate",
         "artgraph-plan-coverage",
         "artgraph-rename",
         "artgraph-setup",
@@ -858,7 +791,8 @@ describe("CLI: init", () => {
     expect(Array.isArray(result.skillsInstalled.skills)).toBe(true);
     // Bumped 7 -> 8 in spec 014 (artgraph-plan-coverage added).
     // Bumped 8 -> 9 in issue #123 (artgraph-bootstrap added).
-    expect(result.skillsInstalled.skills.length).toBe(9);
+    // Reduced 9 -> 6 in #135 (detect / integrate absorbed into setup, coverage deleted).
+    expect(result.skillsInstalled.skills.length).toBe(6);
     expect(result.skillsInstalled.fragments.length).toBeGreaterThanOrEqual(3);
     expect(result.skillsInstalled.skills).toContain(".claude/skills/artgraph-impact/SKILL.md");
   });
@@ -918,52 +852,6 @@ describe("CLI: init", () => {
   );
 
   // -------------------------------------------------------------------------
-  // D3 / D-adj-3 / D-adj-6: `--minimal --with-skills` (or
-  // `--with-agent-context`) without `--agents` used to silently no-op with
-  // exit 0. It must now hard-error like the AGENTS_REQUIRED_ERROR path.
-  // -------------------------------------------------------------------------
-  it(
-    "--minimal --with-skills without --agents errors instead of silently no-op-ing",
-    { timeout: 30000 },
-    async () => {
-      const { existsSync } = require("node:fs");
-      const { join } = require("node:path");
-      const { exitCode, stderr } = await runInit(["--minimal", "--with-skills"]);
-      expect(exitCode).toBe(1);
-      expect(stderr).toContain("requires --agents=<list>");
-      expect(existsSync(join(initTmp, ".artgraph.json"))).toBe(false);
-    },
-  );
-
-  it(
-    "--minimal --with-agent-context without --agents errors instead of silently no-op-ing",
-    { timeout: 30000 },
-    async () => {
-      const { existsSync } = require("node:fs");
-      const { join } = require("node:path");
-      const { exitCode, stderr } = await runInit(["--minimal", "--with-agent-context"]);
-      expect(exitCode).toBe(1);
-      expect(stderr).toContain("requires --agents=<list>");
-      expect(existsSync(join(initTmp, ".artgraph.json"))).toBe(false);
-    },
-  );
-
-  // --agents IS supplied here, so the new D3 gate (which only fires when
-  // --agents is absent) must NOT trigger. The pre-existing FR-013 behavior
-  // — --minimal unconditionally overrides --agents with a WARNING and no
-  // install — is unrelated to this fix and stays exit 0.
-  it(
-    "--minimal --with-skills --agents=claude does not trigger D3's new error (agents given)",
-    { timeout: 30000 },
-    async () => {
-      const { exitCode, stderr } = await runInit(["--minimal", "--with-skills", "--agents=claude"]);
-      expect(exitCode).toBe(0);
-      expect(stderr).toMatch(/WARNING:\s*--minimal overrides --agents/);
-      expect(stderr).not.toContain("requires --agents=<list>");
-    },
-  );
-
-  // -------------------------------------------------------------------------
   // E-adj-A1 / E-adj-A2 / E-adj-A9 / BND-7: init --help text accuracy.
   // Commander word-wraps help text to terminal width, so normalize
   // whitespace before asserting on multi-word phrases.
@@ -978,13 +866,6 @@ describe("CLI: init", () => {
     expect(normalized).toContain("Refuses symlinks even with --force.");
   });
 
-  it("init --help clarifies --integrations=all means auto-detect", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await runInit(["--help"]);
-    expect(exitCode).toBe(0);
-    const normalized = stdout.replace(/\s+/g, " ");
-    expect(normalized).toContain("'all' (= auto-detect every installed SDD tool)");
-  });
-
   it(
     "init --help derives the --agents id list from AGENT_IDS (not a stale literal)",
     { timeout: 30000 },
@@ -993,35 +874,6 @@ describe("CLI: init", () => {
       expect(exitCode).toBe(0);
       const normalized = stdout.replace(/\s+/g, " ");
       expect(normalized).toContain("claude, codex, copilot, cursor, kiro");
-    },
-  );
-
-  // -------------------------------------------------------------------------
-  // E2 / OUT-10: --integrations=speckit,unknown warns exactly once (CLI M12
-  // is now the single source; runInit no longer duplicates the same
-  // "unknown provider" fact), and the valid-id list is sourced from the
-  // live provider registry rather than a hardcoded literal.
-  // -------------------------------------------------------------------------
-  it(
-    "--integrations=speckit,unknown warns about the unknown provider exactly once",
-    { timeout: 30000 },
-    async () => {
-      const { exitCode, stderr, stdout } = await runInit([
-        "--agents=claude",
-        "--no-scan",
-        "--integrations=speckit,unknown",
-      ]);
-      expect(exitCode).toBe(0);
-      const occurrences = (stderr + stdout).split("unknown").length - 1;
-      // "unknown" appears once as the invalid id token AND once again inside
-      // "unknown integration provider(s)" wording from the M12 warning itself
-      // — but must NOT additionally appear via runInit's own duplicate
-      // "unknown integration provider: unknown" warning.
-      expect(stderr).toContain(
-        "WARNING: unknown integration provider(s): unknown (valid: speckit, kiro)",
-      );
-      expect(stderr).not.toContain("unknown integration provider: unknown");
-      expect(occurrences).toBeLessThanOrEqual(2);
     },
   );
 });
@@ -1056,39 +908,37 @@ describe("CLI: error cases", () => {
     expect(stdout).toContain("impact");
     expect(stdout).toContain("check");
     expect(stdout).toContain("reconcile");
-    expect(stdout).toContain("graph");
   });
 });
 
 // ---------------------------------------------------------------------------
-// symbol mode
+// symbol mode — driven purely by `.artgraph.json`'s `mode` field:
+//   * fixtures/symbol-mode ships `"mode": "symbol"` in its config
+//   * fixtures/symbol-level has no config, so scan stays in file mode
 // ---------------------------------------------------------------------------
-const SYM_FIXTURE = resolve(import.meta.dirname, "fixtures/symbol-level");
-const SYM_LOCK_PATH = resolve(SYM_FIXTURE, ".trace.lock");
-
-function runSym(args: string[]): Promise<RunResult> {
-  return runAt(SYM_FIXTURE, args);
-}
+const SYM_CONFIG_FIXTURE = resolve(import.meta.dirname, "fixtures/symbol-mode");
+const FILE_MODE_FIXTURE = resolve(import.meta.dirname, "fixtures/symbol-level");
+const FILE_MODE_LOCK_PATH = resolve(FILE_MODE_FIXTURE, ".trace.lock");
 
 describe("CLI: symbol mode", () => {
   afterEach(() => {
-    if (existsSync(SYM_LOCK_PATH)) unlinkSync(SYM_LOCK_PATH);
+    if (existsSync(FILE_MODE_LOCK_PATH)) unlinkSync(FILE_MODE_LOCK_PATH);
   });
 
-  it("should show symbol count with --mode symbol", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await runSym(["scan", "--mode", "symbol"]);
+  it("should show symbol count when config mode is symbol", { timeout: 30000 }, async () => {
+    const { stdout, exitCode } = await runAt(SYM_CONFIG_FIXTURE, ["scan"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("symbol:");
   });
 
   it("should not show symbol count in file mode", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await runSym(["scan"]);
+    const { stdout, exitCode } = await runAt(FILE_MODE_FIXTURE, ["scan"]);
     expect(exitCode).toBe(0);
     expect(stdout).not.toContain("symbol:");
   });
 
   it("should include symbolCount in JSON output", { timeout: 30000 }, async () => {
-    const { stdout, exitCode } = await runSym(["scan", "--mode", "symbol", "--format", "json"]);
+    const { stdout, exitCode } = await runAt(SYM_CONFIG_FIXTURE, ["scan", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
     expect(result.symbolCount).toBeGreaterThan(0);
@@ -1096,7 +946,9 @@ describe("CLI: symbol mode", () => {
 });
 
 // ---------------------------------------------------------------------------
-// test-results integration
+// test-results integration — driven purely by `.artgraph.json`'s
+// `testResultPaths` field. Each test builds a tmp copy of the all-verified
+// fixture whose config points at the desired result file.
 // ---------------------------------------------------------------------------
 const TEST_RESULTS_DIR = resolve(import.meta.dirname, "fixtures/test-results");
 const ALL_VERIFIED_DIR = resolve(import.meta.dirname, "fixtures/all-verified");
@@ -1107,50 +959,54 @@ function runAllVerified(args: string[]): Promise<RunResult> {
 }
 
 describe("CLI: test-results integration", () => {
+  const tmpDirs: string[] = [];
+
+  // Tmp copy of fixtures/all-verified with `testResultPaths` pointing at the
+  // given fixtures/test-results file (copied in as results.json).
+  function makeResultsProject(resultFile: string): string {
+    const tmp = mkdtempSync(join(tmpdir(), "artgraph-test-results-"));
+    tmpDirs.push(tmp);
+    cpSync(ALL_VERIFIED_DIR, tmp, { recursive: true });
+    cpSync(resolve(TEST_RESULTS_DIR, resultFile), join(tmp, "results.json"));
+    writeFileSync(
+      join(tmp, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["requirements"],
+        testPatterns: ["tests/**/*.test.ts"],
+        lockFile: ".trace.lock",
+        testResultPaths: ["results.json"],
+      }),
+    );
+    return tmp;
+  }
+
+  function coverageById(checkJson: string): Record<string, string> {
+    const result = JSON.parse(checkJson);
+    return Object.fromEntries(result.coverage.map((c: any) => [c.reqId, c.status]));
+  }
+
   afterEach(() => {
     if (existsSync(ALL_VERIFIED_LOCK)) unlinkSync(ALL_VERIFIED_LOCK);
+    while (tmpDirs.length > 0) {
+      rmSync(tmpDirs.pop()!, { recursive: true, force: true });
+    }
   });
 
   it(
-    "should accept --test-results option on check command without crash",
+    "should accept config testResultPaths on check command without crash",
     { timeout: 30000 },
     async () => {
-      const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
-      const { exitCode } = await runAllVerified(["check", "--test-results", vitestPath]);
+      const tmp = makeResultsProject("vitest-pass.json");
+      const { exitCode } = await runAt(tmp, ["check"]);
       // Without --gate, check always exits 0 even with issues
       expect(exitCode).toBe(0);
     },
   );
 
-  it(
-    "should accept --test-results option on coverage command without crash",
-    { timeout: 30000 },
-    async () => {
-      const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
-      const { exitCode } = await runAllVerified(["coverage", "--test-results", vitestPath]);
-      expect(exitCode).toBe(0);
-    },
-  );
-
-  it(
-    "should accept --test-results option on scan command without crash",
-    { timeout: 30000 },
-    async () => {
-      const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-pass.json");
-      const { exitCode } = await runAllVerified(["scan", "--test-results", vitestPath]);
-      expect(exitCode).toBe(0);
-    },
-  );
-
   it("should include testResultStats in scan JSON output", { timeout: 30000 }, async () => {
-    const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-mixed.json");
-    const { stdout, exitCode } = await runAllVerified([
-      "scan",
-      "--format",
-      "json",
-      "--test-results",
-      vitestPath,
-    ]);
+    const tmp = makeResultsProject("vitest-mixed.json");
+    const { stdout, exitCode } = await runAt(tmp, ["scan", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
     expect(result.testResultStats).toBeDefined();
@@ -1160,8 +1016,8 @@ describe("CLI: test-results integration", () => {
   });
 
   it("should show test result stats in scan text output", { timeout: 30000 }, async () => {
-    const vitestPath = resolve(TEST_RESULTS_DIR, "vitest-mixed.json");
-    const { stdout, exitCode } = await runAllVerified(["scan", "--test-results", vitestPath]);
+    const tmp = makeResultsProject("vitest-mixed.json");
+    const { stdout, exitCode } = await runAt(tmp, ["scan"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Test Results:");
     expect(stdout).toContain("passed=1");
@@ -1169,31 +1025,23 @@ describe("CLI: test-results integration", () => {
   });
 
   it(
-    "should report all REQs verified without --test-results (legacy)",
+    "should report all REQs verified without testResultPaths (legacy)",
     { timeout: 30000 },
     async () => {
-      const { stdout } = await runAllVerified(["coverage", "--format", "json"]);
-      const cov = JSON.parse(stdout);
-      const byId = Object.fromEntries(cov.items.map((i: any) => [i.reqId, i.status]));
+      const { stdout } = await runAllVerified(["check", "--format", "json"]);
+      const byId = coverageById(stdout);
       expect(byId["VER-001"]).toBe("verified");
       expect(byId["VER-002"]).toBe("verified");
     },
   );
 
   it(
-    "should keep status verified when --test-results show all passing",
+    "should keep status verified when test results show all passing",
     { timeout: 30000 },
     async () => {
-      const passPath = resolve(TEST_RESULTS_DIR, "all-verified-pass.json");
-      const { stdout } = await runAllVerified([
-        "coverage",
-        "--format",
-        "json",
-        "--test-results",
-        passPath,
-      ]);
-      const cov = JSON.parse(stdout);
-      const byId = Object.fromEntries(cov.items.map((i: any) => [i.reqId, i.status]));
+      const tmp = makeResultsProject("all-verified-pass.json");
+      const { stdout } = await runAt(tmp, ["check", "--format", "json"]);
+      const byId = coverageById(stdout);
       expect(byId["VER-001"]).toBe("verified");
       expect(byId["VER-002"]).toBe("verified");
     },
@@ -1203,16 +1051,9 @@ describe("CLI: test-results integration", () => {
     "should downgrade a REQ to impl-only when its test fails (verified -> impl-only)",
     { timeout: 30000 },
     async () => {
-      const failPath = resolve(TEST_RESULTS_DIR, "all-verified-fail.json");
-      const { stdout } = await runAllVerified([
-        "coverage",
-        "--format",
-        "json",
-        "--test-results",
-        failPath,
-      ]);
-      const cov = JSON.parse(stdout);
-      const byId = Object.fromEntries(cov.items.map((i: any) => [i.reqId, i.status]));
+      const tmp = makeResultsProject("all-verified-fail.json");
+      const { stdout } = await runAt(tmp, ["check", "--format", "json"]);
+      const byId = coverageById(stdout);
       // VER-001's test failed -> must transition away from "verified".
       expect(byId["VER-001"]).toBe("impl-only");
       // VER-002's test still passes -> stays verified.
@@ -1221,26 +1062,21 @@ describe("CLI: test-results integration", () => {
   );
 
   it("should pass check --gate when all tests pass", { timeout: 30000 }, async () => {
-    const passPath = resolve(TEST_RESULTS_DIR, "all-verified-pass.json");
-    const { exitCode } = await runAllVerified(["check", "--gate", "--test-results", passPath]);
+    const tmp = makeResultsProject("all-verified-pass.json");
+    const { exitCode } = await runAt(tmp, ["check", "--gate"]);
     expect(exitCode).toBe(0);
   });
 
   it("should fail check --gate (exit 2) when a test fails", { timeout: 30000 }, async () => {
-    const failPath = resolve(TEST_RESULTS_DIR, "all-verified-fail.json");
-    const { stdout, exitCode } = await runAllVerified([
-      "check",
-      "--gate",
-      "--test-results",
-      failPath,
-    ]);
+    const tmp = makeResultsProject("all-verified-fail.json");
+    const { stdout, exitCode } = await runAt(tmp, ["check", "--gate"]);
     expect(exitCode).toBe(2);
     expect(stdout).toContain("TEST FAILURES:");
     expect(stdout).toContain("VER-001");
   });
 
   it(
-    "should not fail check --gate for test failures when --test-results is absent",
+    "should not fail check --gate for test failures when testResultPaths is absent",
     { timeout: 30000 },
     async () => {
       // Legacy: without test results the gate ignores pass/fail entirely.
@@ -1248,160 +1084,4 @@ describe("CLI: test-results integration", () => {
       expect(exitCode).toBe(0);
     },
   );
-});
-
-// ---------------------------------------------------------------------------
-// hook-pretool
-// ---------------------------------------------------------------------------
-
-describe("CLI: hook-pretool", () => {
-  it("should output valid hookSpecificOutput for Edit input", { timeout: 30000 }, async () => {
-    const stdin = readFileSync(resolve(HOOKS_DIR, "edit-input.json"), "utf-8");
-    const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
-    expect(exitCode).toBe(0);
-    const output = JSON.parse(stdout);
-    expect(output.hookSpecificOutput).toBeDefined();
-    expect(output.hookSpecificOutput.hookEventName).toBe("PreToolUse");
-    expect(output.hookSpecificOutput.additionalContext).toBe("artgraph impact: (none)");
-  });
-
-  it("should output valid hookSpecificOutput for Write input", { timeout: 30000 }, async () => {
-    const stdin = readFileSync(resolve(HOOKS_DIR, "write-input.json"), "utf-8");
-    const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
-    expect(exitCode).toBe(0);
-    const output = JSON.parse(stdout);
-    expect(output.hookSpecificOutput).toBeDefined();
-    expect(output.hookSpecificOutput.hookEventName).toBe("PreToolUse");
-    expect(output.hookSpecificOutput.additionalContext).toBe("artgraph impact: (none)");
-  });
-
-  it("should output valid hookSpecificOutput for MultiEdit input", { timeout: 30000 }, async () => {
-    const stdin = readFileSync(resolve(HOOKS_DIR, "multiedit-input.json"), "utf-8");
-    const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
-    expect(exitCode).toBe(0);
-    const output = JSON.parse(stdout);
-    expect(output.hookSpecificOutput).toBeDefined();
-    expect(output.hookSpecificOutput.hookEventName).toBe("PreToolUse");
-    expect(output.hookSpecificOutput.additionalContext).toBe("artgraph impact: (none)");
-  });
-
-  it("should include impact info for a tracked file", { timeout: 30000 }, async () => {
-    const stdin = JSON.stringify({
-      tool_name: "Edit",
-      tool_input: { file_path: "src/auth/login.ts", old_string: "x", new_string: "y" },
-    });
-    const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
-    expect(exitCode).toBe(0);
-    const output = JSON.parse(stdout);
-    expect(output.hookSpecificOutput.additionalContext).toContain("artgraph impact:");
-    expect(output.hookSpecificOutput.additionalContext).toContain("AUTH-001");
-  });
-
-  it("should output (none) for an untracked file like README.md", { timeout: 30000 }, async () => {
-    const stdin = JSON.stringify({
-      tool_name: "Edit",
-      tool_input: { file_path: "README.md", old_string: "x", new_string: "y" },
-    });
-    const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
-    expect(exitCode).toBe(0);
-    const output = JSON.parse(stdout);
-    expect(output.hookSpecificOutput.additionalContext).toBe("artgraph impact: (none)");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// hook-pretool: graceful degradation
-// ---------------------------------------------------------------------------
-describe("CLI: hook-pretool graceful degradation", () => {
-  it(
-    "should exit 0 with empty additionalContext when .artgraph.json is missing",
-    { timeout: 30000 },
-    async () => {
-      const stdin = readFileSync(resolve(HOOKS_DIR, "edit-input.json"), "utf-8");
-      const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin, "/tmp");
-      expect(exitCode).toBe(0);
-      const output = JSON.parse(stdout);
-      expect(output.hookSpecificOutput.additionalContext).toBe("");
-    },
-  );
-
-  it(
-    "should exit 0 with empty additionalContext for invalid JSON",
-    { timeout: 30000 },
-    async () => {
-      const { stdout, exitCode } = await runWithStdin(["hook-pretool"], "{not valid json}");
-      expect(exitCode).toBe(0);
-      const output = JSON.parse(stdout);
-      expect(output.hookSpecificOutput.additionalContext).toBe("");
-    },
-  );
-
-  it(
-    "should exit 0 with empty additionalContext when file_path is missing",
-    { timeout: 30000 },
-    async () => {
-      const stdin = JSON.stringify({ tool_name: "Edit", tool_input: {} });
-      const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin);
-      expect(exitCode).toBe(0);
-      const output = JSON.parse(stdout);
-      expect(output.hookSpecificOutput.additionalContext).toBe("");
-    },
-  );
-
-  it(
-    "should exit 0 with empty additionalContext when scan fails (broken config)",
-    { timeout: 30000 },
-    async () => {
-      // Write a .artgraph.json with invalid specDirs to trigger scan failure
-      writeFileSync(
-        resolve("/tmp", ".artgraph.json"),
-        JSON.stringify({
-          include: ["/nonexistent/**/*.ts"],
-          specDirs: ["/nonexistent/specs"],
-          testPatterns: [],
-          lockFile: ".trace.lock",
-        }),
-      );
-      try {
-        const stdin = JSON.stringify({
-          tool_name: "Edit",
-          tool_input: { file_path: "src/foo.ts", old_string: "x", new_string: "y" },
-        });
-        const { stdout, exitCode } = await runWithStdin(["hook-pretool"], stdin, "/tmp");
-        expect(exitCode).toBe(0);
-        const output = JSON.parse(stdout);
-        // Should either be empty or (none) — not crash
-        expect(typeof output.hookSpecificOutput.additionalContext).toBe("string");
-      } finally {
-        if (existsSync(resolve("/tmp", ".artgraph.json"))) {
-          unlinkSync(resolve("/tmp", ".artgraph.json"));
-        }
-      }
-    },
-  );
-});
-
-// ---------------------------------------------------------------------------
-// hook-pretool: stderr content verification
-// ---------------------------------------------------------------------------
-describe("CLI: hook-pretool stderr", () => {
-  it(
-    "should output 'failed to parse hook input' to stderr for invalid JSON",
-    { timeout: 30000 },
-    async () => {
-      const { stderr, exitCode } = await runWithStdin(["hook-pretool"], "{not valid json}");
-      expect(exitCode).toBe(0);
-      expect(stderr).toContain("artgraph: failed to parse hook input");
-    },
-  );
-
-  it("should output 'completed in' to stderr on successful run", { timeout: 30000 }, async () => {
-    const stdin = JSON.stringify({
-      tool_name: "Edit",
-      tool_input: { file_path: "src/auth/login.ts", old_string: "x", new_string: "y" },
-    });
-    const { stderr, exitCode } = await runWithStdin(["hook-pretool"], stdin);
-    expect(exitCode).toBe(0);
-    expect(stderr).toContain("artgraph: hook-pretool completed in");
-  });
 });

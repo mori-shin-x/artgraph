@@ -21,7 +21,8 @@ const ROOT = resolve(import.meta.dirname, "..");
 
 const readme = readFileSync(resolve(ROOT, "README.md"), "utf8");
 const skillsGuide = readFileSync(resolve(ROOT, "docs", "skills-guide.md"), "utf8");
-const cliSource = readFileSync(resolve(ROOT, "src", "cli.ts"), "utf8");
+// issue #162: `init` moved from src/cli.ts into its own module.
+const cliSource = readFileSync(resolve(ROOT, "src", "commands", "init.ts"), "utf8");
 
 type Stage = {
   id: string;
@@ -29,8 +30,6 @@ type Stage = {
   mention: RegExp;
   /** Default-mode opt-out flag; null for stages without one (config). */
   optOut: string | null;
-  /** --minimal opt-in flag; null for stages without one (config, scan). */
-  optIn: string | null;
   /**
    * Whether README / skills-guide list the opt-out flag. `--no-scan` exists
    * on the CLI but is deliberately not part of the documented opt-out list.
@@ -39,34 +38,30 @@ type Stage = {
 };
 
 const DEFAULT_STAGES: Stage[] = [
-  { id: "config", mention: /config/i, optOut: null, optIn: null, optOutDocumented: false },
-  { id: "scan", mention: /scan/i, optOut: "--no-scan", optIn: null, optOutDocumented: false },
+  { id: "config", mention: /config/i, optOut: null, optOutDocumented: false },
+  { id: "scan", mention: /scan/i, optOut: "--no-scan", optOutDocumented: false },
   {
     id: "skills",
     mention: /Skills/,
     optOut: "--no-skills",
-    optIn: "--with-skills",
     optOutDocumented: true,
   },
   {
     id: "integrate",
     mention: /integrate/i,
     optOut: "--no-integrate",
-    optIn: "--with-integrate",
     optOutDocumented: true,
   },
   {
     id: "hooks",
     mention: /Stop hook/,
     optOut: "--no-hooks",
-    optIn: "--with-hooks",
     optOutDocumented: true,
   },
   {
     id: "agent-context",
     mention: /AGENTS\.md/,
     optOut: "--no-agent-context",
-    optIn: "--with-agent-context",
     optOutDocumented: true,
   },
 ];
@@ -160,11 +155,11 @@ function skillsGuideStageBullets(): string {
   return bullets.join("\n");
 }
 
-/** Source text of one commander command block in src/cli.ts. */
+/** Source text of one commander command block in src/commands/init.ts. */
 function cliCommandBlock(name: string): string {
   const start = cliSource.indexOf(`.command("${name}")`);
   if (start === -1) {
-    throw new Error(`src/cli.ts: .command("${name}") not found`);
+    throw new Error(`src/commands/init.ts: .command("${name}") not found`);
   }
   const next = cliSource.indexOf('.command("', start + 1);
   return cliSource.slice(start, next === -1 ? undefined : next);
@@ -174,7 +169,9 @@ function cliCommandBlock(name: string): string {
 function cliInitDescription(): string {
   const match = cliCommandBlock("init").match(/\.description\(\s*"((?:[^"\\]|\\.)*)"/);
   if (!match) {
-    throw new Error('src/cli.ts: init .description("...") not found or not a plain string');
+    throw new Error(
+      'src/commands/init.ts: init .description("...") not found or not a plain string',
+    );
   }
   return match[1];
 }
@@ -214,8 +211,6 @@ describe("docs-trio consistency: README / docs/skills-guide.md / src/cli.ts (#13
     it("cli.ts declares exactly the expected --no-* opt-outs on init", () => {
       const expected = DEFAULT_STAGES.map((s) => s.optOut)
         .filter((f): f is string => f !== null)
-        // Not a stage opt-out, but declared on init alongside them.
-        .concat(["--no-integrate-gate"])
         .sort();
       const actual = cliInitOptionFlags()
         .filter((f) => f.startsWith("--no-"))
@@ -223,14 +218,8 @@ describe("docs-trio consistency: README / docs/skills-guide.md / src/cli.ts (#13
       expect(actual).toEqual(expected);
     });
 
-    it("cli.ts declares exactly the expected --with-* opt-ins on init", () => {
-      const expected = DEFAULT_STAGES.map((s) => s.optIn)
-        .filter((f): f is string => f !== null)
-        .sort();
-      const actual = cliInitOptionFlags()
-        .filter((f) => f.startsWith("--with-"))
-        .sort();
-      expect(actual).toEqual(expected);
+    it("cli.ts declares no --with-* opt-ins on init (removed in #135)", () => {
+      expect(cliInitOptionFlags().filter((f) => f.startsWith("--with-"))).toEqual([]);
     });
 
     for (const stage of DEFAULT_STAGES.filter((s) => s.optOutDocumented)) {
@@ -251,7 +240,7 @@ describe("docs-trio consistency: README / docs/skills-guide.md / src/cli.ts (#13
     const sources: Array<[string, () => string]> = [
       ["README.md", () => readme],
       ["docs/skills-guide.md", () => skillsGuide],
-      ["src/cli.ts", () => cliSource],
+      ["src/commands/init.ts", () => cliSource],
     ];
     for (const [label, read] of sources) {
       for (const marker of STALE_MARKERS) {
