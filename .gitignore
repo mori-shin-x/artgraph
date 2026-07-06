@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .trace.lock
+templates/graph/vendor/
 
 # Dev tooling (personal)
 .claude/*

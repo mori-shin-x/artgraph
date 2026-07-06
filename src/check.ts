@@ -24,10 +24,22 @@ export function check(
     }
   }
 
+  // issue #155 (B1) — `findOrphans` now returns structured `OrphanEntry[]`
+  // so the `--serve` renderer can compare bare node ids. The scope filter
+  // preserves its previous substring semantics against the same descriptor
+  // string the text CLI prints, so the `check --diff` gate behaviour is
+  // byte-identical. NOTE (meta-B-B): the `.includes(s)` prefix-collision
+  // dormant bug (e.g. scope `{REQ-1}` matching descriptor `REQ-10`) is
+  // NOT fixed here — it existed before this PR and belongs in a follow-up.
   const allOrphans = findOrphans(graph);
-  const orphans = scope
-    ? allOrphans.filter((o) => [...scope].some((s) => o.includes(s)))
+  const scopedOrphans = scope
+    ? allOrphans.filter((o) => {
+        const descriptor = `${o.source} -> ${o.target} (${o.kind})`;
+        return [...scope].some((s) => descriptor.includes(s));
+      })
     : allOrphans;
+  const orphans = scopedOrphans.map((o) => `${o.source} -> ${o.target} (${o.kind})`);
+  const orphanNodeIds = Array.from(new Set(scopedOrphans.map((o) => o.source))).sort();
 
   const allUncovered = findUncovered(graph);
   const uncovered = scope ? allUncovered.filter((id) => scope.has(id)) : allUncovered;
@@ -53,5 +65,5 @@ export function check(
     uncovered.length === 0 &&
     testFailures.length === 0;
 
-  return { drifted, orphans, uncovered, coverage, testFailures, pass };
+  return { drifted, orphans, orphanNodeIds, uncovered, coverage, testFailures, pass };
 }

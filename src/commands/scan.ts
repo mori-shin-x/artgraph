@@ -1,5 +1,6 @@
 // `artgraph scan` — extracted verbatim from `src/cli.ts` (issue #162).
 
+import { resolve } from "node:path";
 import { Command } from "commander";
 import { resolveTestResults } from "./shared.js";
 import { printWarnings } from "./presenters/warnings.js";
@@ -9,12 +10,87 @@ export function registerScanCommand(program: Command): void {
     .command("scan")
     .description("Build the artifact graph and show summary (JSON output includes the full graph)")
     .option("--format <format>", "Output format: json | text", "text")
+    .option("--serve", "Start a local HTTP server rendering the graph interactively")
+    .option("--port <n>", "Port for --serve (default 3737)", (v) => Number.parseInt(v, 10))
+    .option("--host <h>", "Host for --serve (default 127.0.0.1)")
+    .option("--output <dir>", "Emit a static HTML export into <dir>")
     .action(async (opts) => {
       const rootDir = process.cwd();
       const { loadConfig } = await import("../config.js");
       const { scan } = await import("../scan.js");
       const config = loadConfig(rootDir);
       const result = scan(rootDir, config);
+
+      // --serve / --output render the same scan graph as an interactive HTML
+      // page (issue #125). The dedicated `graph` command was folded into
+      // `scan` (#135), so these are alternate renderings that sit alongside
+      // the text / `--format json` output.
+      //
+      // They are mutually exclusive — both drive the same HTML pipeline and
+      // combining them just papers over a misuse. Fail fast with a clear
+      // message.
+      if (opts.serve && opts.output) {
+        console.error(
+          "error: --serve and --output cannot be combined. Pick one (serve to preview locally, output for a static snapshot).",
+        );
+        process.exit(1);
+      }
+
+      if (opts.serve || opts.output) {
+        const { readLock } = await import("../lock.js");
+        const { check } = await import("../check.js");
+        const { renderGraphData } = await import("../graph/render.js");
+        const { startServer, writeStaticExport } = await import("../graph/serve.js");
+
+        // Try to enrich the render with drift/orphan/uncovered state from the
+        // lock. Missing lock is fine (the file didn't exist yet); other read
+        // failures (LockSchemaError, permissions) should surface — silently
+        // swallowing them would hide real repo corruption.
+        let checkResult;
+        try {
+          const lock = readLock(rootDir, config.lockFile);
+          if (Object.keys(lock).length > 0) {
+            checkResult = check(result.graph, lock);
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error(`warning: could not read lock (${msg}); rendering without drift info.`);
+        }
+
+        const data = renderGraphData(result.graph, { rootDir, checkResult });
+
+        if (opts.output) {
+          const outputDir = resolve(rootDir, opts.output);
+          await writeStaticExport({ data, outputDir });
+          console.error(`artgraph scan: static export written to ${outputDir}`);
+          return;
+        }
+
+        // --serve: keep the process alive on the http.Server. SIGINT/SIGTERM
+        // trigger a graceful shutdown; without the handler Ctrl+C would still
+        // work but skip the server.close() drain.
+        const port = typeof opts.port === "number" && !Number.isNaN(opts.port) ? opts.port : 3737;
+        const host = typeof opts.host === "string" ? opts.host : "127.0.0.1";
+        try {
+          const handle = await startServer({ data, port, host });
+          console.error(`artgraph scan: serving at ${handle.url}`);
+          const shutdown = async () => {
+            try {
+              await handle.close();
+            } catch {
+              // Ignore close errors during shutdown — we're exiting anyway.
+            }
+            process.exit(0);
+          };
+          process.once("SIGINT", shutdown);
+          process.once("SIGTERM", shutdown);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          console.error(`error: ${msg}`);
+          process.exit(1);
+        }
+        return;
+      }
 
       const testResults = await resolveTestResults(config, rootDir);
       let testResultStats:
