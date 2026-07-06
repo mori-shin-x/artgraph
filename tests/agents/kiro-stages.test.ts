@@ -1,7 +1,7 @@
 // spec 013 T014 (C1 remediation) — Kiro 2-stage independence.
 //
-// Goal: prove that `--agents=kiro` (Skills stage, T010 wiring) and
-// `--integrations=kiro` (existing KiroProvider stage) are independent
+// Goal: prove that `--agents=kiro` (Skills stage, T010 wiring) and the
+// auto-integrate stage (existing KiroProvider) are independent
 // responsibilities. Each stage owns one path under `.kiro/`:
 //
 //   Skills stage      → `.kiro/skills/...`        (this spec)
@@ -22,35 +22,17 @@
 //     `.kiro/steering/artgraph.md` is exercised end-to-end.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import {
-  AGENT_DESCRIPTORS,
-  type AgentDescriptor,
-} from "../../src/agents/descriptors.js";
+import { AGENT_DESCRIPTORS, type AgentDescriptor } from "../../src/agents/descriptors.js";
 import { distribute } from "../../src/agents/distribute.js";
 import { readSkillSource } from "../../src/agents/source.js";
 import { runAt } from "../helpers.js";
 
-const REPO_TEMPLATES_DIR = resolve(
-  import.meta.dirname,
-  "..",
-  "..",
-  "templates",
-  "skills",
-);
+const REPO_TEMPLATES_DIR = resolve(import.meta.dirname, "..", "..", "templates", "skills");
 
-const KIRO_DESCRIPTOR: AgentDescriptor = AGENT_DESCRIPTORS.find(
-  (d) => d.id === "kiro",
-)!;
+const KIRO_DESCRIPTOR: AgentDescriptor = AGENT_DESCRIPTORS.find((d) => d.id === "kiro")!;
 
 const KIRO_SKILLS_REL = ".kiro/skills";
 const KIRO_STEERING_REL = ".kiro/steering/artgraph.md";
@@ -79,7 +61,7 @@ describe("spec 013 FR-008 — Kiro Skills vs Integrate stage independence", () =
   // CLI does (Skills stage first, then integrate). Asserting both targets
   // land proves the two responsibilities co-exist without interference.
   // -------------------------------------------------------------------
-  it("(a) distribute(kiro) + integrate=kiro both land", async () => {
+  it("(a) distribute(kiro) + auto-integrate both land", async () => {
     const source = readSkillSource(REPO_TEMPLATES_DIR);
     const result = distribute(KIRO_DESCRIPTOR, source, { rootDir: tmp });
 
@@ -93,13 +75,7 @@ describe("spec 013 FR-008 — Kiro Skills vs Integrate stage independence", () =
     // `--no-skills --no-agent-context` so the run does NOT require
     // `--agents` (which would loop back into the same Skills stage we
     // already exercised above).
-    const integrate = await runAt(tmp, [
-      "init",
-      "--no-scan",
-      "--integrations=kiro",
-      "--no-skills",
-      "--no-agent-context",
-    ]);
+    const integrate = await runAt(tmp, ["init", "--no-scan", "--no-skills", "--no-agent-context"]);
     expect(integrate.exitCode).toBe(0);
     expect(existsSync(join(tmp, KIRO_STEERING_REL))).toBe(true);
 
@@ -122,13 +98,13 @@ describe("spec 013 FR-008 — Kiro Skills vs Integrate stage independence", () =
 
   // -------------------------------------------------------------------
   // Scenario (c) — Integrate stage alone never writes `.kiro/skills/`.
-  // Drives the CLI with both stages disabled except for `--integrations=kiro`.
+  // Drives the CLI with the Skills / agent-context stages disabled so only
+  // the auto-integrate stage (kiro detected) runs.
   // -------------------------------------------------------------------
-  it("(c) --integrations=kiro alone does NOT write .kiro/skills/", async () => {
+  it("(c) auto-integrate (kiro) alone does NOT write .kiro/skills/", async () => {
     const { exitCode } = await runAt(tmp, [
       "init",
       "--no-scan",
-      "--integrations=kiro",
       "--no-skills",
       "--no-agent-context",
     ]);
@@ -159,13 +135,7 @@ describe("spec 013 FR-008 — Kiro Skills vs Integrate stage independence", () =
     // Integrate: 1st pass writes the steering file; 2nd pass is a noop
     // (the existing KiroProvider implementation reads the on-disk content
     // and returns `noop: true` when it matches the template).
-    const integrateA = await runAt(tmp, [
-      "init",
-      "--no-scan",
-      "--integrations=kiro",
-      "--no-skills",
-      "--no-agent-context",
-    ]);
+    const integrateA = await runAt(tmp, ["init", "--no-scan", "--no-skills", "--no-agent-context"]);
     expect(integrateA.exitCode).toBe(0);
     expect(existsSync(join(tmp, KIRO_STEERING_REL))).toBe(true);
     const firstSteering = readFileSync(join(tmp, KIRO_STEERING_REL), "utf-8");
@@ -174,7 +144,6 @@ describe("spec 013 FR-008 — Kiro Skills vs Integrate stage independence", () =
       "init",
       "--force", // bypass ".artgraph.json already exists"
       "--no-scan",
-      "--integrations=kiro",
       "--no-skills",
       "--no-agent-context",
     ]);
@@ -199,19 +168,12 @@ describe("spec 013 FR-008 — Kiro Skills vs Integrate stage independence", () =
   it("(e) integrate stage runs even when Skills stage would fail (independence)", async () => {
     // Plant a drifted file under .kiro/skills/ so distribute(force=false)
     // throws on this target.
-    const drifted = join(
-      tmp,
-      KIRO_SKILLS_REL,
-      "artgraph-impact",
-      "SKILL.md",
-    );
+    const drifted = join(tmp, KIRO_SKILLS_REL, "artgraph-impact", "SKILL.md");
     mkdirSync(join(tmp, KIRO_SKILLS_REL, "artgraph-impact"), { recursive: true });
     writeFileSync(drifted, "user-edited\n", "utf-8");
 
     const source = readSkillSource(REPO_TEMPLATES_DIR);
-    expect(() =>
-      distribute(KIRO_DESCRIPTOR, source, { rootDir: tmp }),
-    ).toThrow(); // drift conflict, no --force
+    expect(() => distribute(KIRO_DESCRIPTOR, source, { rootDir: tmp })).toThrow(); // drift conflict, no --force
 
     // The drifted file is untouched (no rollback corruption).
     expect(readFileSync(drifted, "utf-8")).toBe("user-edited\n");
@@ -220,7 +182,6 @@ describe("spec 013 FR-008 — Kiro Skills vs Integrate stage independence", () =
     const { exitCode } = await runAt(tmp, [
       "init",
       "--no-scan",
-      "--integrations=kiro",
       "--no-skills",
       "--no-agent-context",
     ]);

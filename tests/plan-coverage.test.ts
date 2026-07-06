@@ -11,7 +11,7 @@
 //   - mention subtraction on `impactReqs` only (originReqs stays raw)
 //   - --ignore one-shot suppression
 //   - --gate exit codes
-//   - --require-files-section diagnostics
+//   - requireFilesSection diagnostics
 //   - text-format two-axis view ("Impact reqs:" / "Origin reqs:" /
 //     conditional "Drift candidates:" section)
 //   - symbol-mode features (symbol-unit dedup, file-unit sourceSymbol
@@ -385,7 +385,7 @@ describe("runPlanCoverage — --gate exit codes", () => {
   });
 });
 
-describe("runPlanCoverage — --require-files-section diagnostics", () => {
+describe("runPlanCoverage — requireFilesSection diagnostics", () => {
   let fx: FixtureRoot;
   afterEach(() => {
     if (fx) rmSync(fx.root, { recursive: true, force: true });
@@ -446,7 +446,7 @@ describe("runPlanCoverage — --require-files-section diagnostics", () => {
     }
   });
 
-  it("--gate + --require-files-section ON with diagnostics → exit 1", () => {
+  it("--gate + requireFilesSection ON with diagnostics → exit 1", () => {
     fx = setupFixture({
       tasksBody: [
         "# Tasks",
@@ -606,7 +606,7 @@ describe("runPlanCoverage — text format hints (UX-4 / MIG-4)", () => {
     if (fx) rmSync(fx.root, { recursive: true, force: true });
   });
 
-  it("text output shows --require-files-section OFF hint when the flag is false", () => {
+  it("text output shows requireFilesSection OFF hint when the option is false", () => {
     fx = setupFixture();
     const result = runPlanCoverage({
       repoRoot: fx.root,
@@ -618,14 +618,14 @@ describe("runPlanCoverage — text format hints (UX-4 / MIG-4)", () => {
       ignore: [],
       requireFilesSection: false,
     });
-    // The hint nudges the user toward enabling the flag so silent-green
-    // reports don't hide missing `Files:` sections.
+    // The hint nudges the user toward enabling the config option so
+    // silent-green reports don't hide missing `Files:` sections.
     expect(result.text).toContain("OFF");
     expect(result.text).toContain("Enable");
-    expect(result.text).toContain("--require-files-section");
+    expect(result.text).toContain("planCoverage.requireFilesSection");
   });
 
-  it("text output suppresses the OFF hint when --require-files-section is true", () => {
+  it("text output suppresses the OFF hint when requireFilesSection is true", () => {
     fx = setupFixture();
     const result = runPlanCoverage({
       repoRoot: fx.root,
@@ -637,7 +637,7 @@ describe("runPlanCoverage — text format hints (UX-4 / MIG-4)", () => {
       ignore: [],
       requireFilesSection: true,
     });
-    expect(result.text).not.toContain("--require-files-section is OFF");
+    expect(result.text).not.toContain("requireFilesSection is OFF");
   });
 
   it("text output shows emptyExtraction hint when no files were extracted", () => {

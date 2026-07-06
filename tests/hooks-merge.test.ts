@@ -116,9 +116,7 @@ describe("installHooks (Stop-hook merge)", () => {
     // {{...}} placeholders in the written file.
     expect(raw).not.toContain("{{");
     const parsed = JSON.parse(raw);
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
     expect(result.hooksInstall).toEqual({ action: "created", failure: false });
   });
 
@@ -133,9 +131,7 @@ describe("installHooks (Stop-hook merge)", () => {
 
     const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
     expect(parsed.permissions).toEqual({ allow: ["Bash"] });
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
     expect(result.hooksInstall?.action).toBe("merged-b");
     expect(result.hooksInstall?.failure).toBe(false);
   });
@@ -152,9 +148,7 @@ describe("installHooks (Stop-hook merge)", () => {
 
     const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
     expect(parsed.hooks.PreToolUse).toEqual(preToolUse);
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
     expect(result.hooksInstall?.action).toBe("merged-c");
     expect(result.hooksInstall?.failure).toBe(false);
   });
@@ -239,9 +233,7 @@ describe("installHooks (Stop-hook merge)", () => {
     const result = runInit(tmp, { noScan: true, force: true });
 
     const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
     expect(result.hooksInstall?.action).toBe("merged-b");
     expect(result.hooksInstall?.failure).toBe(false);
   });
@@ -292,7 +284,7 @@ describe("installHooks (Stop-hook merge)", () => {
       expect(result.hooksInstall?.failure).toBeFalsy();
       const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
       expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-        `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
+        `${execPrefix("pnpm")} check --gate --diff`,
       );
     });
   });
@@ -330,7 +322,7 @@ describe("installHooks (Stop-hook merge)", () => {
       const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
       const command: string = parsed.hooks.Stop[0].hooks[0].command;
       expect(command.startsWith(execPrefix(pm))).toBe(true);
-      expect(command).toBe(`${execPrefix(pm)} check --gate --diff --mode symbol`);
+      expect(command).toBe(`${execPrefix(pm)} check --gate --diff`);
     });
   });
 
@@ -339,27 +331,6 @@ describe("installHooks (Stop-hook merge)", () => {
   it("PM undetectable + default full setup → skipped-no-pm, not a failure", () => {
     // No package.json, no lockfile, no deno marker anywhere in tmp.
     const result = runInit(tmp, { noScan: true });
-
-    expect(existsSync(settingsPath(tmp))).toBe(false);
-    expect(result.hooksInstall?.action).toBe("skipped-no-pm");
-    expect(result.hooksInstall?.failure).toBe(false);
-  });
-
-  it("PM undetectable + --minimal --with-hooks (explicit opt-in) → skipped-no-pm, failure", () => {
-    const result = runInit(tmp, { minimal: true, withHooks: true });
-
-    expect(existsSync(settingsPath(tmp))).toBe(false);
-    expect(result.hooksInstall?.action).toBe("skipped-no-pm");
-    expect(result.hooksInstall?.failure).toBe(true);
-  });
-
-  it("E1: PM undetectable + default mode + --with-hooks → NOT a failure (redundant flag)", () => {
-    // Under default mode, --with-hooks is redundant (hooks are already on)
-    // and must NOT flip PM-missing into a failure. Before E1, passing
-    // `withHooks: true` in default mode escalated skipped-no-pm → exit 1,
-    // giving `init --with-hooks` and plain `init` opposite outcomes for
-    // identical on-disk state.
-    const result = runInit(tmp, { withHooks: true, noScan: true });
 
     expect(existsSync(settingsPath(tmp))).toBe(false);
     expect(result.hooksInstall?.action).toBe("skipped-no-pm");
@@ -394,9 +365,7 @@ describe("installHooks (Stop-hook merge)", () => {
     expect(result.hooksInstall?.action).toBe("created");
     expect(existsSync(settingsPath(tmp))).toBe(true);
     const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
   });
 
   // -- --no-hooks --------------------------------------------------------------------
@@ -415,20 +384,18 @@ describe("installHooks (Stop-hook merge)", () => {
     expect(result.hooksInstall).toBeUndefined();
   });
 
-  // -- --minimal --with-hooks in an empty dir ------------------------------------------
+  // -- default mode in an empty dir -----------------------------------------------------
 
-  it("--minimal --with-hooks creates .claude/settings.json when .claude/ doesn't exist yet", () => {
+  it("default mode creates .claude/settings.json when .claude/ doesn't exist yet", () => {
     seedPm(tmp, "pnpm");
     expect(existsSync(join(tmp, ".claude"))).toBe(false);
 
-    const result = runInit(tmp, { minimal: true, withHooks: true });
+    const result = runInit(tmp, { noScan: true });
 
     expect(existsSync(settingsPath(tmp))).toBe(true);
     expect(result.hooksInstall?.action).toBe("created");
     const parsed = JSON.parse(readFileSync(settingsPath(tmp), "utf-8"));
-    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
   });
 
   // -- A3: Case D reason SSOT (rendered template body) -----------------------------
@@ -439,7 +406,7 @@ describe("installHooks (Stop-hook merge)", () => {
     // write, the user would be told to paste something different from what
     // artgraph actually wants — silently. Assert that the reason we emit is
     // literally the rendered template body, including whatever suffix the
-    // current template carries (--mode symbol today).
+    // current template carries.
     seedPm(tmp, "pnpm");
     mkdirSync(join(tmp, ".claude"), { recursive: true });
     writeFileSync(
@@ -452,9 +419,7 @@ describe("installHooks (Stop-hook merge)", () => {
     const result = runInit(tmp, { noScan: true, force: true });
 
     expect(result.hooksInstall?.action).toBe("conflict");
-    expect(result.hooksInstall?.reason).toBe(
-      `${execPrefix("pnpm")} check --gate --diff --mode symbol`,
-    );
+    expect(result.hooksInstall?.reason).toBe(`${execPrefix("pnpm")} check --gate --diff`);
   });
 
   // -- B1+B2: writeAtomic .tmp cleanup on rename failure --------------------------
@@ -537,8 +502,8 @@ describe("installHooks (Stop-hook merge)", () => {
     // (root user / non-Unix FS), skip gracefully — the contract is still
     // enforced by the try/catch code path + tsc.
     //
-    // Uses `--minimal --with-hooks` so only the hooks stage runs; a full
-    // default init would hit the same chmod'd `.claude` in installSkills
+    // Runs without `agents` so the Skills / agent-context stages no-op; a
+    // Skills-stage run would hit the same chmod'd `.claude` in distribute()
     // first and throw before we can exercise the lstat path.
     if (typeof process.getuid === "function" && process.getuid() === 0) {
       return;
@@ -551,7 +516,7 @@ describe("installHooks (Stop-hook merge)", () => {
 
     let result;
     try {
-      result = runInit(tmp, { minimal: true, withHooks: true, force: true });
+      result = runInit(tmp, { noScan: true, force: true });
     } finally {
       // Always restore so afterEach's rmSync can descend into `.claude`.
       chmodSync(claudeDir, 0o755);
@@ -561,55 +526,5 @@ describe("installHooks (Stop-hook merge)", () => {
     // an escaped exception that took down the whole init.
     expect(result.hooksInstall?.action).toBe("io-error");
     expect(result.hooksInstall?.failure).toBe(true);
-  });
-});
-
-// -- E2-2: --no-integrate + --integrations conflict via CLI ------------------------
-
-describe("init CLI: --no-integrate + --integrations conflict (E2-2)", () => {
-  let tmp: string;
-  let errSpy: ReturnType<typeof vi.spyOn>;
-
-  beforeEach(() => {
-    tmp = mkdtempSync(join(tmpdir(), "artgraph-cli-conflicts-"));
-    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    errSpy.mockRestore();
-    rmSync(tmp, { recursive: true, force: true });
-  });
-
-  it("--no-integrate --integrations=speckit → exit 1 with 'mutually exclusive'", async () => {
-    // Before E2-2, this pair silently dropped `--integrations` in default
-    // mode and *reversed* into an opt-in under `--minimal`. Both surfaces
-    // must now be flagged as a hard error before any fs writes occur.
-    const r = await runCli(["init", "--no-integrate", "--integrations", "speckit"], { cwd: tmp });
-
-    expect(r.exitCode).toBe(1);
-    expect(r.stderr).toMatch(/mutually exclusive/);
-    // No writes happened because the check runs before runInit.
-    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
-  });
-
-  it("--no-integrate --integrations=all → exit 1 with 'mutually exclusive'", async () => {
-    const r = await runCli(["init", "--no-integrate", "--integrations", "all"], { cwd: tmp });
-
-    expect(r.exitCode).toBe(1);
-    expect(r.stderr).toMatch(/mutually exclusive/);
-    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(false);
-  });
-
-  it("--no-integrate --integrations='' (empty) is NOT a conflict (parseInitIntegrations collapses to undefined)", async () => {
-    // Empty / whitespace / ",,," inputs collapse to undefined, which is
-    // semantically "no provider chosen" — indistinguishable from omitting
-    // the flag. Must not trigger the mutual-exclusion check.
-    const r = await runCli(["init", "--no-integrate", "--integrations", "", "--minimal"], {
-      cwd: tmp,
-    });
-
-    expect(r.exitCode).toBe(0);
-    expect(r.stderr).not.toMatch(/mutually exclusive/);
-    expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
   });
 });

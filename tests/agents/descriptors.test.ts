@@ -8,11 +8,7 @@ import { describe, it, expect } from "vitest";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import {
-  AGENT_DESCRIPTORS,
-  AGENT_IDS,
-  findDescriptor,
-} from "../../src/agents/descriptors.js";
+import { AGENT_DESCRIPTORS, AGENT_IDS, findDescriptor } from "../../src/agents/descriptors.js";
 import { readSkillSource } from "../../src/agents/source.js";
 import { SkillsInstallError } from "../../src/init.js";
 import { createFreshProject } from "./helpers.js";
@@ -84,7 +80,7 @@ describe("AGENT_DESCRIPTORS table (spec 013 §data-model 1)", () => {
     expect(d.agentContextLoad).toBe("both");
   });
 
-  it("kiro → .kiro/skills, no wrapper, native-agents-md (steering is --integrations responsibility)", () => {
+  it("kiro → .kiro/skills, no wrapper, native-agents-md (steering is the integrate stage responsibility)", () => {
     const d = findDescriptor("kiro")!;
     expect(d.skillsPath).toBe(".kiro/skills");
     expect(d.wrapperFile).toBeNull();
@@ -218,9 +214,7 @@ describe("readSkillSource (spec 013 §data-model 2, R1)", () => {
       );
 
       expect(() => readSkillSource(templatesDir)).toThrow(SkillsInstallError);
-      expect(() => readSkillSource(templatesDir)).toThrow(
-        /artgraph-broken.*missing SKILL\.md/,
-      );
+      expect(() => readSkillSource(templatesDir)).toThrow(/artgraph-broken.*missing SKILL\.md/);
     } finally {
       cleanup();
     }

@@ -1,24 +1,22 @@
 // `artgraph scan` — extracted verbatim from `src/cli.ts` (issue #162).
 
-import { Command, Option } from "commander";
-import { applyMode, resolveTestResults } from "./shared.js";
+import { Command } from "commander";
+import { resolveTestResults } from "./shared.js";
 import { printWarnings } from "./presenters/warnings.js";
 
 export function registerScanCommand(program: Command): void {
   program
     .command("scan")
-    .description("Build the artifact graph and show summary")
+    .description("Build the artifact graph and show summary (JSON output includes the full graph)")
     .option("--format <format>", "Output format: json | text", "text")
-    .option("--test-results <paths...>", "Test result files (Vitest JSON / JUnit XML)")
-    .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
     .action(async (opts) => {
       const rootDir = process.cwd();
       const { loadConfig } = await import("../config.js");
       const { scan } = await import("../scan.js");
-      const config = applyMode(loadConfig(rootDir), opts.mode);
+      const config = loadConfig(rootDir);
       const result = scan(rootDir, config);
 
-      const testResults = await resolveTestResults(opts, config, rootDir);
+      const testResults = await resolveTestResults(config, rootDir);
       let testResultStats:
         | { totalTests: number; passedTests: number; failedTests: number }
         | undefined;
@@ -37,6 +35,10 @@ export function registerScanCommand(program: Command): void {
       }
 
       if (opts.format === "json") {
+        // Full graph payload (nodes / edges) rides along with the count
+        // summary — `scan --format json` absorbed the old `graph` command.
+        const { graphToJSON } = await import("../graph/format.js");
+        const { nodes, edges } = graphToJSON(result.graph);
         const output: Record<string, unknown> = {
           nodeCount: result.nodeCount,
           edgeCount: result.edgeCount,
@@ -46,6 +48,8 @@ export function registerScanCommand(program: Command): void {
           symbolCount: result.symbolCount,
           testCount: result.testCount,
           taskCount: result.taskCount,
+          nodes,
+          edges,
           warnings: result.warnings,
         };
         if (testResultStats) {
