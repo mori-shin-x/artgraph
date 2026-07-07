@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { buildGraph } from "../src/graph/builder.js";
 import { buildLockFromGraph } from "../src/lock.js";
 import { check } from "../src/check.js";
+import { uncoveredKey } from "../src/baseline.js";
 import type { ArtgraphConfig, LockFile, TestResultMap, ArtifactGraph } from "../src/types.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
@@ -135,6 +136,61 @@ describe("check", () => {
     const result = check(graph, lock);
     expect(result.testFailures).toEqual([]);
     expect(result.pass).toBe(true);
+  });
+
+  // spec 017 (T029) — legacy `check(graph, lock, ...)` calls with no `baseline`
+  // stay back-compatible: with an empty key set every scoped issue is "new",
+  // so `pass` still means "all scoped issues clear". spec 017 (Critical fix
+  // B6/D2, issue #182 review) — a call with no `diffRequested` flag is a
+  // plain (non-`--diff`) check, so `baselineStatus` is now reported as
+  // "not_applicable" (the baseline-diff concept itself doesn't apply — this
+  // used to be conflated with "skipped", which is reserved for a `--diff`
+  // lazy-eval run whose scope was already clean).
+  it("omitting the baseline argument treats every scoped issue as new (back-compat)", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    const result = check(graph, {});
+    expect(result.baselineStatus).toBe("not_applicable");
+    // uncovered AUTH-003 is scoped and, without a baseline, also new.
+    expect(result.uncovered).toContain("AUTH-003");
+    expect(result.newIssues.uncovered).toEqual(result.uncovered);
+    expect(result.pass).toBe(false);
+  });
+
+  // spec 017 (Critical fix B6/D2, issue #182 review) — the SAME "no baseline
+  // supplied" input resolves to two different `baselineStatus` values
+  // depending on the new `diffRequested` argument: a plain check (omitted /
+  // false) → "not_applicable"; a `--diff` run whose lazy-eval (R6) has not
+  // built a baseline yet (true) → "skipped". This is exactly the distinction
+  // the old unconditional `status ?? "skipped"` fallback collapsed.
+  it("diffRequested distinguishes not_applicable (plain check) from skipped (--diff lazy-eval)", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    const plain = check(graph, {});
+    expect(plain.baselineStatus).toBe("not_applicable");
+
+    const diffLazy = check(graph, {}, undefined, undefined, undefined, true);
+    expect(diffLazy.baselineStatus).toBe("skipped");
+
+    // diffRequested only changes the reported label — the new-issue
+    // determination and pass verdict are computed identically either way.
+    expect(diffLazy.newIssues).toEqual(plain.newIssues);
+    expect(diffLazy.pass).toBe(plain.pass);
+  });
+
+  // spec 017 (T029) — a supplied baseline subtracts pre-existing issues, so a
+  // scoped issue whose identity key is in the baseline is NOT counted as new.
+  it("a baseline key set suppresses matching scoped issues from newIssues", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    // AUTH-003 is uncovered in the fixture. Put its key in the baseline → it
+    // becomes pre-existing (suppressed), so the gate passes on it.
+    const baseline = {
+      keys: new Set([uncoveredKey("AUTH-003")]),
+      status: "computed" as const,
+    };
+    const result = check(graph, {}, undefined, undefined, baseline);
+    expect(result.uncovered).toContain("AUTH-003"); // still in scoped output
+    expect(result.newIssues.uncovered).not.toContain("AUTH-003"); // but not new
+    expect(result.suppressedCount).toBeGreaterThanOrEqual(1);
+    expect(result.baselineStatus).toBe("computed");
   });
 
   // SC-006: annotation churn (added/removed `(depends_on: …)` notes) must not
