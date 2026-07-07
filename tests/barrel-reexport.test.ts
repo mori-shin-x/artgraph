@@ -600,4 +600,21 @@ describe("#187 CJS-style TS: import = require() emits at least a file-grain impo
     });
     expect(impactReqs(root, "src/c.ts")).toEqual(["REQ-011"]);
   });
+
+  it('also handles `export import m = require("./m")` (wrapped in ExportNamedDeclaration)', () => {
+    // OXC wraps this form as `ExportNamedDeclaration { declaration:
+    // TSImportEqualsDeclaration, source: null }`. A branch that only
+    // matched top-level `TSImportEqualsDeclaration` missed it and the
+    // consumer edge list came back empty — the same fail-open the plain
+    // form used to have. Pin the wrapped form so we don't regress.
+    makeRepo({
+      "src/m.ts": "// @impl REQ-012\nconst foo = () => 1;\nexport = foo;\n",
+      "src/c.ts": 'export import m = require("./m");\nexport const use = m;\n',
+    });
+    const frag = parseOne("src/c.ts");
+    const importEdges = frag.edges.filter(
+      (e) => e.kind === "imports" && e.source === "file:src/c.ts",
+    );
+    expect(importEdges.map((e) => e.target)).toEqual(["file:src/m.ts"]);
+  });
 });
