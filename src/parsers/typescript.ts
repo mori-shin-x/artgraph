@@ -551,7 +551,11 @@ function computeLineHasCode(
     const end = line < numLines ? lineStarts[line] : content.length;
     for (let i = start; i < end; i++) {
       const ch = content[i];
-      if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n") continue;
+      // Match any Unicode whitespace (\s covers U+3000 etc.) — otherwise a
+      // stray full-width space on an otherwise blank line stops the upward
+      // leading-trivia walk and a `// @impl` above it silently falls back to
+      // file attribution. See issue #190.
+      if (/\s/.test(ch)) continue;
       if (inComment[i]) continue;
       hasCode[line] = true;
       break;
