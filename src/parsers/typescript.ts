@@ -796,6 +796,20 @@ function extractImports(
         // grain by the builder's phantom-repair pass (issue #177 follow-up
         // tracks true per-symbol star precision).
         reexportRefs.push({ specifier: stmt.source.value, named: [] });
+      } else if (
+        stmt.type === "TSImportEqualsDeclaration" &&
+        stmt.moduleReference.type === "TSExternalModuleReference"
+      ) {
+        // `import m = require("./m")` (CJS-style TS). Treat as a namespace
+        // import so symbol mode falls back to a file-grain edge — the
+        // require target has no named specifiers to route per-symbol
+        // through, and its origin uses `export =` which we cannot bind to
+        // a specific export name. This closes the pre-existing fail-open
+        // where consumer edges were empty entirely (issue #187).
+        const specifier = stmt.moduleReference.expression?.value;
+        if (typeof specifier === "string") {
+          importRefs.push({ specifier, hasDefault: false, hasNamespace: true, named: [] });
+        }
       }
     }
   } else {
