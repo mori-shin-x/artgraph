@@ -165,7 +165,7 @@ artgraph plan-coverage --gate --ignore REQ-003,REQ-007
 | `Files:` syntax | `src/auth.ts` | `src/auth.ts:validateToken` (file 単位も混在 OK) |
 | 想定ユーザー | 新規実装 / 大規模 refactor | 既存関数 1 個だけ修正する保守ケース |
 | 必要な scan 設定 | デフォルト (`mode: "file"`) | `.artgraph.json` で `"mode": "symbol"` |
-| barrel / re-export | OK 対応 | 一部不可 (動的 import / namespace import は file-level fallback) |
+| barrel / re-export | OK 対応 | 静的 named/aliased re-export (`export { x } from` / `export { x as y } from` / `export type {} from`) は per-symbol 解決。namespace import (`import * as`) / dynamic import (`import()`) / `export *` 経由の named import は file-level fallback |
 | 過剰検知の傾向 | 同 file 内の全 symbol を巻き込む | 当該 symbol からの forward 波及のみ |
 
 ### `.artgraph.json` の `mode` 設定例

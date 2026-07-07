@@ -81,6 +81,10 @@ export interface ParsedTS {
 
 interface SymbolRange {
   name: string;
+  // Declaration-group id: every sibling binding of ONE variable-declaration
+  // statement shares it; every other export is its own group. resolveSymbolsAt
+  // Line selects a single group and never merges across groups (D1).
+  group: number;
   startLine: number;
   endLine: number;
 }
@@ -312,12 +316,12 @@ function parseTSFile(
 
   let symbolRanges: SymbolRange[] = [];
   if (parsed && mode === "symbol" && !isTest) {
-    symbolRanges = extractSymbols(parsed.program, content, relPath, nodes);
+    symbolRanges = extractSymbols(parsed.program, content, relPath, nodes, parsed.comments);
   }
   if (parsed) {
-    extractImports(parsed, content, relPath, filePath, rootDir, edges, mode, isTest, ctx);
+    extractImports(parsed, content, relPath, filePath, rootDir, nodes, edges, mode, isTest, ctx);
   }
-  extractImplTags(content, relPath, isTest, edges, mode, symbolRanges, matchers);
+  extractImplTags(content, relPath, isTest, edges, mode, symbolRanges, matchers, parsed?.comments);
 
   return { nodes, edges };
 }
@@ -347,8 +351,16 @@ interface LocalDecl {
 
 interface ExportEntry {
   name: string;
+  // Hash span (contentHash input) — the declarator/declaration text, unchanged.
   start: number;
   end: number;
+  // Declaration group + attribution span. The attribution span is the whole
+  // statement for a variable declaration (so a leading tag binds every sibling)
+  // and equals start/end for every other export. Kept SEPARATE from the hash
+  // span so widening never leaks into contentHash (INV-L4).
+  group: number;
+  attrStart: number;
+  attrEnd: number;
 }
 
 function isFunctionDecl(node: { type: string } | null | undefined): boolean {
@@ -369,11 +381,14 @@ function declTextStart(stmtStart: number, decl: unknown): number {
   return start;
 }
 
+type OxcComment = OxcParseResult["comments"][number];
+
 function extractSymbols(
   program: OxcProgram,
   content: string,
   relPath: string,
   nodes: GraphNode[],
+  comments: readonly OxcComment[] = [],
 ): SymbolRange[] {
   const declMap = collectTopLevelDecls(program);
   const lookup = (name: string): LocalDecl | undefined => {
@@ -387,10 +402,18 @@ function extractSymbols(
 
   const entries: ExportEntry[] = [];
   const seen = new Set<string>();
-  const push = (name: string, start: number, end: number) => {
+  let groupCounter = 0;
+  const push = (
+    name: string,
+    start: number,
+    end: number,
+    group: number,
+    attrStart = start,
+    attrEnd = end,
+  ) => {
     if (seen.has(name)) return;
     seen.add(name);
-    entries.push({ name, start, end });
+    entries.push({ name, start, end, group, attrStart, attrEnd });
   };
 
   // Pass 1 — top-level function statements, source order. The TS binder binds
@@ -400,9 +423,9 @@ function extractSymbols(
   for (const stmt of program.body) {
     if (stmt.type === "ExportNamedDeclaration" && isFunctionDecl(stmt.declaration)) {
       const decl = stmt.declaration as { id: { name: string } | null; end: number };
-      if (decl.id) push(decl.id.name, stmt.start, decl.end);
+      if (decl.id) push(decl.id.name, stmt.start, decl.end, groupCounter++);
     } else if (stmt.type === "ExportDefaultDeclaration" && isFunctionDecl(stmt.declaration)) {
-      push("default", stmt.start, stmt.declaration.end);
+      push("default", stmt.start, stmt.declaration.end, groupCounter++);
     }
   }
 
@@ -414,53 +437,79 @@ function extractSymbols(
       if (decl) {
         if (isFunctionDecl(decl)) continue; // pass 1
         if (decl.type === "VariableDeclaration") {
+          // One `export const a = 1, b = 2` / `export const { a, b } = …` is a
+          // SINGLE group: all sibling declarators share the statement-wide
+          // attribution span (stmt.start … decl.end) so a leading tag binds to
+          // every one, even when declarators span multiple lines. The hash span
+          // stays each declarator (s/e) — contentHash is unchanged.
+          const g = groupCounter++;
           for (const declarator of decl.declarations) {
-            collectBindingNames(declarator.id, declarator.start, declarator.end, push);
+            collectBindingNames(declarator.id, declarator.start, declarator.end, (name, s, e) =>
+              push(name, s, e, g, stmt.start, decl.end),
+            );
           }
         } else if (decl.type === "ClassDeclaration") {
-          if (decl.id) push(decl.id.name, declTextStart(stmt.start, decl), decl.end);
+          if (decl.id)
+            push(decl.id.name, declTextStart(stmt.start, decl), decl.end, groupCounter++);
         } else if (
           decl.type === "TSInterfaceDeclaration" ||
           decl.type === "TSTypeAliasDeclaration" ||
           decl.type === "TSEnumDeclaration"
         ) {
-          push(decl.id.name, stmt.start, decl.end);
+          push(decl.id.name, stmt.start, decl.end, groupCounter++);
         } else if (decl.type === "TSModuleDeclaration" && decl.id.type === "Identifier") {
-          push(decl.id.name, stmt.start, decl.end);
+          push(decl.id.name, stmt.start, decl.end, groupCounter++);
         }
       } else {
         // `export { a as b }` — the exported name is the alias; the
         // declaration is the local target. Imported / undeclared targets are
-        // skipped (foreign declarations never became symbol nodes).
+        // skipped (foreign declarations never became symbol nodes). Each
+        // specifier is its own group.
         for (const spec of stmt.specifiers) {
           const localName = moduleExportName(spec.local);
           const target = localName === undefined ? undefined : lookup(localName);
           if (!target) continue;
           const exportedName = moduleExportName(spec.exported);
-          if (exportedName !== undefined) push(exportedName, target.start, target.end);
+          if (exportedName !== undefined)
+            push(exportedName, target.start, target.end, groupCounter++);
         }
       }
     } else if (stmt.type === "ExportDefaultDeclaration") {
       const decl = stmt.declaration;
       if (isFunctionDecl(decl)) continue; // pass 1
       if (decl.type === "ClassDeclaration") {
-        push("default", declTextStart(stmt.start, decl), decl.end);
+        push("default", declTextStart(stmt.start, decl), decl.end, groupCounter++);
       } else if (decl.type === "TSInterfaceDeclaration") {
-        push("default", stmt.start, decl.end);
+        push("default", stmt.start, decl.end, groupCounter++);
       } else if (decl.type === "Identifier") {
         // `export default foo;` resolves to foo's local declaration (skipped
         // when foo is imported/undeclared).
         const target = lookup(decl.name);
-        if (target) push("default", target.start, target.end);
+        if (target) push("default", target.start, target.end, groupCounter++);
       } else {
         // `export default <expr>;` — the symbol hashes the expression node.
-        push("default", decl.start, decl.end);
+        push("default", decl.start, decl.end, groupCounter++);
       }
     }
     // ExportAllDeclaration / TSExportAssignment (`export =`): no local symbols.
   }
 
   const lineStarts = buildLineStarts(content);
+  // Leading-trivia attribution (issue #177). A `// @impl REQ` written on the
+  // line(s) directly above `export …` (idiomatic, and what `bootstrap` emits)
+  // must bind to the symbol, not the file — otherwise symbol-mode gate/impact
+  // fail-opens for named imports. We widen only the symbol's ATTRIBUTION range
+  // (`startLine`) upward over contiguous comment-only / blank lines, stopping
+  // at the first line carrying code. The node `contentHash` still hashes the
+  // ORIGINAL declaration span, so symbol lock bytes are unchanged (only the
+  // `implements` edge SOURCE moves file:x -> symbol:x#name). Working at line
+  // granularity — not the raw `entry.start` offset — is essential: for a
+  // `export const x = …` the entry offset is the DECLARATOR (`x`, after
+  // `const`), so an offset walk would hit code immediately; the line above the
+  // declaration is what carries the tag. JSDoc blocks are spanned line-by-line
+  // (each interior line is comment-only) so a `// @impl` above the JSDoc is
+  // still reached.
+  const lineHasCode = computeLineHasCode(content, comments, lineStarts);
   const ranges: SymbolRange[] = [];
   for (const entry of entries) {
     nodes.push({
@@ -469,13 +518,46 @@ function extractSymbols(
       filePath: relPath,
       contentHash: hash(content.slice(entry.start, entry.end)),
     });
+    let startLine = lineOf(lineStarts, entry.attrStart);
+    while (startLine > 1 && !lineHasCode[startLine - 1]) startLine--;
     ranges.push({
       name: entry.name,
-      startLine: lineOf(lineStarts, entry.start),
-      endLine: lineOf(lineStarts, entry.end),
+      group: entry.group,
+      startLine,
+      endLine: lineOf(lineStarts, entry.attrEnd),
     });
   }
   return ranges;
+}
+
+// Per-line (1-based) "does this line contain a non-whitespace character that
+// is NOT inside a comment?" A blank line and a comment-only line both yield
+// false; any real token yields true. Used by extractSymbols to bound the
+// upward leading-trivia walk at the first code line (issue #177).
+function computeLineHasCode(
+  content: string,
+  comments: readonly OxcComment[],
+  lineStarts: number[],
+): boolean[] {
+  const inComment = new Uint8Array(content.length);
+  for (const c of comments) {
+    const end = Math.min(c.end, content.length);
+    for (let i = Math.max(c.start, 0); i < end; i++) inComment[i] = 1;
+  }
+  const numLines = lineStarts.length;
+  const hasCode: boolean[] = new Array(numLines + 1).fill(false);
+  for (let line = 1; line <= numLines; line++) {
+    const start = lineStarts[line - 1];
+    const end = line < numLines ? lineStarts[line] : content.length;
+    for (let i = start; i < end; i++) {
+      const ch = content[i];
+      if (ch === " " || ch === "\t" || ch === "\r" || ch === "\n") continue;
+      if (inComment[i]) continue;
+      hasCode[line] = true;
+      break;
+    }
+  }
+  return hasCode;
 }
 
 function collectTopLevelDecls(program: OxcProgram): Map<string, LocalDecl[]> {
@@ -653,19 +735,29 @@ interface ImportRef {
   named: string[];
 }
 
+// A `export … from "./x"` re-export. `named` carries the per-specifier
+// `{ local, exported }` name pairs for `export { local as exported } from`
+// (empty for `export *` / `export * as ns`, which have no enumerable names at
+// parse time and stay file-grain).
+interface ReexportRef {
+  specifier: string;
+  named: Array<{ local: string; exported: string }>;
+}
+
 function extractImports(
   parsed: OxcParseResult,
   content: string,
   relPath: string,
   filePath: string,
   rootDir: string,
+  nodes: GraphNode[],
   edges: GraphEdge[],
   mode: "file" | "symbol",
   isTest: boolean,
   ctx: ResolverContext,
 ): void {
   const importRefs: ImportRef[] = [];
-  const reexportSpecifiers: string[] = [];
+  const reexportRefs: ReexportRef[] = [];
 
   if (parsed.program.body.length > 0) {
     for (const stmt of parsed.program.body) {
@@ -683,15 +775,31 @@ function extractImports(
         }
         importRefs.push(ref);
       } else if (stmt.type === "ExportNamedDeclaration" && stmt.source) {
-        reexportSpecifiers.push(stmt.source.value);
+        // `export { a as b } from "./x"` — capture the local (origin export
+        // name) → exported (barrel export name) pairs so the barrel can be
+        // materialized per-symbol. `export type { … } from` re-exports the
+        // same way (origin type symbols exist), so it is NOT filtered out.
+        const named: Array<{ local: string; exported: string }> = [];
+        for (const spec of stmt.specifiers ?? []) {
+          const local = moduleExportName(spec.local);
+          const exported = moduleExportName(spec.exported);
+          if (local !== undefined && exported !== undefined) named.push({ local, exported });
+        }
+        reexportRefs.push({ specifier: stmt.source.value, named });
       } else if (stmt.type === "ExportAllDeclaration") {
-        reexportSpecifiers.push(stmt.source.value);
+        // `export *` / `export * as ns` — no per-name specifiers; stays
+        // file-grain. Named imports through a star barrel are closed at file
+        // grain by the builder's phantom-repair pass (issue #177 follow-up
+        // tracks true per-symbol star precision).
+        reexportRefs.push({ specifier: stmt.source.value, named: [] });
       }
     }
   } else {
     // Fatal syntax error: the AST is empty but oxc's module record still
     // carries the import/export shape — use it so import edges survive for
-    // files that are temporarily unparseable.
+    // files that are temporarily unparseable. Re-export names are not
+    // recovered here (best-effort), so barrels in a broken file stay
+    // file-grain until the file parses again.
     for (const staticImport of parsed.module.staticImports) {
       const ref: ImportRef = {
         specifier: staticImport.moduleRequest.value,
@@ -714,7 +822,7 @@ function extractImports(
     }
     for (const staticExport of parsed.module.staticExports) {
       const request = staticExport.entries.find((e) => e.moduleRequest != null)?.moduleRequest;
-      if (request) reexportSpecifiers.push(request.value);
+      if (request) reexportRefs.push({ specifier: request.value, named: [] });
     }
   }
 
@@ -773,17 +881,58 @@ function extractImports(
     }
   }
 
-  for (const specifier of reexportSpecifiers) {
-    if (!specifier.startsWith(".")) continue;
-    const resolved = resolveRelativeImport(filePath, specifier, ctx);
+  // Names already declared locally in this file win over a same-name
+  // re-export (legal shadowing / illegal duplicate export) — never overwrite a
+  // real symbol node with a re-export pass-through of the same id.
+  const localSymbolIds = new Set(nodes.filter((n) => n.kind === "symbol").map((n) => n.id));
+
+  for (const rex of reexportRefs) {
+    if (!rex.specifier.startsWith(".")) continue;
+    const resolved = resolveRelativeImport(filePath, rex.specifier, ctx);
     if (!resolved) continue;
     const targetRel = relative(rootDir, resolved);
-    edges.push({
-      source: sourceId,
-      target: `file:${targetRel}`,
-      kind: "imports",
-      provenances: ["ts-import"],
-    });
+
+    if (useSymbol && rex.named.length > 0) {
+      // Materialize the barrel's re-exported symbols and point each at the
+      // origin symbol, so `file:consumer --imports--> symbol:barrel#name`
+      // (emitted by the consumer's import loop above) resolves to a real node
+      // and forward BFS chains barrel -> origin -> REQ. Multi-level barrels
+      // chain naturally because each origin file materializes its own nodes.
+      for (const { local, exported } of rex.named) {
+        const barrelSymId = `symbol:${relPath}#${exported}`;
+        // Node AND edge are guarded together: a local declaration that
+        // shadows a same-name re-export wins the node identity, and the
+        // re-export edge is dropped along with it (impact BFS is
+        // bidirectional — a spurious `symbol:barrel#foo -> symbol:origin#foo`
+        // edge on a shadowed name would false-positive the origin's REQ into
+        // the consumer's blast radius). Per-symbol hash uses the resolved
+        // origin path + local + exported (\0-joined) so adding/removing a
+        // sibling specifier in the same `export { … } from` statement does
+        // not drift the surviving names' hashes (INV-L4 noise).
+        if (!localSymbolIds.has(barrelSymId)) {
+          nodes.push({
+            id: barrelSymId,
+            kind: "symbol",
+            filePath: relPath,
+            contentHash: hash([targetRel, local, exported].join("\0")),
+          });
+          localSymbolIds.add(barrelSymId);
+          edges.push({
+            source: barrelSymId,
+            target: `symbol:${targetRel}#${local}`,
+            kind: "imports",
+            provenances: ["ts-import"],
+          });
+        }
+      }
+    } else {
+      edges.push({
+        source: sourceId,
+        target: `file:${targetRel}`,
+        kind: "imports",
+        provenances: ["ts-import"],
+      });
+    }
   }
 }
 
@@ -1069,6 +1218,7 @@ function extractImplTags(
   mode: "file" | "symbol" = "file",
   symbolRanges: SymbolRange[] = [],
   matchers: IdMatchers = buildIdMatchers(),
+  comments?: readonly OxcComment[],
 ) {
   const { implRe, reqIdRe, testReqRe, testAnnotationRe } = matchers;
   const fileSourceId = `file:${relPath}`;
@@ -1077,26 +1227,41 @@ function extractImplTags(
 
   implRe.lastIndex = 0;
   while ((match = implRe.exec(content)) !== null) {
+    // D6: a `// @impl …` counts only when its `//` is a REAL line comment. The
+    // same text inside a string / template / JSX attribute (no comment span at
+    // all) or inside a block/JSDoc comment (e.g. a backtick-quoted `// @impl`
+    // in docs, type "Block") is not a tag and must not emit an edge. `comments`
+    // is undefined only for pathological unparseable input; there we keep the
+    // regex-only behavior so a broken file's tags still survive.
+    if (comments && !matchInLineComment(comments, match.index)) continue;
+
     const reqIds = match[1].match(reqIdRe);
     if (!reqIds) continue;
 
-    let sourceId = fileSourceId;
+    let sourceIds = [fileSourceId];
 
     if (mode === "symbol" && !isTest && symbolRanges.length > 0) {
       const line = lineNumberAt(content, match.index);
-      const resolved = resolveSymbolAtLine(symbolRanges, line);
-      if (resolved) {
-        sourceId = `symbol:${relPath}#${resolved}`;
+      // D1: resolveSymbolsAtLine groups siblings by declaration STATEMENT and
+      // returns one group. A leading tag above `export const a = 1, b = 2` /
+      // `export const { a, b } = …` binds to every sibling of that one
+      // statement; a tag above separate exports (even on the same physical
+      // line) lands only on the innermost/first group, never across statements.
+      const resolved = resolveSymbolsAtLine(symbolRanges, line);
+      if (resolved.length > 0) {
+        sourceIds = resolved.map((name) => `symbol:${relPath}#${name}`);
       }
     }
 
-    for (const reqId of reqIds) {
-      edges.push({
-        source: sourceId,
-        target: reqId,
-        kind: "implements",
-        provenances: ["code-tag"],
-      });
+    for (const sourceId of sourceIds) {
+      for (const reqId of reqIds) {
+        edges.push({
+          source: sourceId,
+          target: reqId,
+          kind: "implements",
+          provenances: ["code-tag"],
+        });
+      }
     }
   }
 
@@ -1132,16 +1297,45 @@ function lineNumberAt(content: string, index: number): number {
   return line;
 }
 
-function resolveSymbolAtLine(ranges: SymbolRange[], line: number): string | null {
-  let best: SymbolRange | null = null;
+// The names of the symbol GROUP whose attribution range encloses `line`,
+// narrowed to the smallest (innermost) enclosing range. Grouping is per
+// declaration STATEMENT: every sibling binding of one `export const a = 1, b =
+// 2` / `export const { a, b } = …` shares one group and one statement-wide
+// attribution span, so a leading tag binds to all of them; every other export
+// (function, class, specifier, default, a separate statement) is its own group.
+// Exactly ONE group is selected — never merged across groups — and a same-size
+// tie keeps the group found FIRST in source order. This closes two boundary
+// gaps of the old line-range approximation: same-line distinct exports no
+// longer over-broadcast (different groups, only the first wins), and a
+// multi-line multi-declarator no longer drops later siblings (one group spans
+// the whole statement).
+function resolveSymbolsAtLine(ranges: SymbolRange[], line: number): string[] {
+  let bestGroup: number | null = null;
+  let bestSize = Number.POSITIVE_INFINITY;
   for (const range of ranges) {
-    if (line >= range.startLine && line <= range.endLine) {
-      if (!best || range.endLine - range.startLine < best.endLine - best.startLine) {
-        best = range;
-      }
+    if (line < range.startLine || line > range.endLine) continue;
+    const size = range.endLine - range.startLine;
+    if (size < bestSize) {
+      bestSize = size;
+      bestGroup = range.group;
     }
+    // Same-size tie: keep the first group found (source order) — do nothing.
   }
-  return best?.name ?? null;
+  if (bestGroup === null) return [];
+  return ranges
+    .filter((r) => r.group === bestGroup && line >= r.startLine && line <= r.endLine)
+    .map((r) => r.name);
+}
+
+// True when `index` (the `//` offset of an @impl match) lands inside a real
+// LINE comment. Block/JSDoc comments (type "Block") and string / template /
+// JSX-attribute literals (no comment span covering the offset) are excluded,
+// so a `// @impl` appearing there is not treated as a tag (D6).
+function matchInLineComment(comments: readonly OxcComment[], index: number): boolean {
+  for (const c of comments) {
+    if (c.type === "Line" && index >= c.start && index < c.end) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
