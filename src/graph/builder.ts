@@ -387,14 +387,19 @@ export function buildGraph(
   // Per-symbol `export *` precision is deferred to a follow-up issue. Runs only
   // in symbol mode (file mode never emits `symbol:` targets).
   if (tsMode === "symbol") {
-    for (const edge of edges) {
+    // Reassign into `edges[i]` (not `edge.target = fileId`) because this edge
+    // object is shared with the parse-cache fragment persisted via `nextTs[..]
+    // = frag` above; an in-place mutation would leak the file-grain degrade
+    // into the cached fragment and drift warm builds off cold (INV-L4).
+    for (let i = 0; i < edges.length; i++) {
+      const edge = edges[i];
       if (edge.kind !== "imports" || !edge.target.startsWith("symbol:")) continue;
       if (nodes.has(edge.target)) continue;
       const body = edge.target.slice("symbol:".length);
       const hashIdx = body.lastIndexOf("#");
       const rel = hashIdx === -1 ? body : body.slice(0, hashIdx);
       const fileId = `file:${rel}`;
-      if (nodes.has(fileId)) edge.target = fileId;
+      if (nodes.has(fileId)) edges[i] = { ...edge, target: fileId };
     }
   }
 
