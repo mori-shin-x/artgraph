@@ -408,6 +408,15 @@ artgraph scan --output ./graph-out
 present to color drift/orphan/uncovered nodes; a missing lock just renders
 without that extra state.
 
+`--output` only ever writes `index.html`, `app.js`, and `vendor/cytoscape.min.js`
+into the target directory, and refuses to run if it finds anything else there
+(e.g. you pointed `--output` at a GitHub Pages `docs/` dir or the repo root by
+mistake) — pass `--force` to overwrite anyway. The `vendor/` subdirectory is
+always wiped and rewritten from scratch, so stale artifacts from a previous
+`artgraph` version never accumulate across repeated `--output` runs. The write
+itself is not atomic — a crash mid-export can leave a partial `outputDir` — the
+same trade-off other static-site generators (VitePress, TypeDoc, Sphinx) make.
+
 ## `artgraph doctor` — cross-agent distribution health check
 
 Diagnoses whether the SKILL.md files distributed by `artgraph init --agents=<list>`

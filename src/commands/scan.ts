@@ -14,6 +14,10 @@ export function registerScanCommand(program: Command): void {
     .option("--port <n>", "Port for --serve (default 3737)", (v) => Number.parseInt(v, 10))
     .option("--host <h>", "Host for --serve (default 127.0.0.1)")
     .option("--output <dir>", "Emit a static HTML export into <dir>")
+    .option(
+      "--force",
+      "Overwrite --output's target directory even if it contains files artgraph doesn't manage",
+    )
     .action(async (opts) => {
       const rootDir = process.cwd();
       const { loadConfig } = await import("../config.js");
@@ -61,7 +65,13 @@ export function registerScanCommand(program: Command): void {
 
         if (opts.output) {
           const outputDir = resolve(rootDir, opts.output);
-          await writeStaticExport({ data, outputDir });
+          try {
+            await writeStaticExport({ data, outputDir, force: Boolean(opts.force) });
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error(`error: ${msg}`);
+            process.exit(1);
+          }
           console.error(`artgraph scan: static export written to ${outputDir}`);
           return;
         }

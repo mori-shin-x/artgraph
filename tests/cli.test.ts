@@ -401,6 +401,58 @@ describe("CLI: scan graph payload", () => {
       rmSync(outDir, { recursive: true, force: true });
     }
   });
+
+  // issue #170 D1: --output used to overwrite whatever sat at index.html /
+  // app.js / vendor/cytoscape.min.js without checking what else lived in the
+  // directory. Pointing --output at the wrong dir (GitHub Pages' docs/, repo
+  // root) could silently replace unrelated files.
+  it("T-graph-serve-3: --output refuses a dir with unmanaged files, --force overrides", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "artgraph-graph-unmanaged-"));
+    try {
+      writeFileSync(join(outDir, "USER-IMPORTANT-INDEX.md"), "do not touch\n");
+
+      const refused = await run(["scan", "--output", outDir]);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr).toMatch(/doesn't manage/);
+      expect(refused.stderr).toContain("USER-IMPORTANT-INDEX.md");
+      expect(refused.stderr).toMatch(/--force/);
+      // Refusal must be fail-fast: no export files written alongside the
+      // untouched user file.
+      expect(existsSync(join(outDir, "index.html"))).toBe(false);
+      expect(existsSync(join(outDir, "USER-IMPORTANT-INDEX.md"))).toBe(true);
+
+      const forced = await run(["scan", "--output", outDir, "--force"]);
+      expect(forced.exitCode).toBe(0);
+      expect(existsSync(join(outDir, "index.html"))).toBe(true);
+      // --force overwrites the managed export paths but must not delete
+      // unrelated files sitting alongside them.
+      expect(existsSync(join(outDir, "USER-IMPORTANT-INDEX.md"))).toBe(true);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
+
+  // issue #170 D2: a stale vendor/ file from a previous artgraph release (or
+  // a differently-named vendor bundle) must not survive a re-export — the
+  // vendor/ subdirectory is fully artgraph-owned and gets wiped + rewritten
+  // on every --output run. `vendor` itself is a D1-managed top-level entry,
+  // so this cleanup happens without needing --force — a CI pipe that reruns
+  // `--output` on the same dir every build must not have to pass --force
+  // just to keep vendor/ tidy.
+  it("T-graph-serve-4: --output clears stale vendor/ artifacts on re-run, no --force needed", async () => {
+    const outDir = mkdtempSync(join(tmpdir(), "artgraph-graph-stale-vendor-"));
+    try {
+      mkdirSync(join(outDir, "vendor"), { recursive: true });
+      writeFileSync(join(outDir, "vendor", "old-cytoscape.min.js"), "stale\n");
+
+      const { exitCode } = await run(["scan", "--output", outDir]);
+      expect(exitCode).toBe(0);
+      expect(existsSync(join(outDir, "vendor", "cytoscape.min.js"))).toBe(true);
+      expect(existsSync(join(outDir, "vendor", "old-cytoscape.min.js"))).toBe(false);
+    } finally {
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
