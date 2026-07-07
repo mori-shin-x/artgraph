@@ -109,6 +109,19 @@ describe("#177 (a) leading-comment @impl binds to the following export symbol", 
     expect(implSourcesFor(parseOne("src/c.ts"), "REQ-004")).toEqual(["file:src/c.ts"]);
   });
 
+  it("treats a Unicode-whitespace-only line (U+3000, IME mishap) as blank so the walk reaches @impl (#190)", () => {
+    // A stray full-width space (U+3000) on an otherwise blank line between
+    // `// @impl` and `export …` used to be treated as a code line, stopping
+    // the upward walk and silently binding the tag to the file. `\s` matches
+    // U+3000 and the walk continues.
+    makeRepo({
+      "src/jp.ts": `// @impl REQ-701\n　\nexport function validateToken(t: string) {\n  return !!t;\n}\n`,
+    });
+    expect(implSourcesFor(parseOne("src/jp.ts"), "REQ-701")).toEqual([
+      "symbol:src/jp.ts#validateToken",
+    ]);
+  });
+
   it("does not change the symbol node contentHash (hash span stays the declaration)", () => {
     // With and without a leading comment, `validateToken`'s hash is identical —
     // proves attribution widening never leaks into the hashed span (INV-L4 /
