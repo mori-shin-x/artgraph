@@ -567,3 +567,54 @@ describe("#177 INV-L4 — barrel graphs are byte-stable across builds", () => {
     expect(importEdge?.target).toBe("symbol:src/star.ts#validateToken");
   });
 });
+
+// ---------------------------------------------------------------------------
+// #187 — TSImportEqualsDeclaration (CJS-style TS) fail-open closed
+// ---------------------------------------------------------------------------
+
+describe("#187 CJS-style TS: import = require() emits at least a file-grain import edge", () => {
+  it("produces a file-grain imports edge from consumer to the required module (was silently []) — closes fail-open", () => {
+    // `import m = require("./m")` used to be handled by neither
+    // ImportDeclaration nor Export*Declaration branches of extractImports,
+    // so the consumer ended up with edges=[] and no path to the origin's
+    // REQs. The new TSImportEqualsDeclaration branch now maps it to a
+    // namespace-style file-grain edge — enough to close the total
+    // fail-open. Per-symbol resolution stays out of scope (`export =`
+    // has no export name to route through).
+    makeRepo({
+      "src/m.ts": "// @impl REQ-011\nconst foo = () => 1;\nexport = foo;\n",
+      "src/c.ts": 'import m = require("./m");\nexport const use = m;\n',
+    });
+    const frag = parseOne("src/c.ts");
+    const importEdges = frag.edges.filter(
+      (e) => e.kind === "imports" && e.source === "file:src/c.ts",
+    );
+    expect(importEdges.map((e) => e.target)).toEqual(["file:src/m.ts"]);
+  });
+
+  it("BFS from consumer reaches REQ-011 on the origin (file-grain)", () => {
+    const root = makeRepo({
+      "specs/req.md": "# R\n\n- REQ-011: cjs style\n",
+      "src/m.ts": "// @impl REQ-011\nconst foo = () => 1;\nexport = foo;\n",
+      "src/c.ts": 'import m = require("./m");\nexport const use = m;\n',
+    });
+    expect(impactReqs(root, "src/c.ts")).toEqual(["REQ-011"]);
+  });
+
+  it('also handles `export import m = require("./m")` (wrapped in ExportNamedDeclaration)', () => {
+    // OXC wraps this form as `ExportNamedDeclaration { declaration:
+    // TSImportEqualsDeclaration, source: null }`. A branch that only
+    // matched top-level `TSImportEqualsDeclaration` missed it and the
+    // consumer edge list came back empty — the same fail-open the plain
+    // form used to have. Pin the wrapped form so we don't regress.
+    makeRepo({
+      "src/m.ts": "// @impl REQ-012\nconst foo = () => 1;\nexport = foo;\n",
+      "src/c.ts": 'export import m = require("./m");\nexport const use = m;\n',
+    });
+    const frag = parseOne("src/c.ts");
+    const importEdges = frag.edges.filter(
+      (e) => e.kind === "imports" && e.source === "file:src/c.ts",
+    );
+    expect(importEdges.map((e) => e.target)).toEqual(["file:src/m.ts"]);
+  });
+});
