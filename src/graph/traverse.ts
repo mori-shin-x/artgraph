@@ -1,26 +1,6 @@
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import type { ArtifactGraph, DriftEntry, EdgeKind, ImpactResult, SymbolEntry } from "../types.js";
+import type { ArtifactGraph, DriftEntry, ImpactResult, SymbolEntry } from "../types.js";
 import type { LockFile } from "../types.js";
-
-/**
- * spec 007 / issue #155 — `findOrphans` output shape.
- *
- * Prior to the B1 fix `findOrphans` returned pre-formatted descriptor
- * strings (`"file:src/foo.ts -> REQ-999 (implements)"`), which the
- * `--serve` renderer then mistook for bare node ids and silently failed
- * to mark orphan nodes. Structured entries let both text output (via
- * `check.ts` -> `printCheckText`) and the render layer keep their own
- * projections of the same data (source id vs. descriptor line) without
- * re-parsing.
- */
-export interface OrphanEntry {
-  /** Bare id of the edge source (the file/symbol/test node that carries the orphan `@impl` / `@verifies` tag). */
-  source: string;
-  /** Bare id of the edge target — a REQ id that does NOT resolve to any node in the graph. */
-  target: string;
-  /** Which claim kind produced the orphan edge (`implements` or `verifies`). */
-  kind: EdgeKind;
-}
 
 // spec 016 (R-006, data-model.md §2.3) — `impact()` BFS body is **unchanged
 // from spec 014**. The redesign reroutes the startId construction (now via
@@ -139,8 +119,28 @@ export function impact(
   };
 }
 
-export function findOrphans(graph: ArtifactGraph): OrphanEntry[] {
-  const orphans: OrphanEntry[] = [];
+// spec 017 (FR-006, data-model §2) — an `@impl`/`@verifies` edge whose target
+// REQ/doc node does not exist in the graph. Structured (rather than a flat
+// string) so `check()` can strict-match `source` against the diff scope
+// instead of the old substring `includes` heuristic. Also the shape consumed
+// by the `--serve` renderer (issue #155) to compare bare node ids without
+// re-parsing the formatted `orphans` strings.
+export interface OrphanEdge {
+  source: string; // e.g. "file:src/foo.ts" / "test:src/foo.test.ts"
+  target: string; // the REQ/doc id that did not resolve
+  kind: "implements" | "verifies";
+}
+
+// SSOT: the canonical `source -> target (kind)` rendering used everywhere an
+// orphan is shown or turned into an identity key (spec 017 R4). Keeping this
+// in one place means `CheckResult.orphans`, the baseline key set, and the
+// presenter never drift on formatting.
+export function formatOrphan(o: OrphanEdge): string {
+  return `${o.source} -> ${o.target} (${o.kind})`;
+}
+
+export function findOrphans(graph: ArtifactGraph): OrphanEdge[] {
+  const orphans: OrphanEdge[] = [];
 
   for (const edge of graph.edges) {
     if (edge.kind === "implements" || edge.kind === "verifies") {

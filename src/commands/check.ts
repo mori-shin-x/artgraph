@@ -30,10 +30,28 @@ export function registerCheckCommand(program: Command): void {
         const { impact, resolveStartIds } = await import("../graph/traverse.js");
         const diffFiles = getGitDiffFiles(rootDir);
         if (diffFiles.length === 0) {
+          // spec 017 (Critical fix E1, issue #182 review) — in CI the checked-
+          // out working tree already matches the commit under test, so `git
+          // diff` (staged+unstaged+untracked) is empty on essentially every
+          // run regardless of what the PR actually changed. Without a `--base
+          // <ref>` (Phase 2, issue #185) the gate silently no-ops right here:
+          // it exits 0 looking like "nothing to check" when it never actually
+          // compared anything. Warn (exit code stays 0 — this is not a gate
+          // failure) so CI logs surface the gap instead of a green check that
+          // checked nothing. No FR covers this directly (issue #182 review
+          // finding, not an original spec 017 requirement) — see issue #185
+          // for the tracked Phase 2 follow-up that actually closes the gap.
+          const isCI = process.env.CI === "true" || process.env.CI === "1";
+          const ciWarning =
+            "WARNING: gate is not active in CI without --base <ref> (Phase 2 — see #185).";
+          if (isCI) console.error(ciWarning);
+
           // E4: same fix as `impact --diff` — don't ignore `--format json` on
           // the "no changes" case. Shape matches the normal `check
           // --format json` output (`CheckResult` + `warnings`), just all-clear,
-          // plus a `message` field flagging the no-diff short-circuit.
+          // plus a `message` field flagging the no-diff short-circuit. spec 017
+          // adds the baseline-diff fields so the shape never depends on the
+          // presence of a diff (baselineStatus "skipped" = no baseline built).
           if (opts.format === "json") {
             console.log(
               JSON.stringify({
@@ -44,7 +62,10 @@ export function registerCheckCommand(program: Command): void {
                 coverage: [],
                 testFailures: [],
                 pass: true,
-                warnings,
+                newIssues: { drifted: [], orphans: [], uncovered: [], testFailures: [] },
+                suppressedCount: 0,
+                baselineStatus: "skipped",
+                warnings: isCI ? [...warnings, ciWarning] : warnings,
                 message: "No changes detected in git diff.",
               }),
             );
@@ -55,7 +76,32 @@ export function registerCheckCommand(program: Command): void {
         }
         const { startIds } = resolveStartIds(graph, pathsToEntries(diffFiles));
         if (startIds.length === 0) {
-          console.log("Changed files are not tracked in the graph.");
+          // spec 017 (Critical fix D1, issue #182 review) — same E4-style gap
+          // as the `diffFiles.length === 0` branch above: `--format json` was
+          // silently ignored here, breaking a CI/Skill consumer piping `check
+          // --diff --format json` into `jq` whenever every changed file sits
+          // outside the graph. `baselineStatus:"skipped"` because this IS a
+          // `--diff` run (not a plain check) whose scope trivially carries
+          // zero issues — nothing resolved to a startId at all.
+          if (opts.format === "json") {
+            console.log(
+              JSON.stringify({
+                drifted: [],
+                orphans: [],
+                uncovered: [],
+                coverage: [],
+                testFailures: [],
+                pass: true,
+                newIssues: { drifted: [], orphans: [], uncovered: [], testFailures: [] },
+                suppressedCount: 0,
+                baselineStatus: "skipped",
+                warnings,
+                message: "Changed files are not tracked in the graph.",
+              }),
+            );
+          } else {
+            console.log("Changed files are not tracked in the graph.");
+          }
           process.exit(0);
         }
         const impactResult = impact(graph, startIds, lock);
@@ -73,15 +119,59 @@ export function registerCheckCommand(program: Command): void {
           }
         }
       }
-      const result = check(graph, lock, scopedNodeIds, testResults);
+
+      // Preliminary scoped result — no baseline applied yet. `diffRequested`
+      // (spec 017 Critical fix B6/D2) tells `check()` whether an omitted
+      // `baseline` means "plain check, baseline concept doesn't apply"
+      // (`not_applicable`) or "`--diff` lazy-eval about to run" (`skipped`).
+      let result = check(graph, lock, scopedNodeIds, testResults, undefined, !!opts.diff);
+
+      // spec 017 (data-model §5, R6) — lazy baseline diff. Only build the
+      // base-ref worktree when a `--diff` run actually has a scoped issue: a
+      // fully clean scope cannot contain any NEW issue, so the worktree cost is
+      // skipped and `baselineStatus` stays "skipped" (SC-005). The baseline is
+      // computed regardless of `--gate` because the new/pre-existing split
+      // drives BOTH the gate decision and the display / json `newIssues` the
+      // `artgraph-verify` Skill reads (which runs `check --diff` WITHOUT
+      // `--gate`). `--gate` only governs the exit code below.
+      // @impl 017-check-gate-baseline-diff/FR-005
+      const hasScopedIssue =
+        result.drifted.length > 0 ||
+        result.orphans.length > 0 ||
+        result.uncovered.length > 0 ||
+        result.testFailures.length > 0;
+
+      if (opts.diff && hasScopedIssue) {
+        const { computeBaselineIssues } = await import("../baseline.js");
+        // Phase 1 pins the base ref to HEAD (FR-002); the internal API already
+        // takes a `baseRef` parameter so Phase 2 can expose `--base` (FR-012).
+        const baseline = computeBaselineIssues(rootDir, "HEAD", lock, config);
+        result = check(graph, lock, scopedNodeIds, testResults, baseline, true);
+      }
 
       if (opts.format === "json") {
         console.log(JSON.stringify({ ...result, warnings }));
       } else {
-        printCheckText(result);
+        printCheckText(result, { diff: !!opts.diff, gate: !!opts.gate });
         printWarnings(warnings);
       }
 
+      // spec 017 (contract cli-check-gate §4.4 / §4.5, §3 note) — baseline
+      // undeterminable. Never silently pass (FR-010): with `--gate` this is a
+      // dedicated exit 1 (distinct from a gate fail's exit 2); without `--gate`
+      // it is display-only, so warn on stderr and exit 0.
+      // @impl 017-check-gate-baseline-diff/FR-010
+      if (result.baselineStatus === "unavailable") {
+        if (opts.gate) {
+          console.error("ERROR: could not establish a baseline (git worktree unavailable).");
+          console.error("       gate result is undetermined; not treating as pass.");
+          process.exit(1);
+        }
+        console.error("WARNING: could not establish a baseline; showing all issues without");
+        console.error("         new/pre-existing distinction.");
+      }
+
+      // Exit code 2 (contract §2): `--gate` and a NEW issue was introduced.
       if (opts.gate && !result.pass) {
         process.exit(2);
       }

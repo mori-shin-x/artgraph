@@ -6,6 +6,7 @@ import {
   resolveStartIds,
   resolveOriginReqs,
   findOrphans,
+  formatOrphan,
   findUncovered,
 } from "../src/graph/traverse.js";
 import type { ArtgraphConfig, ArtifactGraph, GraphNode, LockFile } from "../src/types.js";
@@ -79,7 +80,7 @@ describe("impact traversal", () => {
 });
 
 describe("findOrphans", () => {
-  it("should detect @impl pointing to nonexistent REQ (structured entry — issue #155 B1)", () => {
+  it("should detect @impl pointing to nonexistent REQ (structured OrphanEdge)", () => {
     const { graph } = buildGraph(FIXTURE_DIR, config);
     graph.edges.push({
       source: "file:src/auth/login.ts",
@@ -88,15 +89,26 @@ describe("findOrphans", () => {
       provenances: ["code-tag"],
     });
 
+    // spec 017 (FR-006, data-model §2): findOrphans returns structured
+    // { source, target, kind } so callers can do strict source matching.
     const orphans = findOrphans(graph);
     expect(orphans.length).toBeGreaterThanOrEqual(1);
-    // Post-B1: findOrphans returns { source, target, kind } — assert against
-    // structured fields so a descriptor-format change never silently regresses
-    // downstream consumers (render.ts / printCheckText) again.
-    const match = orphans.find((o) => o.target === "FAKE-9999");
-    expect(match).toBeDefined();
-    expect(match!.source).toBe("file:src/auth/login.ts");
-    expect(match!.kind).toBe("implements");
+    const fake = orphans.find((o) => o.target === "FAKE-9999");
+    expect(fake).toBeDefined();
+    expect(fake).toEqual({
+      source: "file:src/auth/login.ts",
+      target: "FAKE-9999",
+      kind: "implements",
+    });
+  });
+
+  it("formatOrphan renders the canonical `source -> target (kind)` string", () => {
+    expect(
+      formatOrphan({ source: "file:src/auth/login.ts", target: "FAKE-9999", kind: "implements" }),
+    ).toBe("file:src/auth/login.ts -> FAKE-9999 (implements)");
+    expect(formatOrphan({ source: "test:src/a.test.ts", target: "REQ-1", kind: "verifies" })).toBe(
+      "test:src/a.test.ts -> REQ-1 (verifies)",
+    );
   });
 });
 

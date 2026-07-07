@@ -211,7 +211,7 @@ drift = 現在の hash ≠ lock の hash。
 | `artgraph init`                                                    | 設定・lock の雛形生成                                                                                 |
 | `artgraph scan`                                                    | 統合グラフ構築/更新（AST ＋ タグ ＋ frontmatter）、キャッシュ更新                                     |
 | `artgraph impact <files\|--diff>`                                  | Plan 用: 変更から `{依存元 / 紐づく doc・仕様 / drift / 未カバー}` を出力(粒度は config の `mode` で選択) |
-| `artgraph check [--gate] [--diff]`                                 | 検証: drift（コード・doc 両方）/ orphan / 未カバー-vs-Plan / 未テスト。`--gate` 時は問題で exit 2     |
+| `artgraph check [--gate] [--diff]`                                 | 検証: drift（コード・doc 両方）/ orphan / 未カバー-vs-Plan / 未テスト。`--diff --gate` は変更が**新規に導入した**問題のみで exit 2（pre-existing 債務は baseline 差分でゲート対象外、spec 017 / issue #174）。baseline 構築不能時は exit 1 |
 | `artgraph rename --from … --to … / --split / --merge`              | ID ライフサイクル（req・doc のタグ一括書換 ＋ lock 更新）                                             |
 | `artgraph mcp-server`                                              | `impact` を MCP ツールとして公開（Plan 時にエージェントが呼ぶ）                                       |
 

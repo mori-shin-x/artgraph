@@ -58,3 +58,63 @@ export function getGitDiffFiles(rootDir: string): string[] {
     throw new Error(`Failed to run git diff (is this a git repository?): ${msg}`);
   }
 }
+
+/**
+ * spec 017 (High fix C2, issue #182 review) — returns a mapping of renamed
+ * files (old path → new path) between HEAD and the working tree (staged +
+ * unstaged), via `git diff -M --name-status HEAD` with rename detection
+ * enabled. Only records `git` itself reports as a rename (`R<score>`) are
+ * included; a plain modify/add/delete never appears in the map.
+ *
+ * `-z` emits NUL-separated, unquoted fields and `core.quotePath=false` is the
+ * same belt-and-braces guard `getGitTrackedFiles` uses, so a non-ASCII
+ * rename (e.g. `specs/日本語.md` → `specs/新規.md`) round-trips without
+ * octal escaping.
+ *
+ * Empty map when there are no renames, or when `git` itself fails (no repo,
+ * unborn HEAD, corrupted ref, ...) — silent by design: callers that need to
+ * distinguish "no repo" from "no renames" already do so through other means
+ * (`baseline.ts`'s `detectNotGitRepoReason` / `classifyBaseRef` both run
+ * before this is ever called), so this helper only ever needs to answer "is
+ * there a rename to account for".
+ *
+ * Note: `git diff <commit>` (no `--cached`) never reports untracked files, so
+ * a plain filesystem `mv` that was never `git add`-ed is NOT detected as a
+ * rename here (it shows as a plain deletion of the old path, with the new
+ * path invisible to this diff). `git mv` — which stages both sides — always
+ * is, and is the case baseline normalization needs (spec.md C2).
+ */
+export function getGitRenameMap(rootDir: string): Map<string, string> {
+  const map = new Map<string, string>();
+  let output: string;
+  try {
+    output = execFileSync(
+      "git",
+      ["-c", "core.quotePath=false", "diff", "-M", "-z", "--name-status", "HEAD"],
+      { cwd: rootDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+  } catch {
+    return map;
+  }
+
+  const fields = parseNulSeparated(output);
+  let i = 0;
+  while (i < fields.length) {
+    const status = fields[i];
+    // A rename record is 3 fields (`R<score>`, oldPath, newPath); every other
+    // status (M/A/D/T/U/X) is 2 fields (status, path). `-C` (copy detection)
+    // is never passed, so a `C<score>` status never appears here.
+    if (status.startsWith("R")) {
+      const oldPath = fields[i + 1];
+      const newPath = fields[i + 2];
+      if (oldPath !== undefined && newPath !== undefined) {
+        map.set(oldPath, newPath);
+      }
+      i += 3;
+    } else {
+      i += 2;
+    }
+  }
+
+  return map;
+}
