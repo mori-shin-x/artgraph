@@ -39,13 +39,13 @@
 // with N typically <= 20 the cost is negligible.
 
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
+import { resolve as resolvePath } from "node:path";
 import { loadConfig } from "../config.js";
 import { scan } from "../scan.js";
 import { readLock } from "../lock.js";
-import { impact, resolveStartIds, resolveOriginReqs } from "../graph/traverse.js";
+import { entryOriginIds, impact, resolveStartIds, resolveOriginReqs } from "../graph/traverse.js";
 import { extractFiles, type TaskBlock } from "../parsers/sdd-files.js";
-import type { ArtifactGraph, SymbolEntry } from "../types.js";
+import type { SymbolEntry } from "../types.js";
 import { detectMentions } from "./mention.js";
 
 export interface PlanCoverageOptions {
@@ -166,56 +166,9 @@ function toReqEntries(reqIds: string[]): ReqEntry[] {
   return reqIds.map((reqId) => ({ reqId, kind: "req" as const }));
 }
 
-// Mirror `normalizeForLookup` from src/graph/traverse.ts so the per-entry
-// origin-node id we build below uses the same canonical key the graph
-// builder registers under. Kept private so the two stay in lockstep.
-function normalizeForLookup(input: string): string {
-  if (isAbsolute(input)) return input;
-  const root = "/__artgraph__";
-  const abs = resolvePath(root, input);
-  const rel = relative(root, abs);
-  if (rel.length === 0 || rel === ".." || rel.startsWith(`..${sep}`)) return input;
-  return rel.split(sep).join("/");
-}
-
-/**
- * Primary origin node id for an entry — used for `originReqs` resolution
- * so a file-unit entry does NOT inherit its children symbols' `@impl`
- * claims (data-model.md §3.2). `resolveStartIds` deliberately expands
- * file-unit entries to include same-file symbols for BFS reach; that
- * expansion is the WRONG basis for origin attribution.
- *
- * Barrel note (issue #191): a barrel symbol re-exported from another
- * file (`export { x } from "./origin"`) carries no `implements` edge of
- * its own; the `@impl` tag lives on the origin symbol. Walk `imports`
- * edges (symbol → symbol only) transitively from a symbol primary so
- * `resolveOriginReqs` reaches the origin's claim through however many
- * barrel hops separate them. Chains like `index → sub-barrel → origin`
- * are common in package-style layouts; a 1-hop-only walk would leave
- * false-positive drift for every intermediate barrel. Visited set
- * bounds the traversal on `A ↔ B` cycles. File entries stay unchanged —
- * the file node itself carries any file-level `@impl` and the drift
- * semantics for files are correct.
- */
-function entryOriginIds(entry: SymbolEntry, graph: ArtifactGraph): string[] {
-  const path = normalizeForLookup(entry.path);
-  if (entry.symbol === undefined) return [`file:${path}`];
-  const primary = `symbol:${path}#${entry.symbol}`;
-  const visited = new Set<string>([primary]);
-  const queue: string[] = [primary];
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    for (const edge of graph.edges) {
-      if (edge.kind !== "imports") continue;
-      if (edge.source !== current) continue;
-      if (!edge.target.startsWith("symbol:")) continue;
-      if (visited.has(edge.target)) continue;
-      visited.add(edge.target);
-      queue.push(edge.target);
-    }
-  }
-  return [...visited];
-}
+// `entryOriginIds` moved to src/graph/traverse.ts so both plan-coverage and
+// `artgraph impact` share one barrel-BFS definition (issue #191 asymmetry
+// fix). Kept the docstring at the definition site.
 
 // Dedup key for ImpactGroup ordering / aggregation (INV-S3). Newline
 // guarantees the two pieces never collide for path/symbol pairs that

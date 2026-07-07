@@ -278,6 +278,42 @@ export function resolveOriginReqs(graph: ArtifactGraph, startIds: string[]): str
   return [...reqs].sort();
 }
 
+/**
+ * Primary origin node id set for an entry — used as input to
+ * `resolveOriginReqs` so a file-unit entry does NOT inherit its children
+ * symbols' `@impl` claims (data-model.md §3.2). `resolveStartIds`
+ * deliberately expands file-unit entries to include same-file symbols for
+ * BFS reach; that expansion is the WRONG basis for origin attribution.
+ *
+ * Barrel note (issue #191): a barrel symbol re-exported from another file
+ * (`export { x } from "./origin"`) carries no `implements` edge of its
+ * own; the `@impl` tag lives on the origin symbol. Walk `imports` edges
+ * (symbol → symbol only) transitively from a symbol primary so
+ * `resolveOriginReqs` reaches the origin's claim through however many
+ * barrel hops separate them. `A ↔ B` cycles bounded by visited set.
+ * Shared between `plan-coverage` and `artgraph impact` so both commands
+ * see the same origin attribution.
+ */
+export function entryOriginIds(entry: SymbolEntry, graph: ArtifactGraph): string[] {
+  const path = normalizeForLookup(entry.path);
+  if (entry.symbol === undefined) return [`file:${path}`];
+  const primary = `symbol:${path}#${entry.symbol}`;
+  const visited = new Set<string>([primary]);
+  const queue: string[] = [primary];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const edge of graph.edges) {
+      if (edge.kind !== "imports") continue;
+      if (edge.source !== current) continue;
+      if (!edge.target.startsWith("symbol:")) continue;
+      if (visited.has(edge.target)) continue;
+      visited.add(edge.target);
+      queue.push(edge.target);
+    }
+  }
+  return [...visited];
+}
+
 function normalizeForLookup(input: string): string {
   // Skip absolute paths — they can't be safely re-mapped to a repo-relative
   // form without knowing the repo root, and graph nodes are always keyed

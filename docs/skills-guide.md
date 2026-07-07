@@ -191,7 +191,7 @@ artgraph plan-coverage --gate --ignore REQ-003,REQ-007
 `artgraph impact` / `artgraph plan-coverage` は JSON / text の両方で次の二軸を返します(symbol mode / file mode どちらでも有効)。
 
 - **`impactReqs`** — startId (file または symbol node) からの forward BFS で到達した REQ 集合。「この変更が実際に手を伸ばす範囲」。
-- **`originReqs`** — startId の `@impl` claim を `implements` edge で **1-hop** 逆向きに辿った REQ 集合。「この変更が本来 claim している REQ」。
+- **`originReqs`** — startId の `@impl` claim を `implements` edge で **1-hop** 逆向きに辿った REQ 集合。「この変更が本来 claim している REQ」。symbol 起点の場合、barrel 経由の re-export は `imports` edge を transitively 辿ってから 1-hop `implements` を適用するため、多段 barrel（`index.ts → sub.ts → origin.ts`）でも origin の `@impl` に到達します（issue #191、`plan-coverage` と `artgraph impact` 双方で有効）。
 
 二軸を比較してドリフトを判定します。
 
