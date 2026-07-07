@@ -256,7 +256,7 @@ With multiple developers:
 ## Definition of Done（各タスク／PR 提出前）
 
 > 直近 PR のレビュー指摘の大半は同じ観点の抜けで再発している。**敵対的レビューで見つける前に
-> 最初から潰す**ための固定チェック。詳細と背景は `docs/review-patterns-checklist.md`。
+> 最初から潰す**ための固定チェック。詳細と背景は `docs/internal/review-patterns-checklist.md`。
 
 - [ ] **異常系 (Cat1)**: 入力関数で 8 系統（null / 空・0件 / 型違い / 巨大 / 非ASCII / BOM / 壊れた JSON・YAML / 不在パス）を処理した。
 - [ ] **安全な書き込み (Cat1)**: 書き込みは atomic（tmp+rename）かつ成功後に確定し、symlink / repo 外パスを拒否した。
