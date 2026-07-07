@@ -24,13 +24,16 @@ All notable changes to artgraph are documented here. The project is pre-release
   etc. as code, stopping the upward walk that binds a `// @impl` comment
   above a subsequent `export`. The tag then silently fell back to file
   attribution — common failure mode in JP locales after an IME mishap.
-- **`plan-coverage` false-positive drift for barrel entries** (#191). An
-  entry pointing at a barrel symbol (`Files: src/index.ts:validateToken`
-  where `src/index.ts` is `export { validateToken } from "./auth"`) reported
+- **False-positive drift for barrel-symbol entries in both
+  `plan-coverage` and `artgraph impact`** (#191). An entry pointing at a
+  barrel symbol (`Files: src/index.ts:validateToken` where
+  `src/index.ts` is `export { validateToken } from "./auth"`) reported
   `impactReqs \ originReqs` as a drift candidate because the barrel node
-  carries no `implements` edge. `entryOriginIds` now walks `imports`
-  transitively (BFS, symbol → symbol) so multi-hop barrel chains reach the
-  origin's REQ authorship.
+  carries no `implements` edge. `entryOriginIds` (now shared in
+  `src/graph/traverse.ts`) walks `imports` transitively (BFS,
+  symbol → symbol) so multi-hop barrel chains reach the origin's REQ
+  authorship — applied to both commands so their origin attribution
+  stays symmetric.
 - **`import = require()` / `export import = require()` fail-open** (#187).
   `TSImportEqualsDeclaration` (both top-level and wrapped in
   `ExportNamedDeclaration`) produced no edges from `extractImports`;

@@ -294,7 +294,7 @@ MVP: データモデルは最初から型付きアーティファクトグラフ
 
 - リンクの自己申告問題: エージェントが `@impl` を自己 claim する。緩和 = 仕様所有 ID（捏造不可）＋ drift ハッシュ＋ impl＋通るテスト＋意味は人（D5）。ここが設計の根。
 - doc エッジも自己申告: `depends_on` は著者/エージェント宣言。貼り忘れ＝見えない影響。緩和は `@impl` と同じ（解決と drift を検証）。「prose で REQ/doc に言及あるが `depends_on` 無し→提案」lint は任意・既定オフ。
-- `export *` 経由の named import の symbol 解決（barrel/re-export の残存課題）。named / aliased / type / `default as` の barrel は PR #180（issue #177）で per-symbol 解決済み — `export * from` だけが builder の phantom-repair で file 粒度 fail-safe に降格する（#179 で per-symbol 化を追跡）。
+- barrel / re-export の symbol 解決の残存課題。named / aliased / type / `default as` の barrel は PR #180（issue #177）で per-symbol 解決済み。残る 2 系統: (1) `export * from` は builder の phantom-repair で file 粒度 fail-safe に降格（#179 で per-symbol 化を追跡）、(2) `export default <ImportedName>` / `import { x } from "./m"; export { x };` （source なし local re-export）は fail-safe で REQ 到達は保つが per-symbol 精度を失う（#188 で追跡）。
 - drift 粒度: doc/仕様を丸ごとハッシュは小編集で全下流点灯（ノイズ）、節単位は安定アンカーが要る。まず丸ごと、後で節単位（コードの file/symbol と同じ綱引きが一段上で再現）。
 - PreToolUse のレイテンシ予算（デーモン必須）。
 - 未カバー = TODO か漏れか: 未カバーは Plan 信号に留め、ゲートは変更一貫性のみ。

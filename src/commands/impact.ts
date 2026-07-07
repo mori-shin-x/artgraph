@@ -102,7 +102,8 @@ export function registerImpactCommand(program: Command): void {
       const { loadConfig } = await import("../config.js");
       const { scan } = await import("../scan.js");
       const { readLock } = await import("../lock.js");
-      const { impact, resolveStartIds, resolveOriginReqs } = await import("../graph/traverse.js");
+      const { entryOriginIds, impact, resolveStartIds, resolveOriginReqs } =
+        await import("../graph/traverse.js");
       const config = loadConfig(rootDir);
       const { graph } = scan(rootDir, config);
       const lock = readLock(rootDir, config.lockFile);
@@ -207,10 +208,22 @@ export function registerImpactCommand(program: Command): void {
       const result = impact(graph, startIds, lock);
 
       // T031 / FR-014 / INV-S6 — populate `originReqs` axis. `impact()` itself
-      // stays purely forward-BFS; the origin axis is the union of each startId's
-      // direct `@impl` claim (1-hop reverse `implements` edge). Recompute here so
-      // the JSON / text outputs always carry both axes.
-      result.originReqs = resolveOriginReqs(graph, startIds);
+      // stays purely forward-BFS; the origin axis takes the resolved startIds
+      // (file entries here already include same-file symbol children via
+      // `resolveStartIds`'s file-expansion, so children's `@impl` claims still
+      // count — spec 014 Case 6 test) and additionally, for symbol entries,
+      // walks `imports` edges transitively so a barrel-symbol input reaches
+      // the origin's `@impl` claim through however many hops separate them
+      // (issue #191 asymmetry: `plan-coverage` already did this via
+      // `entryOriginIds`; without the parallel expansion here, `artgraph
+      // impact src/index.ts:validateToken` still reported false-positive
+      // drift for barrel entries).
+      const originStartIds = new Set<string>(startIds);
+      for (const entry of entries) {
+        if (entry.symbol === undefined) continue;
+        for (const id of entryOriginIds(entry, graph)) originStartIds.add(id);
+      }
+      result.originReqs = resolveOriginReqs(graph, [...originStartIds]);
 
       if (opts.format === "json") {
         console.log(JSON.stringify(result));
