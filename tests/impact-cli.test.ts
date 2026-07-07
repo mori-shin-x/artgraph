@@ -320,6 +320,50 @@ describe("CLI: impact text Drift candidates section (US2 / FR-015)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// #191 — barrel-symbol origin resolution shared with `plan-coverage`.
+// `entryOriginIds` (traverse.ts) walks `imports` edges transitively so a
+// barrel symbol input reaches the origin's `@impl` claim. Without this,
+// `artgraph impact src/index.ts:validateToken` used to report
+// impactReqs=[REQ-001], originReqs=[] → false-positive drift.
+// ---------------------------------------------------------------------------
+
+describe("CLI: impact — barrel-symbol origin resolution (#191)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = setupSymbolModeFixture();
+    // Add a barrel that re-exports validateToken from ./auth.
+    writeFileSync(join(root, "src", "index.ts"), 'export { validateToken } from "./auth";\n');
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("`impact src/index.ts:validateToken` reaches origin's @impl through the barrel — no false-positive drift", async () => {
+    const { stdout, exitCode } = await runAt(root, [
+      "impact",
+      "src/index.ts:validateToken",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.impactReqs).toContain("REQ-001");
+    // Before the fix originReqs was []; drift = impactReqs \ originReqs
+    // then surfaced REQ-001 as a false-positive drift candidate — the same
+    // asymmetry #196 fixed in plan-coverage but that impact still had.
+    expect(result.originReqs).toContain("REQ-001");
+  });
+
+  it("text output does NOT emit the `Drift candidates` section for a barrel-symbol input", async () => {
+    const { stdout, exitCode } = await runAt(root, ["impact", "src/index.ts:validateToken"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Impact reqs:");
+    expect(stdout).toContain("Origin reqs (@impl claims):");
+    expect(stdout).not.toContain("Drift candidates");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Spec 014 → 016 validation regressions — kept so the redesign doesn't
 // quietly break the navigational error / mutually-exclusive channels /
 // no-source plumbing.
