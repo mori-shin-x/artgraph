@@ -78,11 +78,6 @@ Continue with **Quickstart** below.
 
 ## Quickstart
 
-> **Pre-release**: artgraph is not yet on npm. Until `v0.1.0` ships, install from the GitHub repo
-> (e.g. `npm install -D ShintaroMorimoto/artgraph` / `pnpm add -D github:ShintaroMorimoto/artgraph` /
-> `bun add -d github:ShintaroMorimoto/artgraph`). The plain `artgraph` registry name in the commands
-> below will start resolving once the first release is published.
-
 > **Platforms**: macOS and Linux — including **WSL2** on Windows. Native Windows
 > (PowerShell / cmd) is **not supported**; see the [Windows note](#windows-note).
 
