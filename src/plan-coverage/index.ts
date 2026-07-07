@@ -12,10 +12,13 @@
 //      entries (`symbol: undefined`).
 //   2. for each unique `(path, symbol ?? null)` entry:
 //        - resolveStartIds → forward-BFS impact() → `impactReqs`
-//        - resolveOriginReqs on the **primary** node id (file:<p> for file
-//          entries, symbol:<p>#<s> for symbol entries) → `originReqs`.
-//          Using the primary id intentionally excludes child-symbol claims
-//          when the entry is a file (so file-top `@impl` is reported alone).
+//        - resolveOriginReqs on the entry's origin ids → `originReqs`.
+//          File entries pass only `file:<p>` — child-symbol `@impl` claims
+//          are intentionally excluded so file-top `@impl` is reported
+//          alone. Symbol entries pass `symbol:<p>#<s>` plus every symbol
+//          reachable through `imports` edges (BFS, symbol → symbol only)
+//          so an `@impl` tag that lives on the origin of a barrel chain
+//          reaches originReqs regardless of hop count (issue #191).
 //   3. union impactReqs across entries → detectMentions vs the tasks/plan/
 //      spec text. Mentioned REQs drop out of every group's impactReqs but
 //      stay in `originReqs` (origin is the raw claim view; mention does not
@@ -184,26 +187,34 @@ function normalizeForLookup(input: string): string {
  *
  * Barrel note (issue #191): a barrel symbol re-exported from another
  * file (`export { x } from "./origin"`) carries no `implements` edge of
- * its own; the `@impl` tag lives on the origin symbol. Follow one hop of
- * `imports` edges from a symbol primary so `resolveOriginReqs` reaches
- * the origin's claim through the barrel. Without this, `impactReqs` is
- * non-empty (BFS crosses the barrel) but `originReqs` stays `[]`,
- * causing every barrel-attributed REQ to surface as a drift candidate.
- * File entries stay unchanged — the file node itself carries any
- * file-level `@impl` and the drift semantics for files are correct.
+ * its own; the `@impl` tag lives on the origin symbol. Walk `imports`
+ * edges (symbol → symbol only) transitively from a symbol primary so
+ * `resolveOriginReqs` reaches the origin's claim through however many
+ * barrel hops separate them. Chains like `index → sub-barrel → origin`
+ * are common in package-style layouts; a 1-hop-only walk would leave
+ * false-positive drift for every intermediate barrel. Visited set
+ * bounds the traversal on `A ↔ B` cycles. File entries stay unchanged —
+ * the file node itself carries any file-level `@impl` and the drift
+ * semantics for files are correct.
  */
 function entryOriginIds(entry: SymbolEntry, graph: ArtifactGraph): string[] {
   const path = normalizeForLookup(entry.path);
   if (entry.symbol === undefined) return [`file:${path}`];
   const primary = `symbol:${path}#${entry.symbol}`;
-  const ids: string[] = [primary];
-  for (const edge of graph.edges) {
-    if (edge.kind !== "imports") continue;
-    if (edge.source !== primary) continue;
-    if (!edge.target.startsWith("symbol:")) continue;
-    ids.push(edge.target);
+  const visited = new Set<string>([primary]);
+  const queue: string[] = [primary];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const edge of graph.edges) {
+      if (edge.kind !== "imports") continue;
+      if (edge.source !== current) continue;
+      if (!edge.target.startsWith("symbol:")) continue;
+      if (visited.has(edge.target)) continue;
+      visited.add(edge.target);
+      queue.push(edge.target);
+    }
   }
-  return ids;
+  return [...visited];
 }
 
 // Dedup key for ImpactGroup ordering / aggregation (INV-S3). Newline

@@ -905,6 +905,84 @@ describe("plan-coverage symbol-mode E2E — barrel entry originReqs (#191)", () 
     // therefore surfaced BRL-001 as a false-positive drift candidate.
     expect(g.originReqs.map((r) => r.reqId)).toEqual(["BRL-001"]);
   });
+
+  it("multi-hop barrel chain (index → sub → origin) still reaches origin's @impl (no residual false-positive drift)", () => {
+    // Regression for the multi-hop case flagged in review: a 1-hop-only
+    // walk from `index.ts#x` stops at `sub.ts#x` — itself a mid-barrel
+    // with no `implements` edge — so origin's REQ still fails to surface
+    // in originReqs while impact() BFS reaches it. Two-file barrel
+    // chains are common in package layouts (top-level `index.ts` re-
+    // exports a submodule's `index.ts` which re-exports leaves).
+    tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-pc-barrel-multi-"));
+    mkdirSync(join(tmpRoot, "src"), { recursive: true });
+    mkdirSync(join(tmpRoot, "specs/auth"), { recursive: true });
+    mkdirSync(join(tmpRoot, ".specify/specs/barrel-multi-demo"), { recursive: true });
+
+    writeFileSync(
+      join(tmpRoot, "src/origin.ts"),
+      "// @impl BRL-002\nexport function validateToken(t: string) { return !!t; }\n",
+    );
+    writeFileSync(join(tmpRoot, "src/sub.ts"), 'export { validateToken } from "./origin";\n');
+    writeFileSync(join(tmpRoot, "src/index.ts"), 'export { validateToken } from "./sub";\n');
+
+    writeFileSync(
+      join(tmpRoot, "specs/auth/design.md"),
+      [
+        "---",
+        "artgraph:",
+        '  node_id: "doc:barrel-multi-design"',
+        "---",
+        "",
+        "# Barrel Multi Design",
+        "",
+        "## Requirements",
+        "",
+        "- BRL-002: validateToken must reject empty bearer tokens.",
+        "",
+      ].join("\n"),
+    );
+
+    writeFileSync(
+      join(tmpRoot, ".specify/specs/barrel-multi-demo/tasks.md"),
+      [
+        "# Tasks",
+        "",
+        "### T001: touch the top-level barrel",
+        "",
+        "Files: src/index.ts:validateToken",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(tmpRoot, ".specify/specs/barrel-multi-demo/spec.md"),
+      "# Barrel Multi Demo\n\n(no mentions)\n",
+    );
+
+    writeFileSync(
+      join(tmpRoot, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        mode: "symbol",
+      }),
+    );
+
+    const result = runPlanCoverage({
+      repoRoot: tmpRoot,
+      specDir: join(tmpRoot, ".specify/specs/barrel-multi-demo"),
+      tasksPath: join(tmpRoot, ".specify/specs/barrel-multi-demo/tasks.md"),
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    expect(g.sourceSymbol).toBe("validateToken");
+    expect(g.impactReqs.map((r) => r.reqId)).toEqual(["BRL-002"]);
+    expect(g.originReqs.map((r) => r.reqId)).toEqual(["BRL-002"]);
+  });
 });
 
 describe("plan-coverage symbol-mode E2E — depends_on drift (T025 / SC-006)", () => {
