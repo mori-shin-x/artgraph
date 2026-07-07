@@ -1,5 +1,14 @@
 import { createServer, type Server } from "node:http";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { resolve } from "node:path";
 import type { RenderData } from "./render.js";
 import { renderTemplate } from "../template.js";
@@ -18,6 +27,12 @@ export interface ServeHandle {
 export interface ExportOptions {
   data: RenderData;
   outputDir: string;
+  /**
+   * Overwrite `outputDir` even if it contains files artgraph doesn't manage
+   * (issue #170 D1). Without this, `writeStaticExport` refuses to write into
+   * a non-empty, non-artgraph-owned directory.
+   */
+  force?: boolean;
 }
 
 const DEFAULT_PORT = 3737;
@@ -230,12 +245,51 @@ export async function startServer(opts: ServeOptions): Promise<ServeHandle> {
   });
 }
 
+const MANAGED_OUTPUT_ENTRIES = new Set(["index.html", "app.js", "vendor"]);
+
+// D1 (issue #170): `writeStaticExport` used to overwrite index.html / app.js /
+// vendor/cytoscape.min.js unconditionally, so pointing `--output` at the wrong
+// directory (GitHub Pages' `docs/`, or repo root) could silently replace
+// unrelated files — confirmed in practice against a dir containing
+// `USER-IMPORTANT-INDEX.md`. This lists anything at the top level of
+// `outputDir` that isn't one of the three artgraph-managed paths so the
+// caller can refuse unless `--force`. `vendor` only counts as managed when it
+// is actually a directory — a file/symlink squatting on that name is
+// suspicious and gets flagged too.
+function findUnmanagedTopLevelEntries(outputDir: string): string[] {
+  if (!existsSync(outputDir)) return [];
+  return readdirSync(outputDir).filter((entry) => {
+    if (entry !== "vendor") return !MANAGED_OUTPUT_ENTRIES.has(entry);
+    return !lstatSync(resolve(outputDir, entry)).isDirectory();
+  });
+}
+
 export async function writeStaticExport(opts: ExportOptions): Promise<void> {
-  const { data, outputDir } = opts;
+  const { data, outputDir, force } = opts;
+
+  const unmanaged = findUnmanagedTopLevelEntries(outputDir);
+  if (unmanaged.length > 0 && !force) {
+    throw new Error(
+      `artgraph scan: ${outputDir} contains file(s) artgraph doesn't manage (${unmanaged.join(", ")}). ` +
+        "Pass --force to overwrite anyway, or point --output at an empty/dedicated directory.",
+    );
+  }
+
   const html = readIndexHtml(data);
   mkdirSync(outputDir, { recursive: true });
-  mkdirSync(resolve(outputDir, "vendor"), { recursive: true });
+
+  // D2 (issue #170): once we get here, vendor/ is entirely artgraph-owned —
+  // wipe it before rewriting instead of layering the current cytoscape build
+  // on top of whatever an older artgraph version left behind (e.g. a
+  // differently-named vendor bundle from a prior release). Keeps repeated
+  // `--output` runs in a CI pipe from accumulating stale vendor artifacts.
+  // `rmSync` doesn't follow symlinks, so a `vendor` symlink is unlinked, not
+  // traversed, before `mkdirSync` recreates it as a real directory.
+  const vendorDir = resolve(outputDir, "vendor");
+  rmSync(vendorDir, { recursive: true, force: true });
+  mkdirSync(vendorDir, { recursive: true });
+
   writeFileSync(resolve(outputDir, "index.html"), html, "utf-8");
   copyFileSync(APP_JS_PATH, resolve(outputDir, "app.js"));
-  copyFileSync(VENDOR_JS_PATH, resolve(outputDir, "vendor/cytoscape.min.js"));
+  copyFileSync(VENDOR_JS_PATH, resolve(vendorDir, "cytoscape.min.js"));
 }
