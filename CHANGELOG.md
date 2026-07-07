@@ -19,6 +19,35 @@ All notable changes to artgraph are documented here. The project is pre-release
 
   Both now resolve per-symbol; `export *` is closed at file grain via a
   fail-safe repair (see #179 for per-symbol precision).
+- **Unicode-whitespace-only lines silently killed leading `@impl`
+  attribution** (#190). `computeLineHasCode` treated U+3000 / U+00A0 / U+2028
+  etc. as code, stopping the upward walk that binds a `// @impl` comment
+  above a subsequent `export`. The tag then silently fell back to file
+  attribution — common failure mode in JP locales after an IME mishap.
+- **`plan-coverage` false-positive drift for barrel entries** (#191). An
+  entry pointing at a barrel symbol (`Files: src/index.ts:validateToken`
+  where `src/index.ts` is `export { validateToken } from "./auth"`) reported
+  `impactReqs \ originReqs` as a drift candidate because the barrel node
+  carries no `implements` edge. `entryOriginIds` now walks `imports`
+  transitively (BFS, symbol → symbol) so multi-hop barrel chains reach the
+  origin's REQ authorship.
+- **`import = require()` / `export import = require()` fail-open** (#187).
+  `TSImportEqualsDeclaration` (both top-level and wrapped in
+  `ExportNamedDeclaration`) produced no edges from `extractImports`;
+  consumer BFS never reached the origin's REQ. Emits a file-grain import
+  edge now. Per-symbol still deferred — `export =` origins bind no export
+  name.
+
+### Added
+
+- **Observability warnings for the symbol-mode fail-safe path** (#189, partial).
+  `phantom-import-repaired` fires when a `symbol:M#name` import target has
+  no matching node but `file:M` exists and is degraded to file grain.
+  `dangling-import` fires when even the file target is out of scan scope.
+  Both surface in `scan --format json`'s `warnings[]`; the default stderr
+  presenter suppresses them so repos with lots of `export *` re-exports do
+  not get noisy. Parser-side `unresolved-reexport` still deferred to a
+  follow-up (needs parser plumbing + `SCHEMA_VERSION` bump).
 
 ### Migration notes (existing symbol-mode projects)
 
@@ -33,10 +62,11 @@ upgrade shows expected differences:
    consumers.** The first `reconcile` after upgrade will show a diff even for
    files whose source text did not change — it reflects the new symbol-level
    attribution. Commit the diff once, then subsequent runs are stable.
-3. **`SCHEMA_VERSION` 1 → 2 cold-invalidates the parse cache.** The first
-   scan is cold (slower); warm runs return to normal speed. Delete
-   `node_modules/.cache/artgraph/parse-cache.json` if a partial upgrade left
-   the cache in an odd state.
+3. **Parse cache invalidated across the follow-up wave.**
+   `SCHEMA_VERSION` bumped 1 → 2 in PR #180 and 2 → 3 in #187. The first
+   scan after upgrade is cold; warm runs return to normal speed. Delete
+   `node_modules/.cache/artgraph/parse-cache.json` if a partial upgrade
+   left the cache in an odd state.
 
 ### Known limitations still open
 
@@ -45,8 +75,7 @@ upgrade shows expected differences:
 - `export default <ImportedName>` / `import { x } from "./m"; export { x }`
   per-symbol precision — tracked in #188 (file-grain fail-safe reaches REQs;
   attribution loses symbol grain).
-- `import = require()` / `export =` (CJS-style TS) — file-grain edge added
-  in #187; per-symbol not attempted.
-- Silent skips in the parser (`unresolved-reexport`) — tracked in #189
-  (partial: `phantom-import-repaired` / `dangling-import` builder warnings
-  are exposed in `scan --format json`).
+- Silent parser skips on unresolved re-exports (`export { x } from
+  "./missing"`) — remaining sub-item of #189. `phantom-import-repaired` /
+  `dangling-import` cover the builder side; the parser side still drops
+  the re-export silently.
