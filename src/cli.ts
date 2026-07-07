@@ -3,6 +3,7 @@
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { buildProgram } from "./build-program.js";
+import { installBaselineSignalHandlers } from "./baseline.js";
 
 // @internal re-export — the in-process test harness lives in
 // `src/testing/run-cli.ts` (issue #162: composition root vs. test-harness
@@ -31,6 +32,12 @@ function resolveEntryHref(): string {
   }
 }
 if (import.meta.url === resolveEntryHref()) {
+  // spec 017 (Critical fix A3, issue #182 review) — installed ONLY for the
+  // real CLI entry point, deliberately not from module top-level: the
+  // in-process test harness (`src/testing/run-cli.ts`) imports this module
+  // to reach `runCli` without ever wanting global SIGINT/SIGTERM/
+  // uncaughtException handlers registered into the shared vitest process.
+  installBaselineSignalHandlers();
   const program = buildProgram();
   // parseAsync (not parse): action handlers are async since the lazy-import
   // refactor, and commander's sync parse() would return before they finish.

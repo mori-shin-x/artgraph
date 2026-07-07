@@ -228,6 +228,16 @@ describe("CLI: check", () => {
         expect(result.pass).toBe(true);
         expect(Array.isArray(result.warnings)).toBe(true);
         expect(result.message).toContain("No changes detected in git diff.");
+        // spec 017 (T030) — the no-diff short-circuit carries the baseline-diff
+        // fields so the json shape never depends on whether a diff is present.
+        expect(result.newIssues).toEqual({
+          drifted: [],
+          orphans: [],
+          uncovered: [],
+          testFailures: [],
+        });
+        expect(result.suppressedCount).toBe(0);
+        expect(result.baselineStatus).toBe("skipped");
       } finally {
         rmSync(tmp, { recursive: true, force: true });
       }

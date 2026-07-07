@@ -449,3 +449,36 @@ spec impact set introduced after spec 014 was merged.
 - Considered: 013-cross-agent-extensions/SC-006 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
 - Considered: 013-cross-agent-extensions/SC-007 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
 - Considered: 013-cross-agent-extensions/SC-008 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+
+### Cross-spec REQs reached via shared CLI surface — spec 017 evolution
+
+These REQs belong to spec **017-check-gate-baseline-diff** and are reached
+because spec 017 added `@impl 017-check-gate-baseline-diff/FR-XXX` claims to
+the same shared CLI / check / graph surface that spec 014 owns (`src/check.ts`,
+`src/commands/check.ts`, `src/baseline.ts`, and the `src/graph/traverse.ts` /
+`src/cli.ts` files that transitively import them). Reaching any one 017 REQ
+pulls in the whole 017 spec doc via `contains` edges, so the entire FR/SC set
+is listed. No behavioural change to spec 014 is intended — these entries exist
+purely so the deterministic mention detector clears the cross-spec impact set
+introduced after spec 014 was merged.
+
+- Considered: 017-check-gate-baseline-diff/FR-001 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-002 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-003 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-004 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-005 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-006 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-007 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-008 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-009 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-010 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-011 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-012 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-013 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/FR-014 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/SC-001 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/SC-002 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/SC-003 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/SC-004 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/SC-005 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+- Considered: 017-check-gate-baseline-diff/SC-006 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
