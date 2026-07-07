@@ -1,0 +1,53 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: npm publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for npm Trusted Publishing: GitHub mints a short-lived OIDC
+      # token that npm exchanges for a publish credential scoped to this
+      # exact repo + workflow. No NPM_TOKEN secret is stored anywhere.
+      #
+      # One-time setup (npmjs.com, before this workflow can publish):
+      # Package settings -> Trusted Publisher -> GitHub Actions ->
+      #   repository: ShintaroMorimoto/artgraph
+      #   workflow filename: publish.yml
+      # If the `artgraph` package name has never been published before,
+      # npm may require a first manual `npm publish` to claim the name
+      # before Trusted Publisher can be configured — check npm's current
+      # docs at https://docs.npmjs.com/trusted-publishers if this step
+      # rejects an unpublished package name.
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Trusted Publishing requires a recent npm CLI (>=11.5.1); Node 22's
+      # bundled npm may be older, so make sure we're on latest.
+      - run: npm install -g npm@latest
+
+      # `npm publish` runs the `prepublishOnly` script (rm dist / build /
+      # check-versions / test:unit / test:e2e) automatically as an npm
+      # lifecycle hook — no separate step needed here.
+      - name: Publish
+        run: npm publish --access public --provenance
