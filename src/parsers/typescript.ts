@@ -796,6 +796,41 @@ function extractImports(
         // grain by the builder's phantom-repair pass (issue #177 follow-up
         // tracks true per-symbol star precision).
         reexportRefs.push({ specifier: stmt.source.value, named: [] });
+      } else {
+        // `import m = require("./m")` (CJS-style TS). Treat as a namespace
+        // import so symbol mode falls back to a file-grain edge — the
+        // require target has no named specifiers to route per-symbol
+        // through, and its origin uses `export =` which extractSymbols
+        // does not materialize (no local symbols on TSExportAssignment),
+        // so the origin's `@impl` stays at file grain regardless. Closes
+        // issue #187's fail-open.
+        //
+        // The declaration appears in TWO AST shapes: as a top-level
+        // `TSImportEqualsDeclaration`, and — when written as `export
+        // import m = require(...)` — wrapped in `ExportNamedDeclaration
+        // { declaration: TSImportEqualsDeclaration, source: null }`. The
+        // wrapped form is not caught by the earlier `stmt.source` branch
+        // (source is null) so it needs its own path here.
+        //
+        // Known limit: files with fatal syntax errors take the
+        // `staticImports` fallback below, and oxc's module record only
+        // tracks ESM shape — CJS-style `import = require` in a broken
+        // file still fails open. Acceptable regression baseline: the
+        // pre-fix behavior was ALWAYS fail-open, so this is strictly no
+        // worse.
+        const eq =
+          stmt.type === "TSImportEqualsDeclaration"
+            ? stmt
+            : stmt.type === "ExportNamedDeclaration" &&
+                stmt.declaration?.type === "TSImportEqualsDeclaration"
+              ? stmt.declaration
+              : undefined;
+        if (eq && eq.moduleReference.type === "TSExternalModuleReference") {
+          const specifier = eq.moduleReference.expression?.value;
+          if (typeof specifier === "string") {
+            importRefs.push({ specifier, hasDefault: false, hasNamespace: true, named: [] });
+          }
+        }
       }
     }
   } else {
