@@ -145,6 +145,14 @@ export interface ImpactGroup {
    * hop 逆向きに辿って到達した REQ 集合 (reqId で sort 済、INV-S5)。
    * symbol 起点で symbol が `@impl` claim を持たない、もしくは file 入力で
    * file-top `@impl` タグが無いケースは `[]`。
+   *
+   * Barrel 例外 (issue #191): symbol 起点の場合、primary node に加えて
+   * `imports` エッジ (symbol → symbol) を transitively 辿った全 symbol
+   * ノードの `implements` エッジも union に含める。`export { x } from` 経由
+   * の barrel は自身に `implements` を持たず origin symbol にしか REQ
+   * 主張が無いため、この拡張がないと `impactReqs \ originReqs` が
+   * false-positive drift として出る。多段 barrel (index → sub → origin)
+   * も visited セット付き BFS で origin まで到達する。
    */
   originReqs: ReqEntry[];
 }

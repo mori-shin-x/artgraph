@@ -819,6 +819,172 @@ describe("plan-coverage symbol-mode E2E — static fixture (T024 / SC-001)", () 
   });
 });
 
+describe("plan-coverage symbol-mode E2E — barrel entry originReqs (#191)", () => {
+  // Regression: an entry pointing at a barrel symbol (`Files: src/index.ts:x`
+  // where index.ts is `export { x } from "./origin"`) used to return
+  // originReqs=[] because the barrel node carries no `implements` edge.
+  // impact() still crosses the barrel and reaches origin's REQ, so the
+  // group was flagged as a drift candidate (impactReqs \ originReqs) — a
+  // false positive. entryOriginIds now 1-hop-follows `imports` so the
+  // origin's authorship claim reaches originReqs.
+  let tmpRoot: string;
+  afterEach(() => {
+    if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("barrel symbol entry inherits origin's @impl into originReqs (no false-positive drift)", () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-pc-barrel-"));
+    mkdirSync(join(tmpRoot, "src"), { recursive: true });
+    mkdirSync(join(tmpRoot, "specs/auth"), { recursive: true });
+    mkdirSync(join(tmpRoot, ".specify/specs/barrel-demo"), { recursive: true });
+
+    writeFileSync(
+      join(tmpRoot, "src/auth.ts"),
+      "// @impl BRL-001\nexport function validateToken(t: string) { return !!t; }\n",
+    );
+    writeFileSync(join(tmpRoot, "src/index.ts"), 'export { validateToken } from "./auth";\n');
+
+    writeFileSync(
+      join(tmpRoot, "specs/auth/design.md"),
+      [
+        "---",
+        "artgraph:",
+        '  node_id: "doc:barrel-design"',
+        "---",
+        "",
+        "# Barrel Design",
+        "",
+        "## Requirements",
+        "",
+        "- BRL-001: validateToken must reject empty bearer tokens.",
+        "",
+      ].join("\n"),
+    );
+
+    writeFileSync(
+      join(tmpRoot, ".specify/specs/barrel-demo/tasks.md"),
+      [
+        "# Tasks",
+        "",
+        "### T001: touch the barrel",
+        "",
+        "Files: src/index.ts:validateToken",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(tmpRoot, ".specify/specs/barrel-demo/spec.md"),
+      "# Barrel Demo\n\n(no mentions)\n",
+    );
+
+    writeFileSync(
+      join(tmpRoot, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        mode: "symbol",
+      }),
+    );
+
+    const result = runPlanCoverage({
+      repoRoot: tmpRoot,
+      specDir: join(tmpRoot, ".specify/specs/barrel-demo"),
+      tasksPath: join(tmpRoot, ".specify/specs/barrel-demo/tasks.md"),
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    expect(g.sourceFile).toBe("src/index.ts");
+    expect(g.sourceSymbol).toBe("validateToken");
+    expect(g.impactReqs.map((r) => r.reqId)).toEqual(["BRL-001"]);
+    // Before the fix originReqs was []; drift = impactReqs \ originReqs
+    // therefore surfaced BRL-001 as a false-positive drift candidate.
+    expect(g.originReqs.map((r) => r.reqId)).toEqual(["BRL-001"]);
+  });
+
+  it("multi-hop barrel chain (index → sub → origin) still reaches origin's @impl (no residual false-positive drift)", () => {
+    // Regression for the multi-hop case flagged in review: a 1-hop-only
+    // walk from `index.ts#x` stops at `sub.ts#x` — itself a mid-barrel
+    // with no `implements` edge — so origin's REQ still fails to surface
+    // in originReqs while impact() BFS reaches it. Two-file barrel
+    // chains are common in package layouts (top-level `index.ts` re-
+    // exports a submodule's `index.ts` which re-exports leaves).
+    tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-pc-barrel-multi-"));
+    mkdirSync(join(tmpRoot, "src"), { recursive: true });
+    mkdirSync(join(tmpRoot, "specs/auth"), { recursive: true });
+    mkdirSync(join(tmpRoot, ".specify/specs/barrel-multi-demo"), { recursive: true });
+
+    writeFileSync(
+      join(tmpRoot, "src/origin.ts"),
+      "// @impl BRL-002\nexport function validateToken(t: string) { return !!t; }\n",
+    );
+    writeFileSync(join(tmpRoot, "src/sub.ts"), 'export { validateToken } from "./origin";\n');
+    writeFileSync(join(tmpRoot, "src/index.ts"), 'export { validateToken } from "./sub";\n');
+
+    writeFileSync(
+      join(tmpRoot, "specs/auth/design.md"),
+      [
+        "---",
+        "artgraph:",
+        '  node_id: "doc:barrel-multi-design"',
+        "---",
+        "",
+        "# Barrel Multi Design",
+        "",
+        "## Requirements",
+        "",
+        "- BRL-002: validateToken must reject empty bearer tokens.",
+        "",
+      ].join("\n"),
+    );
+
+    writeFileSync(
+      join(tmpRoot, ".specify/specs/barrel-multi-demo/tasks.md"),
+      [
+        "# Tasks",
+        "",
+        "### T001: touch the top-level barrel",
+        "",
+        "Files: src/index.ts:validateToken",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(tmpRoot, ".specify/specs/barrel-multi-demo/spec.md"),
+      "# Barrel Multi Demo\n\n(no mentions)\n",
+    );
+
+    writeFileSync(
+      join(tmpRoot, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        mode: "symbol",
+      }),
+    );
+
+    const result = runPlanCoverage({
+      repoRoot: tmpRoot,
+      specDir: join(tmpRoot, ".specify/specs/barrel-multi-demo"),
+      tasksPath: join(tmpRoot, ".specify/specs/barrel-multi-demo/tasks.md"),
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    expect(g.sourceSymbol).toBe("validateToken");
+    expect(g.impactReqs.map((r) => r.reqId)).toEqual(["BRL-002"]);
+    expect(g.originReqs.map((r) => r.reqId)).toEqual(["BRL-002"]);
+  });
+});
+
 describe("plan-coverage symbol-mode E2E — depends_on drift (T025 / SC-006)", () => {
   // Copy the static fixture into a tmpdir, mutate the REQ catalogue to
   // append `(depends_on: REQ-007)` + define REQ-007, and confirm the
