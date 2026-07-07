@@ -31,10 +31,30 @@ export interface BuildWarning {
     | "out-of-scope-link"
     | "invalid-annotation-id"
     | "empty-annotation"
-    | "self-reference-annotation";
+    | "self-reference-annotation"
+    // issue #189 — observability for symbol-mode fail-safe. Emitted only in
+    // symbol mode; the phantom-repair pass in `buildGraph` rewrites dangling
+    // `symbol:M#name` import targets to `file:M` (repaired) or leaves them
+    // as-is when the file node itself is out of scope (dangling). Neither
+    // trips gates or fails the build. Suppressed from the default stderr
+    // presenter — surfaced in `scan --format json` `warnings[]` for tooling.
+    | "phantom-import-repaired"
+    | "dangling-import";
   id: string;
   files: string[];
   message?: string;
+}
+
+// issue #189 — warning types that surface only in structured JSON output.
+// The default stderr presenter hides them so a healthy repo with several
+// `export *` fail-safe hits stays quiet on the terminal.
+const SILENT_WARNING_TYPES: ReadonlySet<BuildWarning["type"]> = new Set([
+  "phantom-import-repaired",
+  "dangling-import",
+]);
+
+export function isSilentWarning(type: BuildWarning["type"]): boolean {
+  return SILENT_WARNING_TYPES.has(type);
 }
 
 interface CollectedReq {
@@ -399,7 +419,36 @@ export function buildGraph(
       const hashIdx = body.lastIndexOf("#");
       const rel = hashIdx === -1 ? body : body.slice(0, hashIdx);
       const fileId = `file:${rel}`;
-      if (nodes.has(fileId)) edges[i] = { ...edge, target: fileId };
+      // Source file the consumer's import lives in — the `file:<consumer>`
+      // side of the edge — is the useful location for the observability
+      // warning ("this file's import of X was rewritten / left dangling").
+      const sourceFile = edge.source.startsWith("file:")
+        ? edge.source.slice("file:".length)
+        : edge.source.startsWith("symbol:")
+          ? edge.source.slice("symbol:".length).split("#")[0]
+          : edge.source;
+      if (nodes.has(fileId)) {
+        edges[i] = { ...edge, target: fileId };
+        warnings.push({
+          type: "phantom-import-repaired",
+          id: edge.target,
+          files: [sourceFile],
+          message: `named import of "${body.slice(hashIdx + 1)}" through re-export barrel resolved to file grain (target file: ${rel})`,
+        });
+      } else {
+        // File node itself is out of scan scope (target under an exclude
+        // glob, or otherwise unregistered). Repair cannot degrade to
+        // `file:M` because that node does not exist either — the edge
+        // stays dangling. `orphan-edge` warnings elsewhere in this module
+        // only fire on `implements|verifies`, so without this branch a
+        // symbol-mode import silently dies in BFS with no diagnostic.
+        warnings.push({
+          type: "dangling-import",
+          id: edge.target,
+          files: [sourceFile],
+          message: `import target unresolved and its file node is out of scan scope (target rel: ${rel})`,
+        });
+      }
     }
   }
 
