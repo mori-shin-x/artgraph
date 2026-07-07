@@ -22,6 +22,7 @@ import { buildGraph } from "../src/graph/builder.js";
 import { impact, resolveStartIds } from "../src/graph/traverse.js";
 import { loadConfig } from "../src/config.js";
 import type { ParsedTS } from "../src/parsers/typescript.js";
+import type { BuildWarning } from "../src/graph/builder.js";
 
 let tmp: string;
 afterEach(() => {
@@ -568,53 +569,64 @@ describe("#177 INV-L4 — barrel graphs are byte-stable across builds", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// #187 — TSImportEqualsDeclaration (CJS-style TS) fail-open closed
+// #189 — observability warnings for phantom-repair / dangling imports
 // ---------------------------------------------------------------------------
 
-describe("#187 CJS-style TS: import = require() emits at least a file-grain import edge", () => {
-  it("produces a file-grain imports edge from consumer to the required module (was silently []) — closes fail-open", () => {
-    // `import m = require("./m")` used to be handled by neither
-    // ImportDeclaration nor Export*Declaration branches of extractImports,
-    // so the consumer ended up with edges=[] and no path to the origin's
-    // REQs. The new TSImportEqualsDeclaration branch now maps it to a
-    // namespace-style file-grain edge — enough to close the total
-    // fail-open. Per-symbol resolution stays out of scope (`export =`
-    // has no export name to route through).
-    makeRepo({
-      "src/m.ts": "// @impl REQ-011\nconst foo = () => 1;\nexport = foo;\n",
-      "src/c.ts": 'import m = require("./m");\nexport const use = m;\n',
-    });
-    const frag = parseOne("src/c.ts");
-    const importEdges = frag.edges.filter(
-      (e) => e.kind === "imports" && e.source === "file:src/c.ts",
-    );
-    expect(importEdges.map((e) => e.target)).toEqual(["file:src/m.ts"]);
-  });
-
-  it("BFS from consumer reaches REQ-011 on the origin (file-grain)", () => {
+describe("#189 observability: phantom-import-repaired / dangling-import warnings", () => {
+  it("emits phantom-import-repaired when a named import through export * is degraded to file grain", () => {
     const root = makeRepo({
-      "specs/req.md": "# R\n\n- REQ-011: cjs style\n",
-      "src/m.ts": "// @impl REQ-011\nconst foo = () => 1;\nexport = foo;\n",
-      "src/c.ts": 'import m = require("./m");\nexport const use = m;\n',
+      "specs/req.md": "# R\n\n- REQ-001: x\n",
+      "src/auth.ts": "// @impl REQ-001\nexport function validateToken() {}\n",
+      "src/star.ts": 'export * from "./auth";\n',
+      "src/consumer.ts": 'import { validateToken } from "./star";\n',
     });
-    expect(impactReqs(root, "src/c.ts")).toEqual(["REQ-011"]);
+    const { warnings } = buildGraph(root, loadConfig(root));
+    const phantom = warnings.filter((w: BuildWarning) => w.type === "phantom-import-repaired");
+    expect(phantom.length).toBeGreaterThanOrEqual(1);
+    expect(phantom[0].id).toBe("symbol:src/star.ts#validateToken");
+    expect(phantom[0].files).toEqual(["src/consumer.ts"]);
   });
 
-  it('also handles `export import m = require("./m")` (wrapped in ExportNamedDeclaration)', () => {
-    // OXC wraps this form as `ExportNamedDeclaration { declaration:
-    // TSImportEqualsDeclaration, source: null }`. A branch that only
-    // matched top-level `TSImportEqualsDeclaration` missed it and the
-    // consumer edge list came back empty — the same fail-open the plain
-    // form used to have. Pin the wrapped form so we don't regress.
-    makeRepo({
-      "src/m.ts": "// @impl REQ-012\nconst foo = () => 1;\nexport = foo;\n",
-      "src/c.ts": 'export import m = require("./m");\nexport const use = m;\n',
+  it("emits dangling-import when the imported file itself is outside scan scope", () => {
+    // Consumer imports from an EXCLUDED path — the file node for the target
+    // never gets registered, so phantom-repair cannot even degrade to file
+    // grain. Without a warning this failure mode was completely silent
+    // (orphan-edge only fires for implements|verifies).
+    const root = makeRepo({
+      "src/consumer.ts": 'import { helper } from "./vendor/lib";\nexport const use = helper;\n',
+      "src/vendor/lib.ts": "export function helper() {}\n",
     });
-    const frag = parseOne("src/c.ts");
-    const importEdges = frag.edges.filter(
-      (e) => e.kind === "imports" && e.source === "file:src/c.ts",
+    // Narrow include to keep src/vendor/lib.ts out of scope.
+    writeFileSync(
+      join(root, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/consumer.ts"],
+        specDirs: ["specs"],
+        mode: "symbol",
+      }),
+      "utf-8",
     );
-    expect(importEdges.map((e) => e.target)).toEqual(["file:src/m.ts"]);
+    const { warnings } = buildGraph(root, loadConfig(root));
+    const dangling = warnings.filter((w: BuildWarning) => w.type === "dangling-import");
+    expect(dangling.length).toBeGreaterThanOrEqual(1);
+    expect(dangling[0].id).toBe("symbol:src/vendor/lib.ts#helper");
+    expect(dangling[0].files).toEqual(["src/consumer.ts"]);
+  });
+
+  it("does not emit either warning in file mode (only symbol mode uses the fail-safe)", () => {
+    const root = makeRepo(
+      {
+        "src/auth.ts": "// @impl REQ-001\nexport function validateToken() {}\n",
+        "src/star.ts": 'export * from "./auth";\n',
+        "src/consumer.ts": 'import { validateToken } from "./star";\n',
+      },
+      "file",
+    );
+    const { warnings } = buildGraph(root, loadConfig(root));
+    expect(
+      warnings.filter(
+        (w: BuildWarning) => w.type === "phantom-import-repaired" || w.type === "dangling-import",
+      ),
+    ).toEqual([]);
   });
 });

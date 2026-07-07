@@ -2,10 +2,15 @@
 // `check`. Extracted verbatim from `src/cli.ts` (issue #162) — no behavior
 // change.
 
-import type { BuildWarning } from "../../graph/builder.js";
+import { isSilentWarning, type BuildWarning } from "../../graph/builder.js";
 
 export function printWarnings(warnings: BuildWarning[]) {
   for (const w of warnings) {
+    // issue #189 — observability warnings (`phantom-import-repaired`,
+    // `dangling-import`) stay out of the default stderr stream; a repo
+    // with lots of star re-exports would otherwise get noisy. They are
+    // still emitted into `scan --format json` `warnings[]` for tooling.
+    if (isSilentWarning(w.type)) continue;
     switch (w.type) {
       case "ambiguous-id": {
         const hint = w.files.length > 0 ? ` (candidates: ${w.files.join(", ")})` : "";
@@ -53,6 +58,11 @@ export function printWarnings(warnings: BuildWarning[]) {
         console.error(
           `WARNING: self-reference-annotation "${w.id}"${w.files.length > 0 ? ` in ${w.files.join(", ")}` : ""}${w.message ? ` — ${w.message}` : ""}`,
         );
+        break;
+      // Filtered above via `isSilentWarning`, but the switch still needs
+      // cases so the exhaustiveness check below stays happy.
+      case "phantom-import-repaired":
+      case "dangling-import":
         break;
       default: {
         // Exhaustiveness check: if `BuildWarning.type` gains a new variant
