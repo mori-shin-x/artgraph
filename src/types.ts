@@ -154,6 +154,14 @@ export interface CheckResult {
   // Count of scoped issues suppressed as pre-existing (not surfaced as new).
   suppressedCount: number;
   baselineStatus: BaselineStatus;
+  // spec 017 (Critical fix B1, issue #182 review) — diagnostic message
+  // captured when `baselineStatus === "unavailable"`: the caught exception's
+  // message (a `git rev-parse` failure, a `git worktree add` failure, a
+  // `scan()` exception, an `mkdtemp` error, etc.), so SKILL/CI consumers can
+  // see *why* the baseline could not be established instead of a single
+  // generic "unavailable" string. Always a non-empty string when present;
+  // unset (undefined) for every other `baselineStatus` value.
+  baselineError?: string;
 }
 
 // spec 017 (data-model §1.1) — the subset of scoped issues that are NEW
@@ -171,7 +179,8 @@ export interface NewIssues {
 export type BaselineStatus =
   | "computed" // worktree で base graph を算出し差分を取った
   | "empty" // HEAD 無し初回コミット前 — baseline 空、全 current が new (FR-014)
-  | "skipped" // 遅延評価: current issue ゼロで baseline 未算出 (new もゼロ, R6)
+  | "skipped" // 遅延評価: `--diff` あり + scope の current issue がゼロで baseline 未算出 (new もゼロ, R6)
+  | "not_applicable" // spec 017 (Critical fix B6/D2, issue #182 review) — `--diff` フラグなしのプレーン `check` 実行。baseline 差分という概念自体が適用されない (`skipped` は `--diff` ありでの lazy eval、こちらは `--diff` 自体が無い)
   | "unavailable"; // 構築不能な異常系 (--gate 時は exit 1 の原因, FR-010)
 
 export interface ScanSummary {

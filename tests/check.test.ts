@@ -140,16 +140,40 @@ describe("check", () => {
 
   // spec 017 (T029) — legacy `check(graph, lock, ...)` calls with no `baseline`
   // stay back-compatible: with an empty key set every scoped issue is "new",
-  // so `pass` still means "all scoped issues clear" and `baselineStatus` is
-  // reported as "skipped".
+  // so `pass` still means "all scoped issues clear". spec 017 (Critical fix
+  // B6/D2, issue #182 review) — a call with no `diffRequested` flag is a
+  // plain (non-`--diff`) check, so `baselineStatus` is now reported as
+  // "not_applicable" (the baseline-diff concept itself doesn't apply — this
+  // used to be conflated with "skipped", which is reserved for a `--diff`
+  // lazy-eval run whose scope was already clean).
   it("omitting the baseline argument treats every scoped issue as new (back-compat)", () => {
     const { graph } = buildGraph(FIXTURE_DIR, config);
     const result = check(graph, {});
-    expect(result.baselineStatus).toBe("skipped");
+    expect(result.baselineStatus).toBe("not_applicable");
     // uncovered AUTH-003 is scoped and, without a baseline, also new.
     expect(result.uncovered).toContain("AUTH-003");
     expect(result.newIssues.uncovered).toEqual(result.uncovered);
     expect(result.pass).toBe(false);
+  });
+
+  // spec 017 (Critical fix B6/D2, issue #182 review) — the SAME "no baseline
+  // supplied" input resolves to two different `baselineStatus` values
+  // depending on the new `diffRequested` argument: a plain check (omitted /
+  // false) → "not_applicable"; a `--diff` run whose lazy-eval (R6) has not
+  // built a baseline yet (true) → "skipped". This is exactly the distinction
+  // the old unconditional `status ?? "skipped"` fallback collapsed.
+  it("diffRequested distinguishes not_applicable (plain check) from skipped (--diff lazy-eval)", () => {
+    const { graph } = buildGraph(FIXTURE_DIR, config);
+    const plain = check(graph, {});
+    expect(plain.baselineStatus).toBe("not_applicable");
+
+    const diffLazy = check(graph, {}, undefined, undefined, undefined, true);
+    expect(diffLazy.baselineStatus).toBe("skipped");
+
+    // diffRequested only changes the reported label — the new-issue
+    // determination and pass verdict are computed identically either way.
+    expect(diffLazy.newIssues).toEqual(plain.newIssues);
+    expect(diffLazy.pass).toBe(plain.pass);
   });
 
   // spec 017 (T029) — a supplied baseline subtracts pre-existing issues, so a

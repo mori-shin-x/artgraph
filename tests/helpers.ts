@@ -8,7 +8,7 @@ import {
   appendFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { runCli } from "../src/cli.js";
 
 // Kept as a public export so a small set of tests (SC-004 perf, hook-pretool
@@ -114,6 +114,46 @@ export function introduceNewOrphan(dir: string): void {
 }
 
 /**
+ * spec 017 (High fix C2, issue #182 review) — a committed repo carrying a
+ * **pre-existing orphan**: `src/old.ts` has an `@impl REQ-999` tag whose
+ * target REQ is never defined anywhere in `specs/`. The orphan is committed
+ * as-is (it predates any diff), so a later `git mv src/old.ts <newPath>`
+ * with zero content change is a pure rename of a pre-existing issue — the
+ * gate must keep suppressing it after the rename (baseline key
+ * normalization via `getGitRenameMap`, C2). `src/clean.ts` gives the repo a
+ * second, fully-covered file so a rename of `old.ts` isn't the only file in
+ * the graph.
+ */
+export function makeRepoWithOrphan(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(dir, ".gitignore"), ".trace.lock\nnode_modules/\n");
+  writeFileSync(
+    join(dir, ".artgraph.json"),
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.ts"],
+      lockFile: ".trace.lock",
+    }),
+  );
+  mkdirSync(join(dir, "specs"), { recursive: true });
+  mkdirSync(join(dir, "src"), { recursive: true });
+
+  writeFileSync(
+    join(dir, "specs", "clean.md"),
+    "# Clean\n\n- REQ-001: fully covered requirement\n",
+  );
+  writeFileSync(join(dir, "src", "clean.ts"), "// @impl REQ-001\nexport const clean = 1;\n");
+
+  // Pre-existing orphan: REQ-999 is never defined anywhere in specs/.
+  writeFileSync(join(dir, "src", "old.ts"), "// @impl REQ-999\nexport const old = 1;\n");
+
+  gitInit(dir);
+  gitCommitAll(dir, "init with pre-existing orphan");
+  return dir;
+}
+
+/**
  * spec 017 (T022b / T026) — an **unborn HEAD** repo: `git init` with an
  * uncommitted, untracked spec + impl carrying a scoped issue. `git rev-parse
  * HEAD` fails, so `computeBaselineIssues` returns `status:"empty"` and every
@@ -155,4 +195,20 @@ export function blockWorktreeAdd(dir: string): void {
   // `.git` is a directory for a freshly `git init`'d repo; `.git/worktrees`
   // does not exist yet, so planting a file there is safe and deterministic.
   writeFileSync(join(dir, ".git", "worktrees"), "block");
+}
+
+/**
+ * spec 017 (fix A1, issue #182 review) — returns a PID guaranteed to no
+ * longer be running, simulating a prior `artgraph` invocation that has
+ * already exited (crashed or completed normally). Used to name a fake
+ * leftover baseline worktree so `pruneStaleWorktrees`'s liveness check
+ * (`process.kill(pid, 0)`) reclaims it deterministically, without a 24h
+ * mtime wait and without any risk of colliding with a real running process.
+ */
+export function deadPid(): number {
+  const result = spawnSync(process.execPath, ["-e", "process.exit(0)"]);
+  if (typeof result.pid !== "number") {
+    throw new Error("deadPid(): failed to spawn a helper process");
+  }
+  return result.pid;
 }

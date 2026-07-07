@@ -3,7 +3,12 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { runAt } from "./helpers.js";
-import { makeRepoWithDebt, makeUnbornRepo, introduceNewOrphan } from "./helpers.js";
+import {
+  makeRepoWithDebt,
+  makeUnbornRepo,
+  introduceNewOrphan,
+  makeRepoWithOrphan,
+} from "./helpers.js";
 
 // spec 017 US1 (T011/T014) — `check --diff --gate` must be decided by NEW
 // issues only, so a pre-existing debt REQ dragged into the blast radius never
@@ -70,6 +75,31 @@ describe("check --diff --gate baseline diff (US1)", () => {
     expect(stdout).toContain("Changed files are not tracked in the graph.");
   });
 
+  // spec 017 (Critical fix D1, issue #182 review) — the SAME scenario as (c)
+  // above but `--format json`: before the fix this branch always logged plain
+  // text regardless of `--format`, so a CI/Skill consumer piping the output
+  // into `jq` would fail on invalid JSON. The payload shape mirrors the
+  // `diffFiles.length === 0` short-circuit (E4) one branch up.
+  it("(c-json) editing an untracked file outside the graph → --format json emits CheckResult-shaped payload (D1)", async () => {
+    const dir = repo("artgraph-debt-us1c-json-");
+    writeFileSync(join(dir, "README.md"), "# Readme\n\nunrelated change\n");
+    const { stdout, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    const json = JSON.parse(stdout);
+    expect(json.pass).toBe(true);
+    expect(json.baselineStatus).toBe("skipped");
+    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+    expect(json.suppressedCount).toBe(0);
+    expect(Array.isArray(json.warnings)).toBe(true);
+    expect(json.message).toContain("Changed files are not tracked in the graph.");
+  });
+
   it("(d) clean scope (covered file) → baseline skipped, no worktree built (SC-005)", async () => {
     const dir = repo("artgraph-debt-us1d-");
     // clean.ts's blast radius only reaches the fully-covered REQ-001 — zero
@@ -92,6 +122,60 @@ describe("check --diff --gate baseline diff (US1)", () => {
     // Every scoped issue was pre-existing → nothing new → gate passes.
     expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
     expect(json.suppressedCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// spec 017 (Critical fix E1, issue #182 review) — in CI the checked-out
+// working tree already matches the commit under test, so `--diff` finds an
+// empty git diff on essentially every run and silently no-ops (exit 0, "no
+// changes") regardless of what the PR actually changed. This does not fail
+// the gate (exit code stays 0 — Phase 2 / issue #185 is the real fix) but the
+// run must warn loudly that nothing was actually compared.
+describe("check --diff CI shallow-clone silent no-op warning (E1)", () => {
+  const prevCI = process.env.CI;
+  afterEach(() => {
+    if (prevCI === undefined) delete process.env.CI;
+    else process.env.CI = prevCI;
+  });
+
+  it("CI=true + empty git diff → stderr warns and json warnings[] carries the same message", async () => {
+    const dir = repo("artgraph-debt-us1-ci-");
+    process.env.CI = "true";
+    const { stdout, stderr, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain(
+      "WARNING: gate is not active in CI without --base <ref> (Phase 2 — see #185).",
+    );
+    const json = JSON.parse(stdout);
+    expect(json.baselineStatus).toBe("skipped");
+    expect(
+      (json.warnings as unknown[]).some(
+        (w) => typeof w === "string" && w.includes("gate is not active in CI"),
+      ),
+    ).toBe(true);
+  });
+
+  it("CI=1 + empty git diff (text format) → stderr warns, exit code unchanged", async () => {
+    const dir = repo("artgraph-debt-us1-ci1-");
+    process.env.CI = "1";
+    const { stdout, stderr, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("No changes detected in git diff.");
+    expect(stderr).toContain("gate is not active in CI without --base <ref>");
+  });
+
+  it("no CI env + empty git diff → no CI warning on stderr", async () => {
+    const dir = repo("artgraph-debt-us1-noci-");
+    delete process.env.CI;
+    const { stderr, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
+    expect(exitCode).toBe(0);
+    expect(stderr).not.toContain("gate is not active in CI");
   });
 });
 
@@ -200,6 +284,52 @@ describe("check --diff --gate edge cases (T022)", () => {
     const { stdout, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Changed files are not tracked in the graph.");
+  });
+});
+
+// spec 017 (High fix C2, issue #182 review) — `orphanKey` embeds the
+// orphan's `source` path, so a pure `git mv` of a file carrying a
+// pre-existing orphan (zero content change, `@impl` tag intact) used to
+// compute a DIFFERENT baseline key than the current side's key (which
+// always reflects the live, post-rename path) — the pre-existing orphan
+// failed to suppress and the gate false-positived on a pure rename
+// (SC-004; issue #174's failure mode recurring on the rename path).
+// `getGitRenameMap` + baseline-side normalization (src/baseline.ts) fixes
+// this by rewriting the BASELINE orphan's source onto the renamed path
+// before its key is computed.
+describe("check --diff --gate rename-aware baseline normalization (C2)", () => {
+  it("(T-rename-1) git mv of a pre-existing-orphan file → exit 0, orphan stays suppressed", async () => {
+    const dir = track(makeRepoWithOrphan("artgraph-c2-rename-1-"));
+    execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], { cwd: dir, stdio: "pipe" });
+
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(0);
+    expect(json.pass).toBe(true);
+    expect(json.baselineStatus).toBe("computed");
+    // The orphan is still visible in the scoped display (at its NEW path)…
+    expect(json.orphans).toContain("file:src/new.ts -> REQ-999 (implements)");
+    // …but must not be counted as a newly introduced issue.
+    expect(json.newIssues.orphans).toEqual([]);
+    expect(json.suppressedCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("(T-rename-2) rename stays suppressed even when a genuinely new orphan is introduced elsewhere → exit 2 for the new one only", async () => {
+    const dir = track(makeRepoWithOrphan("artgraph-c2-rename-2-"));
+    execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], { cwd: dir, stdio: "pipe" });
+    // A brand-new orphan on a DIFFERENT, previously-clean file — must still
+    // be caught, so the rename normalization can't be a blanket amnesty.
+    // (String literal split with concatenation to avoid the artgraph scanner
+    // picking this up when running `artgraph check --diff` on this repo
+    // itself; the fixture repo still sees the concatenated tag.)
+    appendFileSync(join(dir, "src", "clean.ts"), "// @" + "impl REQ-888\n");
+
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(2);
+    expect(json.pass).toBe(false);
+    // Renamed pre-existing orphan: still suppressed, not new.
+    expect(json.newIssues.orphans).not.toContain("file:src/new.ts -> REQ-999 (implements)");
+    // Freshly introduced orphan: counted as new and fails the gate.
+    expect(json.newIssues.orphans).toContain("file:src/clean.ts -> REQ-888 (implements)");
   });
 });
 

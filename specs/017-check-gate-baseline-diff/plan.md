@@ -20,7 +20,9 @@
 
 **Testing**: vitest (unit / e2e / perf)。CLI 振る舞いは in-process 実行 (`tests/helpers.ts` の `runAt`) + 一時 git repo (`makeCleanGitRepo`) で担保。
 
-**Target Platform**: 開発者ローカル (Stop hook / `artgraph-verify` Skill) および CI。git リポジトリを前提。
+**Target Platform**: 開発者ローカル (Stop hook / `artgraph-verify` Skill)。git リポジトリを前提。
+
+> **注 (issue #182 レビュー E1)**: CI での実行はスコープ外 — CI の checkout は通常コミット済み状態と作業ツリーが完全一致するため `--diff` (git diff staged+unstaged+untracked) は恒常的に空になり、ゲートが無言で no-op になる (Follow-up 参照)。本 feature は開発者ローカル向けの `--diff` 挙動のみを対象とする。
 
 **Project Type**: single project CLI (`src/` 単一パッケージ)
 
@@ -113,3 +115,7 @@ docs / templates:
 ## Complexity Tracking
 
 > Constitution Check に違反なし。記載不要。
+
+## Follow-up
+
+- **Phase 2: `--base <ref>` CLI 露出 ([#185](https://github.com/ShintaroMorimoto/artgraph/issues/185))**: 内部 API (`computeBaselineIssues(rootDir, baseRef, ...)`) は本 feature で既に base ref パラメータ化済み (FR-012)。CLI フラグとしての露出は本 feature のスコープ外とし、別 PR で扱う (spec.md Assumptions 参照)。issue #182 レビューで判明した E1 (CI での `--diff` 恒常無変化 → ゲート無言 no-op) はこの Phase 2 で解消する想定 — `--base <ref>` を渡せば CI は「PR のマージ先ブランチ」を base ref にでき、作業ツリー diff ではなくコミット間 diff でゲート判定できるようになる。

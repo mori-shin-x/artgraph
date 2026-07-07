@@ -147,3 +147,4 @@
 - **Phase 2 (`--base <ref>` の CLI 露出) は本 feature のスコープ外**: コミット済み / プッシュ済み / PR 済みブランチを base ref 指定でチェックする機能は follow-up の別 PR とする。本 feature では内部構造を base ref パラメータ化するに留める (FR-012)。
 - **中間実装状態のゲート挙動 (#178) はスコープ外**: 新 spec で REQ を追加し実装途中の状態で、未実装 REQ が新規 uncovered として正当にゲートを止める問題は本 feature の対象外であり、issue #178 で別途扱う。
 - **pre-existing 債務そのものの解消はスコープ外**: 他 spec の未タグ付け REQ・重複 / ambiguous ID の整理は本 feature の対象外。baseline 差分によりゲートからは無害化されるため、債務解消は独立した衛生タスクとする。
+- **Submodule / Git LFS (issue #182 レビュー B9)**: Submodule は Phase 1 の対象外。`git worktree add` は submodule を init しないため base graph が submodule 配下のノードを丸ごと欠落させ、issue #174 と同型の誤爆 (全 new 判定) を別経路で再発しうる。`computeBaselineIssues` は submodule の存在 (`git submodule status --recursive` が非空) を検出した時点で `unavailable` を返し、縮退した誤判定を避ける (対応は #185 で別途検討)。LFS はスコープ内だが `GIT_LFS_SKIP_SMUDGE=1` で smudge (実バイナリ取得) を skip する — `scan()` はテキストソースしか読まないため実害はなく、帯域・タイムアウトの悪化を避ける。

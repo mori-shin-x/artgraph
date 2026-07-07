@@ -24,6 +24,14 @@ export function check(
   // non-diff callers) every scoped issue counts as new, so `pass` collapses to
   // the pre-017 "all scoped issues clear" meaning and back-compat holds.
   baseline?: BaselineIssues,
+  // spec 017 (Critical fix B6/D2, issue #182 review) — `baseline === undefined`
+  // is ambiguous on its own: it happens both for a plain (non-`--diff`) check
+  // AND for a `--diff` run whose lazy-eval (R6) skipped baseline computation
+  // because the scope already had zero issues (data-model §7). This flag is
+  // the only signal that lets `check()` tell the two apart when deciding
+  // `baselineStatus` — `true` → `"skipped"`, `false`/omitted → `"not_applicable"`
+  // (data-model §1.1 / §4, contract cli-check-gate §3).
+  diffRequested?: boolean,
 ): CheckResult {
   const drifted: DriftEntry[] = [];
 
@@ -98,11 +106,13 @@ export function check(
 
   // `pass` now means "no NEW issue" (= gate 合否), not "no scoped issue".
   const pass = status === "unavailable" ? false : newCount === 0;
-  // No baseline supplied ⇒ no diff was applied; report "skipped" so callers /
-  // json consumers see a coherent status field even on the legacy path.
-  const baselineStatus: BaselineStatus = status ?? "skipped";
+  // spec 017 (Critical fix B6/D2) — no `baseline` supplied: `diffRequested`
+  // decides whether that means a `--diff` lazy-eval skip (scope was already
+  // clean, R6) or a plain non-`--diff` check where the baseline concept
+  // itself doesn't apply (R8 back-compat).
+  const baselineStatus: BaselineStatus = status ?? (diffRequested ? "skipped" : "not_applicable");
 
-  return {
+  const result: CheckResult = {
     drifted,
     orphans,
     uncovered,
@@ -113,4 +123,11 @@ export function check(
     suppressedCount,
     baselineStatus,
   };
+  // spec 017 (Critical fix B1, issue #182 review) — propagate the baseline's
+  // captured failure message so json/text consumers can see *why* the gate is
+  // undetermined instead of a bare "unavailable" string.
+  if (baselineStatus === "unavailable" && baseline?.error) {
+    result.baselineError = baseline.error;
+  }
+  return result;
 }

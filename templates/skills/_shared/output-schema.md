@@ -24,15 +24,17 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
     { "reqId": "REQ-001", "status": "verified" }       // status: "verified" | "impl-only" | "untagged"
   ],
   "testFailures": ["REQ-003"],                         // REQs whose tests ran and failed (only when --test-results supplied)
-  "pass": true,                                        // spec 017: true iff `newIssues` is empty (NO issue is new vs the baseline). The scoped arrays above may still be non-empty (all pre-existing debt).
-  "newIssues": {                                       // spec 017 (FR-009): the `current \ baseline` subset that decides the gate. Same shapes as the scoped arrays.
-    "drifted": [],
-    "orphans": [],
-    "uncovered": [],
-    "testFailures": []
+  "pass": true,                                        // spec 017: true iff `newIssues` is empty (NO issue is new vs the baseline). DANGER: forced `false` when baselineStatus is "unavailable" — NEVER read `pass` alone, see the table below.
+  "newIssues": {                                       // spec 017 (FR-009): the `current \ baseline` subset that decides the gate.
+    "drifted": [                                       // ⚠ DriftEntry[] (object) — NOT string[]. The only asymmetric field here.
+      { "nodeId": "REQ-100", "kind": "req", "lockedHash": "abc123…", "currentHash": "def456…" }
+    ],
+    "orphans": ["file:src/auth.ts -> REQ-999 (implements)"], // string[] — same "<source> -> <target> (<kind>)" format as top-level `orphans`
+    "uncovered": ["REQ-002"],                          // string[] — REQ ids, same as top-level `uncovered`
+    "testFailures": ["REQ-003"]                        // string[] — REQ ids, same as top-level `testFailures`
   },
   "suppressedCount": 155,                              // count of scoped issues suppressed as pre-existing (in blast radius but not newly introduced)
-  "baselineStatus": "computed",                        // "computed" | "empty" (unborn HEAD → all current is new) | "skipped" (clean scope, no baseline built) | "unavailable" (could not establish a baseline → gate undetermined)
+  "baselineStatus": "computed",                        // "computed" | "empty" | "skipped" | "not_applicable" | "unavailable" — see the table below before trusting `pass`
   "warnings": [                                        // BuildWarning[] from scan (always present, may be empty)
     {
       "type": "duplicate-id",                          // see "Warning types" table below
@@ -44,7 +46,31 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
 }
 ```
 
-An issue is **new** (introduced by this change) iff it appears in `newIssues`; anything only in the scoped arrays is pre-existing. When `baselineStatus` is `"unavailable"`, `newIssues` is empty and `pass` is forced `false` — read `baselineStatus`, not `pass` alone, to tell "gate fail" (`--gate` → exit 2) from "undetermined" (`--gate` → exit 1).
+**`newIssues` is not a uniform shape.** `newIssues.drifted` is `DriftEntry[]` (an array of `{nodeId, kind, lockedHash, currentHash}` objects) — exactly like top-level `drifted`. `newIssues.orphans` / `newIssues.uncovered` / `newIssues.testFailures` stay `string[]`, exactly like their top-level counterparts. Code that does `newIssues.drifted.forEach(d => d.startsWith("REQ-"))` will throw at runtime — `d` is an object; use `d.nodeId`.
+
+**Never read `pass` in isolation — always check `baselineStatus` first.** An issue is **new** (introduced by this change) iff it appears in `newIssues`; anything only in the scoped arrays is pre-existing. But whether that "new" determination is even meaningful depends entirely on `baselineStatus`:
+
+| `baselineStatus` | when it occurs | `newIssues` contents | `pass` / gate meaning |
+| --- | --- | --- | --- |
+| `"computed"` | `--diff`, scope had issues, base ref resolved and scanned | real `current \ baseline` diff | spec-017 gate semantics (new issues only) |
+| `"empty"` | `--diff`, unborn HEAD (repo's first commit, FR-014) | == scoped arrays (baseline is trivially empty, so everything counts as new) | spec-017 semantics; often `pass:false` on a non-trivial repo |
+| `"skipped"` | `--diff`, but the scoped issue count was already zero (lazy eval, SC-005) — no baseline worktree was ever built | all empty (trivially, since scoped was already empty) | trivially `pass:true` |
+| `"not_applicable"` | **no `--diff` at all** — a plain `check` / `check --gate` run. The current-vs-baseline distinction doesn't apply because there's no diff to compare against. | == scoped arrays verbatim (NOT a real "new" determination) | matches the pre-spec-017 "all scoped issues clear" meaning (back-compat, R8) |
+| `"unavailable"` | `--diff`, baseline construction failed (non-git repo, `git worktree add` failure, `scan()` exception, mkdtemp error, …) | forced empty — **means "undetermined"**, not "no issues" | `pass` forced `false` (safe default, never silently passes); see `baselineError` below |
+
+**Do not confuse `"skipped"` with `"not_applicable"`.** Both can leave `newIssues` looking "uninteresting", but for different reasons: `"skipped"` only ever occurs when the scoped issue count is *already* zero (so an empty `newIssues` is trivially correct). `"not_applicable"` can carry a full, non-empty `newIssues` on a dirty repo — it means "this run never attempted a baseline diff", not "nothing is wrong".
+
+`baselineError` (optional `string`): only present, and always non-empty, when `baselineStatus === "unavailable"`. It carries the underlying failure's message (a git command failure, a `scan()` exception, a temp-dir creation error, …) so a Skill/CI consumer can report *why* the gate is undetermined instead of a generic "baseline unavailable":
+
+```json
+{
+  "baselineStatus": "unavailable",
+  "baselineError": "git rev-parse --verify HEAD^{commit}: fatal: not a git repository",
+  "newIssues": { "drifted": [], "orphans": [], "uncovered": [], "testFailures": [] },
+  "pass": false
+}
+```
+(other fields such as `drifted` / `orphans` / `coverage` are still populated with the full scoped listing — omitted above for brevity. `baselineError` is absent/undefined for every `baselineStatus` other than `"unavailable"`.)
 
 `warnings[].type` is one of: `"duplicate-id" | "ambiguous-id" | "orphan-doc" | "orphan-edge" | "invalid-relation" | "reserved-prefix" | "unresolved-link" | "out-of-scope-link" | "invalid-annotation-id" | "empty-annotation" | "self-reference-annotation"`.
 

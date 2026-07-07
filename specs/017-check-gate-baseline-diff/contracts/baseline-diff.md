@@ -12,8 +12,19 @@ function computeBaselineIssues(
   config: ArtgraphConfig,
 ): BaselineIssues;
 
-interface BaselineIssues { keys: Set<string>; status: "computed" | "empty" | "unavailable"; }
+interface BaselineIssues {
+  keys: Set<string>;
+  status: "computed" | "empty" | "unavailable";
+  // Critical fix B1 (issue #182 レビュー) — status === "unavailable" のときの
+  // み設定される診断メッセージ (非空文字列)。git rev-parse の失敗、`git
+  // worktree add` の失敗、scan() が投げた例外、mkdtemp の errno 等、この関数
+  // が捕捉した例外の message をそのまま格納する。`check()` はこれを
+  // `CheckResult.baselineError` へそのまま転記する (data-model.md §1.1)。
+  error?: string;
+}
 ```
+
+> **`status` はこの関数固有の契約であり、`"skipped"` / `"not_applicable"` を含まない。** この 2 値は `computeBaselineIssues` 自体を呼ばない上位層 (`check()` / `commands/check.ts`) でのみ発生する `CheckResult.baselineStatus` (5 値) 側の概念 — `"skipped"` は `--diff` ありで scope の current issue がゼロだったため呼び出しをスキップしたケース (R6)、`"not_applicable"` は `--diff` 自体が要求されていないプレーン `check` のケース (Critical fix B6/D2)。詳細は data-model.md §1.1 / §7 を参照。
 
 ### 1.1 事後条件 (副作用ゼロ, FR-004 / SC-003)
 
@@ -27,7 +38,9 @@ interface BaselineIssues { keys: Set<string>; status: "computed" | "empty" | "un
 |--------|------|
 | `empty` | `git rev-parse --verify <baseRef>` が失敗 (HEAD 無し初回コミット前など) |
 | `computed` | worktree 展開 + scan + issue 算出 が成功 |
-| `unavailable` | 非 git / `git worktree add` 失敗 / scan 例外 |
+| `unavailable` | 非 git / `git worktree add` 失敗 / scan 例外 — `error` に捕捉した例外の message を格納 (非空文字列) |
+
+`unavailable` 以外の全 status では `error` は unset (フィールド自体を省略、または `undefined`)。
 
 ### 1.3 キー集合の内容 (global, R1)
 
