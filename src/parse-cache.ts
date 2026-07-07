@@ -60,7 +60,11 @@ export interface ParseCacheData {
 // now binds to symbols; named/aliased barrel re-exports materialize
 // per-symbol nodes/edges). Bumping the version cold-invalidates every cached
 // fragment so a warm cache from a pre-fix build cannot serve stale edges.
-const SCHEMA_VERSION = 2;
+// v3 (issue #187): `extractImports` now emits a file-grain import edge for
+// `import = require(...)` / `export import = require(...)` — previously
+// these produced no edges at all. Bump so a warm cache from a pre-fix
+// build cannot serve stale empty edges for files that use CJS-style TS.
+const SCHEMA_VERSION = 3;
 const CACHE_RELDIR = join("node_modules", ".cache", "artgraph");
 const CACHE_FILENAME = "parse-cache.json";
 
