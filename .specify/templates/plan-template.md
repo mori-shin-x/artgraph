@@ -44,7 +44,7 @@
 
 ### Engineering Hygiene Gates
 
-*設計時に確認する横断ゲート。背景と全カテゴリは `docs/review-patterns-checklist.md`。
+*設計時に確認する横断ゲート。背景と全カテゴリは `docs/internal/review-patterns-checklist.md`。
 実装時の項目は tasks.md の Definition of Done を参照。*
 
 - [ ] **前提検証 (Cat6)**: issue/spec の前提（既出荷機能・依存 spec・既存挙動）を実コードで裏取りした。覆る前提があればスコープを再定義した。
