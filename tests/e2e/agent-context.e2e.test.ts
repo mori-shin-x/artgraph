@@ -39,11 +39,8 @@ function sha256(path: string): string {
 const SKILL_NAMES = [
   "artgraph-setup",
   "artgraph-bootstrap",
-  "artgraph-detect",
-  "artgraph-integrate",
   "artgraph-impact",
   "artgraph-plan-coverage",
-  "artgraph-coverage",
   "artgraph-verify",
   "artgraph-rename",
 ] as const;
@@ -63,7 +60,7 @@ describe("e2e: artgraph init --agents=claude,copilot agent-context", () => {
     proj.cleanup();
   });
 
-  it("AGENTS.md carries the artgraph body (marker block + 9 Skill names)", () => {
+  it("AGENTS.md carries the artgraph body (marker block + 6 Skill names)", () => {
     const body = readFileSync(join(proj.dir, "AGENTS.md"), "utf-8");
     expect(body).toContain("<!-- artgraph:begin -->");
     expect(body).toContain("<!-- artgraph:end -->");

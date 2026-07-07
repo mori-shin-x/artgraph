@@ -56,7 +56,11 @@ export interface ParseCacheData {
   ts: Record<string, TsFragment>;
 }
 
-const SCHEMA_VERSION = 1;
+// v2 (issue #177): symbol-mode parser output changed (leading-comment @impl
+// now binds to symbols; named/aliased barrel re-exports materialize
+// per-symbol nodes/edges). Bumping the version cold-invalidates every cached
+// fragment so a warm cache from a pre-fix build cannot serve stale edges.
+const SCHEMA_VERSION = 2;
 const CACHE_RELDIR = join("node_modules", ".cache", "artgraph");
 const CACHE_FILENAME = "parse-cache.json";
 

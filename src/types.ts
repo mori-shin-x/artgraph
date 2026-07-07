@@ -134,7 +134,23 @@ export interface DriftEntry {
 
 export interface CheckResult {
   drifted: DriftEntry[];
+  /**
+   * Human-readable descriptor strings, one per orphan edge, in the format
+   * `"<source> -> <target> (<kind>)"` (e.g.
+   * `"file:src/auth/login.ts -> FAKE-9999 (implements)"`). Consumed by the
+   * text CLI (`printCheckText`) and by JSON pipelines that mirror the CLI
+   * text output. Do NOT treat entries as node ids — use `orphanNodeIds`
+   * for that. See issue #155 (B1).
+   */
   orphans: string[];
+  /**
+   * Deduplicated + ascending-sorted bare source node ids of every orphan
+   * edge — the nodes the `--serve` UI should mark with the `orphan` state.
+   * Derived from the SAME underlying `OrphanEdge[]` that `orphans`
+   * descriptors are formatted from, but stripped down to just the source
+   * ids so `Set.has(node.id)` works directly. See issue #155 (B1).
+   */
+  orphanNodeIds: string[];
   uncovered: string[];
   coverage: { reqId: string; status: CoverageStatus }[];
   // REQs whose tests ran and failed (only populated when test results are
@@ -240,8 +256,7 @@ export interface InitOptions {
    *   5. install Stop hook into .claude/settings.json (unless noHooks)
    *   6. inject CLAUDE.md / AGENTS.md snippet (unless noAgentContext)         [P1]
    *
-   * `--minimal` short-circuits stages 2–6 to off; each can be re-enabled with
-   * the matching `with*` flag.
+   * `--minimal` short-circuits stages 2–6 to off.
    */
   minimal?: boolean;
   noScan?: boolean;
@@ -249,28 +264,6 @@ export interface InitOptions {
   noIntegrate?: boolean;
   noHooks?: boolean;
   noAgentContext?: boolean;
-  withSkills?: boolean;
-  withIntegrate?: boolean;
-  withHooks?: boolean;
-  withAgentContext?: boolean;
-  /**
-   * Explicit one-shot integrations to run as part of `init`. When set, overrides
-   * the default auto-detect behavior. Each id must resolve to a registered
-   * provider; the special string `"all"` expands to every provider whose
-   * `detect()` is true.
-   *
-   * Unmatched / undetected ids produce a warning and are skipped — the init
-   * itself still completes with exit 0.
-   */
-  integrations?: IntegrationProviderId[] | "all";
-  /**
-   * Forwarded `--integrate-gate` / `--no-integrate-gate` for the speckit
-   * provider. The CLI defaults this to `true` when neither flag is passed
-   * (contracts/cli-flags.md §integrate-gate, spec.md §FR-003) so a fresh
-   * Spec Kit repo gets the `before_implement` gate hook by default.
-   * Other providers ignore this flag.
-   */
-  integrateGate?: boolean;
   /**
    * spec 013 (FR-001 / FR-002) — Tier 1 agent ids the user selected via
    * `--agents=<csv>`. Alpha-sorted, deduped, fully validated by
@@ -468,8 +461,7 @@ export interface PlanCoverageConfig {
    * When true, `artgraph plan-coverage` adds a `missingFilesSection`
    * diagnostic for each task block in tasks.md that does not declare a
    * `Files:` section. Defaults to false so existing projects without the
-   * `Files:` convention are not broken. The CLI `--require-files-section`
-   * flag overrides this on a per-run basis. See spec 014 FR-018.
+   * `Files:` convention are not broken. See spec 014 FR-018.
    */
   requireFilesSection?: boolean;
 }

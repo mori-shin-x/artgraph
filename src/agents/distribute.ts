@@ -69,8 +69,9 @@
 // Kiro scope note (FR-008):
 //   - `distribute()` for `descriptor.id === "kiro"` writes ONLY into
 //     `.kiro/skills/`. The `.kiro/steering/artgraph.md` file is the
-//     `KiroProvider` (spec 009) responsibility, reached via
-//     `--integrations=kiro`. distribute() must never touch `.kiro/steering/`.
+//     `KiroProvider` (spec 009) responsibility, reached via the integrate
+//     stage / `artgraph integrate kiro`. distribute() must never touch
+//     `.kiro/steering/`.
 
 import { createHash, randomBytes } from "node:crypto";
 import {
@@ -139,11 +140,7 @@ export interface DistributeResult {
 export class DistributionError extends Error {
   readonly conflictPaths: string[];
   readonly partiallyWritten: string[];
-  constructor(
-    message: string,
-    conflictPaths: string[] = [],
-    partiallyWritten: string[] = [],
-  ) {
+  constructor(message: string, conflictPaths: string[] = [], partiallyWritten: string[] = []) {
     super(message);
     this.name = "DistributionError";
     this.conflictPaths = conflictPaths;
@@ -635,10 +632,7 @@ function sha8(): string {
  * message can pinpoint the offending link, which is essential for A4's
  * "refuse to write through" contract.
  */
-function findSymlinkAncestor(
-  absRoot: string,
-  dstAbsPath: string,
-): string | null {
+function findSymlinkAncestor(absRoot: string, dstAbsPath: string): string | null {
   const leafDir = dirname(dstAbsPath);
   const ancestors: string[] = [];
   let current = leafDir;

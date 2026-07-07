@@ -1,7 +1,7 @@
 // `artgraph check` — extracted verbatim from `src/cli.ts` (issue #162).
 
-import { Command, Option } from "commander";
-import { applyMode, pathsToEntries, resolveTestResults } from "./shared.js";
+import { Command } from "commander";
+import { pathsToEntries, resolveTestResults } from "./shared.js";
 import { printWarnings } from "./presenters/warnings.js";
 import { printCheckText } from "./presenters/check.js";
 
@@ -12,19 +12,17 @@ export function registerCheckCommand(program: Command): void {
     .option("--gate", "Exit 2 on any issue (for Stop hook)")
     .option("--diff", "Scope check to files changed in git diff")
     .option("--format <format>", "Output format: json | text", "text")
-    .option("--test-results <paths...>", "Test result files (Vitest JSON / JUnit XML)")
-    .addOption(new Option("--mode <mode>", "Analysis mode").choices(["file", "symbol"]))
     .action(async (opts) => {
       const rootDir = process.cwd();
       const { loadConfig } = await import("../config.js");
       const { scan } = await import("../scan.js");
       const { readLock } = await import("../lock.js");
       const { check } = await import("../check.js");
-      const config = applyMode(loadConfig(rootDir), opts.mode);
+      const config = loadConfig(rootDir);
       const { graph, warnings } = scan(rootDir, config);
       const lock = readLock(rootDir, config.lockFile);
 
-      const testResults = await resolveTestResults(opts, config, rootDir);
+      const testResults = await resolveTestResults(config, rootDir);
 
       let scopedNodeIds: Set<string> | undefined;
       if (opts.diff) {
@@ -59,6 +57,7 @@ export function registerCheckCommand(program: Command): void {
               JSON.stringify({
                 drifted: [],
                 orphans: [],
+                orphanNodeIds: [],
                 uncovered: [],
                 coverage: [],
                 testFailures: [],

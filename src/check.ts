@@ -56,6 +56,9 @@ export function check(
   const allOrphans = findOrphans(graph);
   const scopedOrphans = scope ? allOrphans.filter((o) => scope.has(o.source)) : allOrphans;
   const orphans = scopedOrphans.map(formatOrphan);
+  // issue #155 (B1) — bare orphan-source node ids, for the `--serve` renderer
+  // to compare against without re-parsing the formatted `orphans` strings.
+  const orphanNodeIds = Array.from(new Set(scopedOrphans.map((o) => o.source))).sort();
 
   const allUncovered = findUncovered(graph);
   const uncovered = scope ? allUncovered.filter((id) => scope.has(id)) : allUncovered;
@@ -115,6 +118,7 @@ export function check(
   const result: CheckResult = {
     drifted,
     orphans,
+    orphanNodeIds,
     uncovered,
     coverage,
     testFailures,

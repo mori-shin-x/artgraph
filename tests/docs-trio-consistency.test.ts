@@ -1,28 +1,44 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { run } from "./helpers.js";
 
 // Docs-trio consistency metatest (#139).
 //
-// README.md, docs/skills-guide.md, and src/cli.ts all describe the default
-// stages of `artgraph init`, and nothing keeps them in sync automatically:
-// PR #103 advertised agent-context in the README before it shipped (H1),
-// and PR #129 shipped the Stop hook but left "lands in PR-B" in the CLI
-// help. This test pins the three sources to a single stage list and rejects
-// stale future-tense markers, so the next shipped-but-undocumented (or
-// documented-but-unshipped) stage fails CI instead of reaching users.
+// README.md, docs/skills-guide.md, and `artgraph init --help` all describe
+// the default stages of `artgraph init`, and nothing keeps them in sync
+// automatically: PR #103 advertised agent-context in the README before it
+// shipped (H1), and PR #129 shipped the Stop hook but left "lands in PR-B"
+// in the CLI help. This test pins the three sources to a single stage list
+// and rejects stale future-tense markers, so the next shipped-but-
+// undocumented (or documented-but-unshipped) stage fails CI instead of
+// reaching users.
 //
 // The stage list below is the test's single source of truth. Adding a new
 // init stage means updating it here, and the assertions then force the
-// README paragraph, the skills-guide section, and the cli.ts flag surface
-// to be updated in the same PR.
+// README paragraph, the skills-guide section, and the CLI help text to be
+// updated in the same PR.
+//
+// issue #175: the third source used to be a grep of `src/commands/init.ts`
+// (before that, `src/cli.ts` — issue #162 moved it). Reading the CLI
+// module's source text coupled this test to wherever the `init` command's
+// implementation happened to live, and it broke on pure file moves with no
+// behavior change. Running `artgraph init --help` through the in-process
+// `runCli()` harness instead checks what a user actually sees, and stays
+// correct regardless of how the command's implementation is split up.
 
 const ROOT = resolve(import.meta.dirname, "..");
 
 const readme = readFileSync(resolve(ROOT, "README.md"), "utf8");
 const skillsGuide = readFileSync(resolve(ROOT, "docs", "skills-guide.md"), "utf8");
-// issue #162: `init` moved from src/cli.ts into its own module.
-const cliSource = readFileSync(resolve(ROOT, "src", "commands", "init.ts"), "utf8");
+
+let helpText: string;
+
+beforeAll(async () => {
+  const { stdout, exitCode } = await run(["init", "--help"]);
+  expect(exitCode).toBe(0);
+  helpText = stdout;
+});
 
 type Stage = {
   id: string;
@@ -30,8 +46,6 @@ type Stage = {
   mention: RegExp;
   /** Default-mode opt-out flag; null for stages without one (config). */
   optOut: string | null;
-  /** --minimal opt-in flag; null for stages without one (config, scan). */
-  optIn: string | null;
   /**
    * Whether README / skills-guide list the opt-out flag. `--no-scan` exists
    * on the CLI but is deliberately not part of the documented opt-out list.
@@ -40,34 +54,30 @@ type Stage = {
 };
 
 const DEFAULT_STAGES: Stage[] = [
-  { id: "config", mention: /config/i, optOut: null, optIn: null, optOutDocumented: false },
-  { id: "scan", mention: /scan/i, optOut: "--no-scan", optIn: null, optOutDocumented: false },
+  { id: "config", mention: /config/i, optOut: null, optOutDocumented: false },
+  { id: "scan", mention: /scan/i, optOut: "--no-scan", optOutDocumented: false },
   {
     id: "skills",
     mention: /Skills/,
     optOut: "--no-skills",
-    optIn: "--with-skills",
     optOutDocumented: true,
   },
   {
     id: "integrate",
     mention: /integrate/i,
     optOut: "--no-integrate",
-    optIn: "--with-integrate",
     optOutDocumented: true,
   },
   {
     id: "hooks",
     mention: /Stop hook/,
     optOut: "--no-hooks",
-    optIn: "--with-hooks",
     optOutDocumented: true,
   },
   {
     id: "agent-context",
     mention: /AGENTS\.md/,
     optOut: "--no-agent-context",
-    optIn: "--with-agent-context",
     optOutDocumented: true,
   },
 ];
@@ -161,44 +171,43 @@ function skillsGuideStageBullets(): string {
   return bullets.join("\n");
 }
 
-/** Source text of one commander command block in src/commands/init.ts. */
-function cliCommandBlock(name: string): string {
-  const start = cliSource.indexOf(`.command("${name}")`);
-  if (start === -1) {
-    throw new Error(`src/commands/init.ts: .command("${name}") not found`);
-  }
-  const next = cliSource.indexOf('.command("', start + 1);
-  return cliSource.slice(start, next === -1 ? undefined : next);
-}
-
-/** The .description("...") string of the init command. */
+/**
+ * The free-text description paragraph of `artgraph init --help`: everything
+ * between the "Usage: ..." line and the "Options:" section, with wrapped
+ * lines rejoined into a single line (commander word-wraps to terminal
+ * width, which would otherwise split stage mentions across lines).
+ */
 function cliInitDescription(): string {
-  const match = cliCommandBlock("init").match(/\.description\(\s*"((?:[^"\\]|\\.)*)"/);
+  const match = helpText.match(/^Usage: artgraph init \[options\]\n\n([\s\S]*?)\n\nOptions:/m);
   if (!match) {
     throw new Error(
-      'src/commands/init.ts: init .description("...") not found or not a plain string',
+      "`artgraph init --help`: could not find the description paragraph between " +
+        '"Usage: artgraph init [options]" and "Options:". ' +
+        "If commander's help layout changed, update docs-trio-consistency.test.ts to match.",
     );
   }
-  return match[1];
+  return match[1].replace(/\s+/g, " ").trim();
 }
 
-/** All --flag names declared via .option() inside the init command block. */
+/** All --flag names listed in the "Options:" section of `artgraph init --help`. */
 function cliInitOptionFlags(): string[] {
-  const block = cliCommandBlock("init");
   const flags: string[] = [];
-  for (const m of block.matchAll(/\.option\(\s*"(--[a-z-]+)/g)) {
+  // Anchored to exactly two leading spaces so wrapped continuation lines
+  // (indented further, e.g. "...--agents (default\n  mode only...)") can't
+  // be mistaken for a flag declaration.
+  for (const m of helpText.matchAll(/^ {2}(--[a-z-]+)/gm)) {
     flags.push(m[1]);
   }
   return flags;
 }
 
-describe("docs-trio consistency: README / docs/skills-guide.md / src/cli.ts (#139)", () => {
+describe("docs-trio consistency: README / docs/skills-guide.md / `artgraph init --help` (#139)", () => {
   describe("every default stage is described by all three sources", () => {
     for (const stage of DEFAULT_STAGES) {
-      it(`stage "${stage.id}" appears in the cli.ts init description`, () => {
-        expect(enumerationSentence(cliInitDescription(), "src/cli.ts init description")).toMatch(
-          stage.mention,
-        );
+      it(`stage "${stage.id}" appears in the init --help description`, () => {
+        expect(
+          enumerationSentence(cliInitDescription(), "`artgraph init --help` description"),
+        ).toMatch(stage.mention);
       });
 
       it(`stage "${stage.id}" appears in the README default-setup enumeration`, () => {
@@ -214,11 +223,9 @@ describe("docs-trio consistency: README / docs/skills-guide.md / src/cli.ts (#13
   });
 
   describe("stage flag surface matches the stage list", () => {
-    it("cli.ts declares exactly the expected --no-* opt-outs on init", () => {
+    it("init --help declares exactly the expected --no-* opt-outs", () => {
       const expected = DEFAULT_STAGES.map((s) => s.optOut)
         .filter((f): f is string => f !== null)
-        // Not a stage opt-out, but declared on init alongside them.
-        .concat(["--no-integrate-gate"])
         .sort();
       const actual = cliInitOptionFlags()
         .filter((f) => f.startsWith("--no-"))
@@ -226,14 +233,8 @@ describe("docs-trio consistency: README / docs/skills-guide.md / src/cli.ts (#13
       expect(actual).toEqual(expected);
     });
 
-    it("cli.ts declares exactly the expected --with-* opt-ins on init", () => {
-      const expected = DEFAULT_STAGES.map((s) => s.optIn)
-        .filter((f): f is string => f !== null)
-        .sort();
-      const actual = cliInitOptionFlags()
-        .filter((f) => f.startsWith("--with-"))
-        .sort();
-      expect(actual).toEqual(expected);
+    it("init --help declares no --with-* opt-ins (removed in #135)", () => {
+      expect(cliInitOptionFlags().filter((f) => f.startsWith("--with-"))).toEqual([]);
     });
 
     for (const stage of DEFAULT_STAGES.filter((s) => s.optOutDocumented)) {
@@ -254,7 +255,7 @@ describe("docs-trio consistency: README / docs/skills-guide.md / src/cli.ts (#13
     const sources: Array<[string, () => string]> = [
       ["README.md", () => readme],
       ["docs/skills-guide.md", () => skillsGuide],
-      ["src/commands/init.ts", () => cliSource],
+      ["`artgraph init --help`", () => helpText],
     ];
     for (const [label, read] of sources) {
       for (const marker of STALE_MARKERS) {

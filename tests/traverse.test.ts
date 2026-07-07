@@ -354,6 +354,7 @@ describe("task-source edge semantics (meta-review remediation)", () => {
   it("findOrphans does not warn for task-source verifies with missing target", () => {
     const graph = makeTaskGraph();
     const orphans = findOrphans(graph as any);
+    // task-source orphans must not appear in the structured result at all.
     expect(orphans.some((o) => o.source === "T001" && o.target === "1.1")).toBe(false);
   });
 

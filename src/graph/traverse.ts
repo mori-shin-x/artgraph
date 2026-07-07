@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import type { ArtifactGraph, ImpactResult, DriftEntry, SymbolEntry } from "../types.js";
+import type { ArtifactGraph, DriftEntry, ImpactResult, SymbolEntry } from "../types.js";
 import type { LockFile } from "../types.js";
 
 // spec 016 (R-006, data-model.md §2.3) — `impact()` BFS body is **unchanged
@@ -13,7 +13,7 @@ import type { LockFile } from "../types.js";
 //   - From a doc node, traversal reaches child reqs (via forward contains edge)
 //   - Starting from any req, the blast radius includes sibling reqs in the same doc
 //     (req -> parent doc -> sibling reqs -> their implementations)
-// Use --depth to limit traversal when contains edges cause unexpectedly wide reach.
+// Pass maxDepth to limit traversal when contains edges cause unexpectedly wide reach.
 //
 // File→symbol expansion (the `node.kind === "file"` branch below) is the
 // reason a file startId still drags in same-file symbols; for symbol startIds
@@ -122,7 +122,9 @@ export function impact(
 // spec 017 (FR-006, data-model §2) — an `@impl`/`@verifies` edge whose target
 // REQ/doc node does not exist in the graph. Structured (rather than a flat
 // string) so `check()` can strict-match `source` against the diff scope
-// instead of the old substring `includes` heuristic.
+// instead of the old substring `includes` heuristic. Also the shape consumed
+// by the `--serve` renderer (issue #155) to compare bare node ids without
+// re-parsing the formatted `orphans` strings.
 export interface OrphanEdge {
   source: string; // e.g. "file:src/foo.ts" / "test:src/foo.test.ts"
   target: string; // the REQ/doc id that did not resolve
@@ -178,7 +180,7 @@ export function findUncovered(graph: ArtifactGraph): string[] {
 
 /**
  * spec 016 (R-004, R-005, data-model.md §2.1) — single resolver for
- * `impact()` / `check()` / `hook-pretool` / `plan-coverage` start ids.
+ * `impact()` / `check()` / `plan-coverage` start ids.
  * Replaces spec 014's `resolveFileStartIds` (now removed). Behavior per
  * entry:
  *

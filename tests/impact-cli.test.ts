@@ -172,11 +172,11 @@ describe("CLI: impact scan-mode mismatch (US2 / FR-013 / R-010)", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("Case 3: file-mode graph + symbol input → exit 1, stderr asks for scan --mode symbol", async () => {
+  it("Case 3: file-mode graph + symbol input → exit 1, stderr asks for config mode symbol", async () => {
     const { exitCode, stderr } = await runAt(root, ["impact", "src/auth/login.ts:doesNotMatter"]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("symbol-level input requires");
-    expect(stderr).toContain("scan --mode symbol");
+    expect(stderr).toContain('`mode: "symbol"` in `.artgraph.json`');
   });
 });
 
@@ -193,7 +193,7 @@ describe("CLI: impact REQ-ID rejection precedes symbol detection (US2 / FR-012)"
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("Case 4: `impact REQ-001 src/auth.ts:validateToken` → 4-path REQ-ID error before symbol resolution", async () => {
+  it("Case 4: `impact REQ-001 src/auth.ts:validateToken` → navigational REQ-ID error before symbol resolution", async () => {
     const { exitCode, stderr } = await runAt(root, [
       "impact",
       "REQ-001",
@@ -201,55 +201,10 @@ describe("CLI: impact REQ-ID rejection precedes symbol detection (US2 / FR-012)"
     ]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("REQ-ID");
-    expect(stderr).toContain("--from-tasks");
-    expect(stderr).toContain("--from-plan");
     expect(stderr).toContain("--diff");
+    expect(stderr).toContain("plan-coverage");
     // The symbol miss path must NOT have fired — the REQ-ID gate caught it.
     expect(stderr).not.toContain("No matching symbol found");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// US2 / Case 5 — --from-tasks with a symbol-unit Files: declaration
-// ---------------------------------------------------------------------------
-
-describe("CLI: impact --from-tasks with symbol entries (US2 / FR-010)", () => {
-  let root: string;
-  beforeEach(() => {
-    root = setupSymbolModeFixture();
-  });
-  afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
-  });
-
-  it("Case 5: tasks.md `Files: src/auth.ts:validateToken` → symbol-unit BFS, originReqs = [REQ-001]", async () => {
-    // The fixture already ships such a tasks.md (T001 block). Reuse it.
-    const tasksPath = join(root, "specs", "001-symbol-demo", "tasks.md");
-    writeFileSync(
-      tasksPath,
-      [
-        "# Tasks: Symbol Demo",
-        "",
-        "### T001: Tighten bearer token validation",
-        "",
-        "Files: src/auth.ts:validateToken",
-        "",
-      ].join("\n"),
-    );
-
-    const { stdout, exitCode } = await runAt(root, [
-      "impact",
-      "--from-tasks",
-      tasksPath,
-      "--format",
-      "json",
-    ]);
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout);
-    expect(result.impactReqs).toContain("REQ-001");
-    expect(result.impactReqs).not.toContain("REQ-005");
-    expect(result.impactReqs).not.toContain("REQ-009");
-    expect(result.originReqs).toEqual(["REQ-001"]);
   });
 });
 
@@ -365,19 +320,18 @@ describe("CLI: impact text Drift candidates section (US2 / FR-015)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Spec 014 → 016 validation regressions — kept verbatim so the redesign
-// doesn't quietly break the 4-path navigational error / mutually-exclusive
-// channels / no-source / --from-tasks --from-plan plumbing.
+// Spec 014 → 016 validation regressions — kept so the redesign doesn't
+// quietly break the navigational error / mutually-exclusive channels /
+// no-source plumbing.
 // ---------------------------------------------------------------------------
 
 describe("CLI: impact — input validation (spec 016 keeps spec 014 behavior)", () => {
-  it("rejects REQ-ID positional input with the 4-path navigational error (exit 1)", async () => {
+  it("rejects REQ-ID positional input with the navigational error (exit 1)", async () => {
     const { exitCode, stderr } = await runAt(FIXTURE_DIR, ["impact", "AUTH-001"]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain("REQ-ID");
-    expect(stderr).toContain("--from-tasks");
-    expect(stderr).toContain("--from-plan");
     expect(stderr).toContain("--diff");
+    expect(stderr).toContain("plan-coverage");
     expect(stderr).toMatch(/<file>|file path/i);
   });
 
@@ -397,9 +351,8 @@ describe("CLI: impact — input validation (spec 016 keeps spec 014 behavior)", 
   it("rejects `doc:` prefix positional input", async () => {
     const { exitCode, stderr } = await runAt(FIXTURE_DIR, ["impact", "doc:auth-design"]);
     expect(exitCode).toBe(1);
-    expect(stderr).toContain("--from-tasks");
-    expect(stderr).toContain("--from-plan");
     expect(stderr).toContain("--diff");
+    expect(stderr).toContain("plan-coverage");
   });
 
   it("accepts an existing file path as positional input", async () => {
@@ -414,338 +367,19 @@ describe("CLI: impact — input validation (spec 016 keeps spec 014 behavior)", 
     expect(result.impactReqs).toContain("AUTH-001");
   });
 
-  describe("rejects mutually exclusive start sources (all forbidden pairs)", () => {
-    let tmpRoot: string;
-    let tasksPath: string;
-    let planPath: string;
-    beforeEach(() => {
-      tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-impact-mex-"));
-      tasksPath = join(tmpRoot, "tasks.md");
-      planPath = join(tmpRoot, "plan.md");
-      writeFileSync(tasksPath, "Files: src/auth/login.ts\n");
-      writeFileSync(planPath, "Files: src/auth/login.ts\n");
-    });
-    afterEach(() => {
-      rmSync(tmpRoot, { recursive: true, force: true });
-    });
-
-    it("positional + --from-tasks", async () => {
-      const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
-        "impact",
-        "src/auth/login.ts",
-        "--from-tasks",
-        tasksPath,
-      ]);
-      expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
-    });
-
-    it("positional + --from-plan", async () => {
-      const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
-        "impact",
-        "src/auth/login.ts",
-        "--from-plan",
-        planPath,
-      ]);
-      expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
-    });
-
-    it("positional + --diff", async () => {
-      const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
-        "impact",
-        "src/auth/login.ts",
-        "--diff",
-      ]);
-      expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
-    });
-
-    it("--from-tasks + --from-plan", async () => {
-      const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
-        "impact",
-        "--from-tasks",
-        tasksPath,
-        "--from-plan",
-        planPath,
-      ]);
-      expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
-    });
-
-    it("--from-tasks + --diff", async () => {
-      const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
-        "impact",
-        "--from-tasks",
-        tasksPath,
-        "--diff",
-      ]);
-      expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
-    });
-
-    it("--from-plan + --diff", async () => {
-      const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
-        "impact",
-        "--from-plan",
-        planPath,
-        "--diff",
-      ]);
-      expect(exitCode).toBe(1);
-      expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
-    });
+  it("rejects mutually exclusive start sources (positional + --diff)", async () => {
+    const { exitCode, stderr } = await runAt(FIXTURE_DIR, [
+      "impact",
+      "src/auth/login.ts",
+      "--diff",
+    ]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toMatch(/mutually exclusive|specify only one|choose one/i);
   });
 
   it("rejects when no start source is given", async () => {
     const { exitCode, stderr } = await runAt(FIXTURE_DIR, ["impact"]);
     expect(exitCode).toBe(1);
     expect(stderr).toMatch(/no.*target|no start source/i);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// --from-tasks / --from-plan end-to-end (spec 014 channel preserved)
-// ---------------------------------------------------------------------------
-
-function setupSpecKitProject(): string {
-  const root = mkdtempSync(join(tmpdir(), "artgraph-impact-from-"));
-  cpSync(join(FIXTURE_DIR, "src"), join(root, "src"), { recursive: true });
-  cpSync(join(FIXTURE_DIR, "specs"), join(root, "specs"), { recursive: true });
-  cpSync(join(FIXTURE_DIR, "tests"), join(root, "tests"), { recursive: true });
-  writeFileSync(
-    join(root, ".artgraph.json"),
-    JSON.stringify({
-      include: ["src/**/*.ts"],
-      specDirs: ["specs"],
-      testPatterns: ["tests/**/*.test.ts"],
-      lockFile: ".trace.lock",
-    }),
-  );
-  return root;
-}
-
-describe("CLI: impact --from-tasks (spec 014 regression)", () => {
-  let root: string;
-  beforeEach(() => {
-    root = setupSpecKitProject();
-  });
-  afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
-  });
-
-  it("Stage A: extracts files from a `Files:` section and feeds impact()", async () => {
-    const tasksPath = join(root, "tasks.md");
-    writeFileSync(
-      tasksPath,
-      ["# Tasks", "", "### T001: tweak login", "", "Files: src/auth/login.ts", ""].join("\n"),
-    );
-
-    const { stdout, exitCode } = await runAt(root, [
-      "impact",
-      "--from-tasks",
-      tasksPath,
-      "--format",
-      "json",
-    ]);
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout);
-    expect(result.impactReqs).toContain("AUTH-001");
-    expect(result.affectedFiles).toContain("src/auth/login.ts");
-  });
-
-  it("Stage A: depth=1 narrows impact to direct @impl targets only", async () => {
-    const tasksPath = join(root, "tasks.md");
-    writeFileSync(
-      tasksPath,
-      [
-        "# Tasks",
-        "",
-        "### T001: tweak login (depth-bounded)",
-        "",
-        "Files: src/auth/login.ts",
-        "",
-      ].join("\n"),
-    );
-
-    const { stdout, exitCode } = await runAt(root, [
-      "impact",
-      "--from-tasks",
-      tasksPath,
-      "--depth",
-      "1",
-      "--format",
-      "json",
-    ]);
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout);
-    expect(result.impactReqs).toContain("AUTH-001");
-    expect(result.impactReqs).not.toContain("AUTH-003");
-  });
-
-  it("Stage B: regex fallback discovers file paths in free text", async () => {
-    const tasksPath = join(root, "tasks.md");
-    writeFileSync(
-      tasksPath,
-      [
-        "# Tasks",
-        "",
-        "### T002: rework session",
-        "",
-        "We will need to update src/auth/session.ts to fix the refresh bug.",
-        "",
-      ].join("\n"),
-    );
-
-    const { stdout, exitCode } = await runAt(root, [
-      "impact",
-      "--from-tasks",
-      tasksPath,
-      "--format",
-      "json",
-    ]);
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout);
-    expect(result.impactReqs).toContain("AUTH-001");
-    expect(result.impactReqs).toContain("AUTH-002");
-    expect(result.affectedFiles).toContain("src/auth/session.ts");
-  });
-
-  it("fails (exit 1) when neither Stage A nor Stage B extract anything", async () => {
-    const tasksPath = join(root, "tasks.md");
-    writeFileSync(tasksPath, "# Tasks\n\nNo file references here at all.\n");
-
-    const { exitCode, stderr } = await runAt(root, [
-      "impact",
-      "--from-tasks",
-      tasksPath,
-      "--format",
-      "json",
-    ]);
-    expect(exitCode).toBe(1);
-    expect(stderr).toMatch(/no files|extract|files: section/i);
-  });
-});
-
-describe("CLI: impact --from-plan (spec 014 regression)", () => {
-  let root: string;
-  beforeEach(() => {
-    root = setupSpecKitProject();
-  });
-  afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
-  });
-
-  it("uses the same two-stage extraction as --from-tasks", async () => {
-    const planPath = join(root, "plan.md");
-    writeFileSync(
-      planPath,
-      [
-        "# Plan",
-        "",
-        "## Files in scope",
-        "",
-        "Files: src/auth/login.ts, src/auth/session.ts",
-        "",
-      ].join("\n"),
-    );
-
-    const { stdout, exitCode } = await runAt(root, [
-      "impact",
-      "--from-plan",
-      planPath,
-      "--format",
-      "json",
-    ]);
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout);
-    expect(result.impactReqs).toContain("AUTH-001");
-    expect(result.impactReqs).toContain("AUTH-002");
-    expect(result.affectedFiles).toEqual(
-      expect.arrayContaining(["src/auth/login.ts", "src/auth/session.ts"]),
-    );
-  });
-
-  it("depth=1 narrows --from-plan impact to direct @impl targets only", async () => {
-    const planPath = join(root, "plan.md");
-    writeFileSync(
-      planPath,
-      ["# Plan", "", "Files: src/auth/login.ts, src/auth/session.ts", ""].join("\n"),
-    );
-
-    const { stdout, exitCode } = await runAt(root, [
-      "impact",
-      "--from-plan",
-      planPath,
-      "--depth",
-      "1",
-      "--format",
-      "json",
-    ]);
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout);
-    expect(result.impactReqs).toContain("AUTH-001");
-    expect(result.impactReqs).toContain("AUTH-002");
-    expect(result.impactReqs).not.toContain("AUTH-003");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// SPEC-2 — diagnostics surfaced as warnings from --from-tasks
-// ---------------------------------------------------------------------------
-
-describe("CLI: impact --from-tasks emits diagnostics as warnings (SPEC-2)", () => {
-  let root: string;
-  beforeEach(() => {
-    root = setupSpecKitProject();
-  });
-  afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
-  });
-
-  it("warns about typo'd Files: paths but still runs when other files extract", async () => {
-    const tasksPath = join(root, "tasks.md");
-    writeFileSync(
-      tasksPath,
-      [
-        "# Tasks",
-        "",
-        "### T001: with a typo'd path",
-        "",
-        "Files: src/auth/login.ts, src/auht/login.ts",
-        "",
-      ].join("\n"),
-    );
-
-    const { stdout, stderr, exitCode } = await runAt(root, [
-      "impact",
-      "--from-tasks",
-      tasksPath,
-      "--format",
-      "json",
-    ]);
-    expect(stderr).toContain("WARNING");
-    expect(stderr).toContain("src/auht/login.ts");
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout);
-    expect(result.impactReqs).toContain("AUTH-001");
-  });
-
-  it("includes the source line number when Diagnostic.line is set", async () => {
-    const tasksPath = join(root, "tasks.md");
-    writeFileSync(
-      tasksPath,
-      [
-        "# Tasks",
-        "",
-        "### T001: with a typo",
-        "",
-        "Files: src/auth/login.ts, src/auht.ts",
-        "",
-      ].join("\n"),
-    );
-
-    const { stderr } = await runAt(root, ["impact", "--from-tasks", tasksPath, "--format", "json"]);
-    expect(stderr).toMatch(/line \d+/);
-    expect(stderr).toContain("src/auht.ts");
   });
 });

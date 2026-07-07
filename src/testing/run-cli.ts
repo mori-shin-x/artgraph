@@ -9,13 +9,10 @@
  */
 import { CommanderError } from "commander";
 import { buildProgram } from "../build-program.js";
-import { getHookStdinOverride, setHookStdinOverride } from "../hook-stdin-override.js";
 
 export interface RunCliOptions {
   /** Working directory the CLI sees as `process.cwd()` for the duration of the call. */
   cwd?: string;
-  /** Optional stdin string injected into hook-pretool (replaces process.stdin reads). */
-  stdin?: string;
 }
 
 /** @internal */
@@ -56,8 +53,6 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
   const origErr = console.error;
   const origStdoutWrite = process.stdout.write.bind(process.stdout);
   const origStderrWrite = process.stderr.write.bind(process.stderr);
-  const hadStdinOverride = getHookStdinOverride() !== undefined;
-  const prevStdinOverride = getHookStdinOverride();
   // Snapshot `process.exitCode` so we can restore it after this runCli call.
   // Commands may leave a non-zero exitCode (e.g. `init` on hooksInstall
   // failure) that would otherwise poison the surrounding vitest process's
@@ -71,7 +66,6 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
 
   try {
     if (opts.cwd) process.chdir(opts.cwd);
-    if (opts.stdin !== undefined) setHookStdinOverride(opts.stdin);
 
     console.log = (...args: unknown[]) => {
       pushStdout(args.map(formatLogArg).join(" ") + "\n");
@@ -128,7 +122,6 @@ export async function runCli(argv: string[], opts: RunCliOptions = {}): Promise<
     console.error = origErr;
     process.stdout.write = origStdoutWrite;
     process.stderr.write = origStderrWrite;
-    setHookStdinOverride(hadStdinOverride ? prevStdinOverride : undefined);
     // Restore prior `process.exitCode` so a runCli call doesn't leak its
     // exit state into the surrounding test process.
     process.exitCode = origProcessExitCode;

@@ -78,7 +78,7 @@ export function installBaselineSignalHandlers(): void {
   if (signalHandlersInstalled) return;
   signalHandlersInstalled = true;
 
-  const fatalHandler = (exitCode: number) => (arg?: unknown) => {
+  const fatalHandler = (exitCode: number, eventName: string) => (arg?: unknown) => {
     if (handlingFatalSignal) return; // already unwinding — avoid re-entrant cleanup
     handlingFatalSignal = true;
 
@@ -101,14 +101,24 @@ export function installBaselineSignalHandlers(): void {
       }
       activeWorktrees.delete(entry);
     }
+
+    // issue #155/#125 (`scan --serve`) — some commands register their OWN
+    // SIGINT/SIGTERM listener for command-specific graceful shutdown (e.g.
+    // draining the HTTP server before exiting). This handler is installed
+    // FIRST, at CLI entry, before such a command ever runs — so if it always
+    // exits here, it wins the race against Node's in-order listener dispatch
+    // and the command's own drain logic never runs. When another listener is
+    // already registered for this event, defer: finish the worktree cleanup
+    // above but let that listener decide the actual exit path/code.
+    if (process.listenerCount(eventName) > 1) return;
     process.exit(exitCode);
   };
 
-  process.on("SIGINT", fatalHandler(130));
-  process.on("SIGTERM", fatalHandler(143));
-  process.on("SIGHUP", fatalHandler(129));
-  process.on("uncaughtException", fatalHandler(1));
-  process.on("unhandledRejection", fatalHandler(1));
+  process.on("SIGINT", fatalHandler(130, "SIGINT"));
+  process.on("SIGTERM", fatalHandler(143, "SIGTERM"));
+  process.on("SIGHUP", fatalHandler(129, "SIGHUP"));
+  process.on("uncaughtException", fatalHandler(1, "uncaughtException"));
+  process.on("unhandledRejection", fatalHandler(1, "unhandledRejection"));
 }
 
 // spec 017 — baseline computation is base-ref-parameterised (Phase 1 pins

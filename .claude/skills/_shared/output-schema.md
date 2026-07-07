@@ -23,7 +23,7 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
   "coverage": [                                        // per-requirement coverage rows
     { "reqId": "REQ-001", "status": "verified" }       // status: "verified" | "impl-only" | "untagged"
   ],
-  "testFailures": ["REQ-003"],                         // REQs whose tests ran and failed (only when --test-results supplied)
+  "testFailures": ["REQ-003"],                         // REQs whose tests ran and failed (only when `testResultPaths` is configured)
   "pass": true,                                        // spec 017: true iff `newIssues` is empty (NO issue is new vs the baseline). DANGER: forced `false` when baselineStatus is "unavailable" — NEVER read `pass` alone, see the table below.
   "newIssues": {                                       // spec 017 (FR-009): the `current \ baseline` subset that decides the gate.
     "drifted": [                                       // ⚠ DriftEntry[] (object) — NOT string[]. The only asymmetric field here.
@@ -95,22 +95,6 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
     "reqs": 39,
     "files": 0,
     "tasks": 52
-  }
-}
-```
-
-## artgraph coverage
-
-```json
-{
-  "items": [                                           // per-requirement coverage rows
-    { "reqId": "FR-001", "status": "verified" }        // status: "verified" | "impl-only" | "untagged"
-  ],
-  "summary": {
-    "total": 10,
-    "verified": 7,
-    "implOnly": 2,                                     // camelCase, not "impl-only"
-    "untagged": 1
   }
 }
 ```

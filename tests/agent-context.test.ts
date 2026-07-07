@@ -246,20 +246,20 @@ describe("inspectMarkerBlock (T018)", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildAgentsMdBody (T019)", () => {
-  it("contains all 9 Skill names from contracts/agent-context-format.md", () => {
+  it("contains all 6 Skill names (contracts/agent-context-format.md, reduced by #135)", () => {
     const body = buildAgentsMdBody("npm");
     for (const skill of [
       "artgraph-setup",
       "artgraph-bootstrap",
-      "artgraph-detect",
-      "artgraph-integrate",
       "artgraph-impact",
       "artgraph-plan-coverage",
-      "artgraph-coverage",
       "artgraph-verify",
       "artgraph-rename",
     ]) {
       expect(body, `missing Skill mention: ${skill}`).toContain(skill);
+    }
+    for (const gone of ["artgraph-detect", "artgraph-integrate", "artgraph-coverage"]) {
+      expect(body, `deleted Skill still mentioned: ${gone}`).not.toContain(gone);
     }
   });
 

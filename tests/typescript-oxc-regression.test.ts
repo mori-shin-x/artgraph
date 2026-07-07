@@ -504,8 +504,12 @@ export * from "./re-export-target.js";
     const rel = "src/exports-kitchen-sink.ts";
     // R6: `default` (line 5) and `over` (line 10) are FunctionDeclaration
     // statements -> bound before the interface on line 3. R7: each hash is
-    // the exact legacy getText() of the declaration; re-exported `qux` and
-    // star exports resolve to foreign declarations -> no symbol node.
+    // the exact legacy getText() of the declaration. Issue #177: the named
+    // re-export `export { qux } from …` now materializes a barrel symbol node
+    // (`#qux`) hashed PER-SPECIFIER on the resolved origin path + local +
+    // exported (\0-joined) — sibling specifier edits in the same `export { … }
+    // from` statement don't drift each other's hashes. Star re-exports still
+    // produce no per-name node (stay file-grain).
     expect(symbolsOf(parseSymbol(rel), rel)).toEqual(
       expectedSymbols(rel, [
         ["default", "export default function defaultFn() { return 1; }"],
@@ -521,6 +525,8 @@ export * from "./re-export-target.js";
         ["mutable", "mutable = 5"],
         ["arrow", "arrow = () => 1"],
         ["NS", "export namespace NS { export const inner = 1; }"],
+        // #177: barrel symbol -> hash source is targetRel\0local\0exported.
+        ["qux", "src/re-export-target.ts\0qux\0qux"],
       ]),
     );
   });
@@ -626,6 +632,11 @@ export * from "./re-export-target.js";
       expected: [
         ["T", "type T = string;"],
         ["val", "val = 1"],
+        // #177: `export type { starred } from …` is a named (type-only)
+        // re-export -> materialized as a barrel symbol node like a value
+        // re-export (the origin's `starred` symbol exists), hashed per-
+        // specifier on targetRel\0local\0exported.
+        ["starred", "src/re-export-target.ts\0starred\0starred"],
       ],
     },
     {
@@ -663,9 +674,16 @@ export * from "./re-export-target.js";
         kind: "implements",
         provenances: ["code-tag"],
       },
-      // FR-103 sits on its own line above the declaration -> outside every
-      // symbol range -> falls back to the file.
-      { source: `file:${rel}`, target: "FR-103", kind: "implements", provenances: ["code-tag"] },
+      // FR-103 sits on the line directly above `const topLevel = 1;`. Issue
+      // #177: leading-comment tags now bind to the following symbol's widened
+      // attribution range, so it attaches to `#topLevel` (the local backing the
+      // `export { topLevel }`) instead of falling back to the file.
+      {
+        source: `symbol:${rel}#topLevel`,
+        target: "FR-103",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
     ]);
   });
 });

@@ -14,23 +14,32 @@
 //       `DoctorFinding` / `AGENT_DESCRIPTORS` imports / symbol references).
 //       This is fast, deterministic, and survives refactors that rename
 //       file fixtures.
-//   (b) **Behavioural smoke** runs `check()` directly on a stub graph + lock
+//   (b) **Behavioural CLI check** (issue #175): runs the real
+//       `check --gate` command end-to-end via the `runCli()` harness and
+//       asserts its stdout/stderr never mention the doctor surface. This
+//       replaces a grep of `src/commands/check.ts`'s action body, which
+//       broke every time the check subcommand moved to a new file (#162)
+//       and only proved the source text was clean — not what a user
+//       actually sees when running the command.
+//   (c) **Behavioural smoke** runs `check()` directly on a stub graph + lock
 //       — the function is pure and takes no rootDir, so spec 013
 //       distribution files (`.claude/skills/...` etc.) cannot influence its
 //       outcome by construction. We assert the function signature stays free
 //       of any `rootDir` / `agents` parameter so the doctor cannot be
 //       wired in via an "implicit" surface either.
 //
-// The two together cover the spec intent without depending on a tmp
+// The three together cover the spec intent without depending on a tmp
 // project + multi-step setup: any wiring of doctor into check would either
-// require touching `src/check.ts` (caught by (a)) or expanding `check()`'s
-// signature (caught by (b)).
+// require touching `src/check.ts` (caught by (a)), leak into the CLI's
+// visible output (caught by (b)), or expand `check()`'s signature (caught
+// by (c)).
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { check } from "../src/check.js";
 import type { ArtifactGraph, LockFile } from "../src/types.js";
+import { run, cleanup } from "./helpers.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 
@@ -62,29 +71,20 @@ describe("check --gate non-regression (FR-012 後段)", () => {
     }
   });
 
-  it("src/commands/check.ts `check` action does not invoke runDoctor / DoctorFinding", () => {
-    // issue #162: the `check` subcommand moved from src/cli.ts into its own
-    // module. That module registers exactly one command, so — unlike the
-    // old single-file cli.ts — there is no second `program.command(...)`
-    // block to bound the slice against; the check block runs to EOF.
-    const cliSource = readFileSync(resolve(REPO_ROOT, "src/commands/check.ts"), "utf-8");
-    const checkStart = cliSource.indexOf('.command("check")');
-    expect(
-      checkStart,
-      "could not locate check subcommand in src/commands/check.ts",
-    ).toBeGreaterThan(0);
-    // Accept both top-level (`\nprogram`) and indented-inside-registerCommands
-    // (`\n  program`) — oxfmt normalises whichever style the surrounding scope
-    // uses, so pinning to one indentation would be a maintenance trap.
-    const nextProgramMatch = cliSource.slice(checkStart + 1).search(/\n[ \t]*program(\s|\.|\r?\n)/);
-    const checkEnd = nextProgramMatch >= 0 ? checkStart + 1 + nextProgramMatch : cliSource.length;
-    expect(checkEnd).toBeGreaterThan(checkStart);
-    const checkBlock = cliSource.slice(checkStart, checkEnd);
-
-    for (const needle of ["runDoctor", "DoctorFinding", "formatDoctorReport"]) {
+  it("`check --gate` output never mentions the doctor surface (#175)", async () => {
+    // The fixture project has real coverage gaps once the lock file is
+    // cleared, so --gate fails on its own merits (exit 2) — proving the
+    // assertion below isn't vacuously true on an all-clear run. Runs the
+    // real CLI end-to-end, so it stays correct no matter which file the
+    // check subcommand's implementation lives in.
+    cleanup();
+    const { stdout, stderr, exitCode } = await run(["check", "--gate"]);
+    expect(exitCode).toBe(2);
+    const combined = stdout + stderr;
+    for (const needle of ["doctor", "Doctor", "runDoctor", "DoctorFinding", "formatDoctorReport"]) {
       expect(
-        checkBlock.includes(needle),
-        `check subcommand must not call "${needle}" (FR-012)`,
+        combined.includes(needle),
+        `check --gate output must not mention "${needle}" (FR-012: doctor is independent of check --gate)`,
       ).toBe(false);
     }
   });
