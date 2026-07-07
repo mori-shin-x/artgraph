@@ -42,7 +42,7 @@ import { scan } from "../scan.js";
 import { readLock } from "../lock.js";
 import { impact, resolveStartIds, resolveOriginReqs } from "../graph/traverse.js";
 import { extractFiles, type TaskBlock } from "../parsers/sdd-files.js";
-import type { SymbolEntry } from "../types.js";
+import type { ArtifactGraph, SymbolEntry } from "../types.js";
 import { detectMentions } from "./mention.js";
 
 export interface PlanCoverageOptions {
@@ -181,11 +181,29 @@ function normalizeForLookup(input: string): string {
  * claims (data-model.md §3.2). `resolveStartIds` deliberately expands
  * file-unit entries to include same-file symbols for BFS reach; that
  * expansion is the WRONG basis for origin attribution.
+ *
+ * Barrel note (issue #191): a barrel symbol re-exported from another
+ * file (`export { x } from "./origin"`) carries no `implements` edge of
+ * its own; the `@impl` tag lives on the origin symbol. Follow one hop of
+ * `imports` edges from a symbol primary so `resolveOriginReqs` reaches
+ * the origin's claim through the barrel. Without this, `impactReqs` is
+ * non-empty (BFS crosses the barrel) but `originReqs` stays `[]`,
+ * causing every barrel-attributed REQ to surface as a drift candidate.
+ * File entries stay unchanged — the file node itself carries any
+ * file-level `@impl` and the drift semantics for files are correct.
  */
-function entryOriginIds(entry: SymbolEntry): string[] {
+function entryOriginIds(entry: SymbolEntry, graph: ArtifactGraph): string[] {
   const path = normalizeForLookup(entry.path);
-  if (entry.symbol !== undefined) return [`symbol:${path}#${entry.symbol}`];
-  return [`file:${path}`];
+  if (entry.symbol === undefined) return [`file:${path}`];
+  const primary = `symbol:${path}#${entry.symbol}`;
+  const ids: string[] = [primary];
+  for (const edge of graph.edges) {
+    if (edge.kind !== "imports") continue;
+    if (edge.source !== primary) continue;
+    if (!edge.target.startsWith("symbol:")) continue;
+    ids.push(edge.target);
+  }
+  return ids;
 }
 
 // Dedup key for ImpactGroup ordering / aggregation (INV-S3). Newline
@@ -541,7 +559,7 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
       continue;
     }
     const impactResult = impact(graph, startIds, lock);
-    const originReqs = resolveOriginReqs(graph, entryOriginIds(entry));
+    const originReqs = resolveOriginReqs(graph, entryOriginIds(entry, graph));
     drafts.push({
       sourceFile: entry.path,
       sourceSymbol: entry.symbol,
