@@ -62,6 +62,7 @@ The result carries the **dual-axis impact view** (per `implicitImpacts` entry) p
 Compare per-entry `impactReqs` against `originReqs`:
 
 - **`impactReqs \ originReqs` non-empty → drift candidate.** The start id reaches a REQ it does not `@impl`-claim. Surface those REQs and ask the user to either tag the symbol with `@impl REQ-XXX` or update the spec graph.
+  - **Exception (c) — barrel-side namespace re-export.** If the entry is `Files: barrel.ts:ns` where `ns` is defined by `export * as ns from "./o"` (S2) or `import * as ns from "./m"; export { ns }` (S3-namespace), `entryOriginIds` cannot follow the `symbol:barrel#ns → file:O` file-grain edge, so `originReqs` is empty and every reached REQ appears as a drift candidate. **This is expected and does not require `@impl` on the barrel — the barrel is a re-export shim, not an implementation site.** Either (i) switch the entry to file-level (`Files: barrel.ts`) to include all origin REQs, or (ii) target the underlying origin directly (`Files: o.ts:actualSymbol`).
 - **Sets equal → no drift.** Claim and reach match.
 - **`originReqs \ impactReqs` non-empty → orphan claim.** Out of scope for this Skill — `artgraph check --gate` (Stop hook) will report it.
 

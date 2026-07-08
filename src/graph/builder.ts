@@ -17,6 +17,7 @@ import {
   type TsFragment,
 } from "../parse-cache.js";
 import { dedupEdges, sortNodesById } from "./canonical.js";
+import { expandStarReexports } from "./star-expansion.js";
 import type { ArtifactGraph, GraphNode, GraphEdge, ArtgraphConfig } from "../types.js";
 
 export interface BuildWarning {
@@ -349,11 +350,21 @@ export function buildGraph(
   if (missPaths.length > 0) {
     const parsed = parseTSFilePaths(rootDir, missPaths, tsMode, codeId);
     for (const [abs, frag] of parsed) {
-      fragmentByFile.set(abs, {
+      // Preserve the parser's `starExports` side-channel (specs/018 §3) on the
+      // freshly-parsed fragment so the builder's star-expansion pass below
+      // can see plain-`export *` sources on cold builds too. Warm builds get
+      // the field back from the cache automatically. Omit the key when the
+      // parser did not emit any (typical for non-barrel files) so the
+      // fragment stays byte-identical to a pre-018 shape.
+      const next: TsFragment = {
         contentHash: missHashes.get(abs)!,
         nodes: frag.nodes,
         edges: frag.edges,
-      });
+      };
+      if (frag.starExports && frag.starExports.length > 0) {
+        next.starExports = frag.starExports;
+      }
+      fragmentByFile.set(abs, next);
     }
   }
   const tsResult: { nodes: GraphNode[]; edges: GraphEdge[] } = { nodes: [], edges: [] };
@@ -391,6 +402,47 @@ export function buildGraph(
       edges.push(edge);
     } else {
       edges.push(edge);
+    }
+  }
+
+  // specs/018 §5 — `export *` per-symbol expansion. Runs AFTER the parser
+  // fragments have populated `nodes` with every locally-declared and
+  // #177/S2/S3 synth symbol (ownNames wins over star per §7 D3), and BEFORE
+  // the phantom-repair pass below so any name a star chain materializes
+  // resolves to a real node rather than getting degraded to `file:M`.
+  // Symbol mode only; file mode never emits `symbol:` nodes.
+  //
+  // Reads plain-`export *` targets from each fragment's `starExports` side-
+  // channel (populated by extractImports on non-test symbol-mode parses),
+  // dedups defensively across the cache boundary — the parser also dedups
+  // per-file, but a fragment that survived from an older SCHEMA_VERSION or
+  // was hand-written by a test can drift — then hands the map to the pure
+  // `expandStarReexports`. The result is additive: nodes go through
+  // `addNodeWithDupCheck` (so a shadow collision with a same-id local decl
+  // would surface as a `duplicate-id` warning — expansion already excludes
+  // ownNames so this should never happen, but the check is cheap
+  // defence-in-depth) and edges get pushed straight into `edges`. Neither
+  // side mutates the parser fragments persisted via `nextTs[..] = frag`
+  // above (the fragments are the SSOT the warm-vs-cold parity depends on;
+  // synth nodes/edges must live in the assembly layer only).
+  if (tsMode === "symbol") {
+    const starMap = new Map<string, string[]>();
+    for (let i = 0; i < codeFiles.length; i++) {
+      const frag = fragmentByFile.get(codeFiles[i])!;
+      if (!frag.starExports || frag.starExports.length === 0) continue;
+      const seen = new Set<string>();
+      const targets: string[] = [];
+      for (const t of frag.starExports) {
+        if (seen.has(t)) continue;
+        seen.add(t);
+        targets.push(t);
+      }
+      starMap.set(relCodeFiles[i], targets);
+    }
+    if (starMap.size > 0) {
+      const { nodes: starNodes, edges: starEdges } = expandStarReexports(nodes, starMap);
+      for (const node of starNodes) addNodeWithDupCheck(nodes, node, warnings);
+      for (const edge of starEdges) edges.push(edge);
     }
   }
 

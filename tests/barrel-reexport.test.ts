@@ -17,12 +17,14 @@ import { describe, it, expect, afterEach } from "vitest";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { parseTSFilePaths, hash } from "../src/parsers/typescript.js";
+import { parseTSFilePaths, hash, synthReexportHash } from "../src/parsers/typescript.js";
 import { buildGraph } from "../src/graph/builder.js";
 import { impact, resolveStartIds } from "../src/graph/traverse.js";
 import { loadConfig } from "../src/config.js";
+import { buildLockFromGraph } from "../src/lock.js";
 import type { ParsedTS } from "../src/parsers/typescript.js";
 import type { BuildWarning } from "../src/graph/builder.js";
+import type { GraphEdge } from "../src/types.js";
 
 let tmp: string;
 afterEach(() => {
@@ -417,11 +419,16 @@ describe("#177 impact — fail-open closed with per-symbol precision", () => {
     expect(impactReqs(root, "src/consumer.ts")).toEqual(["REQ-001"]);
   });
 
-  it("`export *` barrel closes the fail-open at file grain (non-empty)", () => {
+  it("`export *` barrel reaches only the imported symbol's REQ (specs/018 §5 per-symbol)", () => {
+    // Pre-specs/018 this pinned the file-grain fail-safe (`REQ-001` +
+    // `REQ-009`). specs/018 §5 star expansion materialises
+    // `symbol:src/star.ts#validateToken → symbol:src/auth.ts#validateToken`
+    // so the consumer's named import now reaches the origin symbol
+    // directly, and REQ-009 (the sibling `revokeToken`) stays out of the
+    // blast radius. Same precision property #177 delivered for
+    // `export { x } from`, now extended to plain `export *`.
     const root = makeRepo({ ...base, "src/consumer.ts": consumer("./star") });
-    // file-grain: reaches the origin FILE, so both siblings surface. The point
-    // is it is NOT empty — the fail-open is closed.
-    expect(impactReqs(root, "src/consumer.ts")).toEqual(["REQ-001", "REQ-009"]);
+    expect(impactReqs(root, "src/consumer.ts")).toEqual(["REQ-001"]);
   });
 
   it("a re-export of a name the origin does not export raises no orphan and does not crash", () => {
@@ -573,11 +580,21 @@ describe("#177 INV-L4 — barrel graphs are byte-stable across builds", () => {
 // ---------------------------------------------------------------------------
 
 describe("#189 observability: phantom-import-repaired / dangling-import warnings", () => {
-  it("emits phantom-import-repaired when a named import through export * is degraded to file grain", () => {
+  it("emits phantom-import-repaired when a named import goes through an AMBIGUOUS `export *` (specs/018 §7 drop)", () => {
+    // Post-specs/018: a plain `export * from "./o"` chain now materialises
+    // the barrel symbol via builder star expansion, so a named import
+    // through it resolves per-symbol — no phantom-repair fires. The
+    // fail-safe still guards the CASES star expansion drops (§7 D3
+    // ambiguous star: two star sources both supplying `x`). Give the fixture
+    // two providers of `validateToken` so star expansion refuses to pick
+    // one, `symbol:src/star.ts#validateToken` stays absent, and the
+    // consumer's import edge lands in phantom-repair for file-grain
+    // degrade.
     const root = makeRepo({
-      "specs/req.md": "# R\n\n- REQ-001: x\n",
-      "src/auth.ts": "// @impl REQ-001\nexport function validateToken() {}\n",
-      "src/star.ts": 'export * from "./auth";\n',
+      "specs/req.md": "# R\n\n- REQ-001: x\n- REQ-002: y\n",
+      "src/a.ts": "// @impl REQ-001\nexport function validateToken() {}\n",
+      "src/b.ts": "// @impl REQ-002\nexport function validateToken() {}\n",
+      "src/star.ts": 'export * from "./a";\nexport * from "./b";\n',
       "src/consumer.ts": 'import { validateToken } from "./star";\n',
     });
     const { warnings } = buildGraph(root, loadConfig(root));
@@ -628,5 +645,324 @@ describe("#189 observability: phantom-import-repaired / dangling-import warnings
         (w: BuildWarning) => w.type === "phantom-import-repaired" || w.type === "dangling-import",
       ),
     ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// specs/018-reexport-symbol-precision §11 — builder-integrated star expansion.
+// Phase 1 shipped the parser (S2/S3) + `expandStarReexports` pure module +
+// `starExports` side-channel. Phase 2 wires expansion into `buildGraph` so
+// end-to-end `impact` / graph.nodes reflect per-symbol precision. These tests
+// pin every T#/T## row of design §11 that is not already covered by
+// tests/star-expansion.test.ts (pure algo) or Phase 1 parser tests.
+// ---------------------------------------------------------------------------
+
+// Convenience: return all imports edges (source, target) tuples for the graph.
+function importsEdges(edges: GraphEdge[]): Array<[string, string]> {
+  return edges.filter((e) => e.kind === "imports").map((e) => [e.source, e.target]);
+}
+
+// Lock bytes — sort keys so ordering can't disturb byte comparison, and blank
+// `lastReconciled` since it stamps wall-clock time.
+function lockBytes(root: string): string {
+  const { graph } = buildGraph(root, loadConfig(root));
+  const lock = buildLockFromGraph(graph);
+  for (const entry of Object.values(lock)) entry.lastReconciled = "<t>";
+  const sorted = Object.fromEntries(Object.entries(lock).sort(([a], [b]) => (a < b ? -1 : 1)));
+  return JSON.stringify(sorted);
+}
+
+describe("specs/018 T1 basic — `symbol:B#x` synthesizes with edge to origin", () => {
+  it("emits synth node + edge for each origin export and origin REQ isolates from siblings", () => {
+    // REQ-101 and REQ-102 live in SEPARATE docs so a bidirectional BFS
+    // through the parent doc's `contains` edge cannot cross-pollinate the
+    // consumer's blast radius. Mirrors the split the #177 impact suite
+    // above uses for the same reason.
+    const root = makeRepo({
+      "specs/req1.md": "# R1\n\n- REQ-101: x export\n",
+      "specs/req2.md": "# R2\n\n- REQ-102: y export\n",
+      "src/o.ts":
+        "// @impl REQ-101\nexport function x() {}\n\n// @impl REQ-102\nexport function y() {}\n",
+      "src/b.ts": 'export * from "./o";\n',
+      "src/c.ts": 'import { x } from "./b";\nexport const use = x;\n',
+    });
+    const { graph } = buildGraph(root, loadConfig(root));
+    // Synth node materializes with the direct-provider hash (D4).
+    expect(graph.nodes.get("symbol:src/b.ts#x")).toEqual({
+      id: "symbol:src/b.ts#x",
+      kind: "symbol",
+      filePath: "src/b.ts",
+      contentHash: synthReexportHash("src/o.ts", "x", "x"),
+    });
+    // Same for y — every origin export gets a synth barrel node.
+    expect(graph.nodes.get("symbol:src/b.ts#y")).toBeDefined();
+    // Star-expansion edges go barrel → direct provider (1-hop, §5 D4).
+    expect(importsEdges(graph.edges)).toContainEqual(["symbol:src/b.ts#x", "symbol:src/o.ts#x"]);
+    // Consumer impact only reaches REQ-101 — REQ-102 stays out of the blast radius.
+    expect(impactReqs(root, "src/c.ts")).toEqual(["REQ-101"]);
+  });
+});
+
+describe("specs/018 T2 multi-hop chain — 1 hop per barrel (D4)", () => {
+  it("A→B→C exposes leaf REQ and edges hop-by-hop, never collapsing to origin", () => {
+    const root = makeRepo({
+      "specs/req.md": "# R\n\n- REQ-101: leaf\n",
+      "src/leaf.ts": "// @impl REQ-101\nexport function x() {}\n",
+      "src/mid.ts": 'export * from "./leaf";\n',
+      "src/top.ts": 'export * from "./mid";\n',
+      "src/c.ts": 'import { x } from "./top";\nexport const use = x;\n',
+    });
+    const { graph } = buildGraph(root, loadConfig(root));
+    const imps = importsEdges(graph.edges);
+    // Each hop is one imports edge — the ultimate origin's `#x` sits two hops
+    // below `top`. Symbol nodes exist at every barrel level.
+    expect(imps).toContainEqual(["symbol:src/top.ts#x", "symbol:src/mid.ts#x"]);
+    expect(imps).toContainEqual(["symbol:src/mid.ts#x", "symbol:src/leaf.ts#x"]);
+    expect(graph.nodes.has("symbol:src/top.ts#x")).toBe(true);
+    expect(graph.nodes.has("symbol:src/mid.ts#x")).toBe(true);
+    expect(impactReqs(root, "src/c.ts")).toEqual(["REQ-101"]);
+  });
+});
+
+describe("specs/018 T3 cycle A↔B — terminates and cross-pollinates", () => {
+  it("mutual `export *` propagates each side's own name without duplicating locals", () => {
+    const root = makeRepo({
+      "specs/req.md": "# R\n\n- REQ-201: a\n- REQ-202: b\n",
+      "src/a.ts": "// @impl REQ-201\nexport function a() {}\nexport * from './b';\n",
+      "src/b.ts": "// @impl REQ-202\nexport function b() {}\nexport * from './a';\n",
+    });
+    // Build must terminate (no infinite loop through the cycle).
+    const { graph } = buildGraph(root, loadConfig(root));
+    // Each side carries the OTHER side's name via star (ownNames wins over
+    // star per §7 — no duplicate node for the local decl).
+    expect(graph.nodes.has("symbol:src/a.ts#b")).toBe(true);
+    expect(graph.nodes.has("symbol:src/b.ts#a")).toBe(true);
+    // Direct-provider edges point across the cycle.
+    const imps = importsEdges(graph.edges);
+    expect(imps).toContainEqual(["symbol:src/a.ts#b", "symbol:src/b.ts#b"]);
+    expect(imps).toContainEqual(["symbol:src/b.ts#a", "symbol:src/a.ts#a"]);
+  });
+});
+
+describe("specs/018 T4 default exclusion — `export *` never re-exports `default`", () => {
+  it("origin's `default` symbol stays local; consumer's default import falls to phantom-repair", () => {
+    const root = makeRepo({
+      "specs/req.md": "# R\n\n- REQ-301: default\n",
+      "src/o.ts": "// @impl REQ-301\nexport default function d() {}\nexport function keep() {}\n",
+      "src/b.ts": 'export * from "./o";\n',
+      "src/c.ts": 'import d from "./b";\nexport const use = d;\n',
+    });
+    const { graph, warnings } = buildGraph(root, loadConfig(root));
+    // Star expansion MUST NOT create `symbol:src/b.ts#default` (§5 step 1).
+    expect(graph.nodes.has("symbol:src/b.ts#default")).toBe(false);
+    // Sibling `keep` DID get synthesized as a normal star export (proof that
+    // the default exclusion is name-scoped, not fixture-wide).
+    expect(graph.nodes.has("symbol:src/b.ts#keep")).toBe(true);
+    // Consumer's default import degrades to file grain via phantom-repair —
+    // REQ-301 is still reachable via that fail-safe path (file chain).
+    expect(warnings.some((w) => w.type === "phantom-import-repaired")).toBe(true);
+    expect(impactReqs(root, "src/c.ts")).toContain("REQ-301");
+  });
+});
+
+describe("specs/018 T5 shadowing — local decl wins over star (ownNames beats provider)", () => {
+  it("local `x` keeps its declarator hash; no star edge from `symbol:B#x`", () => {
+    const root = makeRepo({
+      "specs/req.md": "# R\n\n- REQ-401: origin x\n",
+      "src/o.ts": "// @impl REQ-401\nexport const x = 1;\n",
+      "src/b.ts": 'export const x = 2;\nexport * from "./o";\n',
+      "src/c.ts": 'import { x } from "./b";\nexport const use = x;\n',
+    });
+    const { graph } = buildGraph(root, loadConfig(root));
+    // Local decl wins node identity — hash equals declarator text `x = 2`.
+    const bx = graph.nodes.get("symbol:src/b.ts#x")!;
+    expect(bx.contentHash).toBe(hash("x = 2"));
+    // No star import edge from B#x (would drag REQ-401 into consumer blast radius).
+    expect(
+      importsEdges(graph.edges).some(
+        ([s, t]) => s === "symbol:src/b.ts#x" && t === "symbol:src/o.ts#x",
+      ),
+    ).toBe(false);
+    // Consumer reaches ONLY B's local `x`, not origin's REQ-401.
+    expect(impactReqs(root, "src/c.ts")).not.toContain("REQ-401");
+  });
+});
+
+describe("specs/018 T6 named re-export beats star (§7 ownNames wins over provider)", () => {
+  it("`export { x } from o1` + `export * from o2` — edge points at o1 only", () => {
+    const root = makeRepo({
+      "specs/req.md": "# R\n\n- REQ-501: o1\n- REQ-502: o2\n",
+      "src/o1.ts": "// @impl REQ-501\nexport function x() {}\n",
+      "src/o2.ts": "// @impl REQ-502\nexport function x() {}\n",
+      "src/b.ts": 'export { x } from "./o1";\nexport * from "./o2";\n',
+    });
+    const { graph } = buildGraph(root, loadConfig(root));
+    const imps = importsEdges(graph.edges).filter(([s]) => s === "symbol:src/b.ts#x");
+    // Exactly one edge from B#x — the #177 named re-export to o1. The star
+    // path is silenced by the ownNames-wins rule (the #177 synth already
+    // populated `symbol:src/b.ts#x` in nodes before expansion looked).
+    expect(imps).toEqual([["symbol:src/b.ts#x", "symbol:src/o1.ts#x"]]);
+  });
+});
+
+describe("specs/018 T7 ambiguous star — drop + file-grain fail-safe (§7 D3)", () => {
+  it("two star providers of the same name → synth suppressed, phantom-repair warns", () => {
+    const root = makeRepo({
+      "specs/req.md": "# R\n\n- REQ-501: o1\n- REQ-502: o2\n",
+      "src/o1.ts": "// @impl REQ-501\nexport function x() {}\n",
+      "src/o2.ts": "// @impl REQ-502\nexport function x() {}\n",
+      "src/b.ts": 'export * from "./o1";\nexport * from "./o2";\n',
+      "src/c.ts": 'import { x } from "./b";\nexport const use = x;\n',
+    });
+    const { graph, warnings } = buildGraph(root, loadConfig(root));
+    // Design §7: |providers| ≥ 2 → drop. No synth barrel node emitted.
+    expect(graph.nodes.has("symbol:src/b.ts#x")).toBe(false);
+    // Consumer edge lands in phantom-repair — fail-open closed at file grain.
+    expect(warnings.some((w) => w.type === "phantom-import-repaired")).toBe(true);
+    // Design §7 D3: ambiguous drop still keeps file-grain REQ reachability via
+    // the phantom-repair fail-safe (file:consumer → file:b → file:{o1,o2} →
+    // symbol:{o1,o2}#x → REQ-{501,502}). Consumer's blast radius widens to
+    // file grain — never fail-open (no REQs reached) — so BOTH origin REQs
+    // remain reachable. Pins the fail-open-closed contract distinct from the
+    // per-symbol precision path exercised by T1–T6 above.
+    const reqs = impactReqs(root, "src/c.ts");
+    expect(reqs).toContain("REQ-501");
+    expect(reqs).toContain("REQ-502");
+  });
+});
+
+describe("specs/018 T14 type-only star — value / type parity", () => {
+  it("`export type * from` gets the same synth as `export * from`", () => {
+    const root = makeRepo({
+      "src/o.ts": "export interface Session {}\nexport type Token = string;\n",
+      "src/b.ts": 'export type * from "./o";\n',
+    });
+    const { graph } = buildGraph(root, loadConfig(root));
+    // Design §6: `exportKind` type/value is not distinguished — both go
+    // through the same star materialisation path.
+    expect(graph.nodes.has("symbol:src/b.ts#Session")).toBe(true);
+    expect(graph.nodes.has("symbol:src/b.ts#Token")).toBe(true);
+    // Edges point at the direct provider.
+    const imps = importsEdges(graph.edges);
+    expect(imps).toContainEqual(["symbol:src/b.ts#Session", "symbol:src/o.ts#Session"]);
+    expect(imps).toContainEqual(["symbol:src/b.ts#Token", "symbol:src/o.ts#Token"]);
+  });
+});
+
+describe("specs/018 T15 fatal syntax error inside a star barrel — no crash", () => {
+  it("fragment stays file-grain; build succeeds; other files unaffected", () => {
+    const root = makeRepo({
+      "specs/req.md": "# R\n\n- REQ-101: x\n",
+      "src/o.ts": "// @impl REQ-101\nexport function x() {}\n",
+      // Deliberately unbalanced brace after a plain `export *` — oxc reports
+      // a parse error; the parser falls back to file-grain (§2 non-goal:
+      // fatal-syntax file stays file-grain).
+      "src/b.ts": 'export * from "./o";\nconst broken = {\n',
+      "src/c.ts": 'import { x } from "./b";\nexport const use = x;\n',
+    });
+    // Must not throw.
+    const { graph } = buildGraph(root, loadConfig(root));
+    // File node still registered for the broken barrel.
+    expect(graph.nodes.has("file:src/b.ts")).toBe(true);
+    // Other files' synths / impact still work — no cascade from the broken
+    // file. The graph builds; specific per-symbol precision through the
+    // broken file is not guaranteed (design §10 known limit).
+    expect(graph.nodes.has("symbol:src/o.ts#x")).toBe(true);
+  });
+});
+
+describe("specs/018 T17 S1 refactor equivalence — `export *` ⇔ enumerated `export { x } from`", () => {
+  it("lock bytes are identical whether the barrel spells the re-export as star or enumerated", () => {
+    // Design §4 refactor equivalence pin: the LOCK (which records symbol
+    // hashes but NOT `imports` edges) must be byte-identical for the two
+    // forms. Graph edges differ — variant A also has the `file:B → file:O`
+    // file-grain edge — but the lock does not record that class.
+    const filesA = {
+      "src/o.ts": "export function x() {}\nexport function y() {}\n",
+      "src/b.ts": 'export * from "./o";\n',
+    };
+    const filesB = {
+      "src/o.ts": "export function x() {}\nexport function y() {}\n",
+      "src/b.ts": 'export { x, y } from "./o";\n',
+    };
+    const rootA = makeRepo(filesA);
+    const bytesA = lockBytes(rootA);
+    rmSync(tmp, { recursive: true, force: true });
+    const rootB = makeRepo(filesB);
+    const bytesB = lockBytes(rootB);
+    expect(bytesB).toBe(bytesA);
+    // Sanity: both really did materialise the synth node — otherwise the
+    // equality could pass vacuously with only `file:` entries.
+    const { graph } = buildGraph(rootB, loadConfig(rootB));
+    expect(graph.nodes.has("symbol:src/b.ts#x")).toBe(true);
+  });
+});
+
+describe("specs/018 T18 duplicate `export *` on same target — not ambiguous", () => {
+  it("two identical star statements dedup into one provider — synth still emitted", () => {
+    const root = makeRepo({
+      "specs/req.md": "# R\n\n- REQ-101: x\n",
+      "src/o.ts": "// @impl REQ-101\nexport function x() {}\n",
+      "src/b.ts": 'export * from "./o";\nexport * from "./o";\n',
+      "src/c.ts": 'import { x } from "./b";\nexport const use = x;\n',
+    });
+    const { graph, warnings } = buildGraph(root, loadConfig(root));
+    // Design §5 dedup rationale: the parser's `starExports` collapses
+    // duplicate specifiers by first occurrence, and the builder dedups
+    // defensively too. |providers| stays 1 → not ambiguous.
+    expect(graph.nodes.has("symbol:src/b.ts#x")).toBe(true);
+    expect(warnings.some((w) => w.type === "phantom-import-repaired")).toBe(false);
+    expect(impactReqs(root, "src/c.ts")).toContain("REQ-101");
+  });
+});
+
+describe("specs/018 T19 bare-specifier `export default X` — no materialisation", () => {
+  it('`import X from "react"; export default X;` stays file-grain (bare-specifier guard)', () => {
+    const root = makeRepo({
+      // No node_modules resolver; "react" doesn't resolve to any relative
+      // path so the S3-C3 materialisation guard (§6) rejects it.
+      "src/b.ts": 'import X from "react";\nexport default X;\n',
+    });
+    const { graph } = buildGraph(root, loadConfig(root));
+    // Design §6 hash-input pin: only resolved relative specifiers get a
+    // synth node. Bare / node_modules specifiers stay file-grain (§10).
+    expect(graph.nodes.has("symbol:src/b.ts#default")).toBe(false);
+  });
+});
+
+describe("specs/018 T20 diamond DAG — memoization keeps expansion polynomial", () => {
+  it("shared leaf under two parents, layered, expands correctly and quickly", () => {
+    // Four-layer diamond: leaf → mid1/mid2 → top1/top2 → root. mid1 and
+    // mid2 each carry a single provider so they resolve unambiguously; the
+    // top layer sees BOTH mid1 and mid2 as providers, which is the design
+    // §7 ambiguous drop for the top / root level. Below that level the
+    // synth must materialise; above it, drop. Naive recursion is O(2^k) on
+    // a stack of these — with memoization it stays polynomial. We give it
+    // a soft time budget as a canary against accidental de-memoization.
+    const root = makeRepo({
+      "src/leaf.ts": "export function a() {}\nexport function b() {}\n",
+      "src/mid1.ts": 'export * from "./leaf";\n',
+      "src/mid2.ts": 'export * from "./leaf";\n',
+      "src/top1.ts": 'export * from "./mid1";\n',
+      "src/top2.ts": 'export * from "./mid2";\n',
+      "src/root.ts": 'export * from "./top1";\nexport * from "./top2";\n',
+    });
+    const start = Date.now();
+    const { graph } = buildGraph(root, loadConfig(root));
+    const elapsed = Date.now() - start;
+    // Unambiguous mid / top synths — direct providers each have one
+    // upstream, so they resolve cleanly.
+    expect(graph.nodes.has("symbol:src/mid1.ts#a")).toBe(true);
+    expect(graph.nodes.has("symbol:src/mid2.ts#a")).toBe(true);
+    expect(graph.nodes.has("symbol:src/top1.ts#a")).toBe(true);
+    expect(graph.nodes.has("symbol:src/top2.ts#a")).toBe(true);
+    // Root sees two distinct direct providers (top1 / top2) for `a` — §7
+    // drop. Same for `b`. No synth emitted at root level.
+    expect(graph.nodes.has("symbol:src/root.ts#a")).toBe(false);
+    expect(graph.nodes.has("symbol:src/root.ts#b")).toBe(false);
+    // Soft perf pin — memoized run is milliseconds; without memoization
+    // deeper stacks explode. Keep the budget generous so CI noise doesn't
+    // flake.
+    expect(elapsed).toBeLessThan(5000);
   });
 });
