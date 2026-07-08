@@ -613,10 +613,24 @@ export * from "./re-export-target.js";
       ],
     },
     {
-      // Re-exported imports (`export { qux }`, `export { ns }`,
-      // `export default qux` where qux is imported) are foreign -> skipped.
+      // #188 / specs/018 S3: imported identifiers re-exported via a source-null
+      // named export (S3-C4) or as a default (S3-C3) are materialized per-symbol
+      // in extractImports, hashed with synthReexportHash (targetRel \0
+      // originBinding \0 exportedName). extractSymbols still skips the
+      // ExportNamedDeclaration/ExportDefaultDeclaration because it has no
+      // resolve context — the extractImports pass fills them in. Emit order:
+      // extractSymbols first (local decl), then extractImports S3 in source
+      // order (qux → ns → default).
+      //   export { qux }         local="qux",  binding: named "qux"    -> targetRel\0qux\0qux
+      //   export { ns }          local="ns",   binding: namespace "*"  -> targetRel\0*\0ns
+      //   export default qux     local="qux",  binding: named "qux"    -> targetRel\0qux\0default
       rel: "src/import-reexport.ts",
-      expected: [["local", "local = 1"]],
+      expected: [
+        ["local", "local = 1"],
+        ["qux", "src/re-export-target.ts\0qux\0qux"],
+        ["ns", "src/re-export-target.ts\0*\0ns"],
+        ["default", "src/re-export-target.ts\0qux\0default"],
+      ],
     },
     {
       rel: "src/declares.ts",
