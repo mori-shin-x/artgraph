@@ -1419,3 +1419,20 @@ function isDirectory(p: string): boolean {
 export function hash(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
+
+// specs/018 §4 SSOT — single deterministic contentHash for every synthesized
+// re-export symbol node (barrel-side #177 named/aliased re-exports, S1 star
+// expansion in builder.ts, S2 `export * as ns`, S3 imported-identifier
+// re-export). Input is resolved rootDir-relative target path, origin-side
+// binding name (`"default"` | `"*"` | origin export name), and the name the
+// barrel exposes. Determinism (no file-walk order, no OS variance) is the
+// pin behind INV-L4 and the §4 refactor-equivalence property
+// (`export *` ⇔ enumerated `export { x } from`, `import { x }; export { x }`
+// ⇔ `export { x } from` all yield byte-identical lock).
+export function synthReexportHash(
+  targetRel: string,
+  originBinding: string,
+  exportedName: string,
+): string {
+  return hash([targetRel, originBinding, exportedName].join("\0"));
+}
