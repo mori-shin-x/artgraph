@@ -57,22 +57,30 @@ Perf tests are excluded from `pre-push` — they are wall-clock sensitive and wo
 
 ## Commit messages
 
-We follow a Conventional-Commits-lite style:
+We follow [Conventional Commits](https://www.conventionalcommits.org/):
 
 ```
 <type>(<scope>): <summary>
 ```
 
-Common types:
+Common types (the ones surfaced in `CHANGELOG.md` are marked ★):
 
-- `feat` — user-visible new functionality
-- `fix` — bug fix
-- `refactor` — internal change without behavior shift
-- `docs` — documentation only
-- `chore` — toolchain, dependencies, repo housekeeping
-- `test` — tests only
+- ★ `feat` — user-visible new functionality
+- ★ `fix` — bug fix
+- ★ `perf` — performance improvement
+- ★ `refactor` — internal change without behavior shift
+- ★ `docs` — documentation only
+- ★ `revert` — revert of a previous commit
+- `chore` — toolchain, dependencies, repo housekeeping (hidden from CHANGELOG)
+- `test` — tests only (hidden from CHANGELOG)
+- `ci` / `build` — CI or build tooling only (hidden from CHANGELOG)
+- `style` — formatting only (hidden from CHANGELOG)
 
 `<scope>` is optional but encouraged. Scopes seen in the history include `artgraph`, `graph`, `deps`, `oss-ci`, `oss-publish`. When a commit closes an issue, append `(#NN)` to the summary or write `Closes #NN` in the body.
+
+**Breaking changes** must be flagged either by appending `!` after the type/scope (`feat(cli)!: rename --serve to --preview`) or by a `BREAKING CHANGE:` footer in the body. This drives the semver major bump on release.
+
+The type/scope prefix is machine-parsed by release-please to compute the next version and generate `CHANGELOG.md` — see [Releases](#releases) below.
 
 ## Branch naming
 
@@ -106,6 +114,19 @@ artgraph is developed spec-first. Non-trivial features live under `specs/<NNN>-<
 - Three-digit numeric prefix followed by a kebab-case slug (e.g. `010-req-req-dependency`).
 - Inside, follow the Spec Kit layout (`spec.md` → `plan.md` → `tasks.md`, with optional `research.md`). The `speckit-*` skills shipped with the repository scaffold these for you.
 - Cross-cutting design notes or reference material that doesn't belong to a single feature go directly under `docs/`.
+
+## Releases
+
+Releases are driven by [release-please](https://github.com/googleapis/release-please) on every push to `main`. As a contributor you don't touch `CHANGELOG.md`, `package.json` `version`, or tags directly — Conventional Commits do that for you.
+
+The flow is:
+
+1. **Merge Conventional Commits into `main`.** Every `feat` / `fix` / `perf` / `refactor` / `docs` / `revert` commit is a candidate line in the next release's changelog.
+2. **release-please maintains a Release PR.** On each push to `main`, [`.github/workflows/release-please.yml`](./.github/workflows/release-please.yml) opens (or updates) a PR titled `chore(release): release X.Y.Z` that stages the next version bump in `package.json` and prepends a fresh section to `CHANGELOG.md`. `X.Y.Z` is computed from the accumulated commit types (feat → minor, fix → patch, `BREAKING CHANGE`/`!` → major).
+3. **A maintainer reviews and merges the Release PR.** This is a normal PR — it is reviewed for changelog accuracy the same way any doc PR is. Merging pushes the version-bump commit and creates the `vX.Y.Z` git tag.
+4. **A maintainer manually kicks the npm publish.** Go to Actions → `Publish to npm` → **Run workflow**, selecting the `vX.Y.Z` tag as the ref. This runs [`.github/workflows/publish.yml`](./.github/workflows/publish.yml) with npm Trusted Publishing + provenance — no `NPM_TOKEN` secret is stored. The manual kick is intentional: it keeps the "actually publish to npm" step under human control even though everything upstream is automated.
+
+Between releases the "Unreleased" section at the top of `CHANGELOG.md` is generated from unreleased commits by release-please; no need to edit it by hand.
 
 ## Reporting issues
 
