@@ -25,7 +25,7 @@ function canonicalManifest(): SpecKitExtensionManifest {
       version: "0.1.0",
       description: "Run artgraph scan/reconcile/check at Spec Kit workflow checkpoints.",
       author: "artgraph",
-      repository: "https://github.com/ShintaroMorimoto/artgraph",
+      repository: "https://github.com/mori-shin-x/artgraph",
       license: "MIT",
     },
     requires: { speckit_version: ">=0.11.0" },

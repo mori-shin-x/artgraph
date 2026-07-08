@@ -117,7 +117,7 @@ artgraph plan-coverage
 - **検知後の 3 経路** (Skill の中心的価値):
   1. **言及追加** (推奨): tasks.md / plan.md / spec.md のいずれかで該当 REQ-ID を mention する。**ラベル無依存** — `Considered: REQ-003 — no impact` でも `Affected: REQ-003` でも `[REQ-003]` でもプレーン `REQ-003` でも、境界マッチ (`\bREQ-003\b`) すれば全て「言及」とみなされる。次の実行から `implicitImpacts` から消える
   2. **`--ignore REQ-003,REQ-007`**: one-shot suppression。当該実行限定で抑止し、**設定ファイルに永続化しない**。CI を一時的に通す緊急回避用
-  3. **(将来) strict mode**: ラベル keyword (`Considered:` / `Affected:`) 強制。本 spec 014 ではスコープ外、spec 015 候補 [#105](https://github.com/ShintaroMorimoto/artgraph/issues/105) で扱う
+  3. **(将来) strict mode**: ラベル keyword (`Considered:` / `Affected:`) 強制。本 spec 014 ではスコープ外、spec 015 候補 [#105](https://github.com/mori-shin-x/artgraph/issues/105) で扱う
 - exit code: デフォルト exit 0 + report (informational)。`--gate` 付きで `implicitImpacts` 非空 or `diagnostics` 非空のとき exit 1
 - `requireFilesSection`: opt-in 厳格モード。tasks.md の各 task block に `Files:` セクションが無いものを `diagnostics[]` に `{ kind: "missingFilesSection", taskId, line }` 形で報告する。`.artgraph.json` の `{ "planCoverage": { "requireFilesSection": true } }` で有効化する。デフォルト OFF なので既存プロジェクトを壊さない
 - 使用例:

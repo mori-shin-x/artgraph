@@ -40,7 +40,7 @@ Files:
 - tests/auth.test.ts
 ```
 
-詳細文法は [`contracts/sdd-files-parser.md`](https://github.com/ShintaroMorimoto/artgraph/blob/main/specs/014-reinvent-impact-cli/contracts/sdd-files-parser.md) を参照。Stage A (`Files:` セクション) 抽出ゼロ時のみ Stage B (regex フォールバック) が実在 path のみ採用します。
+詳細文法は [`contracts/sdd-files-parser.md`](https://github.com/mori-shin-x/artgraph/blob/main/specs/014-reinvent-impact-cli/contracts/sdd-files-parser.md) を参照。Stage A (`Files:` セクション) 抽出ゼロ時のみ Stage B (regex フォールバック) が実在 path のみ採用します。
 
 `Files:` セクションを必須化したいプロジェクトは:
 
@@ -94,4 +94,4 @@ artgraph plan-coverage --spec .kiro/specs/<your-feature>/
 
 出力に暗黙波及 REQ が現れたら、上記「暗黙波及 REQ の mention 規約」のフローに従って tasks.md / spec.md を更新してください。
 
-**enforcement(`plan-coverage --gate` を blocking する自動化)は本ステアリングのスコープ外** です。Kiro はそもそも public Hook API を持たないため (KiroProvider 実装メモ参照)、現状は推奨に留めます。将来的な enforcement は spec 015 候補 ([#105](https://github.com/ShintaroMorimoto/artgraph/issues/105)) で扱う予定。
+**enforcement(`plan-coverage --gate` を blocking する自動化)は本ステアリングのスコープ外** です。Kiro はそもそも public Hook API を持たないため (KiroProvider 実装メモ参照)、現状は推奨に留めます。将来的な enforcement は spec 015 候補 ([#105](https://github.com/mori-shin-x/artgraph/issues/105)) で扱う予定。

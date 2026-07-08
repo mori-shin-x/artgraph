@@ -67,7 +67,7 @@ promptly and fairly.
 All community leaders are obligated to respect the privacy and security of the
 reporter of any incident.
 
-[PVR]: https://github.com/ShintaroMorimoto/artgraph/security/advisories/new
+[PVR]: https://github.com/mori-shin-x/artgraph/security/advisories/new
 
 ## Enforcement Guidelines
 

@@ -274,7 +274,7 @@ describe("buildAgentsMdBody (T019)", () => {
 
   it("contains the canonical repository link for human readers", () => {
     const body = buildAgentsMdBody("npm");
-    expect(body).toContain("https://github.com/ShintaroMorimoto/artgraph");
+    expect(body).toContain("https://github.com/mori-shin-x/artgraph");
   });
 
   it("does not embed the marker literals (those are added by applyMarkerBlock)", () => {

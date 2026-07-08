@@ -37,12 +37,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ShintaroMorimoto/artgraph.git"
+    "url": "git+https://github.com/mori-shin-x/artgraph.git"
   },
   "bugs": {
-    "url": "https://github.com/ShintaroMorimoto/artgraph/issues"
+    "url": "https://github.com/mori-shin-x/artgraph/issues"
   },
-  "homepage": "https://github.com/ShintaroMorimoto/artgraph#readme",
+  "homepage": "https://github.com/mori-shin-x/artgraph#readme",
   "keywords": [
     "ai-agent-context",
     "ai-coding-agents",

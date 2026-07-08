@@ -2,7 +2,7 @@
 
 > 本書は artgraph の設計判断（D1〜D7）・差別化軸・アーキテクチャ（L1〜L3）・スキーマ・統合方式・既知のリスクを 1 箇所にまとめた一次資料。実装の意思決定や Constitution Check（`.specify/memory/constitution.md`）の根拠としてここを参照する。
 >
-> 履歴メモ: コードネームは当初 `spectrace`（spec + trace）。名称衝突（spectrace.io / spectraceai.com）を避けるため Issue [#15](https://github.com/ShintaroMorimoto/artgraph/issues/15) で `artgraph`（artifact graph）に確定。
+> 履歴メモ: コードネームは当初 `spectrace`（spec + trace）。名称衝突（spectrace.io / spectraceai.com）を避けるため Issue [#15](https://github.com/mori-shin-x/artgraph/issues/15) で `artgraph`（artifact graph）に確定。
 
 ---
 

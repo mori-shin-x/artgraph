@@ -9,7 +9,7 @@ otherwise clutter it.
 Native Windows (PowerShell / cmd) is **not** a supported platform for the
 `artgraph` CLI itself — run it inside WSL2. See
 [architecture.md §8 Support Scope](./architecture.md#8-support-scope) for the
-policy and [#137](https://github.com/ShintaroMorimoto/artgraph/issues/137) for
+policy and [#137](https://github.com/mori-shin-x/artgraph/issues/137) for
 the deliberate v0.x scope decision.
 
 Even when artgraph itself runs inside WSL2, teammates checking the repo out on
@@ -20,7 +20,7 @@ the tracked files. **Do NOT set `core.autocrlf=true` globally** — if
 checkout. Alternatively add `.claude/skills/** text eol=lf` (and equivalents
 for other agents) to your repo's root `.gitattributes`.
 
-Since [#141](https://github.com/ShintaroMorimoto/artgraph/issues/141), the
+Since [#141](https://github.com/mori-shin-x/artgraph/issues/141), the
 distributed Skill instructions themselves are shell-agnostic prose — each
 host agent composes the actual commands for its own shell — but the
 `artgraph` CLI commands those Skills invoke still require POSIX, so the
