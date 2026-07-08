@@ -364,6 +364,54 @@ describe("CLI: impact — barrel-symbol origin resolution (#191)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// specs/018 T13 — `artgraph impact <path:symbol>` on a symbol that only
+// exists via a `export * from` chain. Before specs/018 the barrel node did
+// not exist and the CLI errored with `unresolvedSymbol`; if resolved via
+// file fallback, origin's REQ would drift-flag. With builder star expansion
+// the barrel symbol materialises, `resolveStartIds` finds it, and
+// `entryOriginIds` walks the symbol-hop chain to origin's `@impl`.
+// ---------------------------------------------------------------------------
+
+describe("CLI: impact — `export *` star-barrel entry (specs/018 T13)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = setupSymbolModeFixture();
+    // Overwrite src/index.ts to use plain `export *` (star) instead of the
+    // #191 named re-export. The origin `src/auth.ts` still carries the
+    // @impl claim for REQ-001.
+    writeFileSync(join(root, "src", "index.ts"), 'export * from "./auth";\n');
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("`impact src/index.ts:validateToken` (through `export *`) reaches origin's REQ, no false-positive drift", async () => {
+    const { stdout, exitCode } = await runAt(root, [
+      "impact",
+      "src/index.ts:validateToken",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    // Star expansion emits `symbol:src/index.ts#validateToken` → forward BFS
+    // reaches REQ-001 via origin's @impl.
+    expect(result.impactReqs).toContain("REQ-001");
+    // `entryOriginIds` walks the symbol chain
+    // (symbol:src/index.ts#validateToken → symbol:src/auth.ts#validateToken)
+    // and lands on origin's @impl claim — originReqs contains REQ-001.
+    // Pre-specs/018 the barrel symbol did not exist, so this returned []
+    // (or unresolvedSymbol) and drift = impactReqs \ originReqs flagged
+    // REQ-001 as a false positive.
+    expect(result.originReqs).toContain("REQ-001");
+    const drift = (result.impactReqs as string[]).filter(
+      (r) => !(result.originReqs as string[]).includes(r),
+    );
+    expect(drift).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Spec 014 → 016 validation regressions — kept so the redesign doesn't
 // quietly break the navigational error / mutually-exclusive channels /
 // no-source plumbing.

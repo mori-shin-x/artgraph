@@ -6,7 +6,15 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  appendFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { buildGraph } from "../src/graph/builder.js";
 import { buildLockFromGraph } from "../src/lock.js";
@@ -39,10 +47,13 @@ function snapshotGraph(graph: ArtifactGraph): string {
 }
 
 // Reference result: what a cache-less build of the CURRENT tree produces.
-function buildWithoutCache(dir: string): string {
+// Accepts an optional config so symbol-mode fixtures can compare against a
+// cold symbol-mode reference (the T12/T16 star tests need this because the
+// module-level `config` defaults to file mode).
+function buildWithoutCache(dir: string, cfg: ArtgraphConfig = config): string {
   process.env.ARTGRAPH_CACHE = "0";
   try {
-    return snapshotGraph(buildGraph(dir, config).graph);
+    return snapshotGraph(buildGraph(dir, cfg).graph);
   } finally {
     delete process.env.ARTGRAPH_CACHE;
   }
@@ -164,5 +175,99 @@ describe("parse cache", () => {
     // and the corrupt file was replaced with a fresh valid cache
     const warmAgain = snapshotGraph(buildGraph(tmp, config).graph);
     expect(warmAgain).toBe(snapshotGraph(graph));
+  });
+
+  // ---------------------------------------------------------------------------
+  // specs/018 T12 / T16 — warm/cold parity across `export *` chains, and
+  // fragment-invalidation propagation through star expansion. These pin the
+  // INV-L4 property under the new `starExports` side-channel: the cache
+  // persists the parser's plain-`export *` targets, and the builder re-runs
+  // the whole star-expansion pass fresh on every build so a warm rebuild
+  // produces exactly the same graph a cold one does.
+  //
+  // The base fixture (`beforeEach`) is file-mode. Both tests below opt into
+  // `mode: "symbol"` by overriding the config so the star expansion path
+  // fires at all (§9 "file mode 一切不変").
+  // ---------------------------------------------------------------------------
+
+  it("T12 (INV-L4): warm build of an `export *` chain yields the same lock bytes as cold", () => {
+    // Set up a plain-star chain in the fixture root: leaf → mid → top, with
+    // a consumer that imports one name through the top. Symbol mode so the
+    // builder's star expansion actually runs.
+    const symbolCfg: ArtgraphConfig = { ...config, mode: "symbol" };
+    writeFileSync(join(tmp, "src", "b.ts"), "export const b = 1;\n"); // reset
+    writeFileSync(join(tmp, "src", "leaf.ts"), "// @impl REQ-002\nexport function x() {}\n");
+    writeFileSync(join(tmp, "src", "mid.ts"), 'export * from "./leaf.js";\n');
+    writeFileSync(join(tmp, "src", "top.ts"), 'export * from "./mid.js";\n');
+    writeFileSync(
+      join(tmp, "src", "a.ts"),
+      '// @impl REQ-001\nimport { x } from "./top.js";\nexport const a = x;\n',
+    );
+
+    // Cold: cache-disabled reference (symbol mode).
+    const cold = buildWithoutCache(tmp, symbolCfg);
+    // Warm: populate cache, then rebuild.
+    buildGraph(tmp, symbolCfg);
+    expect(existsSync(join(tmp, CACHE_REL))).toBe(true);
+    const warm = snapshotGraph(buildGraph(tmp, symbolCfg).graph);
+    expect(warm).toBe(cold);
+  });
+
+  it("T16: adding a new @impl on the origin of a star chain propagates through the warm rebuild", () => {
+    // Cold populate: chain leaf → mid → top, consumer imports `x`. Warm the
+    // cache. Then EDIT ONLY the origin file (`leaf.ts`) to add a new @impl
+    // tag on a NEW export, plus register that REQ in the spec.
+    const symbolCfg: ArtgraphConfig = { ...config, mode: "symbol" };
+    writeFileSync(join(tmp, "src", "b.ts"), "export const b = 1;\n");
+    writeFileSync(join(tmp, "src", "leaf.ts"), "// @impl REQ-002\nexport function x() {}\n");
+    writeFileSync(join(tmp, "src", "mid.ts"), 'export * from "./leaf.js";\n');
+    writeFileSync(join(tmp, "src", "top.ts"), 'export * from "./mid.js";\n');
+    writeFileSync(
+      join(tmp, "src", "a.ts"),
+      '// @impl REQ-001\nimport { x } from "./top.js";\nexport const a = x;\n',
+    );
+    buildGraph(tmp, symbolCfg); // populate cache
+
+    // Mutate ONLY the origin file (leaf.ts) plus register REQ-020 in spec.
+    writeFileSync(
+      join(tmp, "src", "leaf.ts"),
+      "// @impl REQ-002\nexport function x() {}\n// @impl REQ-020\nexport function y() {}\n",
+    );
+    appendFileSync(join(tmp, "specs", "feat", "spec.md"), "- REQ-020: new sibling\n");
+
+    // Warm rebuild — mid.ts and top.ts fragments are UNCHANGED (their
+    // content hash matches), so they come straight from the cache. Their
+    // `starExports` side-channel (unchanged rel target `src/leaf.ts`) is
+    // reused verbatim. The builder re-runs expansion end-to-end, so `#y`
+    // now appears at every barrel level.
+    const { graph } = buildGraph(tmp, symbolCfg);
+    expect(graph.nodes.has("symbol:src/leaf.ts#y")).toBe(true);
+    expect(graph.nodes.has("symbol:src/mid.ts#y")).toBe(true);
+    expect(graph.nodes.has("symbol:src/top.ts#y")).toBe(true);
+    // Warm build MUST equal cold build byte-for-byte (INV-L4 across a
+    // mid-cache origin edit). Compare against a cold symbol-mode reference.
+    expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp, symbolCfg));
+  });
+
+  it("rejects a cache file with schemaVersion 3 (SCHEMA_VERSION was bumped 3→4 in specs/018)", () => {
+    // Populate the cache normally, then hand-edit its schemaVersion down to
+    // the pre-specs/018 value. `readParseCache` must reject it and force a
+    // cold path — otherwise a warm build could serve S2/S3 nodes without
+    // the parser side-channel that supports them, silently diverging from
+    // a cold rebuild (INV-L4 breach).
+    buildGraph(tmp, config); // populate cache
+    const rawPath = join(tmp, CACHE_REL);
+    const cache = JSON.parse(readFileSync(rawPath, "utf-8"));
+    expect(cache.schemaVersion).toBe(4);
+    cache.schemaVersion = 3;
+    writeFileSync(rawPath, JSON.stringify(cache));
+
+    // The next build sees a schema-mismatched cache and must fall back to
+    // a cold parse. Behaviorally identical to a cache-disabled build.
+    const { graph } = buildGraph(tmp, config);
+    expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp));
+    // The rewritten cache carries the current schemaVersion (=4).
+    const rewritten = JSON.parse(readFileSync(rawPath, "utf-8"));
+    expect(rewritten.schemaVersion).toBe(4);
   });
 });
