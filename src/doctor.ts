@@ -25,7 +25,8 @@ import {
   type AgentId,
   findDescriptor,
 } from "./agents/descriptors.js";
-import { inspectMarkerBlock } from "./agents/agent-context.js";
+import { buildAgentsMdBody, inspectMarkerBlock } from "./agents/agent-context.js";
+import { detectPackageManager } from "./package-manager.js";
 import { readSkillSource, type SkillSource } from "./agents/source.js";
 
 /** Skip files larger than this when hashing / walking (C-adj-1). Prevents an
@@ -52,6 +53,7 @@ export type DoctorFindingKind =
   | "agents-md-present"
   | "agents-md-missing"
   | "agents-md-marker-broken"
+  | "agents-md-body-stale"
   | "wrapper-present"
   | "wrapper-missing"
   | "wrapper-no-import"
@@ -116,9 +118,12 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   // action wraps this call in a try/catch so the message surfaces as
   // `Error: ...` (C1).
   const source: SkillSource = readSkillSource(SKILLS_TEMPLATE_DIR);
-  const canonicalTopLevels = new Set<string>(
-    source.entries.map((e) => e.topLevel),
-  );
+  const canonicalTopLevels = new Set<string>(source.entries.map((e) => e.topLevel));
+
+  // Detect the current PM up front so `addAgentsMdFindings` can compare the
+  // AGENTS.md marker body against the canonical `buildAgentsMdBody(detectedPm)`.
+  // Quiet mode — doctor never prints its own PM detection warning.
+  const detectedPm = detectPackageManager(rootAbs, { quiet: true });
 
   // Step 1 — detect agents.
   //   - explicit `opts.agents`: trust the caller; the CLI parser has already
@@ -217,7 +222,7 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   }
 
   // Step 4 — AGENTS.md (single shared resource; `agent: null`).
-  addAgentsMdFindings(rootAbs, findings);
+  addAgentsMdFindings(rootAbs, detectedPm, findings);
 
   // Step 5 — wrappers (claude / copilot only).
   for (const descriptor of detectedDescriptors) {
@@ -232,10 +237,7 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   const passCount = findings.filter((f) => f.severity === "pass").length;
   const failCount = findings.length - passCount;
   const agents = [
-    ...new Set([
-      ...detectedDescriptors.map((d) => d.id),
-      ...absentDescriptors.map((d) => d.id),
-    ]),
+    ...new Set([...detectedDescriptors.map((d) => d.id), ...absentDescriptors.map((d) => d.id)]),
   ].sort();
 
   return {
@@ -349,9 +351,7 @@ function addExtraneousFindings(
   // Within each canonical top-level dir, every file MUST match a canonical
   // relPath; mismatches (old version remnants, manually added files) are
   // reported as `extraneous-file`.
-  const canonicalTopLevels = new Set<string>(
-    source.entries.map((e) => e.topLevel),
-  );
+  const canonicalTopLevels = new Set<string>(source.entries.map((e) => e.topLevel));
   const canonical = new Set<string>();
   for (const entry of source.entries) {
     for (const file of entry.files) {
@@ -406,7 +406,11 @@ function addExtraneousFindings(
   }
 }
 
-function addAgentsMdFindings(rootAbs: string, out: DoctorFinding[]): void {
+function addAgentsMdFindings(
+  rootAbs: string,
+  detectedPm: ReturnType<typeof detectPackageManager>,
+  out: DoctorFinding[],
+): void {
   const absPath = resolve(rootAbs, "AGENTS.md");
   // C3 / C-adj-4 — single defensive readFileSync so an ENOENT race with a
   // concurrent rm surfaces as `agents-md-missing`, and an EACCES surfaces as
@@ -455,6 +459,38 @@ function addAgentsMdFindings(rootAbs: string, out: DoctorFinding[]): void {
       message: `AGENTS.md artgraph marker block is broken. Re-run \`artgraph init --agents=<list> --force\` to repair.`,
     });
     return;
+  }
+  // Compare the marker-block body to the canonical rendering for the
+  // currently detected PM. If they differ, the user's AGENTS.md is running
+  // an outdated snippet (the template changed since their last `init`) —
+  // flag it so they know to re-run `init --force`. Severity is `pass`
+  // (NOTICE-style) so a plain artgraph upgrade doesn't silently break CI
+  // gates that treat any `fail` finding as a hard stop.
+  const currentBody = health.bodyText ?? "";
+  let canonicalBody: string | null = null;
+  try {
+    canonicalBody = buildAgentsMdBody(detectedPm);
+  } catch {
+    // Packaging fault reading the template — do not synthesize a false
+    // stale finding. `readSkillSource` above will surface the packaging
+    // error on the same path elsewhere.
+    canonicalBody = null;
+  }
+  if (canonicalBody !== null) {
+    const currentHash = createHash("sha256").update(currentBody).digest("hex");
+    const canonicalHash = createHash("sha256").update(canonicalBody).digest("hex");
+    if (currentHash !== canonicalHash) {
+      out.push({
+        severity: "pass",
+        agent: null,
+        kind: "agents-md-body-stale",
+        path: "AGENTS.md",
+        expected: canonicalHash,
+        actual: currentHash,
+        message: `NOTICE: AGENTS.md artgraph marker block body is out of date. Re-run \`artgraph init --agents=<list> --force\` to refresh it against the current template.`,
+      });
+      return;
+    }
   }
   out.push({
     severity: "pass",
@@ -564,9 +600,7 @@ export function formatDoctorReportText(report: DoctorReport): string {
 
   if (report.findings.length === 0) {
     // No distribution detected → soft-success path (per FR-011 + quickstart §3-5).
-    lines.push(
-      "No Tier 1 distribution detected. Run `artgraph init --agents=<list>` to set up.",
-    );
+    lines.push("No Tier 1 distribution detected. Run `artgraph init --agents=<list>` to set up.");
     return lines.join("\n");
   }
 
@@ -589,7 +623,9 @@ export function formatDoctorReportText(report: DoctorReport): string {
       for (const f of failures) {
         lines.push(`  ✗ ${f.path}    (${f.kind})`);
         if (f.kind === "skill-file-drift" && f.expected && f.actual) {
-          lines.push(`       expected: ${f.expected.slice(0, 12)}…  actual: ${f.actual.slice(0, 12)}…`);
+          lines.push(
+            `       expected: ${f.expected.slice(0, 12)}…  actual: ${f.actual.slice(0, 12)}…`,
+          );
         } else if (f.expected !== null && f.actual !== null) {
           lines.push(`       expected: ${f.expected}  actual: ${f.actual}`);
         }
@@ -722,9 +758,10 @@ function toPosix(p: string): string {
 }
 
 function toRepoRel(rootAbs: string, abs: string): string {
-  const stripped = abs.startsWith(rootAbs + sep) || abs.startsWith(rootAbs + "/")
-    ? abs.slice(rootAbs.length + 1)
-    : abs;
+  const stripped =
+    abs.startsWith(rootAbs + sep) || abs.startsWith(rootAbs + "/")
+      ? abs.slice(rootAbs.length + 1)
+      : abs;
   return toPosix(stripped);
 }
 
@@ -742,14 +779,10 @@ function brokenMarkerDescription(
   const endCount = Array.from(content.matchAll(END_RE_G)).length;
   if (!h.hasBegin && !h.hasEnd) return "no markers found";
   if (h.hasBegin && !h.hasEnd) {
-    return beginCount === 1
-      ? "1 begin marker without end"
-      : `${beginCount} begin markers, 0 ends`;
+    return beginCount === 1 ? "1 begin marker without end" : `${beginCount} begin markers, 0 ends`;
   }
   if (!h.hasBegin && h.hasEnd) {
-    return endCount === 1
-      ? "1 end marker without begin"
-      : `0 begins, ${endCount} end markers`;
+    return endCount === 1 ? "1 end marker without begin" : `0 begins, ${endCount} end markers`;
   }
   return `markers present but unpaired (${beginCount} begins, ${endCount} ends)`;
 }
