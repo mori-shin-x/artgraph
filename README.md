@@ -292,7 +292,8 @@ split/merge caveats.
 - [Architecture](./docs/architecture.md) — design decisions and positioning
 
 Repository: <https://github.com/mori-shin-x/artgraph>. To work on artgraph
-itself, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+itself, see [CONTRIBUTING.md](./CONTRIBUTING.md). For release history, see
+[CHANGELOG.md](./CHANGELOG.md).
 
 ## Requirements
 
