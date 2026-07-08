@@ -188,6 +188,27 @@ COVERAGE:
 A runnable copy of this flow lives in
 [`examples/basic/`](./examples/basic).
 
+## See the graph
+
+`artgraph scan --serve` opens the req / doc / code / test graph as an
+interactive Cytoscape.js page in your browser. Node border color and style
+encode `drift` / `orphan` / `uncovered`, so you can spot problem areas at a
+glance without reading `check` output line by line.
+
+<p align="center">
+  <img src="./docs/demo/scan-serve.png" alt="artgraph scan --serve UI: 4-layer req / doc / code / test graph with drifted nodes highlighted" width="820" />
+</p>
+
+```bash
+artgraph scan --serve                            # http://127.0.0.1:3737/
+artgraph scan --serve --port 4000 --host 0.0.0.0 # override port / bind address
+artgraph scan --output ./graph-out               # static HTML export
+```
+
+With a `.trace.lock` present, drift / orphan / uncovered nodes are colored;
+without one, the raw graph structure is rendered. See
+[docs/commands.md](./docs/commands.md#artgraph-scan) for the full reference.
+
 ## A turn with Spec Kit + artgraph
 
 Here is what a `/speckit-tasks` turn looks like once installed, with the
