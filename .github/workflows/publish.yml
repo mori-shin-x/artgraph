@@ -21,7 +21,7 @@ jobs:
       #
       # One-time setup (npmjs.com, before this workflow can publish):
       # Package settings -> Trusted Publisher -> GitHub Actions ->
-      #   repository: ShintaroMorimoto/artgraph
+      #   repository: mori-shin-x/artgraph
       #   workflow filename: publish.yml
       # If the `artgraph` package name has never been published before,
       # npm may require a first manual `npm publish` to claim the name

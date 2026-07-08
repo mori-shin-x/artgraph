@@ -10,7 +10,7 @@ Thanks for your interest in artgraph. This document covers the development setup
 ## Setup
 
 ```bash
-git clone https://github.com/ShintaroMorimoto/artgraph.git
+git clone https://github.com/mori-shin-x/artgraph.git
 cd artgraph
 pnpm install --frozen-lockfile
 ```

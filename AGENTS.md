@@ -28,5 +28,5 @@ pnpm exec artgraph init --agents=<list>   # provision Skills + agent-context
 pnpm exec artgraph doctor                 # diagnose distribution health
 ```
 
-For full CLI reference, run `pnpm exec artgraph --help` or see https://github.com/ShintaroMorimoto/artgraph.
+For full CLI reference, run `pnpm exec artgraph --help` or see https://github.com/mori-shin-x/artgraph.
 <!-- artgraph:end -->

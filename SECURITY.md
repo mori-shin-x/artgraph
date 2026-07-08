@@ -23,8 +23,8 @@ Reporting][PVR]:
 3. Describe the issue, steps to reproduce, affected versions, and — if you
    have one — a suggested mitigation.
 
-[PVR]: https://github.com/ShintaroMorimoto/artgraph/security/advisories/new
-[security]: https://github.com/ShintaroMorimoto/artgraph/security
+[PVR]: https://github.com/mori-shin-x/artgraph/security/advisories/new
+[security]: https://github.com/mori-shin-x/artgraph/security
 
 ## Response expectations
 
