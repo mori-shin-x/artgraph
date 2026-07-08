@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-08
 
-**Status**: Implemented (PR #201 as-built — Phase 1 5f5ce51, Phase 2 cde5d00)
+**Status**: Implemented as-built — Phase 1 = 306c69d, Phase 2 = 3056dc2 (formerly PR #201, superseded by force-push during v0.1.0 release prep)
 
 **Input**:
 

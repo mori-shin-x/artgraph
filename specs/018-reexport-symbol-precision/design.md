@@ -1,7 +1,7 @@
 # 018 — re-export の per-symbol 精度 (`export *` / imported-identifier)
 
 Issues: #179 (`export *` per-symbol), #188 (`export default <ImportedName>` / source なし local re-export)
-Status: **implemented** (PR #201 で cde5d00 / 5f5ce51 として merge 対象)
+Status: **implemented** (Phase 1 = 306c69d, Phase 2 = 3056dc2、formerly PR #201 が force-push で superseded)
 関連: #177 / PR #180 (named / barrel re-export の per-symbol 化), specs/016 (impact / plan-coverage symbol-level)
 
 ## 1. 背景と現状

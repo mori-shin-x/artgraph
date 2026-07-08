@@ -6,7 +6,7 @@
 
 ## 進め方 (as-built)
 
-本 spec は **実装後に as-built で記述** している (PR #201 で Phase 1 = 5f5ce51、Phase 2 = cde5d00 として merge 対象)。全 task は既に完了状態 `[X]`、`Files:` breadcrumb は実 commit で touch したファイルを反映。各 task は `[REQ-018-NNN]` marker で spec.md の Requirements と紐付ける。
+本 spec は **実装後に as-built で記述** している (Phase 1 = 306c69d、Phase 2 = 3056dc2、formerly PR #201 が force-push で superseded)。全 task は既に完了状態 `[X]`、`Files:` breadcrumb は実 commit で touch したファイルを反映。各 task は `[REQ-018-NNN]` marker で spec.md の Requirements と紐付ける。
 
 ## Format: `[ID] [P?] [Story] Description [REQ-018-NNN]`
 
