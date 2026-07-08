@@ -77,6 +77,13 @@ function buildIdMatchers(codeId?: string): IdMatchers {
 export interface ParsedTS {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  // specs/018 §3 S1 side-channel. rootDir-relative resolved targets of every
+  // plain `export * from "./o"` in this file, in source order, deduped by
+  // first occurrence. Populated only in symbol mode on non-test files, and
+  // only for plain `export *` — `export * as ns from` is materialized in the
+  // parser (S2) and does not go through this channel. Consumed by builder's
+  // star-expansion pass (§5) to compute exported names across module graph.
+  starExports?: string[];
 }
 
 interface SymbolRange {
@@ -318,12 +325,25 @@ function parseTSFile(
   if (parsed && mode === "symbol" && !isTest) {
     symbolRanges = extractSymbols(parsed.program, content, relPath, nodes, parsed.comments);
   }
+  let starExports: string[] | undefined;
   if (parsed) {
-    extractImports(parsed, content, relPath, filePath, rootDir, nodes, edges, mode, isTest, ctx);
+    const result = extractImports(
+      parsed,
+      content,
+      relPath,
+      filePath,
+      rootDir,
+      nodes,
+      edges,
+      mode,
+      isTest,
+      ctx,
+    );
+    if (result.starExports.length > 0) starExports = result.starExports;
   }
   extractImplTags(content, relPath, isTest, edges, mode, symbolRanges, matchers, parsed?.comments);
 
-  return { nodes, edges };
+  return starExports ? { nodes, edges, starExports } : { nodes, edges };
 }
 
 // The TS compiler host strips a UTF-8 BOM when reading files — the file-hash
@@ -742,10 +762,36 @@ interface ImportRef {
 // A `export … from "./x"` re-export. `named` carries the per-specifier
 // `{ local, exported }` name pairs for `export { local as exported } from`
 // (empty for `export *` / `export * as ns`, which have no enumerable names at
-// parse time and stay file-grain).
+// parse time). specs/018: `export * as ns from` sets `nsName` (S2 — parser
+// materializes `symbol:B#ns → file:O` per-symbol on top of the file-grain
+// edge). Plain `export * from` sets `isPlainStar` (§3 side-channel candidate,
+// consumed by builder star-expansion). The two flags are mutually exclusive
+// and both come strictly from the well-formed AST path — the fatal-syntax
+// fallback below cannot distinguish `export *` from `export { x } from`, so
+// it leaves both flags off and stays file-grain (§10 known limit).
 interface ReexportRef {
   specifier: string;
   named: Array<{ local: string; exported: string }>;
+  nsName?: string;
+  isPlainStar?: boolean;
+}
+
+// specs/018 §6: per-file import binding table used by S3 materialization
+// (source-null `export { x }` and `export default X` forms). Keyed by the
+// LOCAL name introduced into the file's scope; the origin's export name is
+// captured separately for the "named" kind so `import { y as z } from …;
+// export { z }` maps correctly to origin export `y`.
+type ImportBinding =
+  | { kind: "default"; specifier: string }
+  | { kind: "namespace"; specifier: string }
+  | { kind: "named"; specifier: string; imported: string };
+
+// A source-null `export { … }` statement (specs/018 §6 S3-C4). Materialized
+// after the reexport loop so shadowing / origin resolution can consult the
+// same `importBindings` table and reuse the existing resolveRelativeImport +
+// synthReexportHash helpers.
+interface SourceNullNamedReexport {
+  specifiers: Array<{ localName: string; exportedName: string }>;
 }
 
 function extractImports(
@@ -759,11 +805,56 @@ function extractImports(
   mode: "file" | "symbol",
   isTest: boolean,
   ctx: ResolverContext,
-): void {
+): { starExports: string[] } {
   const importRefs: ImportRef[] = [];
   const reexportRefs: ReexportRef[] = [];
+  // specs/018 §6: build the local-name → origin-binding table BEFORE the main
+  // statement walk. S3 branches below consult this to look up the origin
+  // module of every locally-defined name that is later re-exported without a
+  // `from` clause. Bare-specifier / unresolvable bindings are still recorded
+  // here so lookups return the correct binding kind; the specifier-relative
+  // check is applied at materialization time (§6 "実体化の前提ガード").
+  //
+  // The wrapped CJS-style `import m = require(...)` binding is deliberately
+  // omitted: its origin uses `export =` which extractSymbols cannot emit
+  // symbol nodes for, so S3-C3/C4 through it would only synthesize edges to
+  // a `symbol:m#*` id that will never exist. The existing #187 file-grain
+  // fail-safe (via the `namespace` ImportRef) still applies.
+  const importBindings = new Map<string, ImportBinding>();
+  const sourceNullNamedReexports: SourceNullNamedReexport[] = [];
+  const defaultIdentReexports: string[] = [];
 
   if (parsed.program.body.length > 0) {
+    // Pass 0 (specs/018 §6): collect importBindings from every
+    // ImportDeclaration. `import type` (`importKind: "type"`) is treated
+    // identically — an `export type { X }` re-export of a `import type { X }`
+    // binding is a valid pass-through and origin type symbols exist.
+    for (const stmt of parsed.program.body) {
+      if (stmt.type !== "ImportDeclaration") continue;
+      const specifier = stmt.source.value;
+      for (const spec of stmt.specifiers ?? []) {
+        if (spec.type === "ImportDefaultSpecifier") {
+          if (spec.local.name) {
+            importBindings.set(spec.local.name, { kind: "default", specifier });
+          }
+        } else if (spec.type === "ImportNamespaceSpecifier") {
+          if (spec.local.name) {
+            importBindings.set(spec.local.name, { kind: "namespace", specifier });
+          }
+        } else {
+          // ImportSpecifier. `imported` is the origin's export name (the
+          // pre-alias half of `import { y as z }` — `y`); `local.name` is the
+          // in-scope name (`z`). String-literal import names are handled by
+          // moduleExportName, which returns the literal's value.
+          const imported = moduleExportName(spec.imported);
+          const localName = spec.local.name;
+          if (imported !== undefined && localName) {
+            importBindings.set(localName, { kind: "named", specifier, imported });
+          }
+        }
+      }
+    }
+
     for (const stmt of parsed.program.body) {
       if (stmt.type === "ImportDeclaration") {
         const ref: ImportRef = {
@@ -791,11 +882,62 @@ function extractImports(
         }
         reexportRefs.push({ specifier: stmt.source.value, named });
       } else if (stmt.type === "ExportAllDeclaration") {
-        // `export *` / `export * as ns` — no per-name specifiers; stays
-        // file-grain. Named imports through a star barrel are closed at file
-        // grain by the builder's phantom-repair pass (issue #177 follow-up
-        // tracks true per-symbol star precision).
-        reexportRefs.push({ specifier: stmt.source.value, named: [] });
+        // `export *` / `export * as ns`. Both keep the pre-existing file-grain
+        // edge (`file:B → file:O`) as an additive fail-safe. specs/018:
+        //   - `export * as ns from "./o"` → nsName carries the ns identifier
+        //     so the materialization loop can emit `symbol:B#ns → file:O`
+        //     (S2, contentHash = synthReexportHash(O, "*", ns));
+        //   - plain `export * from "./o"` → isPlainStar flags it as an
+        //     exportedNames provider for the builder's star-expansion pass
+        //     (§5). The resolved rootDir-relative target is captured into
+        //     the `starExports` side-channel below.
+        let nsName: string | undefined;
+        if (stmt.exported) nsName = moduleExportName(stmt.exported);
+        reexportRefs.push({
+          specifier: stmt.source.value,
+          named: [],
+          nsName,
+          isPlainStar: nsName === undefined,
+        });
+      } else if (
+        stmt.type === "ExportNamedDeclaration" &&
+        !stmt.source &&
+        stmt.specifiers.length > 0
+      ) {
+        // specs/018 §6 S3-C4: `import { x } from "./m"; export { x as y };`
+        // (also `import X from "./a"; export { X };` and namespace forms).
+        // Collected here in source order; per-specifier materialization —
+        // which consults `importBindings` and applies the shadowing /
+        // relative-specifier / resolver guards — runs after the main reexport
+        // loop below.
+        //
+        // The `stmt.specifiers.length > 0` clause deliberately excludes the
+        // #187 `export import m = require(...)` shape: its wrapped
+        // ExportNamedDeclaration has empty specifiers, so it falls through
+        // to the TSImportEqualsDeclaration branch below where it's mapped to
+        // a namespace ImportRef.
+        const specs: Array<{ localName: string; exportedName: string }> = [];
+        for (const spec of stmt.specifiers) {
+          const localName = moduleExportName(spec.local);
+          const exportedName = moduleExportName(spec.exported);
+          if (localName !== undefined && exportedName !== undefined) {
+            specs.push({ localName, exportedName });
+          }
+        }
+        if (specs.length > 0) sourceNullNamedReexports.push({ specifiers: specs });
+      } else if (
+        stmt.type === "ExportDefaultDeclaration" &&
+        stmt.declaration.type === "Identifier"
+      ) {
+        // specs/018 §6 S3-C3: `import X from "./a"; export default X;` (and
+        // named / namespace forms). extractSymbols only pushes
+        // `symbol:B#default` when the identifier resolves to a LOCAL
+        // top-level declaration (its L484-488 branch); when the identifier
+        // was imported, `lookup` returns undefined and no local symbol node
+        // exists — so materializing `symbol:B#default → symbol:origin#…`
+        // here does not clobber anything. Collected in source order for
+        // materialization after the reexport loop.
+        defaultIdentReexports.push(stmt.declaration.name);
       } else {
         // `import m = require("./m")` (CJS-style TS). Treat as a namespace
         // import so symbol mode falls back to a file-grain edge — the
@@ -922,8 +1064,20 @@ function extractImports(
 
   // Names already declared locally in this file win over a same-name
   // re-export (legal shadowing / illegal duplicate export) — never overwrite a
-  // real symbol node with a re-export pass-through of the same id.
+  // real symbol node with a re-export pass-through of the same id. Every
+  // synthesized S2/S3 node adds its id to the set as it is emitted, so a
+  // later synth in the same file (rare — typically an illegal duplicate
+  // export) cannot overwrite an earlier one.
   const localSymbolIds = new Set(nodes.filter((n) => n.kind === "symbol").map((n) => n.id));
+
+  // specs/018 §3 side-channel. Populated below only for plain `export *`
+  // sources in symbol mode on a non-test file whose specifier resolves to a
+  // real module (relative + resolved). Deduped by first occurrence so a
+  // duplicate `export * from "./o"` (or two specifiers that resolve to the
+  // same file) collapses into a single provider — the design's §5 dedup
+  // rationale for the builder starMap holds here too.
+  const starExports: string[] = [];
+  const starExportsSeen = new Set<string>();
 
   for (const rex of reexportRefs) {
     if (!rex.specifier.startsWith(".")) continue;
@@ -944,16 +1098,16 @@ function extractImports(
         // re-export edge is dropped along with it (impact BFS is
         // bidirectional — a spurious `symbol:barrel#foo -> symbol:origin#foo`
         // edge on a shadowed name would false-positive the origin's REQ into
-        // the consumer's blast radius). Per-symbol hash uses the resolved
-        // origin path + local + exported (\0-joined) so adding/removing a
-        // sibling specifier in the same `export { … } from` statement does
-        // not drift the surviving names' hashes (INV-L4 noise).
+        // the consumer's blast radius). Per-symbol hash uses the specs/018
+        // §4 SSOT (`synthReexportHash`) so adding/removing a sibling specifier
+        // in the same `export { … } from` statement does not drift the
+        // surviving names' hashes (INV-L4 noise).
         if (!localSymbolIds.has(barrelSymId)) {
           nodes.push({
             id: barrelSymId,
             kind: "symbol",
             filePath: relPath,
-            contentHash: hash([targetRel, local, exported].join("\0")),
+            contentHash: synthReexportHash(targetRel, local, exported),
           });
           localSymbolIds.add(barrelSymId);
           edges.push({
@@ -964,15 +1118,158 @@ function extractImports(
           });
         }
       }
-    } else {
+    } else if (useSymbol && rex.nsName !== undefined) {
+      // specs/018 §6 S2: `export * as ns from "./o"`. The file-grain edge
+      // (`file:B → file:O`) is preserved as an additive fail-safe (an
+      // exported namespace is by definition a whole-module binding, and
+      // `entryOriginIds` / impact BFS still route file-unit inputs through
+      // it); on top of that a `symbol:B#ns → file:O` symbol node/edge lets
+      // consumer named/namespace imports of `ns` resolve at symbol grain.
+      // The single edge target is `file:O` — not a per-name symbol — because
+      // `ns` binds the whole module (no origin export name in play).
       edges.push({
         source: sourceId,
         target: `file:${targetRel}`,
         kind: "imports",
         provenances: ["ts-import"],
       });
+      const barrelSymId = `symbol:${relPath}#${rex.nsName}`;
+      if (!localSymbolIds.has(barrelSymId)) {
+        nodes.push({
+          id: barrelSymId,
+          kind: "symbol",
+          filePath: relPath,
+          contentHash: synthReexportHash(targetRel, "*", rex.nsName),
+        });
+        localSymbolIds.add(barrelSymId);
+        edges.push({
+          source: barrelSymId,
+          target: `file:${targetRel}`,
+          kind: "imports",
+          provenances: ["ts-import"],
+        });
+      }
+    } else {
+      // Everything else: plain `export *` in symbol mode, or ANY re-export in
+      // file mode / test files. Emit only the file-grain edge; per-name
+      // precision for star (§5) is the builder star-expansion's job. Plain
+      // `export *` is captured into the side-channel here so the builder
+      // sees the origin resolved rel path, which matters for warm cache
+      // correctness (an origin file's rel path can only be computed with
+      // the resolver context this parse owns).
+      edges.push({
+        source: sourceId,
+        target: `file:${targetRel}`,
+        kind: "imports",
+        provenances: ["ts-import"],
+      });
+      if (useSymbol && rex.isPlainStar) {
+        if (!starExportsSeen.has(targetRel)) {
+          starExportsSeen.add(targetRel);
+          starExports.push(targetRel);
+        }
+      }
     }
   }
+
+  // specs/018 §6 S3-C4: source-null `export { … }` synthesizes barrel-side
+  // symbol nodes/edges that consumer named imports can resolve against, so
+  // `import { x } from m; export { x }` becomes lock-byte equivalent to
+  // `export { x } from m` (§4 refactor-equivalence). Runs only in symbol
+  // mode on non-test files (matches the useSymbol gate all per-symbol
+  // materialization uses).
+  if (useSymbol) {
+    for (const { specifiers } of sourceNullNamedReexports) {
+      for (const { localName, exportedName } of specifiers) {
+        const barrelSymId = `symbol:${relPath}#${exportedName}`;
+        // Shadowing: a real local declaration OR an earlier synth (source
+        // order — pass 1 functions-first, then any #177/S2 synth above) with
+        // the same exported name wins. Prevents spurious edges from an
+        // illegal duplicate export.
+        if (localSymbolIds.has(barrelSymId)) continue;
+        const binding = importBindings.get(localName);
+        if (!binding) continue;
+        // Bare-specifier / unresolvable guard (§6). §4 hash-input pin: the
+        // resolved rootDir-relative target must exist — a bare or
+        // node_modules specifier is skipped exactly as consumer imports of
+        // the same specifier are today.
+        if (!binding.specifier.startsWith(".")) continue;
+        const resolved = resolveRelativeImport(filePath, binding.specifier, ctx);
+        if (!resolved) continue;
+        const targetRel = relative(rootDir, resolved);
+        const { originBinding, edgeTarget } = mapS3OriginBinding(binding, targetRel);
+        nodes.push({
+          id: barrelSymId,
+          kind: "symbol",
+          filePath: relPath,
+          contentHash: synthReexportHash(targetRel, originBinding, exportedName),
+        });
+        localSymbolIds.add(barrelSymId);
+        edges.push({
+          source: barrelSymId,
+          target: edgeTarget,
+          kind: "imports",
+          provenances: ["ts-import"],
+        });
+      }
+    }
+
+    // specs/018 §6 S3-C3: `export default <Identifier>` where the identifier
+    // is imported. The exported name is unconditionally `"default"`; the
+    // rest of the resolution / shadowing / bare-specifier logic is identical
+    // to S3-C4 above.
+    for (const localName of defaultIdentReexports) {
+      const barrelSymId = `symbol:${relPath}#default`;
+      if (localSymbolIds.has(barrelSymId)) continue;
+      const binding = importBindings.get(localName);
+      if (!binding) continue;
+      if (!binding.specifier.startsWith(".")) continue;
+      const resolved = resolveRelativeImport(filePath, binding.specifier, ctx);
+      if (!resolved) continue;
+      const targetRel = relative(rootDir, resolved);
+      const { originBinding, edgeTarget } = mapS3OriginBinding(binding, targetRel);
+      nodes.push({
+        id: barrelSymId,
+        kind: "symbol",
+        filePath: relPath,
+        contentHash: synthReexportHash(targetRel, originBinding, "default"),
+      });
+      localSymbolIds.add(barrelSymId);
+      edges.push({
+        source: barrelSymId,
+        target: edgeTarget,
+        kind: "imports",
+        provenances: ["ts-import"],
+      });
+    }
+  }
+
+  return { starExports };
+}
+
+// specs/018 §4 origin-binding table for S3 (both C3 and C4 forms). Maps the
+// resolved ImportBinding to (originBinding-name, edge target-id) exactly per
+// the design's table:
+//   default    → "default" / `symbol:target#default`
+//   named y    → y         / `symbol:target#y`
+//   namespace  → "*"        / `file:target`
+// Kept as one helper so the two S3 loops share a single mapping and the
+// hash-input contract (`[targetRel, originBinding, exportedName]`) never
+// drifts between them.
+function mapS3OriginBinding(
+  binding: ImportBinding,
+  targetRel: string,
+): { originBinding: string; edgeTarget: string } {
+  if (binding.kind === "default") {
+    return { originBinding: "default", edgeTarget: `symbol:${targetRel}#default` };
+  }
+  if (binding.kind === "namespace") {
+    return { originBinding: "*", edgeTarget: `file:${targetRel}` };
+  }
+  return {
+    originBinding: binding.imported,
+    edgeTarget: `symbol:${targetRel}#${binding.imported}`,
+  };
 }
 
 // ---------------------------------------------------------------------------

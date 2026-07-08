@@ -44,6 +44,15 @@ export interface TsFragment {
   contentHash: string;
   nodes: GraphNode[];
   edges: GraphEdge[];
+  // specs/018 §3 side-channel — rootDir-relative resolved targets of every
+  // plain `export * from` in this file (symbol mode + non-test only, source
+  // order, deduped by first occurrence). Consumed by the builder star-
+  // expansion pass to compute exported-name providers per barrel. Only the
+  // owning file's parse can compute this — the resolved rel path depends on
+  // the resolver context this file's parse used — so it MUST travel with
+  // the fragment; recomputing from edges alone would lose the plain-star vs.
+  // `export * as ns` distinction (both are `file:B → file:O` edges).
+  starExports?: string[];
 }
 
 export interface ParseCacheData {
@@ -64,7 +73,16 @@ export interface ParseCacheData {
 // `import = require(...)` / `export import = require(...)` — previously
 // these produced no edges at all. Bump so a warm cache from a pre-fix
 // build cannot serve stale empty edges for files that use CJS-style TS.
-const SCHEMA_VERSION = 3;
+// v4 (issues #179 / #188, specs/018): parser now materializes per-symbol
+// nodes for `export * as ns from` (S2) and source-null re-exports of
+// imported identifiers (`export default X` / `export { X }` — S3), and
+// carries a `starExports` side-channel on TsFragment consumed by the
+// builder's star-expansion pass (S1). Two independent reasons to bump:
+// (a) old fragments lack `starExports`, so a warm cache from a pre-fix
+// build would silently skip star expansion in the builder and diverge
+// from a cold rebuild (INV-L4); (b) parser node/edge output itself
+// changed for S2/S3 files.
+const SCHEMA_VERSION = 4;
 const CACHE_RELDIR = join("node_modules", ".cache", "artgraph");
 const CACHE_FILENAME = "parse-cache.json";
 
