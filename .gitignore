@@ -13,3 +13,6 @@ templates/graph/vendor/
 !.claude/skills/speckit-*/
 # CLAUDE.md is user-editable — each maintainer keeps a local copy. Not tracked.
 CLAUDE.md
+
+# Internal-only docs live in the private mori-shin-x/artgraph-internal repo.
+docs/internal/
