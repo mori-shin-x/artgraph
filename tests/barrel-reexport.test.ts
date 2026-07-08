@@ -819,6 +819,15 @@ describe("specs/018 T7 ambiguous star — drop + file-grain fail-safe (§7 D3)",
     expect(graph.nodes.has("symbol:src/b.ts#x")).toBe(false);
     // Consumer edge lands in phantom-repair — fail-open closed at file grain.
     expect(warnings.some((w) => w.type === "phantom-import-repaired")).toBe(true);
+    // Design §7 D3: ambiguous drop still keeps file-grain REQ reachability via
+    // the phantom-repair fail-safe (file:consumer → file:b → file:{o1,o2} →
+    // symbol:{o1,o2}#x → REQ-{501,502}). Consumer's blast radius widens to
+    // file grain — never fail-open (no REQs reached) — so BOTH origin REQs
+    // remain reachable. Pins the fail-open-closed contract distinct from the
+    // per-symbol precision path exercised by T1–T6 above.
+    const reqs = impactReqs(root, "src/c.ts");
+    expect(reqs).toContain("REQ-501");
+    expect(reqs).toContain("REQ-502");
   });
 });
 

@@ -416,6 +416,8 @@ export { arrow };
 export namespace NS { export const inner = 1; }
 
 export * from "./re-export-target.js";
+
+export * as ns from "./re-export-target.js";
 `,
     );
     write(root, "src/default-expr.ts", "const a = 1;\nexport default 42;\nexport const b = 2;\n");
@@ -508,8 +510,12 @@ export * from "./re-export-target.js";
     // re-export `export { qux } from …` now materializes a barrel symbol node
     // (`#qux`) hashed PER-SPECIFIER on the resolved origin path + local +
     // exported (\0-joined) — sibling specifier edits in the same `export { … }
-    // from` statement don't drift each other's hashes. Star re-exports still
-    // produce no per-name node (stay file-grain).
+    // from` statement don't drift each other's hashes. Note: at the parser
+    // layer, plain `export *` still produces no per-name node — per-symbol
+    // expansion for `export *` happens later in the builder (see
+    // src/graph/star-expansion.ts and tests/star-expansion.test.ts). specs/018
+    // S2 (`export * as ns from`) IS materialized at parse time — see the `ns`
+    // pin below.
     expect(symbolsOf(parseSymbol(rel), rel)).toEqual(
       expectedSymbols(rel, [
         ["default", "export default function defaultFn() { return 1; }"],
@@ -527,6 +533,13 @@ export * from "./re-export-target.js";
         ["NS", "export namespace NS { export const inner = 1; }"],
         // #177: barrel symbol -> hash source is targetRel\0local\0exported.
         ["qux", "src/re-export-target.ts\0qux\0qux"],
+        // specs/018 §6 S2: `export * as ns from "./m"` materialises a
+        // per-symbol barrel node for the namespace binding. Hash source is
+        // targetRel\0*\0ns (the "*" origin-binding sentinel is the same one
+        // S3-C4 uses for `import * as ns; export { ns }` — see the
+        // src/import-reexport.ts pin below). Emitted by the same reExports
+        // pass that emits `qux` above, in source order after it.
+        ["ns", "src/re-export-target.ts\0*\0ns"],
       ]),
     );
   });

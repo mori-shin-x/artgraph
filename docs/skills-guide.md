@@ -165,7 +165,7 @@ artgraph plan-coverage --gate --ignore REQ-003,REQ-007
 | `Files:` syntax | `src/auth.ts` | `src/auth.ts:validateToken` (file 単位も混在 OK) |
 | 想定ユーザー | 新規実装 / 大規模 refactor | 既存関数 1 個だけ修正する保守ケース |
 | 必要な scan 設定 | デフォルト (`mode: "file"`) | `.artgraph.json` で `"mode": "symbol"` |
-| barrel / re-export | OK 対応 | 静的 named/aliased re-export (`export { x } from` / `export { x as y } from` / `export type {} from`) と `export * from` チェーン (specs/018 §5、多段 barrel も 1 hop ずつ実体化) と source なし local re-export (`import { x } from "./m"; export { x }` / `export default X`、specs/018 §6 S3) はすべて per-symbol 解決。namespace import (`import * as`) / dynamic import (`import()`) / 曖昧 star (同名を供給する star が複数) は file-level fallback |
+| barrel / re-export | OK 対応 | 静的 named/aliased re-export (`export { x } from` / `export { x as y } from` / `export type {} from`)、`export * as ns from` (S2 namespace re-export、specs/018)、`export * from` チェーン (specs/018 §5、多段 barrel も 1 hop ずつ実体化)、source なし local re-export (`import { x } from "./m"; export { x }` / `export default X`、specs/018 §6 S3) はすべて per-symbol 解決。namespace import (`import * as`) / dynamic import (`import()`) / (a) 曖昧 star / (b) diamond 束縛同一性 / (c) `export = X` origin / (d) fatal syntax file / (e) exclude glob origin / (f) `@impl` を star statement 直上に配置 / (g) parser silent skip on unresolved re-exports は file-level fallback (詳細は `docs/architecture.md` §11 と `CHANGELOG.md`) |
 | 過剰検知の傾向 | 同 file 内の全 symbol を巻き込む | 当該 symbol からの forward 波及のみ |
 
 ### `.artgraph.json` の `mode` 設定例
