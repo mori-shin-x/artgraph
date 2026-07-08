@@ -33,7 +33,7 @@ Files:
 - tests/auth.test.ts
 ```
 
-規約の詳細(文法、Stage A / B parser、絶対 path の扱い等)は [`contracts/sdd-files-parser.md`](https://github.com/ShintaroMorimoto/artgraph/blob/main/specs/014-reinvent-impact-cli/contracts/sdd-files-parser.md) を参照。
+規約の詳細(文法、Stage A / B parser、絶対 path の扱い等)は [`contracts/sdd-files-parser.md`](https://github.com/mori-shin-x/artgraph/blob/main/specs/014-reinvent-impact-cli/contracts/sdd-files-parser.md) を参照。
 
 強制したいプロジェクトは `.artgraph.json` に以下を設定してください:
 
@@ -84,4 +84,4 @@ artgraph plan-coverage
 
 出力に暗黙波及 REQ が現れたら、上記「暗黙波及 REQ の調査結果記録」のフローに従って tasks.md を更新してください。
 
-**enforcement(`before_implement` hook で `plan-coverage --gate` を blocking する自動化)は本テンプレのスコープ外** です。spec 015 候補 ([#105](https://github.com/ShintaroMorimoto/artgraph/issues/105)) で扱う予定。
+**enforcement(`before_implement` hook で `plan-coverage --gate` を blocking する自動化)は本テンプレのスコープ外** です。spec 015 候補 ([#105](https://github.com/mori-shin-x/artgraph/issues/105)) で扱う予定。

@@ -27,4 +27,4 @@ See `<agent_skills_path>/<skill-name>/SKILL.md` for each Skill's full descriptio
 {{ARTGRAPH_EXEC}} doctor                 # diagnose distribution health
 ```
 
-For full CLI reference, run `{{ARTGRAPH_EXEC}} --help` or see https://github.com/ShintaroMorimoto/artgraph.
+For full CLI reference, run `{{ARTGRAPH_EXEC}} --help` or see https://github.com/mori-shin-x/artgraph.
