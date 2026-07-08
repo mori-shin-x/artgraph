@@ -1049,3 +1049,104 @@ describe("plan-coverage symbol-mode E2E — depends_on drift (T025 / SC-006)", (
     expect(drift).toEqual(["REQ-007"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// specs/018 T13 — `plan-coverage` with a `path:symbol` entry pointing at a
+// symbol reached ONLY through a plain `export *` chain. Before the builder
+// star-expansion pass (Phase 2), such an entry would either error as
+// `unresolvedSymbol` (barrel node absent) or, if resolved via file-grain
+// fail-safe, drift-flag the origin's REQ because `entryOriginIds` could not
+// follow the `imports` chain past a file→file edge. With star expansion the
+// barrel symbol is materialised and `entryOriginIds` walks `symbol→symbol`
+// hops to origin's `@impl`, so no false-positive drift.
+// ---------------------------------------------------------------------------
+
+describe("plan-coverage symbol-mode E2E — `export *` chain entry (specs/018 T13)", () => {
+  let tmpRoot: string;
+  afterEach(() => {
+    if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it("`Files: src/star.ts:validateToken` (star barrel) → originReqs contains origin's REQ, no drift", () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-pc-star-"));
+    mkdirSync(join(tmpRoot, "src"), { recursive: true });
+    mkdirSync(join(tmpRoot, "specs/auth"), { recursive: true });
+    mkdirSync(join(tmpRoot, ".specify/specs/star-demo"), { recursive: true });
+
+    // Origin symbol carries the `@impl`, and the barrel re-exports EVERY
+    // name via `export * from "./auth"`. Before specs/018 there was no
+    // `symbol:src/star.ts#validateToken` node and the entry either
+    // unresolved-symbolled or drift-flagged; now star expansion emits it.
+    writeFileSync(
+      join(tmpRoot, "src/auth.ts"),
+      "// @impl STAR-001\nexport function validateToken(t: string) { return !!t; }\n",
+    );
+    writeFileSync(join(tmpRoot, "src/star.ts"), 'export * from "./auth";\n');
+
+    writeFileSync(
+      join(tmpRoot, "specs/auth/design.md"),
+      [
+        "---",
+        "artgraph:",
+        '  node_id: "doc:star-design"',
+        "---",
+        "",
+        "# Star Design",
+        "",
+        "## Requirements",
+        "",
+        "- STAR-001: validateToken must reject empty bearer tokens.",
+        "",
+      ].join("\n"),
+    );
+
+    writeFileSync(
+      join(tmpRoot, ".specify/specs/star-demo/tasks.md"),
+      [
+        "# Tasks",
+        "",
+        "### T001: touch the star barrel",
+        "",
+        "Files: src/star.ts:validateToken",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(tmpRoot, ".specify/specs/star-demo/spec.md"),
+      "# Star Demo\n\n(no mentions)\n",
+    );
+
+    writeFileSync(
+      join(tmpRoot, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        mode: "symbol",
+      }),
+    );
+
+    const result = runPlanCoverage({
+      repoRoot: tmpRoot,
+      specDir: join(tmpRoot, ".specify/specs/star-demo"),
+      tasksPath: join(tmpRoot, ".specify/specs/star-demo/tasks.md"),
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    expect(g.sourceFile).toBe("src/star.ts");
+    expect(g.sourceSymbol).toBe("validateToken");
+    // impactReqs reaches STAR-001 via barrel → origin.
+    expect(g.impactReqs.map((r) => r.reqId)).toEqual(["STAR-001"]);
+    // Before specs/018 this was []; with star expansion + `entryOriginIds`
+    // symbol-hop traversal, the origin's @impl reaches originReqs.
+    expect(g.originReqs.map((r) => r.reqId)).toEqual(["STAR-001"]);
+    const drift = g.impactReqs
+      .map((r) => r.reqId)
+      .filter((id) => !g.originReqs.map((o) => o.reqId).includes(id));
+    expect(drift).toEqual([]);
+  });
+});

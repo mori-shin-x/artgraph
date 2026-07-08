@@ -146,13 +146,16 @@ export interface ImpactGroup {
    * symbol 起点で symbol が `@impl` claim を持たない、もしくは file 入力で
    * file-top `@impl` タグが無いケースは `[]`。
    *
-   * Barrel 例外 (issue #191): symbol 起点の場合、primary node に加えて
-   * `imports` エッジ (symbol → symbol) を transitively 辿った全 symbol
-   * ノードの `implements` エッジも union に含める。`export { x } from` 経由
-   * の barrel は自身に `implements` を持たず origin symbol にしか REQ
-   * 主張が無いため、この拡張がないと `impactReqs \ originReqs` が
+   * Barrel 例外 (issue #191 + specs/018): symbol 起点の場合、primary
+   * node に加えて `imports` エッジ (symbol → symbol) を transitively 辿った
+   * 全 symbol ノードの `implements` エッジも union に含める。`export { x }
+   * from` 経由の barrel は自身に `implements` を持たず origin symbol にしか
+   * REQ 主張が無いため、この拡張がないと `impactReqs \ originReqs` が
    * false-positive drift として出る。多段 barrel (index → sub → origin)
-   * も visited セット付き BFS で origin まで到達する。
+   * も visited セット付き BFS で origin まで到達する。specs/018 の builder
+   * star 展開により `export * from` チェーンも `symbol:B#name → symbol:O#name`
+   * エッジ列で繋がるため、`impact` と `plan-coverage` の両方で star 経由の
+   * 多段 barrel も同じ symbol→symbol BFS で origin の `@impl` に到達する。
    */
   originReqs: ReqEntry[];
 }
