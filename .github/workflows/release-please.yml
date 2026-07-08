@@ -1,0 +1,30 @@
+name: release-please
+
+# Automates version bumps + CHANGELOG.md updates + git tag creation via
+# Conventional Commits (see CONTRIBUTING.md "Releases"). On every push to
+# main, release-please inspects new commits and maintains a single open
+# "Release PR" that stages the next version. Merging the Release PR pushes
+# the version tag; npm publish is then a **separate manual step**
+# (workflow_dispatch on publish.yml) so a human always has the final say on
+# what actually goes to npm.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to open the Release PR, push version-bump commits to its
+      # branch, and later create the git tag on merge.
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
