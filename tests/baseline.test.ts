@@ -1,6 +1,14 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, utimesSync } from "node:fs";
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -199,7 +207,13 @@ describe("pruneStaleWorktrees liveness (A1)", () => {
     // Named after OUR OWN pid — trivially alive for the whole test, so this
     // exercises the general `isProcessAlive` liveness check (not just the
     // `pid === process.pid` fast path).
-    const liveWt = track(mkdtempSync(join(tmpdir(), `artgraph-baseline-${process.pid}-`)));
+    // realpathSync: on macOS, tmpdir() is under a symlink (/var/folders/...
+    // -> /private/var/folders/...); `git worktree add` records the
+    // resolved path, so comparing against the raw mkdtemp path would
+    // spuriously fail `baselineWorktrees()`'s `toContain` checks below.
+    const liveWt = track(
+      realpathSync(mkdtempSync(join(tmpdir(), `artgraph-baseline-${process.pid}-`))),
+    );
     execFileSync("git", ["worktree", "add", "--detach", liveWt, "HEAD"], {
       cwd: dir,
       stdio: "pipe",
@@ -218,7 +232,9 @@ describe("pruneStaleWorktrees liveness (A1)", () => {
     const config = loadConfig(dir);
     // No liveness signal available for this naming — must be judged on
     // mtime alone, and "just created" must never be reclaimed.
-    const staleWt = track(mkdtempSync(join(tmpdir(), "artgraph-baseline-")));
+    // realpathSync: see the liveWt comment above — git resolves symlinked
+    // tmpdirs (macOS) before recording the worktree path.
+    const staleWt = track(realpathSync(mkdtempSync(join(tmpdir(), "artgraph-baseline-"))));
     execFileSync("git", ["worktree", "add", "--detach", staleWt, "HEAD"], {
       cwd: dir,
       stdio: "pipe",
