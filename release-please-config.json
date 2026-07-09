@@ -6,7 +6,7 @@
       "package-name": "artgraph",
       "changelog-path": "CHANGELOG.md",
       "include-v-in-tag": true,
-      "bootstrap-sha": "43c31b29c54fc409f56a84e7eed983713151eba3",
+      "bootstrap-sha": "ffe249b7d25f070ad8becf119e40147675c69e38",
       "changelog-sections": [
         { "type": "feat", "section": "Features" },
         { "type": "fix", "section": "Bug Fixes" },
