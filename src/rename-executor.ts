@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
+import { globSync } from "glob";
 import {
   rewriteFile,
   rewriteImplTags,
@@ -18,7 +19,7 @@ import type { LockChange } from "./rename-lock.js";
 import { readLock } from "./lock.js";
 import { scan, reconcile } from "./scan.js";
 import { loadConfig } from "./config.js";
-import { getGitTrackedFiles } from "./diff.js";
+import { globCodeFiles } from "./parsers/typescript.js";
 import { assertValidTargetId } from "./rename-validate-id.js";
 import type { ArtgraphConfig, LockFile } from "./types.js";
 
@@ -45,6 +46,10 @@ export interface RenameResult {
   to?: string;
   sourceIds?: string[];
   intoIds?: string[];
+  // How many files were enumerated and scanned for references (issue #212):
+  // makes an accidentally-empty scan scope visible in `--dry-run`/JSON output
+  // instead of silently reporting success over zero files.
+  filesScanned: number;
   changes: RewriteChange[];
   lockChanges: LockChange[];
   warnings: RenameWarning[];
@@ -63,8 +68,27 @@ function filterRelevantFiles(files: string[]): string[] {
   return files.filter((f) => RELEVANT_EXTENSIONS.has(extOf(f)));
 }
 
-function relevantTrackedFiles(rootDir: string): string[] {
-  return filterRelevantFiles(getGitTrackedFiles(rootDir));
+/**
+ * Enumerate rewrite-candidate files from the `.artgraph.json` patterns — the
+ * exact sources `scan` reads: spec markdown under `specDirs` plus code/test
+ * files matching `include`/`testPatterns` (see graph/builder.ts). Deliberately
+ * NOT `git ls-files`: rename must rewrite untracked (pre-commit) files exactly
+ * like committed ones (issue #212), and must never touch tracked files outside
+ * the configured scan scope such as `.claude/` skills or `.specify/` templates
+ * (issue #213). Returned paths are root-relative and sorted for deterministic
+ * change ordering.
+ */
+function enumerateRewriteFiles(rootDir: string, config: ArtgraphConfig): string[] {
+  const absPaths = new Set<string>();
+  for (const specDirName of config.specDirs) {
+    for (const file of globSync(resolve(rootDir, specDirName, "**/*.md"))) {
+      absPaths.add(resolve(file));
+    }
+  }
+  for (const file of globCodeFiles(rootDir, [...config.include, ...config.testPatterns])) {
+    absPaths.add(resolve(file));
+  }
+  return filterRelevantFiles([...absPaths].map((f) => relative(rootDir, f))).sort();
 }
 
 /**
@@ -154,8 +178,9 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
   // Rewrite each file
   const allChanges: RewriteChange[] = [];
   const filesToWrite = new Map<string, string>();
+  const scannedFiles = enumerateRewriteFiles(rootDir, config);
 
-  for (const relPath of relevantTrackedFiles(rootDir)) {
+  for (const relPath of scannedFiles) {
     const absPath = resolve(rootDir, relPath);
     if (!existsSync(absPath)) continue;
 
@@ -167,6 +192,17 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
     }
   }
 
+  // Safety valve (issue #212): the graph knows `from`, so at least one scanned
+  // file must carry a rewritable reference. Zero hits means the enumeration
+  // and the scan disagree — report the failure loudly instead of "success".
+  if (allChanges.length === 0) {
+    throw new Error(
+      `ID "${from}" was not found in any of the ${scannedFiles.length} files matched by ` +
+        `.artgraph.json include/specDirs/testPatterns — nothing was rewritten. ` +
+        `Check that the files referencing "${from}" are covered by those patterns.`,
+    );
+  }
+
   // Project lock changes (also the source of truth for dry-run reporting).
   const lockChanges = projectLockChanges(rootDir, config, (lock) => renameLockKey(lock, from, to));
 
@@ -176,6 +212,7 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
     operation: "rename",
     from,
     to,
+    filesScanned: scannedFiles.length,
     changes: allChanges,
     lockChanges,
     warnings: [],
@@ -219,10 +256,11 @@ export function executeSplit(
   const allChanges: RewriteChange[] = [];
   const warnings: RenameWarning[] = [];
   const filesToWrite = new Map<string, string>();
+  const scannedFiles = enumerateRewriteFiles(rootDir, config);
 
   const implRe = /\/\/[^\S\n]*@impl[^\S\n]+/;
 
-  for (const relPath of relevantTrackedFiles(rootDir)) {
+  for (const relPath of scannedFiles) {
     const absPath = resolve(rootDir, relPath);
     if (!existsSync(absPath)) continue;
 
@@ -261,6 +299,17 @@ export function executeSplit(
     }
   }
 
+  // Safety valve (issue #212): if no scanned file carried the split source —
+  // neither a spec definition (change) nor a code `@impl` (warning) — the
+  // split would only touch the lock and report success. Fail loudly instead.
+  if (allChanges.length === 0 && warnings.length === 0) {
+    throw new Error(
+      `ID "${splitId}" was not found in any of the ${scannedFiles.length} files matched by ` +
+        `.artgraph.json include/specDirs/testPatterns — nothing was rewritten. ` +
+        `Check that the files referencing "${splitId}" are covered by those patterns.`,
+    );
+  }
+
   const lockChanges = projectLockChanges(rootDir, config, (lock) =>
     splitLockKey(lock, splitId, intoIds),
   );
@@ -272,6 +321,7 @@ export function executeSplit(
     from: splitId,
     sourceIds: [splitId],
     intoIds,
+    filesScanned: scannedFiles.length,
     changes: allChanges,
     lockChanges,
     warnings,
@@ -316,8 +366,9 @@ export function executeMerge(
 
   const allChanges: RewriteChange[] = [];
   const filesToWrite = new Map<string, string>();
+  const scannedFiles = enumerateRewriteFiles(rootDir, config);
 
-  for (const relPath of relevantTrackedFiles(rootDir)) {
+  for (const relPath of scannedFiles) {
     const absPath = resolve(rootDir, relPath);
     if (!existsSync(absPath)) continue;
 
@@ -358,6 +409,18 @@ export function executeMerge(
     }
   }
 
+  // Safety valve (issue #212): when there are IDs to collapse but no scanned
+  // file carried any of them, the merge would only touch the lock and report
+  // success. Fail loudly instead. (A degenerate `--merge X --into X` has
+  // nothing to rewrite by definition and is left to the presenter.)
+  if (idsToRewrite.length > 0 && allChanges.length === 0) {
+    throw new Error(
+      `None of the IDs ${idsToRewrite.map((id) => `"${id}"`).join(", ")} were found in any of ` +
+        `the ${scannedFiles.length} files matched by .artgraph.json include/specDirs/testPatterns — ` +
+        `nothing was rewritten. Check that the files referencing them are covered by those patterns.`,
+    );
+  }
+
   const lockChanges = projectLockChanges(rootDir, config, (lock) =>
     mergeLockKeys(lock, mergeIds, intoId),
   );
@@ -369,6 +432,7 @@ export function executeMerge(
     to: intoId,
     sourceIds: mergeIds,
     intoIds: [intoId],
+    filesScanned: scannedFiles.length,
     changes: allChanges,
     lockChanges,
     warnings: [],

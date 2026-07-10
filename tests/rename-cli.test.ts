@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { mkdtempSync, cpSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, cpSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { runAt, type RunResult } from "./helpers.js";
 
@@ -374,6 +374,108 @@ describe("CLI: rename --merge/--into", () => {
     expect(exitCode).not.toBe(0);
     expect(stderr).toMatch(/invalid target id/i);
   });
+});
+
+// ---------------------------------------------------------------------------
+// issue #212 — file enumeration is `.artgraph.json`-pattern based, not
+// git-tracked. Untracked (pre-commit) files must be rewritten like committed
+// ones, a zero-hit scan must fail loudly, and JSON output must expose the
+// scanned-file count.
+// ---------------------------------------------------------------------------
+describe("CLI: rename enumeration ignores git tracking state (#212)", () => {
+  /** Fixture copy + config, WITHOUT any commit — files exist but are untracked. */
+  function prepareBareDir(withGit: boolean): string {
+    const tmp = mkdtempSync(resolve(tmpdir(), "artgraph-rename-untracked-"));
+    tempDirs.push(tmp);
+    cpSync(RENAME_FIXTURE, tmp, { recursive: true });
+    writeFileSync(
+      resolve(tmp, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        testPatterns: ["tests/**/*.test.ts"],
+        lockFile: ".trace.lock",
+      }),
+    );
+    if (withGit) execFileSync("git", ["init"], { cwd: tmp, stdio: "pipe" });
+    return tmp;
+  }
+
+  it(
+    "rewrites untracked (never committed) files instead of silently no-opping",
+    { timeout: 30000 },
+    async () => {
+      // `git init` only — the exact state of a Spec Kit specify→implement flow
+      // before the first `git add`, which used to be a silent no-op.
+      const tmp = prepareBareDir(true);
+      await runAt(tmp, ["reconcile"]);
+
+      const { exitCode } = await runCli(["rename", "--from", "REQ-001", "--to", "REQ-100"], tmp);
+      expect(exitCode).toBe(0);
+
+      const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
+      expect(spec).toContain("REQ-100: ユーザー認証");
+      expect(spec).not.toMatch(/^- REQ-001:/m);
+      const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
+      expect(src).toContain("@impl REQ-100");
+      expect(src).not.toContain("@impl REQ-001");
+      const test = readFileSync(resolve(tmp, "tests/feature.test.ts"), "utf-8");
+      expect(test).toContain("[REQ-100]");
+
+      const lock = JSON.parse(readFileSync(resolve(tmp, ".trace.lock"), "utf-8"));
+      expect(lock["REQ-100"]).toBeDefined();
+      expect(lock["REQ-001"]).toBeUndefined();
+    },
+  );
+
+  it("works in a directory that is not a git repository at all", { timeout: 30000 }, async () => {
+    // Used to die with `Error: Failed to run git ls-files`.
+    const tmp = prepareBareDir(false);
+    await runAt(tmp, ["reconcile"]);
+
+    const { exitCode } = await runCli(["rename", "--from", "REQ-001", "--to", "REQ-100"], tmp);
+    expect(exitCode).toBe(0);
+    expect(readFileSync(resolve(tmp, "src/feature.ts"), "utf-8")).toContain("@impl REQ-100");
+  });
+
+  it("reports filesScanned in JSON output, including --dry-run", { timeout: 30000 }, async () => {
+    const tmp = await prepareTempDir();
+    const { exitCode, stdout } = await runCli(
+      ["rename", "--from", "REQ-001", "--to", "REQ-100", "--dry-run", "--format", "json"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    // Fixture scope: specs/feature.md + src/feature.ts + tests/feature.test.ts.
+    expect(result.filesScanned).toBe(3);
+    expect(result.applied).toBe(false);
+  });
+
+  it(
+    "fails (non-zero) when --from exists in the graph but no scanned file is rewritable",
+    { timeout: 30000 },
+    async () => {
+      // A kiro heading req can only be renamed to another `Requirement-N` ID;
+      // renaming it to `REQ-500` finds zero rewritable references. This used to
+      // report success while touching nothing but the lock (safety valve #212).
+      const tmp = await prepareTempDir();
+      writeFileSync(
+        resolve(tmp, "specs/kiro.md"),
+        ["# Kiro spec", "", "### Requirement 1: 認証フロー", ""].join("\n"),
+        "utf-8",
+      );
+      await runAt(tmp, ["reconcile"]);
+      const before = readFileSync(resolve(tmp, "specs/kiro.md"), "utf-8");
+
+      const { exitCode, stderr } = await runCli(
+        ["rename", "--from", "Requirement-1", "--to", "REQ-500"],
+        tmp,
+      );
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toMatch(/was not found in any of the \d+ files/);
+      expect(readFileSync(resolve(tmp, "specs/kiro.md"), "utf-8")).toBe(before);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

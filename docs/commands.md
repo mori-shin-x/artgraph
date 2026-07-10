@@ -128,7 +128,9 @@ artgraph reconcile
 Renames, splits or merges a requirement ID and rewrites **every** reference to it
 (spec list items / headings, `@impl` tags, test tags, frontmatter
 `depends_on` / `derives_from`, and `.trace.lock` keys) in one pass, limited to
-git-tracked files.
+the files `.artgraph.json` puts in scan scope (`specDirs` markdown plus
+`include` / `testPatterns` code and tests). Git tracking state is irrelevant:
+uncommitted and untracked files are rewritten too.
 
 ```bash
 artgraph rename --from REQ-001 --to REQ-100
@@ -140,8 +142,8 @@ artgraph rename --from REQ-001 --to REQ-100 --format json
 
 Notes:
 
-- **Always commit first** — rename writes to tracked files in place. Use
-  `--dry-run` to preview.
+- **Always commit first** — rename writes files in place (untracked ones
+  included). Use `--dry-run` to preview.
 - **Target IDs are validated**: they must match the requirement-ID grammar
   (`REQ-001`, `auth/FR-2`, `Requirement-3`) or the `doc:` prefix, so the
   renamed ID is guaranteed to be re-discoverable by the next scan.
