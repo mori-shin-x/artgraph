@@ -724,6 +724,127 @@ describe("runDoctor — D-adj-1: throws on unknown agent id", () => {
   });
 });
 
+describe("runDoctor — config.agents cross-check (spec 013 follow-up, #158)", () => {
+  let proj: ReturnType<typeof createFreshProject>;
+
+  beforeEach(() => {
+    proj = createFreshProject();
+  });
+
+  afterEach(() => {
+    proj.cleanup();
+  });
+
+  function readConfig(): Record<string, unknown> {
+    return JSON.parse(readFileSync(join(proj.dir, ".artgraph.json"), "utf-8"));
+  }
+
+  function writeConfig(patch: Record<string, unknown>): void {
+    const config = readConfig();
+    writeFileSync(
+      join(proj.dir, ".artgraph.json"),
+      JSON.stringify({ ...config, ...patch }, null, 2) + "\n",
+    );
+  }
+
+  it("emits config-missing-agents-field when config has no agents and disk has at least one agent", () => {
+    // initProject persists `agents` by default now (#158) — strip it back off
+    // to simulate a legacy config predating this feature.
+    initProject(proj.dir, ["claude"]);
+    const config = readConfig();
+    delete config.agents;
+    writeFileSync(join(proj.dir, ".artgraph.json"), JSON.stringify(config, null, 2) + "\n");
+
+    const report = runDoctor({ rootDir: proj.dir });
+    const f = findFinding(report.findings, (x) => x.kind === "config-missing-agents-field");
+    expect(f, JSON.stringify(report.findings, null, 2)).toBeDefined();
+    expect(f!.severity).toBe("pass");
+    expect(f!.agent).toBeNull();
+    expect(f!.message).toContain("--agents=<csv>");
+    // Advisory only — must not flip the exit code.
+    expect(report.summary.failCount).toBe(0);
+  });
+
+  it("does not emit config-missing-agents-field once the agents field is persisted", () => {
+    initProject(proj.dir, ["claude"]);
+    expect(readConfig().agents).toEqual(["claude"]);
+    const report = runDoctor({ rootDir: proj.dir });
+    const f = findFinding(report.findings, (x) => x.kind === "config-missing-agents-field");
+    expect(f).toBeUndefined();
+  });
+
+  it("fires agent-recorded-but-missing when config lists an id but disk lacks its distribution dir", () => {
+    initProject(proj.dir, ["claude"]);
+    writeConfig({ agents: ["claude", "codex"] }); // codex never distributed
+    const report = runDoctor({ rootDir: proj.dir });
+    const f = findFinding(report.findings, (x) => x.kind === "agent-recorded-but-missing");
+    expect(f, JSON.stringify(report.findings, null, 2)).toBeDefined();
+    expect(f!.severity).toBe("fail");
+    expect(f!.agent).toBe("codex");
+    expect(f!.message).toContain("codex");
+    expect(f!.message).toContain("--force --agents=codex");
+    expect(report.summary.failCount).toBeGreaterThanOrEqual(1);
+    // The obsolete generic finding must not double-fire for the same agent.
+    expect(
+      findFinding(report.findings, (x) => x.kind === "distribution-absent" && x.agent === "codex"),
+    ).toBeUndefined();
+  });
+
+  it("fires agent-installed-not-recorded when config lists a subset and disk has more", () => {
+    initProject(proj.dir, ["claude", "codex"]);
+    writeConfig({ agents: ["claude"] }); // codex is installed but not recorded
+    const report = runDoctor({ rootDir: proj.dir });
+    const f = findFinding(report.findings, (x) => x.kind === "agent-installed-not-recorded");
+    expect(f, JSON.stringify(report.findings, null, 2)).toBeDefined();
+    expect(f!.severity).toBe("pass");
+    expect(f!.agent).toBe("codex");
+    expect(f!.message).toContain("codex");
+    // Advisory only — must not flip the exit code (codex's own distribution
+    // is byte-identical, just unrecorded).
+    expect(report.summary.failCount).toBe(0);
+    // The unrecorded-but-installed agent still gets full diagnostics and
+    // shows up in the summary, matching legacy on-disk-observation coverage.
+    expect(report.summary.agents).toContain("codex");
+    expect(
+      report.findings.some((x) => x.agent === "codex" && x.kind === "skill-file-present"),
+    ).toBe(true);
+  });
+
+  it("emits no new #158 finding kinds when config.agents matches on-disk exactly", () => {
+    initProject(proj.dir, ["claude", "codex"]);
+    expect(readConfig().agents).toEqual(["claude", "codex"]);
+    const report = runDoctor({ rootDir: proj.dir });
+    const newKinds = report.findings.filter((f) =>
+      [
+        "config-missing-agents-field",
+        "agent-recorded-but-missing",
+        "agent-installed-not-recorded",
+      ].includes(f.kind),
+    );
+    expect(newKinds, JSON.stringify(newKinds, null, 2)).toEqual([]);
+  });
+
+  it("opts.agents explicit override skips the config cross-check entirely", () => {
+    initProject(proj.dir, ["claude"]);
+    // Config only records claude, but the caller explicitly asks about codex
+    // (never distributed). The explicit-override path must still report the
+    // legacy `distribution-absent` finding, not `agent-recorded-but-missing`,
+    // and must not synthesize any #158 finding kind.
+    const report = runDoctor({ rootDir: proj.dir, agents: ["codex"] });
+    const newKinds = report.findings.filter((f) =>
+      [
+        "config-missing-agents-field",
+        "agent-recorded-but-missing",
+        "agent-installed-not-recorded",
+      ].includes(f.kind),
+    );
+    expect(newKinds).toEqual([]);
+    const absent = findFinding(report.findings, (x) => x.kind === "distribution-absent");
+    expect(absent, JSON.stringify(report.findings, null, 2)).toBeDefined();
+    expect(absent!.agent).toBe("codex");
+  });
+});
+
 describe("runDoctor — dogfood (this repo)", () => {
   // Cheap standing guard for SC-002 byte-identical distribution: run the
   // production doctor engine against the repo root itself. When template ↔

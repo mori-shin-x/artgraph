@@ -8,6 +8,7 @@ import {
   type ReqPatternConfig,
   type TaskConventionPreset,
 } from "./types.js";
+import { AGENT_IDS, type AgentId } from "./agents/descriptors.js";
 
 const CONFIG_FILE = ".artgraph.json";
 
@@ -351,6 +352,35 @@ function validateIgnoreIdPrefixes(value: unknown): string[] | undefined {
   return out;
 }
 
+// spec 013 follow-up (#158) — `.artgraph.json` `agents` field validation.
+// Mirrors `validateIgnoreIdPrefixes`: `undefined` round-trips as `undefined`
+// (legacy configs pre-dating this field), everything else must be a
+// deduped array of Tier 1 `AgentId` strings. Returned alpha-sorted so the
+// persisted array (and every downstream cross-check) has a stable order
+// regardless of how `init --agents=<csv>` was invoked.
+function validateAgents(value: unknown): AgentId[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error("Invalid agents: must be an array of strings");
+  }
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry === "") {
+      throw new Error("Invalid agents: every entry must be a non-empty string");
+    }
+    if (!(AGENT_IDS as readonly string[]).includes(entry)) {
+      throw new Error(
+        `Invalid agents: "${entry}" is not a supported agent id (allowed: ${AGENT_IDS.join(", ")})`,
+      );
+    }
+    if (seen.has(entry)) {
+      throw new Error(`Invalid agents: duplicate entry "${entry}"`);
+    }
+    seen.add(entry);
+  }
+  return [...seen].sort() as AgentId[];
+}
+
 // spec 014 — `.artgraph.json` `planCoverage` section validation. Currently
 // only `requireFilesSection: boolean` is recognised; unknown fields are
 // silently dropped (no warning) so the schema can grow without breaking
@@ -441,6 +471,8 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
 
   const planCoverage = validatePlanCoverage(raw.planCoverage);
 
+  const agents = validateAgents(raw.agents);
+
   const lockFile = raw.lockFile ?? DEFAULT_CONFIG.lockFile;
   const resolvedLock = resolve(rootDir, lockFile);
   const relFromRoot = relative(rootDir, resolvedLock);
@@ -462,5 +494,6 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
     taskConventions: raw.taskConventions,
     disableBuiltinTaskConventions: disabledBuiltins,
     planCoverage,
+    agents,
   };
 }

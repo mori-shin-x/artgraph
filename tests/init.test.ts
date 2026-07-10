@@ -1076,3 +1076,97 @@ describe("runInit — packageManager recording (spec 015, FR-007/008, SC-002)", 
     expect(readPm()).toBe("pnpm");
   });
 });
+
+describe("runInit — agents field persistence (#158)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(tmp);
+  });
+
+  const readAgents = (): unknown =>
+    JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8")).agents;
+
+  // #158 review (BLOCKER) — `--minimal` gates off every distribution stage
+  // (skills AND agent-context), so no per-agent artifact is ever installed.
+  // Persisting `agents` in that case would create a self-inflicted
+  // `agent-recorded-but-missing` FAIL on the next `doctor` run. This test
+  // used to assert the opposite (field written); updated to match the new
+  // stage-gated persistence semantic (src/init.ts `anyDistributionStageActive`).
+  it("fresh init with --minimal does NOT write the agents field, even when --agents=claude,cursor is given (no distribution stage ran)", () => {
+    runInit(tmp, { minimal: true, agents: ["cursor", "claude"] });
+    const config = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
+    expect("agents" in config).toBe(false);
+  });
+
+  it("fresh init without --agents does NOT write an agents field", () => {
+    runInit(tmp, { minimal: true });
+    const config = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
+    expect("agents" in config).toBe(false);
+  });
+
+  // #158 review — these two union/legacy-config tests need at least one
+  // distribution stage active to exercise persistence at all post-fix
+  // (`--minimal` no longer triggers a write). Swapped `minimal: true` for
+  // `noScan/noHooks/noIntegrate` so the skills + agent-context stages stay
+  // on (cheap on an empty tmp dir — no project content required) while the
+  // heavier stages we don't care about here stay off.
+  it('--force --agents=cursor on an existing config with agents:["claude"] unions to ["claude","cursor"] (skills stage active)', () => {
+    writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify({ agents: ["claude"] }));
+    runInit(tmp, {
+      force: true,
+      noScan: true,
+      noHooks: true,
+      noIntegrate: true,
+      agents: ["cursor"],
+    });
+    expect(readAgents()).toEqual(["claude", "cursor"]);
+  });
+
+  it('--force --agents=cursor on an existing legacy config (no agents field) writes just ["cursor"] (skills stage active)', () => {
+    writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify({ include: ["src/**/*.ts"] }));
+    runInit(tmp, {
+      force: true,
+      noScan: true,
+      noHooks: true,
+      noIntegrate: true,
+      agents: ["cursor"],
+    });
+    expect(readAgents()).toEqual(["cursor"]);
+  });
+
+  it("--force re-init with no --agents preserves a previously persisted agents field", () => {
+    writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify({ agents: ["claude", "codex"] }));
+    runInit(tmp, { force: true, minimal: true });
+    expect(readAgents()).toEqual(["claude", "codex"]);
+  });
+
+  // #158 review — Fix 1's documented corner case: a `--force` re-run that
+  // still passes `--agents=<X>` but opts out of BOTH distribution stages via
+  // the granular flags (as opposed to `--minimal`, tested above) must NOT
+  // union `agentsList` into the existing `config.agents` — nothing was
+  // actually installed for `cursor` this invocation, so recording it would
+  // be exactly the BLOCKER's self-inflicted `agent-recorded-but-missing`.
+  // The previously persisted set is carried through untouched.
+  it("--force --agents=cursor with --no-skills --no-agent-context preserves existing config.agents untouched (does not union in cursor)", () => {
+    writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify({ agents: ["claude"] }));
+    runInit(tmp, {
+      force: true,
+      noSkills: true,
+      noAgentContext: true,
+      agents: ["cursor"],
+    });
+    expect(readAgents()).toEqual(["claude"]);
+    expect(existsSync(join(tmp, ".cursor", "skills"))).toBe(false);
+  });
+
+  it("dedupes when the same agent id is requested again on --force", () => {
+    writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify({ agents: ["claude"] }));
+    runInit(tmp, { force: true, minimal: true, agents: ["claude"] });
+    expect(readAgents()).toEqual(["claude"]);
+  });
+});
