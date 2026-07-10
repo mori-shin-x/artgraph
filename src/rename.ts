@@ -15,7 +15,10 @@ export type ReferenceKind =
   | "test-tag"
   | "frontmatter-depends-on"
   | "annotation-target"
-  | "lock-key";
+  | "lock-key"
+  // spec 020 T017 (FR-016) — a `testName`/`suitePath` REQ ID rewritten inside
+  // a `.artgraph/trace/*.jsonl` shard (src/rename-trace.ts).
+  | "trace-shard";
 
 export interface RewriteChange {
   filePath: string;
