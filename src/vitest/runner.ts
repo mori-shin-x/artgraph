@@ -59,9 +59,15 @@ function stripBom(content: string): string {
   return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
 }
 
+// Exported (spec 020 T012) purely for `tests/hash-equivalence.test.ts`'s SSOT
+// equivalence pin against `src/parsers/typescript.ts`'s `hash(stripBom(...))`
+// — no runtime caller outside this file needs the content-only form.
+export function hashContent(content: string): string {
+  return createHash("sha256").update(stripBom(content)).digest("hex").slice(0, 16);
+}
+
 function hashFileContent(absPath: string): string {
-  const content = stripBom(readFileSync(absPath, "utf-8"));
-  return createHash("sha256").update(content).digest("hex").slice(0, 16);
+  return hashContent(readFileSync(absPath, "utf-8"));
 }
 
 // contract §hits: "テストファイル自身・node_modules が hits に現れない" — the
