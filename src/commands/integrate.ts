@@ -17,8 +17,11 @@ export function registerIntegrateCommand(program: Command): void {
     .description(
       "Integrate artgraph into an SDD tool's workflow (speckit | kiro), or 'list' to show providers",
     )
-    .option("--gate", "(speckit only) Add before_implement gate hook")
-    .option("--no-gate", "(speckit only) Remove before_implement gate hook")
+    .option(
+      "--gate",
+      "(speckit only) Wire before_implement as a BLOCKING gate (artgraph check --gate). Default wiring is a non-blocking check --diff preview. Note: on a brand-new spec the gate always fails until the first implementation lands.",
+    )
+    .option("--no-gate", "(speckit only) Remove artgraph's before_implement hook entirely")
     .option("--force", "Overwrite existing files")
     .option("--uninstall", "Remove the integration (delete files / hook entries)")
     .addOption(

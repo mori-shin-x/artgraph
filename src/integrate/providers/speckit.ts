@@ -15,6 +15,7 @@ import { loadTemplate } from "../templates.js";
 import {
   addHookEntry,
   addInstalled,
+  hasHookEntry,
   parseExtensionsYaml,
   removeAllArtgraphHooks,
   removeHookEntry,
@@ -70,7 +71,32 @@ const HOOK_ENTRIES = {
     description: "Verify artgraph traceability after implementation",
     condition: null,
   } satisfies HookEntry,
-  before_implement: {
+  /**
+   * Default `before_implement` wiring (issue #217): a NON-BLOCKING preview.
+   * `artgraph check --diff` exits 0 even when issues exist, so the
+   * implementer sees the current traceability state without the workflow
+   * being halted. The blocking variant below is a guaranteed exit 2 on a
+   * fresh spec (every REQ is still uncovered right before the first
+   * `/speckit-implement`), so blocking is strictly opt-in via `--gate`.
+   */
+  before_implement_info: {
+    extension: "artgraph",
+    command: "artgraph.check-diff",
+    enabled: true,
+    optional: true,
+    priority: 50,
+    prompt: "Preview artgraph traceability (check --diff, non-blocking) before implementing?",
+    description: "Preview artgraph traceability before implementation (non-blocking)",
+    condition: null,
+  } satisfies HookEntry,
+  /**
+   * Opt-in `before_implement` gate (`integrate speckit --gate`): blocking
+   * absolute check. NOTE (issue #217): on a brand-new spec this ALWAYS
+   * fails before the first implementation run — the extension README
+   * template documents that this is expected. The gating policy for
+   * in-progress work is tracked in issue #178.
+   */
+  before_implement_gate: {
     extension: "artgraph",
     command: "artgraph.check-gate",
     enabled: true,
@@ -217,15 +243,28 @@ export class SpecKitProvider implements IntegrationProvider {
       if (addHookEntry(doc, "after_implement", HOOK_ENTRIES.after_implement)) ymlChanged = true;
 
       if (opts.gate === true) {
-        if (addHookEntry(doc, "before_implement", HOOK_ENTRIES.before_implement)) {
+        // Explicit opt-in: wire (or upgrade the default preview entry to)
+        // the blocking gate.
+        if (addHookEntry(doc, "before_implement", HOOK_ENTRIES.before_implement_gate)) {
           ymlChanged = true;
         }
       } else if (opts.gate === false) {
         if (removeHookEntry(doc, "before_implement", "artgraph")) {
           ymlChanged = true;
         }
+      } else {
+        // gate === undefined (default, incl. `init` auto-integrate): wire the
+        // NON-BLOCKING preview hook, but only when artgraph has no
+        // before_implement entry yet — a previously chosen variant (e.g. an
+        // explicit `--gate` opt-in) must survive a plain re-install
+        // (issue #217).
+        if (
+          !hasHookEntry(doc, "before_implement", "artgraph") &&
+          addHookEntry(doc, "before_implement", HOOK_ENTRIES.before_implement_info)
+        ) {
+          ymlChanged = true;
+        }
       }
-      // gate === undefined: leave before_implement alone.
 
       if (ymlChanged) {
         const serialized = serializeExtensionsYaml(doc);
