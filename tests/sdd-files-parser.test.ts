@@ -331,6 +331,69 @@ describe("extractFiles — Stage B (regex fallback, entries shape)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Stage A scope boundary — flat checklist tasks (issue #219)
+// ---------------------------------------------------------------------------
+
+describe("extractFiles — Stage A boundary at checklist items (issue #219)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = makeTmpRoot();
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("inline Files: followed directly by the next checklist task does not swallow the task line", () => {
+    // Exact layout from issue #219: Spec Kit standard flat checklist, one
+    // blank line between the task and its Files: block, and the next task
+    // line right below the Files: header. Before the fix the T003 line was
+    // parsed as a bullet entry and surfaced as a bogus unresolvedFilePath.
+    const graph = makeGraph(["src/todo.ts", "src/cli.ts"]);
+    const text = [
+      "- [ ] T002 Define Todo type in src/todo.ts",
+      "",
+      "Files: src/todo.ts",
+      "- [ ] T003 Create CLI entry scaffold (argv parsing, command dispatch table, shared",
+      "  helpers) in src/cli.ts",
+      "",
+    ].join("\n");
+    const result = extractFiles(text, { graph, repoRoot: root });
+    expect(result.stage).toBe("files-section");
+    expect(paths(result)).toEqual(["src/todo.ts"]);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("bullet-form Files: scope ends at the next checklist item", () => {
+    const graph = makeGraph(["src/a.ts", "src/b.ts"]);
+    const text = [
+      "Files:",
+      "- src/a.ts",
+      "- src/b.ts",
+      "- [ ] T004 Implement feature (not a file entry)",
+    ].join("\n");
+    const result = extractFiles(text, { graph, repoRoot: root });
+    expect(paths(result)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("checked (`[x]` / `[X]`), `*`-bulleted, and indented checklist items all terminate the scope", () => {
+    const graph = makeGraph(["src/a.ts"]);
+    const markers = [
+      "- [x] T005 next task",
+      "- [X] T005 next task",
+      "* [ ] T005 next task",
+      "  - [ ] T005 next task",
+    ];
+    for (const marker of markers) {
+      const text = ["Files: src/a.ts", marker].join("\n");
+      const result = extractFiles(text, { graph, repoRoot: root });
+      expect(paths(result)).toEqual(["src/a.ts"]);
+      expect(result.diagnostics).toEqual([]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // taskBlocks (unchanged, but verified once for non-regression)
 // ---------------------------------------------------------------------------
 
