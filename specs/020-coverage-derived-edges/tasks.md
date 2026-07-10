@@ -37,9 +37,9 @@
 
 - [X] T008 [US1] **Red**: `tests/trace-ingest.test.ts` — REQ join と名前 join を固定: (a) describe 祖先継承・dedup が spec 006 の `extractReqTags` 規則と一致(⑦: `src/test-results.ts` の既存挙動を流用し二重実装しない)、(b) ②分岐組合せ: {passed, failed} × {タグあり, なし} × {シンボル解決可, 不可} の 8 通りで「green かつタグありかつ解決可」のみ symbol エッジ化(D6 / FR-006-007)、(c) ①境界: 排他 = **正確に 1 REQ**(FR-013)。REQ 数 = 1 → suggested、= 2 → silent(suggested にも infrastructure にも現れず、エッジは impact 到達に残る)、= `sharedThreshold`(既定 3)→ infrastructure 降格、(d) ⑥エッジ: 同名 export が同一ファイルに複数 / V8 合成名 (`<instance_members_initializer>`) / 無名 default → file 粒度フォールバックで REQ 到達は維持(fail-safe、SC-006)、クラス member 名 → クラス symbol へ集約、(e) ④例外: hits が消滅ファイルを指す(⑤: trace 取得後に `git rm`)→ dangling 診断、`include` 境界外ファイル → エッジ化しない、(f) N:M: 同一 REQ の複数テストの和集合(US1-4)
 - [X] T009 [US1] `src/trace/ingest.ts` + 名前表ビルダを実装して T008 を **Green** に(`extractSymbols` 再利用、data-model.md §2-3)
-- [ ] T010 [US2] **Red**: `tests/trace-cli.test.ts` — `artgraph trace status` / `trace report`: (a) 偽 `@impl REQ-003` を植えた fixture → `unexercisedClaims` に検出(SC-003 の Phase A 版)、排他実行+タグなし → `suggestedImpls`、共有ヘルパ → `infrastructure`(quickstart Phase A と同シナリオ)、(b) ④例外: shard ゼロ → exit 1 + runner 導入ガイダンス(FR-018 と同文言・対称)、(c) `--format json|text` 両出力(CLI 規約 Cat5)、(d) ⑤事故: stale shard(hashes 不一致)混在時に report が stale 件数を診断表示
-- [ ] T011 [US2] `src/commands/trace.ts` を実装し CLI に配線して T010 を **Green** に(グラフ / lock は**読み取りのみ・非改変**が Phase A の契約)
-- [ ] T012 ⑦回帰: 既存 full suite(`pnpm typecheck && pnpm test:unit && pnpm test:e2e && pnpm knip`)が **無変更で green** であることを確認 — Phase A は `scan`/`check`/`impact`/lock の出力に 1 byte も影響しないこと(SC-007 の Phase A 版)。knip で `src/vitest/` の隔離(CLI 本体からの import なし)を確認
+- [X] T010 [US2] **Red**: `tests/trace-cli.test.ts` — `artgraph trace status` / `trace report`: (a) 偽 `@impl REQ-003` を植えた fixture → `unexercisedClaims` に検出(SC-003 の Phase A 版)、排他実行+タグなし → `suggestedImpls`、共有ヘルパ → `infrastructure`(quickstart Phase A と同シナリオ)、(b) ④例外: shard ゼロ → exit 1 + runner 導入ガイダンス(FR-018 と同文言・対称)、(c) `--format json|text` 両出力(CLI 規約 Cat5)、(d) ⑤事故: stale shard(hashes 不一致)混在時に report が stale 件数を診断表示
+- [X] T011 [US2] `src/commands/trace.ts` を実装し CLI に配線して T010 を **Green** に(グラフ / lock は**読み取りのみ・非改変**が Phase A の契約)
+- [X] T012 ⑦回帰: 既存 full suite(`pnpm typecheck && pnpm test:unit && pnpm test:e2e && pnpm knip`)が **無変更で green** であることを確認 — Phase A は `scan`/`check`/`impact`/lock の出力に 1 byte も影響しないこと(SC-007 の Phase A 版)。knip で `src/vitest/` の隔離(CLI 本体からの import なし)を確認
 
 ---
 
