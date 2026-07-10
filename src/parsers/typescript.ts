@@ -64,10 +64,18 @@ interface IdMatchers {
 
 // For codeId, the whole match is the ID, so the constructed matchers below rely
 // on the token having no significance beyond what it matches.
+//
+// implRe: one `// @impl` line carries one or more IDs, separated by line-local
+// whitespace and/or commas — `@impl A B`, `@impl A, B`, `@impl A,B` are all
+// equivalent (issue #214: the comma is the notation first-time users reach
+// for; before it was accepted, `@impl A, B` silently dropped every ID after
+// the first). A trailing comma (`@impl A,`) is consumed into the capture and
+// ignored by the reqIdRe tokenization below, which extracts ID tokens
+// regardless of what separates them.
 function buildIdMatchers(codeId?: string): IdMatchers {
   const token = codeId ?? NAMESPACED_ID_TOKEN;
   return {
-    implRe: new RegExp(`//[^\\S\\n]*@impl[^\\S\\n]+((?:(?:${token})[^\\S\\n]*)+)`, "gm"),
+    implRe: new RegExp(`//[^\\S\\n]*@impl[^\\S\\n]+((?:(?:${token})(?:[^\\S\\n]|,)*)+)`, "gm"),
     reqIdRe: new RegExp(token, "g"),
     testReqRe: new RegExp(`\\[(?:${token})]`, "g"),
     testAnnotationRe: new RegExp(`req:\\s*["']?(${token})["']?`, "g"),

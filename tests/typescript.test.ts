@@ -1,5 +1,7 @@
-import { describe, it, expect } from "vitest";
-import { resolve } from "node:path";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { createTSParser } from "../src/parsers/typescript.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
@@ -262,5 +264,117 @@ describe("createTSParser (symbol mode)", () => {
 
     expect(implEdges).toHaveLength(1);
     expect(implEdges[0].source).toBe("file:src/utils.ts");
+  });
+});
+
+// Issue #214: `// @impl REQ-001, REQ-002` used to register only the FIRST ID
+// and silently drop the rest — the implRe separator accepted whitespace only.
+// Commas (with or without surrounding spaces, including a trailing comma) are
+// now a supported separator, equivalent to the space-separated and stacked
+// one-per-line notations.
+describe("createTSParser (@impl comma-separated IDs — issue #214)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  const implTargets = (
+    edges: Array<{ kind: string; source: string; target: string }>,
+    source: string,
+  ): string[] =>
+    edges
+      .filter((e) => e.kind === "implements" && e.source === source)
+      .map((e) => e.target)
+      .sort();
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-impl-comma-"));
+    // The exact reproduction from the issue: comma style vs stacked style.
+    write(
+      "src/repro.ts",
+      [
+        "// @impl REQ-901, REQ-902",
+        "export function commaStyle(): void {}",
+        "",
+        "// @impl REQ-903",
+        "// @impl REQ-904",
+        "export function stackedStyle(): void {}",
+        "",
+      ].join("\n"),
+    );
+    write(
+      "src/edge-cases.ts",
+      [
+        "// @impl REQ-001,REQ-002",
+        "export function noSpace(): void {}",
+        "",
+        "// @impl REQ-003,",
+        "export function trailingComma(): void {}",
+        "",
+        "// @impl REQ-004, REQ-005 REQ-006",
+        "export function mixedSeparators(): void {}",
+        "",
+        "// @impl ns/REQ-007, Requirement-8",
+        "export function namespacedAndKiro(): void {}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("registers EVERY comma-separated ID as an implements edge (issue repro)", () => {
+    const result = createTSParser(root, ["src/**/*.ts"]).parse();
+    expect(implTargets(result.edges, "file:src/repro.ts")).toEqual([
+      "REQ-901",
+      "REQ-902",
+      "REQ-903",
+      "REQ-904",
+    ]);
+  });
+
+  it("accepts no-space commas, a trailing comma, and mixed comma/space separators", () => {
+    const result = createTSParser(root, ["src/**/*.ts"]).parse();
+    expect(implTargets(result.edges, "file:src/edge-cases.ts")).toEqual([
+      "REQ-001",
+      "REQ-002",
+      "REQ-003",
+      "REQ-004",
+      "REQ-005",
+      "REQ-006",
+      "Requirement-8",
+      "ns/REQ-007",
+    ]);
+  });
+
+  it("binds every comma-separated ID to the tagged symbol in symbol mode", () => {
+    const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    expect(implTargets(result.edges, "symbol:src/repro.ts#commaStyle")).toEqual([
+      "REQ-901",
+      "REQ-902",
+    ]);
+    // The stacked notation keeps working exactly as before.
+    expect(implTargets(result.edges, "symbol:src/repro.ts#stackedStyle")).toEqual([
+      "REQ-903",
+      "REQ-904",
+    ]);
+  });
+
+  it("supports commas with a custom codeId token too", () => {
+    const customRoot = mkdtempSync(join(tmpdir(), "artgraph-impl-comma-custom-"));
+    try {
+      const abs = join(customRoot, "src/ids.ts");
+      mkdirSync(dirname(abs), { recursive: true });
+      writeFileSync(abs, "// @impl 123, 456,789\nexport function f(): void {}\n");
+      const result = createTSParser(customRoot, ["src/**/*.ts"], "file", "\\d+").parse();
+      expect(implTargets(result.edges, "file:src/ids.ts")).toEqual(["123", "456", "789"]);
+    } finally {
+      rmSync(customRoot, { recursive: true, force: true });
+    }
   });
 });

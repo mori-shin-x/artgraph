@@ -918,6 +918,81 @@ artgraph:
       }
     });
 
+    it("splits comma-separated @impl(A, B) into one implements edge per ID (issue #214)", () => {
+      // Pre-fix, `@impl(FR-001, FR-002)` emitted a SINGLE edge whose target
+      // was the literal string "FR-001, FR-002" — a node id that can never
+      // exist, so both requirements silently lost their task link.
+      const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-impl-comma");
+      mkdirSync(tmpDir, { recursive: true });
+      const file = resolve(tmpDir, "tasks.md");
+      writeFileSync(
+        file,
+        [
+          "# Tasks",
+          "",
+          "- [X] T600 comma list @impl(FR-001, FR-002)",
+          "- [ ] T601 no space @impl(FR-003,FR-004)",
+          "- [ ] T602 trailing comma @impl(FR-005,)",
+          "- [ ] T603 commas only @impl(, )",
+          "",
+        ].join("\n"),
+      );
+      try {
+        const result = parseMarkdown(file);
+        const impl = result.edges
+          .filter((e) => e.kind === "implements")
+          .map((e) => `${e.source}->${e.target}`)
+          .sort();
+        expect(impl).toEqual([
+          "T600->FR-001",
+          "T600->FR-002",
+          "T601->FR-003",
+          "T601->FR-004",
+          "T602->FR-005",
+        ]);
+        for (const e of result.edges.filter((e) => e.kind === "implements")) {
+          expect(e.provenances).toEqual(["task-tag"]);
+        }
+      } finally {
+        unlinkSync(file);
+        rmdirSync(tmpDir);
+      }
+    });
+
+    it("splits comma lists captured by a custom verifiesTagRe as well (issue #214)", () => {
+      // Built-in presets capture one ID per match (spec-kit brackets, kiro's
+      // per-ID lookbehind), but a custom preset whose verifiesTagRe captures a
+      // whole `A, B` run must yield one verifies edge per ID — consistent with
+      // the implements-tag comma grammar.
+      const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-verify-comma");
+      mkdirSync(tmpDir, { recursive: true });
+      const file = resolve(tmpDir, "tasks.md");
+      writeFileSync(
+        file,
+        ["# Tasks", "", "- OS-100 custom task @verify(FR-010, FR-011)", ""].join("\n"),
+      );
+      try {
+        const result = parseMarkdown(file, {
+          taskConventions: [
+            {
+              name: "custom-verify",
+              fileStems: ["tasks"],
+              taskIdRe: "^(OS-\\d+)\\b",
+              verifiesTagRe: "@verify\\(([^)\\n]+)\\)",
+            },
+          ],
+        });
+        const verifies = result.edges
+          .filter((e) => e.kind === "verifies")
+          .map((e) => `${e.source}->${e.target}`)
+          .sort();
+        expect(verifies).toEqual(["OS-100->FR-010", "OS-100->FR-011"]);
+      } finally {
+        unlinkSync(file);
+        rmdirSync(tmpDir);
+      }
+    });
+
     it("@impl target is single-line — newline inside parens does NOT escape (M1)", () => {
       const tmpDir = resolve(FIXTURE_DIR, "tasks-tmp-m1");
       mkdirSync(tmpDir, { recursive: true });
