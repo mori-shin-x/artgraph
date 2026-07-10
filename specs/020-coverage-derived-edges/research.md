@@ -71,3 +71,53 @@ export default class PerTestCoverageRunner extends VitestTestRunner {
 - 原則 I: エッジ導出元の列挙「frontmatter 宣言、ID タグ、TS AST のいずれか」に「テスト実行トレース成果物」が含まれない → MINOR 改訂が必要。決定性の実体(同一入力 → 同一出力)は `graph = f(files, trace)` の形式化で維持。
 - 原則 III: カバレッジ三段階 `untagged / impl-only / verified` に `exercised`(オプトイン時のみ)を追加 → MINOR 改訂が必要。「タグだけで安心する」を防ぐ非対称信頼境界という原則の意図は、証拠が宣言を**監査する**方向なのでむしろ強化される。
 - 原則 V: 「実行された」は観測可能な構造的事実であり意味判定ではない → 抵触なし。
+
+## Phase 0 設計判断 (Decision / Rationale / Alternatives)
+
+### D1. 採取方式 = Vitest カスタムランナー + ワーカー内 inspector セッション
+
+- **Decision**: `VitestTestRunner` 拡張の `onBeforeRunTask`/`onAfterRunTask` で `Profiler.takePreciseCoverage` を挟む(PoC 実証方式)。
+- **Rationale**: `@vitest/coverage-v8` と同一機構の per-task 版であり、ビルドステップ・コード書換えが不要。既存のテスト挙動(スナップショット・レポーター)を変えない。
+- **Alternatives**: (a) istanbul 計装(Stryker 方式) — build 変換の注入が必要で「config 1 行」の UX が壊れる。(b) `NODE_V8_COVERAGE` — プロセス単位でしか取れず per-test 分離不能。(c) reporter のみ — テスト境界フックがなく分離不能。
+
+### D2. カバレッジ粒度 = `detailed: false`(関数粒度)
+
+- **Decision**: `startPreciseCoverage({callCount: true, detailed: false})`。
+- **Rationale**: 必要なのは「関数が実行されたか」の boolean のみ。block 粒度を落とすことで overhead(PoC 33%)をさらに削れる。
+- **Alternatives**: `detailed: true` — block 粒度は将来の行レベル可視化まで不要。データ量と正規化コストが増える。
+
+### D3. シンボル join = 「相対パス × 関数名」(source-map 不採用)
+
+- **Decision**: V8 の `functionName` と scan 時再構築の名前表(export 名 → symbol id、クラス member 名 → クラス symbol id)で join。曖昧・不一致は file 粒度フォールバック。
+- **Rationale**: PoC で arrow / メソッド / named default の名前忠実度を確認済み。バイトオフセットはトランスフォーム後の値でそのままでは使えず、source-map 復元は vitest 内部(`ast-v8-to-istanbul` 相当)への依存を持ち込む。fail-safe フォールバックがあれば名前 join の失敗は精度低下に留まり、REQ 到達は失われない(spec 018 規範)。
+- **Alternatives**: (a) source-map 復元 — 精度は上がるが複雑性・依存・vitest バージョン結合が重い。将来の精度改善として保留。(b) バイトオフセット直接使用 — トランスフォームで無効。
+
+### D4. trace 成果物 = per-worker JSONL シャード、読込み時正規化
+
+- **Decision**: runner はワーカーごとに `.artgraph/trace/*.jsonl` へ追記のみ行い、正規化(boolean 化・ソート・和集合・dedup)は ingest/scan の読込み時に決定的に行う。世代管理(旧シャード削除)は config ラッパーが仕込む globalSetup。
+- **Rationale**: 書込み競合を設計で排除(Edge Case 対応)。「正規化はすべて読む側」に寄せることで runner を最小・最速に保ち、CI シャードのマージ(和集合)も自然に扱える。
+- **Alternatives**: (a) run 終了時に単一 canonical ファイルへ集約 — グローバルフックが必要で構成が増える。(b) 各テスト後に共有ファイルへ書込み — ロック必須で遅い。
+
+### D5. エッジモデル = 新 kind `exercises` + 一致時の `implements` provenance 追記
+
+- **Decision**: 証拠のみの対は `exercises` エッジ、宣言と一致する対は既存 `implements` の provenances へ `coverage` 追記。
+- **Rationale**: 「実行された」と「実装している」は真理条件が異なる。別エッジであることで UNEXERCISED CLAIM(主張 − 証拠)と SUGGESTED IMPL(証拠 − 主張)が集合差として素直に定義でき、`acceptExercises` のオプトインも表現できる。
+- **Alternatives**: provenance のみで `implements` に統一 — 証拠が黙って uncovered を充足し原則 III の信頼境界を破る(plan.md Complexity Tracking 参照)。
+
+### D6. green テストのみを証拠に数える
+
+- **Decision**: 失敗テストのカバレッジは trace に保持するが、エッジ・充足・提案には使わない。
+- **Rationale**: 既存 `verified` の `every(passed)` セマンティクスと整合。red テストの実行経路は「実装が主張どおりか」の証拠として弱い。
+- **Alternatives**: 全実行を数える — ドリフト中・実装途中のコードへ証拠エッジが張られ、監査所見の信頼を毀損する。
+
+### D7. staleness = trace 記録時 contentHash vs 現在ハッシュ
+
+- **Decision**: shard に実行シンボルの contentHash を記録し、scan/check 時に現在値と照合。
+- **Rationale**: 既存 drift 機構(hash 照合)の転用で、新しい時刻・git 依存を持ち込まない。git 非依存(core scan は git 不要という既存性質を維持)。
+- **Alternatives**: (a) mtime / git commit 比較 — 非決定的・環境依存。(b) 鮮度無視 — 決定性ブランドを毀損(spec US5 の根拠)。
+
+### D8. vitest は optional peerDependency `>=3 <5`
+
+- **Decision**: runner モジュール(`artgraph/vitest`)のみが `vitest/runners` を import し、CLI 本体は vitest 非依存。CI で 3.x / 4.x マトリクス E2E。
+- **Rationale**: CLI 利用者に vitest を強制しない。Runner API は experimental のためバージョン結合はマトリクステストで監視する。
+- **Alternatives**: (a) hard dependency — CLI だけ使うユーザーに不要な重み。(b) バンドル同梱 — vitest はユーザープロジェクト側の実行環境なので原理的に不可。
