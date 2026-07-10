@@ -25,7 +25,7 @@
 ## Phase 2: Foundational — shard スキーマ (runner ↔ ingest の SSOT)
 
 - [X] T003 **Red**: `tests/trace-schema.test.ts` — [contracts/trace-artifact.md](./contracts/trace-artifact.md) の正規化仕様を固定: ①境界: 空 shard / meta 行のみ / hits 空配列のテストレコード。⑥エッジ: 同一テスト名が複数ファイルに存在・同一レコード重複 → dedup。④例外: `schemaVersion` 未知 → `unknownSchema` 診断カウント(silent skip 禁止)、JSONL 破損行(途中 kill された run)→ 該当行のみ診断+残りは処理。決定性: shard 読込み順・行順をシャッフルしても正規化出力が同一
-- [ ] T004 `src/trace/schema.ts` を実装して T003 を **Green** に: スキーマ定数・型・正規化(boolean 化・辞書順ソート・和集合)・診断カウンタ。runner / ingest 双方がここだけを import する(SSOT、plan.md Cat2-(b))
+- [X] T004 `src/trace/schema.ts` を実装して T003 を **Green** に: スキーマ定数・型・正規化(boolean 化・辞書順ソート・和集合)・診断カウンタ。runner / ingest 双方がここだけを import する(SSOT、plan.md Cat2-(b))
 
 ## Phase A-1: runner (US1 採取側)
 
