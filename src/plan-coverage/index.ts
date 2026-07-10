@@ -125,7 +125,18 @@ export type PlanCoverageDiagnostic =
       symbol: string;
       line: number;
     }
-  | { kind: "emptyExtraction" };
+  | {
+      /**
+       * Nothing was analyzed. Fires when (a) no entries were extracted from
+       * tasks.md / plan.md at all, or (b) entries were extracted but none
+       * resolved to an analyzable graph start node (issue #220 — e.g. Stage
+       * B regex fallback only picked up incidental fs-existing paths like
+       * `package.json` that are not graph nodes). Without (b) a Spec Kit
+       * standard flat tasks.md with no `Files:` sections reported a silent
+       * green "No implicit impacts." with empty diagnostics.
+       */
+      kind: "emptyExtraction";
+    };
 
 export interface PlanCoverageSummary {
   totalAffected: number;
@@ -286,6 +297,14 @@ function formatLocation(loc: { file: string; symbol?: string }): string {
 
 interface FormatTextOptions {
   requireFilesSection: boolean;
+  /**
+   * issue #220 — task blocks detected in tasks.md (heading-delimited or
+   * flat-checklist style). Used to phrase the "nothing to analyze" message
+   * so a zero-analysis run is distinguishable from a clean run.
+   */
+  taskCount: number;
+  /** Of `taskCount`, how many blocks declare a `Files:` section. */
+  tasksWithFilesSection: number;
 }
 
 function formatText(
@@ -296,7 +315,26 @@ function formatText(
   const lines: string[] = [];
   const totalImplicit = result.implicitImpactsByReq.length;
   if (totalImplicit === 0 && result.implicitImpacts.length === 0) {
-    lines.push("No implicit impacts.");
+    // issue #220 — "No implicit impacts." is a POSITIVE verdict ("checked,
+    // nothing implicit"). When nothing was analyzable in the first place
+    // (emptyExtraction fired) that phrasing is a silent green, so branch to
+    // an explicitly-distinguishable "Nothing to analyze" message instead.
+    const nothingAnalyzed = result.diagnostics.some((d) => d.kind === "emptyExtraction");
+    if (
+      nothingAnalyzed &&
+      formatOptions.taskCount > 0 &&
+      formatOptions.tasksWithFilesSection === 0
+    ) {
+      lines.push(
+        `Nothing to analyze: no Files: sections found across ${formatOptions.taskCount} task(s).`,
+      );
+    } else if (nothingAnalyzed) {
+      lines.push(
+        "Nothing to analyze: no analyzable file paths were extracted from tasks.md / plan.md.",
+      );
+    } else {
+      lines.push("No implicit impacts.");
+    }
   } else {
     lines.push(`Implicit impacts (${totalImplicit} REQ(s) impacted but not mentioned):`);
     lines.push("");
@@ -414,7 +452,11 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
     return {
       json: empty,
       exitCode: gate ? 1 : 0,
-      text: formatText(empty, ignore, { requireFilesSection }),
+      text: formatText(empty, ignore, {
+        requireFilesSection,
+        taskCount: 0,
+        tasksWithFilesSection: 0,
+      }),
     };
   }
 
@@ -427,6 +469,15 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
   const tasksExtract = extractFiles(tasksContent, { graph, repoRoot });
   const planExtract =
     planContent !== undefined ? extractFiles(planContent, { graph, repoRoot }) : undefined;
+
+  // issue #220 — task-block counts (tasks.md only) feed the text-format
+  // "Nothing to analyze" message so a zero-analysis run names how many
+  // tasks were seen without a single `Files:` section.
+  const taskBlocks = tasksExtract.taskBlocks ?? [];
+  const textCounts = {
+    taskCount: taskBlocks.length,
+    tasksWithFilesSection: taskBlocks.filter((b: TaskBlock) => b.hasFilesSection).length,
+  };
 
   // Dedup entries across (tasks, plan) preserving first-seen order so
   // groups appear in the order the author declared them (before the
@@ -503,7 +554,7 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
     return {
       json: result,
       exitCode: gate && diagnostics.length > 0 ? 1 : 0,
-      text: formatText(result, ignore, { requireFilesSection }),
+      text: formatText(result, ignore, { requireFilesSection, ...textCounts }),
     };
   }
 
@@ -531,6 +582,16 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
       originReqs: new Set(originReqs),
     });
     for (const r of impactResult.impactReqs) totalAffectedSet.add(r);
+  }
+
+  // issue #220 — entries were extracted but NONE resolved to an analyzable
+  // start node (typical case: Stage B regex fallback picked up incidental
+  // fs-existing paths like `package.json` that are not graph nodes). The
+  // run analyzed nothing, which is indistinguishable from a clean run
+  // unless we surface it — emit `emptyExtraction` here too so the
+  // silent-green state is visible in diagnostics (and trips `--gate`).
+  if (drafts.length === 0) {
+    diagnostics.push({ kind: "emptyExtraction" });
   }
 
   // Mention detection on the unique affected set. The detector is set-
@@ -579,6 +640,7 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
   const tripGate = gate && (implicitImpacts.length > 0 || diagnostics.length > 0);
   const exitCode: 0 | 1 = tripGate ? 1 : 0;
 
-  const text = format === "text" ? formatText(json, ignore, { requireFilesSection }) : "";
+  const text =
+    format === "text" ? formatText(json, ignore, { requireFilesSection, ...textCounts }) : "";
   return { json, exitCode, text };
 }

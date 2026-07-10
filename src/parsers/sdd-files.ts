@@ -48,12 +48,14 @@ export type Diagnostic =
 
 /**
  * spec 014 (US1 / FR-018) — Task block surface info for `plan-coverage`'s
- * `requireFilesSection` option. Populated only when the input text has heading-
- * delimited task blocks (e.g. `### T013: ...`). Each entry records whether
- * the block declares a `Files:` section so the caller can emit a
- * `missingFilesSection` diagnostic. `taskId` is captured from the heading
- * line via a heuristic regex; if the regex doesn't match (the block has a
- * heading but no T-id prefix) the entry is omitted.
+ * `requireFilesSection` option. Populated when the input text has heading-
+ * delimited task blocks (e.g. `### T013: ...`) or Spec Kit-style flat
+ * checklist tasks (`- [ ] T001 ...`, issue #219/#220). Each entry records
+ * whether the block declares a `Files:` section so the caller can emit a
+ * `missingFilesSection` diagnostic. `taskId` is captured from the heading /
+ * checklist line via a heuristic regex; if the regex doesn't match (the
+ * block has a heading or checkbox but no T-id / numeric-id prefix) the
+ * entry is omitted.
  */
 export interface TaskBlock {
   /** Task ID parsed from the heading (e.g. `T013`). */
@@ -79,9 +81,10 @@ export type ExtractResult = {
   stage: "files-section" | "regex-fallback" | "empty";
   diagnostics: Diagnostic[];
   /**
-   * spec 014: heading-delimited task blocks and their `Files:` status. Empty
-   * array when the input has no `### T<NNN>` headings (e.g. plan.md or a
-   * tasks.md that uses a different convention).
+   * spec 014: task blocks (heading-delimited `### T<NNN>` or flat checklist
+   * `- [ ] T<NNN>`) and their `Files:` status. Empty array when the input
+   * has neither (e.g. plan.md or a tasks.md that uses a different
+   * convention).
    */
   taskBlocks?: TaskBlock[];
 };
@@ -329,24 +332,35 @@ function runStageB(text: string, options: ExtractOptions): SymbolEntry[] {
 // IDs (1, 1.1, 2.3.4) work. Heading depth (`#`, `##`, `###`, ...) is not
 // constrained — tasks.md authors place T-IDs at varied levels.
 const TASK_HEADING_RE = /^#+\s+(T?\d+(?:\.\d+)*)\b/;
+// issue #219/#220 — Spec Kit's standard tasks-template emits a flat
+// checklist (`- [ ] T001 ...`) with no per-task headings. Detect those as
+// task blocks too so `plan-coverage` can (a) report a task count when
+// nothing is analyzable and (b) apply `requireFilesSection` to flat lists.
+// Same ID heuristic as TASK_HEADING_RE; items without an ID are omitted
+// (mirrors the heading behaviour documented on TaskBlock).
+const TASK_CHECKLIST_RE = /^\s*[-*]\s+\[[ xX]\]\s+(T?\d+(?:\.\d+)*)\b/;
 
 function extractTaskBlocks(lines: string[]): TaskBlock[] {
-  // Build the list of `(line, taskId)` headings first, then for each
-  // heading scan its scope (up to the next heading) for a `Files:` line.
-  // The scope rule is the same as Stage A so the two stay in lockstep.
+  // Build the list of `(line, taskId)` task markers first (headings and
+  // checklist items), then for each marker scan its scope for a `Files:`
+  // line. The scope ends at the next task marker of either style or the
+  // next markdown heading of any depth — the same boundaries Stage A uses,
+  // so the two stay in lockstep.
   const blocks: TaskBlock[] = [];
-  const headingPositions: Array<{ index: number; taskId: string }> = [];
+  const markerPositions: Array<{ index: number; taskId: string }> = [];
   for (let i = 0; i < lines.length; i++) {
-    const m = TASK_HEADING_RE.exec(lines[i]);
-    if (m) headingPositions.push({ index: i, taskId: m[1] });
+    const m = TASK_HEADING_RE.exec(lines[i]) ?? TASK_CHECKLIST_RE.exec(lines[i]);
+    if (m) markerPositions.push({ index: i, taskId: m[1] });
   }
 
-  for (let k = 0; k < headingPositions.length; k++) {
-    const { index, taskId } = headingPositions[k];
-    // Scope: from the line after the heading to (exclusive) the next
-    // markdown heading of any depth.
-    let scopeEnd = lines.length;
-    for (let j = index + 1; j < lines.length; j++) {
+  for (let k = 0; k < markerPositions.length; k++) {
+    const { index, taskId } = markerPositions[k];
+    // Scope: from the line after the marker to (exclusive) the next task
+    // marker (heading or checklist style) or the next markdown heading of
+    // any depth, whichever comes first.
+    const nextMarker = k + 1 < markerPositions.length ? markerPositions[k + 1].index : lines.length;
+    let scopeEnd = nextMarker;
+    for (let j = index + 1; j < nextMarker; j++) {
       if (HEADING_RE.test(lines[j])) {
         scopeEnd = j;
         break;

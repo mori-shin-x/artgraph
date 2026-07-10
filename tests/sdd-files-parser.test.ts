@@ -394,7 +394,7 @@ describe("extractFiles — Stage A boundary at checklist items (issue #219)", ()
 });
 
 // ---------------------------------------------------------------------------
-// taskBlocks (unchanged, but verified once for non-regression)
+// taskBlocks (heading style unchanged; checklist style added for issue #220)
 // ---------------------------------------------------------------------------
 
 describe("extractFiles — taskBlocks", () => {
@@ -414,5 +414,35 @@ describe("extractFiles — taskBlocks", () => {
       { taskId: "T001", line: 1, hasFilesSection: false },
       { taskId: "1.1", line: 3, hasFilesSection: false },
     ]);
+  });
+
+  it("detects Spec Kit flat-checklist tasks (`- [ ] T001 ...`) as task blocks (issue #220)", () => {
+    const graph = makeGraph(["src/todo.ts"]);
+    const text = [
+      "# Tasks",
+      "",
+      "## Phase 1",
+      "",
+      "- [ ] T001 First task",
+      "",
+      "Files: src/todo.ts",
+      "- [x] T002 Second task",
+      "- [ ] Third item without a task ID",
+    ].join("\n");
+    const result = extractFiles(text, { graph, repoRoot: root });
+    // `## Phase 1` has no task ID → not a block. The ID-less checklist
+    // item is omitted, mirroring the heading heuristic. T001's scope runs
+    // to the next checklist task, so the intervening `Files:` counts.
+    expect(result.taskBlocks).toEqual([
+      { taskId: "T001", line: 5, hasFilesSection: true },
+      { taskId: "T002", line: 8, hasFilesSection: false },
+    ]);
+  });
+
+  it("a checklist task's scope ends at the next heading of any depth", () => {
+    const graph = makeGraph(["src/todo.ts"]);
+    const text = ["- [ ] T001 First task", "", "## Notes", "", "Files: src/todo.ts"].join("\n");
+    const result = extractFiles(text, { graph, repoRoot: root });
+    expect(result.taskBlocks).toEqual([{ taskId: "T001", line: 1, hasFilesSection: false }]);
   });
 });

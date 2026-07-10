@@ -32,6 +32,7 @@ Files:
 - `symbol` は `\s` / `,` / `(` / `)` を含まない。`:` は最初の 1 つで split し、後続は symbol 名の一部として保持する (Edge Case `symbol 名に : が含まれる` / FR-005)。
 - `(new)` / `(deleted)` 等の trailing annotation は Stage A の `stripTrailingAnnotation` で剥がしてから本処理 (FR-003)。
 - Stage A scope の終端は、次の markdown heading 行 (`^#+\s`)、次の checklist item 行 (`^\s*[-*]\s+\[[ xX]\]` — Spec Kit 標準フラットチェックリストの次タスク境界、issue #219)、または空行 2 連のいずれか早い方。基底文法の詳細は [specs/014-reinvent-impact-cli/contracts/sdd-files-parser.md](../../014-reinvent-impact-cli/contracts/sdd-files-parser.md) を参照。
+- `TaskBlock` は heading 形式 (`### T013 ...`) に加え、flat checklist 形式 (`- [ ] T013 ...`) の task も検出する (issue #220 — task 数カウントと `requireFilesSection` の Spec Kit 標準テンプレ対応)。ID を持たない heading / checklist item は従来通り omit。
 
 ### 1.4 出力との対応
 
@@ -89,3 +90,4 @@ Files:
 7. path 登録済 + symbol 登録済 → `diagnostics` は空。
 8. Stage B fallback (本文中の `src/a.ts` を regex で拾うケース) → `entries` は Stage B 検出 path を `{ path, line }` で並べ、`symbol` は全件 undefined。
 9. フラットチェックリスト境界 (issue #219): `Files:` ブロック直後の `- [ ] T003 ...` 行で Stage A scope が終端 → 次タスク行は entry にも diagnostic にもならない (`[x]` / `[X]` / `*` bullet / インデント付きも同様)。
+10. taskBlocks: flat checklist task (`- [ ] T001 ...`) を heading task と同様に検出し、次の task marker / heading までの scope 内の `Files:` 有無を `hasFilesSection` に反映 (issue #220)。ID 無し checklist item は omit。
