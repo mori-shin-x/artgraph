@@ -288,6 +288,14 @@ in [docs/sdd-integration.md](./docs/sdd-integration.md).
 | Test                | `it("[REQ-001] …")` or `// req: "REQ-001"`      |
 | Doc relations       | frontmatter `artgraph.depends_on` / `derives_from`, inferred from kiro / spec-kit file-name conventions, or inline `[text](./other.md)` links |
 
+ID prefixes are free-form (`[A-Z][A-Za-z]*-\d+`): the `REQ-` prefix used in
+the examples above is just a convention — `FR-001`, `AUTH-2`, or `US-12` work
+with zero configuration. If you use Spec Kit, keep its default `FR-NNN` IDs
+as-is. To exclude an ID family from tracking (e.g. Spec Kit's `SC-NNN` Success
+Criteria, which are outcomes rather than implementable requirements), list its
+prefix in `.artgraph.json` `ignoreIdPrefixes` — see
+[docs/configuration.md](./docs/configuration.md#ignoreidprefixes--exclude-specific-id-prefixes-from-tracking).
+
 Custom grammars are configurable via `reqPatterns` in `.artgraph.json` — see
 [docs/configuration.md](./docs/configuration.md).
 
@@ -312,7 +320,7 @@ split/merge caveats.
 ## Documentation
 
 - [Getting Started](./docs/getting-started.md) — Windows CRLF, committing Skills, Stop hook troubleshooting
-- [Configuration](./docs/configuration.md) — `reqPatterns`, `docGraph`, `taskConventions`, edge provenance
+- [Configuration](./docs/configuration.md) — `reqPatterns`, `ignoreIdPrefixes`, `docGraph`, `taskConventions`, edge provenance
 - [Commands](./docs/commands.md) — full CLI reference
 - [SDD Tool Integration](./docs/sdd-integration.md) — Spec Kit / Kiro details
 - [Skills Guide](./docs/skills-guide.md) — file vs symbol mode, Skill customization

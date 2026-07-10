@@ -564,6 +564,53 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("ignoreIdPrefixes validation (issue #216)", () => {
+    it("should load a valid ignoreIdPrefixes array", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ ignoreIdPrefixes: ["SC", "Requirement"] }));
+      expect(loadConfig(TMP_DIR).ignoreIdPrefixes).toEqual(["SC", "Requirement"]);
+    });
+
+    it("should be undefined when the field is absent", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, "{}");
+      expect(loadConfig(TMP_DIR).ignoreIdPrefixes).toBeUndefined();
+    });
+
+    it("should accept an empty array (nothing ignored)", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ ignoreIdPrefixes: [] }));
+      expect(loadConfig(TMP_DIR).ignoreIdPrefixes).toEqual([]);
+    });
+
+    it("should reject a non-array value", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ ignoreIdPrefixes: "SC" }));
+      expect(() => loadConfig(TMP_DIR)).toThrow(/must be an array of strings/);
+    });
+
+    it("should reject an empty-string entry", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ ignoreIdPrefixes: [""] }));
+      expect(() => loadConfig(TMP_DIR)).toThrow(/non-empty string/);
+    });
+
+    it("should reject a non-string entry", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ ignoreIdPrefixes: [42] }));
+      expect(() => loadConfig(TMP_DIR)).toThrow(/non-empty string/);
+    });
+
+    it.each([["SC-"], ["SC-\\d+"], ["sc"], ["1SC"], ["SC 001"]])(
+      "should reject an entry outside the prefix grammar: %s",
+      (entry) => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ ignoreIdPrefixes: [entry] }));
+        expect(() => loadConfig(TMP_DIR)).toThrow(/bare ID prefix/);
+      },
+    );
+  });
+
   describe("top-level JSON shape", () => {
     // Hand-edited configs can accidentally produce a non-object root
     // (array / number / string / null). The old code silently fell back to

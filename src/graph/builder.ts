@@ -93,6 +93,22 @@ const CONVENTION_EDGES: ReadonlyArray<readonly [from: string, to: string]> = [
   ["research", "spec"],
 ];
 
+// issue #216 — `ignoreIdPrefixes` matcher. Returns a predicate that is true
+// when `id`'s bare token (after an optional `namespace/` or collision
+// qualifier, i.e. the segment after the last `/`) is exactly
+// `<prefix>-<digits>` for one of the configured prefixes. The exact-shape
+// match (`-\d+$` anchor) keeps non-requirement ids like `doc:SC-overview.md`
+// or a hypothetical `SCX-001` from false-matching a `"SC"` entry. Prefixes
+// are regex-escaped defensively — loadConfig already restricts them to
+// `[A-Z][A-Za-z]*`, but buildGraph is also called with hand-built configs
+// from tests/programmatic use.
+function buildIgnoredIdMatcher(prefixes: string[] | undefined): (id: string) => boolean {
+  if (!prefixes || prefixes.length === 0) return () => false;
+  const escaped = prefixes.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const re = new RegExp(`^(?:${escaped.join("|")})-\\d+$`);
+  return (id: string) => re.test(id.slice(id.lastIndexOf("/") + 1));
+}
+
 export function buildGraph(
   rootDir: string,
   config: ArtgraphConfig,
@@ -100,6 +116,13 @@ export function buildGraph(
   const nodes = new Map<string, GraphNode>();
   const edges: GraphEdge[] = [];
   const warnings: BuildWarning[] = [];
+
+  // issue #216 — ids with an ignored prefix are excluded at assembly time (no
+  // req node, no edges touching them). Filtering here rather than inside the
+  // parsers keeps parse-cache fragments a pure memo of parser output: toggling
+  // `ignoreIdPrefixes` changes the assembled graph without invalidating the
+  // cache, mirroring how collision remap / dedup already run fresh per build.
+  const isIgnoredId = buildIgnoredIdMatcher(config.ignoreIdPrefixes);
 
   const autoNodes = config.docGraph?.autoNodes ?? true;
   const autoContains = config.docGraph?.autoContains ?? true;
@@ -170,6 +193,10 @@ export function buildGraph(
       const fileReqs: CollectedReq[] = [];
 
       for (const node of result.nodes) {
+        // issue #216 — an ignored-prefix ID never becomes a req node (Spec
+        // Kit's SC-NNN Success Criteria are outcome statements, not
+        // implementation-trackable requirements).
+        if (node.kind === "req" && isIgnoredId(node.id)) continue;
         if (node.kind === "req" || node.kind === "task") {
           // T028: reserved-prefix warning
           if (RESERVED_PREFIXES.some((p) => node.id.startsWith(p))) {
@@ -197,6 +224,12 @@ export function buildGraph(
       }
 
       for (const edge of result.edges) {
+        // issue #216 — drop spec-side edges touching an ignored id on either
+        // end: annotation edges from/to a skipped req, task-tag
+        // `@impl(SC-001)` / `[SC-001]` pointers, and frontmatter relations
+        // naming an ignored id. Without this they would surface as
+        // orphan-edge / orphan-doc noise for a node we intentionally removed.
+        if (isIgnoredId(edge.source) || isIgnoredId(edge.target)) continue;
         // Match the source against just this file's reqs/tasks so a same-raw-ID
         // entry in another spec dir (e.g. `T001` in two plan.md files) lands on
         // the right collision-qualified node. fileReqs is rebuilt per file above.
@@ -381,6 +414,14 @@ export function buildGraph(
 
   // Remap @impl/@verifies edge targets for colliding IDs
   for (const edge of tsResult.edges) {
+    // issue #216 — code-side `@impl SC-001` / test markers `[SC-001]`
+    // (including namespaced `013-foo/SC-001`) referencing an ignored prefix
+    // emit no edge, so `check` never reports them as orphans. Skipped here at
+    // assembly (not in the TS parser) for the same cache-purity reason as the
+    // spec-side filter above.
+    if ((edge.kind === "implements" || edge.kind === "verifies") && isIgnoredId(edge.target)) {
+      continue;
+    }
     if ((edge.kind === "implements" || edge.kind === "verifies") && collidingIds.has(edge.target)) {
       const dirs = idToDirs.get(edge.target) ?? new Set<string>();
       warnings.push({

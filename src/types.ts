@@ -490,6 +490,16 @@ export interface ArtgraphConfig {
    */
   packageManager?: PackageManager;
   reqPatterns?: ReqPatternConfig;
+  /**
+   * issue #216 — requirement-ID prefixes to exclude from tracking. An ID whose
+   * bare token (after an optional `namespace/` qualifier) is exactly
+   * `<prefix>-<digits>` for any listed prefix is invisible to the graph: no
+   * req node is registered from specs, and code/test/task tags referencing it
+   * emit no edges (so it can never surface as UNCOVERED or an orphan).
+   * Canonical use case: Spec Kit's Success Criteria (`"ignoreIdPrefixes":
+   * ["SC"]`). Default is empty — nothing is ignored.
+   */
+  ignoreIdPrefixes?: string[];
   docGraph?: DocGraphConfig;
   mode?: "file" | "symbol";
   testResultPaths?: string[];
