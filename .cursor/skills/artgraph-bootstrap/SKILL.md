@@ -1,6 +1,6 @@
 ---
 name: "artgraph-bootstrap"
-description: "Bootstraps spec ↔ code ↔ test traceability tags in an existing project by proposing spec entries, `@impl REQ-NNN` tags on code, and `[REQ-NNN]` markers on tests as a reviewable diff, then verifying deterministically with `artgraph scan && artgraph check`. Use when the user asks to bootstrap / cold-start / seed traceability / add initial REQs to an untagged or partially-tagged project. Make sure to use this skill whenever the user mentions bootstrap / cold-start / initial REQ seeding for artgraph."
+description: "Bootstraps spec ↔ code ↔ test traceability tags in an existing project by proposing spec entries and `[REQ-NNN]` markers on covering test titles as a reviewable diff (code-side `@impl REQ-NNN` tags only where no test exists), then verifying deterministically with `artgraph scan && artgraph check` and, when tests ran with the artgraph/vitest runner, `artgraph trace report`. Use when the user asks to bootstrap / cold-start / seed traceability / add initial REQs to an untagged or partially-tagged project. Make sure to use this skill whenever the user mentions bootstrap / cold-start / initial REQ seeding for artgraph."
 allowed-tools:
   - "Bash(npx artgraph *)"
   - "Bash(npx --no-install artgraph *)"
@@ -18,7 +18,7 @@ disable-model-invocation: false
 
 ## Purpose
 
-Cold-starts traceability on a project that has few or no REQ tags today. The agent (probabilistically) reads the existing spec and source and proposes an initial set of `- REQ-NNN:` spec entries, `// @impl REQ-NNN` code tags, and `[REQ-NNN]` test markers as a single reviewable diff; then artgraph (deterministically) verifies the result with `scan`, `reconcile`, and `check`. This split — LLM proposes, CLI verifies — is the **determinism boundary**: link generation may be probabilistic, but link verification must be reproducible without an LLM in the loop. The Skill never writes trace tags without first showing a diff and getting explicit user approval.
+Cold-starts traceability on a project that has few or no REQ tags today. Where a covering test already exists for a candidate requirement, the agent (probabilistically) proposes ONLY the test-side closure — a `- REQ-NNN:` spec entry plus a `[REQ-NNN]` marker on the covering test title — and does NOT touch implementation code; once the user approves and the tests run, the coverage-derived `exercises` edge corroborates (or contradicts) the tag mechanically, no LLM needed. Only in areas with no test to tag at all does the agent fall back to the older code-side proposal (spec entry + `// @impl REQ-NNN`), and the proposal must say so explicitly. This split — LLM proposes, artgraph verifies deterministically — is the **determinism boundary**: link generation may be probabilistic, but link verification must be reproducible without an LLM in the loop. The Skill never writes trace tags without first showing a diff and getting explicit user approval.
 
 ## Preconditions
 
@@ -34,42 +34,20 @@ See [install-check](../_shared/install-check.md) for the standard pre-flight che
 
 ### 2. Snapshot current graph state
 
-Scan the graph, noting node counts (`req`, `doc`, `file`, `test`):
-
-```
-<PM-exec> scan --format json
-```
-
-Then, using your host's search tooling, count how many source files in the project already carry an `@impl REQ-` marker — search text files matching the project's source extensions (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.py`, `.go`, `.rs`, `.java`), excluding `node_modules/`, `dist/`, and `.git/`, for the literal string `@impl REQ-`. Silence "permission denied" / "no matches" noise; you only need the count of files with at least one match. Compose the search with whatever tool fits your environment (POSIX `grep -rl`, ripgrep, PowerShell `Select-String`, or your file-search API).
-
-Silently decide the path — **do not expose this as a mode flag**: **cold path** (`req == 0`, no `@impl REQ-` matches) proposes fresh IDs from `REQ-001`; **augment path** (REQs or `@impl` tags already present) allocates new IDs from `max(existing REQ-ID) + 1` — read the current spec first (Step 4) to preserve its existing sequence.
+Scan the graph, noting node counts (`req`, `doc`, `file`, `test`): `<PM-exec> scan --format json`. Then, using your host's search tooling, count how many source files already carry an `@impl REQ-` marker (search the project's source extensions, excluding `node_modules/`, `dist/`, `.git/`, for the literal string `@impl REQ-`) — silence "permission denied" / "no matches" noise, you only need the count of files with at least one match. Silently decide the ID-numbering path — **do not expose this as a mode flag**: **cold path** (`req == 0`, no `@impl REQ-` matches) proposes fresh IDs from `REQ-001`; **augment path** (REQs or `@impl` tags already present) allocates new IDs from `max(existing REQ-ID) + 1` — read the current spec first (Step 4) to preserve its existing sequence.
 
 ### 3. Scope gating
 
-The user may narrow scope with an argument such as `src/auth/`; otherwise use `.artgraph.json`'s `include` globs. Count candidate source files under that scope, then the existing spec files under `.artgraph.json#specDirs` (default `specs/`) — Step 4 reads every spec file regardless of the source scope gate.
-
-Using your host's file-listing tooling, count:
-
-- source files under `<scope>` matching the project's source extensions (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.py`, `.go`, `.rs`, `.java`), excluding `node_modules/`, `dist/`, and `.git/`.
-- spec files under `<specDir>` matching `*.md` (recursive).
-
-Report both counts. If either count is > 50, do **not** proceed. Tell the user verbatim: "The scope is too broad for reliable single-pass estimation ({N} source files / {M} spec files); ask me again with a narrower target such as `src/<subdir>/`," naming the specific offending count, and stop. Do **not** attempt auto-partitioning in v1.
+The user may narrow scope with an argument such as `src/auth/`; otherwise use `.artgraph.json`'s `include` globs. Using your host's file-listing tooling, count source files under `<scope>` (project's source extensions, excluding `node_modules/`, `dist/`, `.git/`) and spec files under `<specDir>` (default `specs/`) matching `*.md` recursively — Step 4 reads every spec file regardless of the source scope gate. Report both counts. If either count is > 50, do **not** proceed: tell the user verbatim "The scope is too broad for reliable single-pass estimation ({N} source files / {M} spec files); ask me again with a narrower target such as `src/<subdir>/`," naming the specific offending count, and stop. Do **not** attempt auto-partitioning in v1.
 
 ### 4. Read & propose
 
-Read the sources needed to draft a coherent proposal:
+Read every existing spec file under `.artgraph.json#specDirs`, `README.md` (and `docs/` if present) for domain vocabulary, and every source file plus every test file under the gated scope; in augment mode also skim the whole project (same scope as Step 2's grep) for orphaned `@impl` tags so proposed IDs stay disjoint. For **each** candidate requirement, decide its path independently — this is a per-REQ decision, not a project-wide mode:
 
-- Every existing spec file under `.artgraph.json#specDirs` (default `specs/`).
-- `README.md` (and `docs/` if present) for domain vocabulary and phrasing.
-- Every source file under the gated scope from Step 3. In augment mode, also skim **the whole project** — the same project-wide scope as Step 2's grep, not the Step 3 scope gate — for files already carrying `@impl` tags, so proposed IDs stay disjoint; this catches orphaned `@impl REQ-NNN` tags whose spec entry was manually deleted, which would otherwise silently collide with newly-allocated IDs.
+- **Test-tag path (default, FR-019)** — a covering test exists (or a near-miss `it()`/`describe()` clearly exercises the behavior but lacks the marker): propose only (1) a `- REQ-NNN: <one-sentence requirement>` spec entry (match the project's ID prefix / structural convention — see `src/grammar/tokens.ts` and `examples/kiro-integration/`) and (2) a `[REQ-NNN]` prefix on that test's name. Propose **no code edit** for this REQ.
+- **Impl-fallback path (only when no test exists to tag)** — propose the spec entry plus a `// @impl REQ-NNN` line directly **above** the exported declaration (or above its JSDoc) in the target language's comment syntax; state in the proposal that this REQ is falling back because no test covers it. Do NOT place the tag trailing after the declaration or inside a `/** */` block (silently binds to the file or the next symbol), and one tag does not cover a run of consecutive exports.
 
-Draft, for each intended REQ, all three sides of the traceability closure:
-
-1. **Spec entry** — a `- REQ-NNN: <one-sentence requirement>` line appended to an appropriate `specs/*.md` file (prefer an existing one; if none exists, propose creating `specs/main.md` and note it in the diff header). If the project uses a different ID prefix convention (e.g. `AUTH-`, `FR-`, or Kiro's `### Requirement N:` heading style — see `src/grammar/tokens.ts` for the accepted grammar `[A-Z][A-Za-z]*-\d+|Requirement-\d+`), match that instead of defaulting to `REQ-`, and follow the spec's structural convention (bullets stay bullets, `### Requirement N: Title` headings stay headings — see `examples/kiro-integration/.kiro/specs/auth/requirements.md` for the Kiro pattern).
-2. **Impl tag** — a `// @impl REQ-NNN` line on the implementing function/class/module, one per REQ per symbol, using the target language's comment syntax. Place it on the line directly **above** the exported declaration (or above its JSDoc); this is the only placement that binds to the symbol under `mode: "symbol"`. Do **NOT** put the tag trailing after the declaration (silently binds to the FILE — or, if another `export` follows in the same file, silently binds to that NEXT unrelated symbol), inside a `/** @impl */` JSDoc block (only line comments `//` count), or expect one tag above a run of consecutive `export`s to cover all of them (it only binds to the first). Under `mode: "file"` every placement collapses to the file, so these pitfalls only bite symbol-mode projects.
-3. **Test marker** — a `[REQ-NNN]` prefix on the covering `it()`/`describe()` name; if no test exists, mark the REQ **test-missing** in the summary rather than fabricating one.
-
-Present the whole proposal as a unified diff-style preview, grouped by REQ (spec entry, then code tag(s), then test marker(s)), prefixed with a summary line — "Proposing {K} REQs, {J} `@impl` tags, {M} test markers. Cold-path: fresh IDs from REQ-001. (Or: Augment-path: adding REQ-{next}..REQ-{last}.)" — and call out any **test-missing** REQ so the user knows the closure is incomplete for that ID.
+Present the whole proposal as a unified diff-style preview grouped by REQ, each line labeled `[test-tag]` or `[impl-fallback: no test]`, prefixed with a summary — "Proposing {K} REQs: {T} test-tag, {F} impl-fallback. Cold-path: fresh IDs from REQ-001. (Or: Augment-path: adding REQ-{next}..REQ-{last}.)".
 
 ### 5. User approval
 
@@ -83,7 +61,7 @@ If the user rejects outright, stop cleanly without writing. Never apply on ambig
 
 ### 6. Deterministic verification
 
-After writing the approved edits, run the three CLI calls that establish the determinism boundary. `scan` and `check` alone never write `.trace.lock` — only `reconcile` does, so it must run between them:
+Write the approved edits. If the project has `vitest.config.ts` configured with the `artgraph/vitest` runner (`runner: 'artgraph/vitest'` or `withTrace(...)`), ask the user to run the test suite (or run it yourself if already permitted) so a trace shard lands under `.artgraph/trace/`, then run `<PM-exec> trace report --format json` to cross-check the newly-tagged tests against execution evidence *before* touching the graph: a `suggestedImpls` entry whose symbol plausibly matches the REQ's spec text corroborates the tag; an `unexercisedClaims` entry or a nonzero `diagnostics.dangling` pointing at a newly tagged test means the tag doesn't reach the code it claims — propose a concrete fix (retag, move the assertion, or reword the spec) and return to Step 5 instead of silently accepting. If no runner is configured, trace shards stay empty (trace is opt-in, FR-010) — skip straight to the graph-side commands below:
 
 ```bash
 <PM-exec> scan
@@ -91,10 +69,10 @@ After writing the approved edits, run the three CLI calls that establish the det
 <PM-exec> check
 ```
 
-Report the outcome. A clean `check` exit is the success condition — `reconcile` is what wrote the trace lock, and `check` verifies the project now has a consistent, real traceability graph. This invocation runs without `--gate`, so exit 0 does not guarantee a clean graph — read the stdout categories (`drift`, `uncovered`, `orphan`, `duplicate-id`, `impl-only`) rather than relying on the exit code alone. If any are reported, offer to re-propose fixes scoped to just those gaps (return to Step 4 with the gap list as the new target set):
+Report the outcome. A clean `check` exit is the success condition — `reconcile` is what wrote the trace lock, and `check` verifies the project now has a consistent, real traceability graph. This runs without `--gate`, so exit 0 does not guarantee a clean graph — read the stdout categories (`drift`, `uncovered`, `orphan`, `duplicate-id`, `impl-only`, and, once a trace exists, `unexercisedClaims` / `suggestedImpls` / `staleEvidence`) rather than relying on the exit code alone. If any are reported, offer to re-propose fixes scoped to just those gaps (return to Step 4 with the gap list as the new target set):
 
 - `duplicate-id` — the same REQ ID was claimed in more than one place; resolve by renaming one of the collisions (see the `artgraph-rename` Skill) before re-running `check`.
-- `impl-only` — this is how the **test-missing** REQs from Step 4 resurface after verification: the code tag exists but no test covers it yet. Non-fatal, but worth following up.
+- `impl-only` — how the impl-fallback REQs from Step 4 resurface after verification: the code tag exists but no test covers it yet. Non-fatal, but worth following up.
 
 Do not silently re-scan and re-apply — every write goes through user approval.
 
