@@ -425,7 +425,6 @@ describe("buildLockFromGraph — exercises (spec 020 T016)", () => {
       [node("REQ-7", "req"), node("file:src/a.ts", "file")],
       [{ source: "file:src/a.ts", target: "REQ-7", kind: "implements", provenances: ["code-tag"] }],
     );
-    const lock = buildLockFromGraph(g);
     const now = "2026-06-26T00:00:00.000Z";
     const real = global.Date;
     // @ts-expect-error - test stub
