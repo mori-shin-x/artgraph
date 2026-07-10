@@ -60,6 +60,15 @@ export function printImpactText(result: any) {
     console.log("Drifted:");
     for (const d of result.drifted) console.log(`  ${d.nodeId} (${d.kind})`);
   }
+  // spec 020 (FR-018) — `--tests` output. Present only when the flag was
+  // passed (`result.testsToRun` is `undefined` otherwise).
+  if (result.testsToRun && result.testsToRun.length > 0) {
+    console.log("");
+    console.log("Tests to run:");
+    for (const t of result.testsToRun) {
+      console.log(`  ${t.testFile} :: ${t.testName}  (${t.reqId})`);
+    }
+  }
   if (result.summary) {
     const taskPart = result.summary.tasks > 0 ? `, ${result.summary.tasks} tasks` : "";
     console.log(

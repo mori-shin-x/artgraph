@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import type { SymbolEntry } from "../types.js";
-import { pathsToEntries } from "./shared.js";
+import { pathsToEntries, TRACE_NO_SHARDS_GUIDANCE } from "./shared.js";
 import { printImpactText } from "./presenters/impact.js";
 
 // spec 014 (FR-001 / FR-003): REQ-ID inputs are no longer accepted here.
@@ -58,6 +58,10 @@ export function registerImpactCommand(program: Command): void {
       "File paths or `path:symbol` entries — REQ-IDs and `doc:` prefix are rejected",
     )
     .option("--diff", "Use git diff to detect changed files")
+    .option(
+      "--tests",
+      "List tagged tests of REQs whose exercises evidence reaches the resolved nodes (requires a trace, FR-018)",
+    )
     .option("--format <format>", "Output format: json | text", "text")
     .action(async (targets: string[], opts) => {
       const rootDir = process.cwd();
@@ -105,8 +109,34 @@ export function registerImpactCommand(program: Command): void {
       const { entryOriginIds, impact, resolveStartIds, resolveOriginReqs } =
         await import("../graph/traverse.js");
       const config = loadConfig(rootDir);
+
+      // spec 020 (FR-018, contracts/cli-surface.md §5) — `--tests` requires
+      // trace evidence to exist at all; exit 1 with the SAME guidance string
+      // `trace report` uses (FR-018's explicit "同文言" requirement) before
+      // any graph/git work happens.
+      const { hasTraceShards, ingestTrace } = await import("../trace/ingest.js");
+      const hasTrace = hasTraceShards(config, rootDir);
+      if (opts.tests && !hasTrace) {
+        console.error(TRACE_NO_SHARDS_GUIDANCE);
+        process.exit(1);
+      }
+
       const { graph } = scan(rootDir, config);
       const lock = readLock(rootDir, config.lockFile);
+
+      // spec 020 (FR-017) — load evidence once, resolve the staleness
+      // exclusion set (only when `trace.staleness === "exclude"`) so both the
+      // BFS traversal below AND `--tests`'s testsToRun use the exact same
+      // "what counts as evidence right now" trace snapshot.
+      let ingestedTrace: import("../trace/ingest.js").IngestedTrace | undefined;
+      let excludeStaleExercises: Set<string> | undefined;
+      if (hasTrace) {
+        ingestedTrace = ingestTrace(config, rootDir);
+        if ((config.trace?.staleness ?? "warn") === "exclude") {
+          const { computeStaleNodeIds } = await import("../trace/report.js");
+          excludeStaleExercises = computeStaleNodeIds(graph, ingestedTrace);
+        }
+      }
 
       // ----- Build SymbolEntry[] from the chosen channel:
       //   * --diff → file-unit only (contracts/cli-flags.md §1.3; git diff has
@@ -205,7 +235,13 @@ export function registerImpactCommand(program: Command): void {
         process.exit(1);
       }
 
-      const result = impact(graph, startIds, lock);
+      const result = impact(
+        graph,
+        startIds,
+        lock,
+        undefined,
+        excludeStaleExercises ? { excludeStaleExercises } : undefined,
+      );
 
       // T031 / FR-014 / INV-S6 — populate `originReqs` axis. `impact()` itself
       // stays purely forward-BFS; the origin axis takes the resolved startIds
@@ -224,6 +260,41 @@ export function registerImpactCommand(program: Command): void {
         for (const id of entryOriginIds(entry, graph)) originStartIds.add(id);
       }
       result.originReqs = resolveOriginReqs(graph, [...originStartIds]);
+
+      // spec 020 (FR-018, contracts/cli-surface.md §5) — `--tests`: union,
+      // over every startId, the REQs whose (staleness-filtered) exercises
+      // evidence directly reaches that node, then list each such REQ's full
+      // tagged-test set (the trace only tracks test membership at REQ grain,
+      // not per-node — see `IngestedTrace.perReq[reqId].tests`'s doc).
+      if (opts.tests && ingestedTrace) {
+        const effectiveTrace = excludeStaleExercises
+          ? (await import("../trace/report.js")).excludeStaleEvidence(
+              ingestedTrace,
+              excludeStaleExercises,
+            )
+          : ingestedTrace;
+
+        const reachingReqIds = new Set<string>();
+        for (const id of startIds) {
+          for (const reqId of effectiveTrace.reqsByNode.get(id) ?? []) {
+            reachingReqIds.add(reqId);
+          }
+        }
+
+        const seen = new Set<string>();
+        const testsToRun: Array<{ testFile: string; testName: string; reqId: string }> = [];
+        for (const reqId of [...reachingReqIds].sort()) {
+          const coverage = effectiveTrace.perReq.get(reqId);
+          if (!coverage) continue;
+          for (const t of coverage.tests) {
+            const key = `${reqId} ${t.testFile} ${t.testName}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            testsToRun.push({ testFile: t.testFile, testName: t.testName, reqId });
+          }
+        }
+        result.testsToRun = testsToRun;
+      }
 
       if (opts.format === "json") {
         console.log(JSON.stringify(result));

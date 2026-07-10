@@ -138,6 +138,24 @@ export interface ImpactResult {
    */
   originReqs: string[];
   summary?: ImpactSummary;
+  /**
+   * spec 020 (FR-017, contracts/cli-surface.md §5) — per-`impactReqs`-entry
+   * provenance: was this REQ reached (at least in part) through a direct
+   * `exercises` edge ("evidence"), through any other edge kind directly
+   * incident to it ("static"), or both? Present ONLY when the graph contains
+   * at least one `exercises` edge at all (trace-absent scans have zero, so
+   * this key is omitted rather than emitted as an all-`["static"]` array —
+   * FR-010 byte-identical requirement, T021(e)). Sorted by `reqId`.
+   */
+  reqProvenance?: Array<{ reqId: string; provenance: Array<"static" | "evidence"> }>;
+  /**
+   * spec 020 (FR-018, contracts/cli-surface.md §5) — `impact --tests`'
+   * output: the tagged tests of every REQ whose (non-stale, per
+   * `trace.staleness`) exercises evidence directly reaches one of the
+   * resolved start nodes. Present only when `--tests` was passed (undefined
+   * otherwise, so the flag is a pure opt-in addition to the JSON schema).
+   */
+  testsToRun?: Array<{ testFile: string; testName: string; reqId: string }>;
 }
 
 export interface ImpactSummary {
