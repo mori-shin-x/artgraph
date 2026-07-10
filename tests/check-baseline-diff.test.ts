@@ -50,21 +50,25 @@ describe("check --diff --gate baseline diff (US1)", () => {
     expect(json.baselineStatus).toBe("skipped");
   });
 
-  it("(b) harmless edit to a debt-connected file → exit 0, pre-existing REQ NOT new", async () => {
+  it("(b) harmless edit to the hub → exit 0, doc-sibling debt REQ excluded from scope entirely (spec 019 US3)", async () => {
     const dir = repo("artgraph-debt-us1b-");
-    // Touch the hub: its blast radius reaches the sibling pre-existing debt
-    // REQ-200 via the shared doc, but the edit introduces nothing new.
+    // spec 019 (issue #215): touching the hub reaches only its own `@impl`
+    // claim (REQ-100) — the `contains` reverse edge no longer bridges
+    // REQ-100 -> parent doc -> sibling REQ-200, so the pre-existing debt
+    // REQ never enters scope at all (previously it leaked in "for free" via
+    // the shared doc and had to be suppressed as pre-existing debt).
     appendFileSync(join(dir, "src", "hub.ts"), "\n// harmless comment\n");
 
     const { exitCode, json } = await checkJson(dir);
     expect(exitCode).toBe(0);
     expect(json.pass).toBe(true);
-    expect(json.baselineStatus).toBe("computed");
-    // REQ-200 is in scope (pre-existing) but must NOT be flagged as new.
-    expect(json.uncovered).toContain("REQ-200");
-    expect(json.newIssues.uncovered).not.toContain("REQ-200");
+    // Scope is now fully clean (REQ-100 alone, and it's covered) → the
+    // lazy-eval short-circuit fires; no baseline worktree is built.
+    expect(json.baselineStatus).toBe("skipped");
+    expect(json.uncovered).not.toContain("REQ-200");
+    expect(json.uncovered).toEqual([]);
     expect(json.newIssues.uncovered).toEqual([]);
-    expect(json.suppressedCount).toBeGreaterThanOrEqual(1);
+    expect(json.suppressedCount).toBe(0);
   });
 
   it("(c) editing an untracked file outside the graph → exit 0 (FR-013)", async () => {
@@ -112,16 +116,21 @@ describe("check --diff --gate baseline diff (US1)", () => {
     expect(json.baselineStatus).toBe("skipped");
   });
 
-  it("(e) scope with pre-existing debt only → baseline computed and subtracted → exit 0", async () => {
+  it("(e) hub-only edit → scope carries no pre-existing debt anymore → baseline skipped → exit 0 (spec 019 US3)", async () => {
     const dir = repo("artgraph-debt-us1e-");
+    // spec 019 (issue #215): this used to be the "pre-existing debt only"
+    // scenario (REQ-200 dragged in via the shared doc, then suppressed as
+    // pre-existing). With the doc-sibling leak fixed, hub.ts's blast radius
+    // is just REQ-100 (covered) — there is no debt in scope to suppress, so
+    // this now takes the exact same "skipped" lazy-eval path as (b)/(d).
     appendFileSync(join(dir, "src", "hub.ts"), "\n// another harmless comment\n");
 
     const { exitCode, json } = await checkJson(dir);
     expect(exitCode).toBe(0);
-    expect(json.baselineStatus).toBe("computed");
-    // Every scoped issue was pre-existing → nothing new → gate passes.
+    expect(json.baselineStatus).toBe("skipped");
+    // Nothing was ever in scope → nothing new, nothing suppressed.
     expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
-    expect(json.suppressedCount).toBeGreaterThanOrEqual(1);
+    expect(json.suppressedCount).toBe(0);
   });
 });
 
@@ -334,25 +343,71 @@ describe("check --diff --gate rename-aware baseline normalization (C2)", () => {
 });
 
 // spec 017 US4 (T027) — the gate narrowing must NOT shrink the `impact --diff`
-// blast radius (FR-007 / SC-006). `impact` still reports the pre-existing debt
-// REQ that `check --gate` suppresses.
+// blast radius (FR-007 / SC-006): `check --diff`'s scope must always agree
+// with plain `impact --diff`'s reach — the gate only decides new-vs-pre-
+// existing, it never computes a narrower reachable set of its own.
+//
+// spec 019 (issue #215) update: this fixture's original demonstration relied
+// on REQ-200 being reachable from hub.ts ONLY via the doc-sibling containment
+// leak that spec 019 removes — REQ-100 and REQ-200 share `specs/debt.md` but
+// hub.ts has zero code dependency on REQ-200. That reachability was itself
+// the bug #215 reports, so "impact still reports the debt REQ the gate
+// suppresses" no longer has a debt REQ to report: hub.ts's blast radius is
+// now exactly REQ-100. The invariant this test protects (impact's view and
+// check's scope never diverge) still holds — just with a narrower shared
+// scope, which is the fix working as intended.
 describe("impact --diff blast radius is preserved (US4)", () => {
-  it("impact still reports the debt REQ that the gate suppresses", async () => {
+  it("impact and check --diff agree: hub.ts's blast radius is REQ-100 only, doc-sibling debt is out of scope (spec 019 US3)", async () => {
     const dir = repo("artgraph-us4-impact-");
     appendFileSync(join(dir, "src", "hub.ts"), "\n// harmless\n");
 
     const impact = await runAt(dir, ["impact", "--diff", "--format", "json"]);
     const ij = JSON.parse(impact.stdout);
-    // Blast radius reaches BOTH reqs via the shared doc — unchanged by spec 017.
-    expect(ij.impactReqs).toContain("REQ-100");
-    expect(ij.impactReqs).toContain("REQ-200");
-    expect(ij.summary.reqs).toBe(2);
+    expect(ij.impactReqs).toEqual(["REQ-100"]);
+    expect(ij.impactReqs).not.toContain("REQ-200");
+    expect(ij.summary.reqs).toBe(1);
 
-    // …yet the same change's gate treats the pre-existing REQ-200 as suppressed.
+    // check --diff's scope agrees: nothing pre-existing is in scope, so the
+    // lazy-eval short-circuit fires (baselineStatus "skipped") rather than
+    // computing a baseline to suppress a debt REQ that was never reached.
     const gate = await checkJson(dir);
     expect(gate.exitCode).toBe(0);
+    expect(gate.json.baselineStatus).toBe("skipped");
     expect(gate.json.newIssues.uncovered).not.toContain("REQ-200");
-    expect(gate.json.uncovered).toContain("REQ-200"); // still visible in scoped output
+    expect(gate.json.uncovered).not.toContain("REQ-200");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spec 019 (US3, T007) — dedicated pin for the spec's Independent Test:
+// same-doc REQ-A (REQ-100, implemented) / REQ-B (REQ-200, uncovered) via
+// `tests/helpers.ts`'s `makeRepoWithDebt` fixture. A code-only diff must NOT
+// pull REQ-B into the scoped `uncovered` array; diffing the spec file itself
+// must (spec-change path stays unretouched — FR-011 / Edge Case).
+// ---------------------------------------------------------------------------
+describe("check --diff scope purification — same-spec REQ-A/REQ-B (spec 019 US3, T007)", () => {
+  it("AS3-1: code-only diff (hub.ts) → scoped uncovered excludes the sibling debt REQ-B", async () => {
+    const dir = repo("artgraph-019-us3-code-");
+    appendFileSync(join(dir, "src", "hub.ts"), "\n// spec 019 US3 pin — code-only diff\n");
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(0);
+    expect(json.pass).toBe(true);
+    expect(json.uncovered).not.toContain("REQ-200");
+  });
+
+  it("AS3-2: spec-file diff (specs/debt.md) → REQ-B enters scope as (pre-existing) uncovered", async () => {
+    const dir = repo("artgraph-019-us3-spec-");
+    appendFileSync(join(dir, "specs", "debt.md"), "\n<!-- spec 019 US3 pin — spec-file diff -->\n");
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(0);
+    expect(json.pass).toBe(true);
+    // resolveStartIds' filePath fallback seeds the doc + every req parsed
+    // from it directly (no `contains` traversal needed) — unaffected by the
+    // direction constraint, per spec 019 Edge Cases.
+    expect(json.uncovered).toContain("REQ-200");
+    // Still pre-existing (REQ-100/REQ-200 content unchanged) → suppressed,
+    // not new.
+    expect(json.newIssues.uncovered).not.toContain("REQ-200");
   });
 });
 

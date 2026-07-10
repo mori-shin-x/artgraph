@@ -9,7 +9,13 @@ import {
   formatOrphan,
   findUncovered,
 } from "../src/graph/traverse.js";
-import type { ArtgraphConfig, ArtifactGraph, GraphNode, LockFile } from "../src/types.js";
+import type {
+  ArtgraphConfig,
+  ArtifactGraph,
+  GraphEdge,
+  GraphNode,
+  LockFile,
+} from "../src/types.js";
 
 // spec 016 — `resolveFileStartIds` was removed in favor of `resolveStartIds`.
 // Provide a local compat shim so spec 014 test bodies still compile/import
@@ -557,5 +563,312 @@ describe("resolveOriginReqs (spec 016)", () => {
     const reqs = resolveOriginReqs(graph, ["symbol:src/auth.ts#validateToken"]);
     // REQ-009 must NOT appear — `depends_on` is not the `implements` axis.
     expect(reqs).toEqual(["REQ-001"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spec 019 (issue #215) — `contains` 辺の方向制約 + 親 doc 帰属アトリビューション
+//
+// T001/T002: hand-rolled fixtures mirroring the issue #215 minimal repro
+// (fnA `@impl REQ-901` / fnB `@impl REQ-902` co-located in one spec.md, no
+// code dependency between fnA/fnB). Under the CURRENT (pre-fix) bidirectional
+// BFS these are RED: REQ-902 leaks into `impactReqs` via
+// fnA -> REQ-901 -> (reverse contains) doc -> (forward contains) REQ-902.
+// Phase 2 (T003/T004) makes them GREEN by restricting `contains` reverse
+// traversal and re-adding the parent doc via post-BFS attribution.
+// ---------------------------------------------------------------------------
+
+function makeContainsFixture(
+  opts: { sameFile?: boolean; splitSpec?: boolean } = {},
+): ArtifactGraph {
+  const { sameFile = true, splitSpec = false } = opts;
+  const fileA = "src/sample.ts";
+  const fileB = sameFile ? "src/sample.ts" : "src/other.ts";
+
+  const nodes = new Map<string, GraphNode>();
+  nodes.set("doc:d1", {
+    id: "doc:d1",
+    kind: "doc",
+    filePath: "specs/901.md",
+    contentHash: "doc1-hash",
+  });
+  if (splitSpec) {
+    nodes.set("doc:d2", {
+      id: "doc:d2",
+      kind: "doc",
+      filePath: "specs/902.md",
+      contentHash: "doc2-hash",
+    });
+  }
+  nodes.set("REQ-901", {
+    id: "REQ-901",
+    kind: "req",
+    filePath: "specs/901.md",
+    contentHash: "req901-hash",
+  });
+  nodes.set("REQ-902", {
+    id: "REQ-902",
+    kind: "req",
+    filePath: splitSpec ? "specs/902.md" : "specs/901.md",
+    contentHash: "req902-hash",
+  });
+  nodes.set(`file:${fileA}`, {
+    id: `file:${fileA}`,
+    kind: "file",
+    filePath: fileA,
+    contentHash: "fa",
+  });
+  if (fileB !== fileA) {
+    nodes.set(`file:${fileB}`, {
+      id: `file:${fileB}`,
+      kind: "file",
+      filePath: fileB,
+      contentHash: "fb",
+    });
+  }
+  nodes.set(`symbol:${fileA}#fnA`, {
+    id: `symbol:${fileA}#fnA`,
+    kind: "symbol",
+    filePath: fileA,
+    contentHash: "fna",
+    label: "fnA",
+  });
+  nodes.set(`symbol:${fileB}#fnB`, {
+    id: `symbol:${fileB}#fnB`,
+    kind: "symbol",
+    filePath: fileB,
+    contentHash: "fnb",
+    label: "fnB",
+  });
+
+  const edges: GraphEdge[] = [
+    { source: "doc:d1", target: "REQ-901", kind: "contains", provenances: ["structural"] },
+    {
+      source: splitSpec ? "doc:d2" : "doc:d1",
+      target: "REQ-902",
+      kind: "contains",
+      provenances: ["structural"],
+    },
+    {
+      source: `symbol:${fileA}#fnA`,
+      target: "REQ-901",
+      kind: "implements",
+      provenances: ["code-tag"],
+    },
+    {
+      source: `symbol:${fileB}#fnB`,
+      target: "REQ-902",
+      kind: "implements",
+      provenances: ["code-tag"],
+    },
+  ];
+
+  return { nodes, edges };
+}
+
+describe("impact: contains 辺方向制約 — US1 (issue #215 repro, spec 019)", () => {
+  it("AS1-1: same-file fnA/fnB, no code dependency — REQ-902 excluded from impactReqs", () => {
+    const graph = makeContainsFixture({ sameFile: true });
+    const result = impact(graph, ["symbol:src/sample.ts#fnA"], {});
+    expect(result.impactReqs).toEqual(["REQ-901"]);
+    expect(result.impactReqs).not.toContain("REQ-902");
+    expect(result.drifted.some((d) => d.nodeId === "REQ-902")).toBe(false);
+  });
+
+  it("AS1-2: fnB in a separate file, no code dependency — REQ-902 / other.ts excluded", () => {
+    const graph = makeContainsFixture({ sameFile: false });
+    const result = impact(graph, ["symbol:src/sample.ts#fnA"], {});
+    expect(result.impactReqs).toEqual(["REQ-901"]);
+    expect(result.affectedFiles).not.toContain("src/other.ts");
+  });
+
+  it("AS1-5: REQ-901/REQ-902 split across separate spec docs — behavior unchanged (still excluded)", () => {
+    const graph = makeContainsFixture({ sameFile: false, splitSpec: true });
+    const result = impact(graph, ["symbol:src/sample.ts#fnA"], {});
+    expect(result.impactReqs).toEqual(["REQ-901"]);
+    expect(result.affectedFiles).not.toContain("src/other.ts");
+  });
+
+  it("AS1-3: fnA imports fnB — REQ-902 IS reached via `imports` (code-dependency blast radius is legit)", () => {
+    const graph = makeContainsFixture({ sameFile: false });
+    graph.edges.push({
+      source: "symbol:src/sample.ts#fnA",
+      target: "symbol:src/other.ts#fnB",
+      kind: "imports",
+      provenances: ["ts-import"],
+    });
+    const result = impact(graph, ["symbol:src/sample.ts#fnA"], {});
+    expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-902"]));
+    expect(result.affectedFiles).toContain("src/other.ts");
+  });
+
+  it("AS1-4: parent doc is attributed to affectedDocs and participates in drift detection", () => {
+    const graph = makeContainsFixture({ sameFile: true });
+    const result = impact(graph, ["symbol:src/sample.ts#fnA"], {});
+    expect(result.affectedDocs).toContain("doc:d1");
+
+    const staleLock: LockFile = {
+      "doc:d1": { contentHash: "stale", lastReconciled: "2025-01-01T00:00:00Z" },
+    };
+    const withDrift = impact(graph, ["symbol:src/sample.ts#fnA"], staleLock);
+    expect(withDrift.drifted.some((d) => d.nodeId === "doc:d1" && d.kind === "doc")).toBe(true);
+  });
+
+  it("AS1-6: `REQ-901 depends_on REQ-903` (separate spec) — req→req reach is maintained", () => {
+    const graph = makeContainsFixture({ sameFile: true });
+    graph.nodes.set("doc:d3", {
+      id: "doc:d3",
+      kind: "doc",
+      filePath: "specs/903.md",
+      contentHash: "d3",
+    });
+    graph.nodes.set("REQ-903", {
+      id: "REQ-903",
+      kind: "req",
+      filePath: "specs/903.md",
+      contentHash: "r903",
+    });
+    graph.edges.push(
+      { source: "doc:d3", target: "REQ-903", kind: "contains", provenances: ["structural"] },
+      { source: "REQ-901", target: "REQ-903", kind: "depends_on", provenances: ["annotation"] },
+    );
+    const result = impact(graph, ["symbol:src/sample.ts#fnA"], {});
+    expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-903"]));
+    expect(result.impactReqs).not.toContain("REQ-902");
+  });
+
+  it("FR-003: doc→task contains direction constraint — sibling task not swept via req→task→doc→task", () => {
+    const nodes = new Map<string, GraphNode>();
+    nodes.set("REQ-901", {
+      id: "REQ-901",
+      kind: "req",
+      filePath: "specs/901.md",
+      contentHash: "r",
+    });
+    nodes.set("REQ-902", {
+      id: "REQ-902",
+      kind: "req",
+      filePath: "specs/901.md",
+      contentHash: "r2",
+    });
+    nodes.set("doc:tasks", {
+      id: "doc:tasks",
+      kind: "doc",
+      filePath: "specs/tasks.md",
+      contentHash: "dt",
+    });
+    nodes.set("T001", { id: "T001", kind: "task", filePath: "specs/tasks.md", contentHash: "t1" });
+    nodes.set("T002", { id: "T002", kind: "task", filePath: "specs/tasks.md", contentHash: "t2" });
+    const edges: GraphEdge[] = [
+      { source: "T001", target: "REQ-901", kind: "implements", provenances: ["task-tag"] },
+      { source: "T002", target: "REQ-902", kind: "implements", provenances: ["task-tag"] },
+      { source: "doc:tasks", target: "T001", kind: "contains", provenances: ["structural"] },
+      { source: "doc:tasks", target: "T002", kind: "contains", provenances: ["structural"] },
+    ];
+    const graph: ArtifactGraph = { nodes, edges };
+
+    const result = impact(graph, ["REQ-901"], {});
+    expect(result.affectedTasks).toContain("T001");
+    expect(result.affectedTasks).not.toContain("T002");
+    expect(result.impactReqs).not.toContain("REQ-902");
+    // Attribution: doc:tasks still surfaces as T001's parent doc.
+    expect(result.affectedDocs).toContain("doc:tasks");
+  });
+
+  it("Edge Case: spec-path start (resolveStartIds filePath fallback) still reaches all child REQs", () => {
+    const graph = makeContainsFixture({ sameFile: true });
+    const { startIds } = resolveStartIds(graph, [{ path: "specs/901.md", line: 1 }]);
+    expect(startIds).toContain("doc:d1");
+    expect(startIds).toContain("REQ-901");
+    expect(startIds).toContain("REQ-902");
+
+    const result = impact(graph, startIds, {});
+    expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-902"]));
+  });
+});
+
+describe("impact: spec 019 review follow-up — attribution guard & intentional task bridge", () => {
+  it("attribution ignores contains edges whose source is dangling or not a doc node", () => {
+    const nodes = new Map<string, GraphNode>();
+    nodes.set("REQ-1", { id: "REQ-1", kind: "req", filePath: "specs/a.md", contentHash: "r1" });
+    nodes.set("file:src/a.ts", {
+      id: "file:src/a.ts",
+      kind: "file",
+      filePath: "src/a.ts",
+      contentHash: "fa",
+    });
+    nodes.set("symbol:src/a.ts#f", {
+      id: "symbol:src/a.ts#f",
+      kind: "symbol",
+      filePath: "src/a.ts",
+      contentHash: "sf",
+    });
+    const edges: GraphEdge[] = [
+      {
+        source: "symbol:src/a.ts#f",
+        target: "REQ-1",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
+      // Malformed by construction — builder.ts never emits these, but
+      // impact() also receives hand-built graphs: a dangling doc id and a
+      // non-doc source must not leak into affectedDocs.
+      { source: "doc:ghost", target: "REQ-1", kind: "contains", provenances: ["structural"] },
+      { source: "file:src/a.ts", target: "REQ-1", kind: "contains", provenances: ["structural"] },
+    ];
+    const graph: ArtifactGraph = { nodes, edges };
+
+    const result = impact(graph, ["symbol:src/a.ts#f"], {});
+    expect(result.impactReqs).toEqual(["REQ-1"]);
+    expect(result.affectedDocs).toEqual([]);
+  });
+
+  it("pins the INTENTIONAL multi-REQ task bridge (spec 019 Edge Cases watch item)", () => {
+    // T020 bundles REQ-901 + REQ-902 into one declared unit of work
+    // (task-tag `implements`). Reaching REQ-901 from code legitimately pulls
+    // in T020 and, through it, REQ-902 — unlike doc co-residency this is an
+    // author-declared causal link and must keep working. Sibling task T021
+    // (connected only via doc:tasks `contains`) must stay unreachable.
+    const nodes = new Map<string, GraphNode>();
+    nodes.set("doc:tasks", {
+      id: "doc:tasks",
+      kind: "doc",
+      filePath: "specs/tasks.md",
+      contentHash: "dt",
+    });
+    nodes.set("T020", { id: "T020", kind: "task", filePath: "specs/tasks.md", contentHash: "t20" });
+    nodes.set("T021", { id: "T021", kind: "task", filePath: "specs/tasks.md", contentHash: "t21" });
+    nodes.set("REQ-901", { id: "REQ-901", kind: "req", filePath: "specs/f.md", contentHash: "h1" });
+    nodes.set("REQ-902", { id: "REQ-902", kind: "req", filePath: "specs/f.md", contentHash: "h2" });
+    nodes.set("REQ-903", { id: "REQ-903", kind: "req", filePath: "specs/f.md", contentHash: "h3" });
+    nodes.set("symbol:src/a.ts#fnA", {
+      id: "symbol:src/a.ts#fnA",
+      kind: "symbol",
+      filePath: "src/a.ts",
+      contentHash: "fna",
+    });
+    const edges: GraphEdge[] = [
+      {
+        source: "symbol:src/a.ts#fnA",
+        target: "REQ-901",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
+      { source: "T020", target: "REQ-901", kind: "implements", provenances: ["task-tag"] },
+      { source: "T020", target: "REQ-902", kind: "implements", provenances: ["task-tag"] },
+      { source: "T021", target: "REQ-903", kind: "implements", provenances: ["task-tag"] },
+      { source: "doc:tasks", target: "T020", kind: "contains", provenances: ["structural"] },
+      { source: "doc:tasks", target: "T021", kind: "contains", provenances: ["structural"] },
+    ];
+    const graph: ArtifactGraph = { nodes, edges };
+
+    const result = impact(graph, ["symbol:src/a.ts#fnA"], {});
+    expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-902"]));
+    expect(result.affectedTasks).toContain("T020");
+    // The sibling-task path stays closed: T021 / REQ-903 merely co-reside.
+    expect(result.affectedTasks).not.toContain("T021");
+    expect(result.impactReqs).not.toContain("REQ-903");
+    // tasks.md is attributed as T020's home for context.
+    expect(result.affectedDocs).toContain("doc:tasks");
   });
 });
