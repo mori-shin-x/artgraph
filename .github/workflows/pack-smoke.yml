@@ -34,8 +34,12 @@ jobs:
   pack-smoke:
     name: pack-smoke
     # All non-release-please PRs get an instant no-op skip here.
-    if: startsWith(github.head_ref, 'release-please--branches--')
+    # PR-author gate hardens against branch-name spoofing from forks/misuse.
+    if: >-
+      startsWith(github.head_ref, 'release-please--branches--')
+      && github.event.pull_request.user.login == 'github-actions[bot]'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
