@@ -84,6 +84,29 @@ export function parseAgentsFlag(raw: string): AgentId[] {
   }
 }
 
+// spec 020 (contracts/cli-surface.md §2 / §5, FR-018) — verbatim error UX
+// emitted (and exit 1) when a trace-dependent command finds ZERO shard
+// files. Shared by `artgraph trace report` (T011) and, later, `artgraph
+// impact --diff --tests` (T022, FR-018 explicitly requires "同文言") — one
+// wording, so the two commands never drift on how they point a user at
+// runner setup. Kept in sync with contracts/cli-surface.md §1's `withTrace`
+// example.
+export const TRACE_NO_SHARDS_GUIDANCE = [
+  "ERROR: no trace shards found.",
+  "",
+  "artgraph looked for trace artifacts matching `trace.artifacts`",
+  "(default: .artgraph/trace/*.jsonl) and found none.",
+  "",
+  "To capture trace evidence, add the artgraph vitest runner to your",
+  "vitest config and re-run your test suite:",
+  "",
+  '  import { withTrace } from "artgraph/vitest/config";',
+  "  export default defineConfig(withTrace({ test: { /* ...your config... */ } }));",
+  "",
+  "then run `vitest run` (or your usual test command) to produce",
+  "`.artgraph/trace/*.jsonl`, and re-run this command.",
+].join("\n");
+
 // spec 013 (FR-002 / SC-006) — verbatim error UX emitted to stderr when
 // `--agents=<list>` is missing on a path that runs the Skills or
 // agent-context distribution stage. The 3-option enumeration is part of
