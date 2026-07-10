@@ -70,7 +70,10 @@ artgraph adds the layer *above* the code:
   TypeScript imports. No LLM in the graph, no embedding retrieval, no RAG.
 - **Per-change context routing** — `artgraph impact --diff` returns only the
   specs, docs, and tests a given change touches. Feed *that* to the agent
-  instead of the whole context file.
+  instead of the whole context file. This holds even when one `spec.md`
+  defines several requirements (the Spec Kit / Kiro default): a sibling
+  requirement with no code dependency of its own doesn't ride along just
+  because it's declared in the same file.
 - **Drift as a CI gate** — `artgraph check --gate` fails the build when a
   spec changed but the code/tests didn't. Byte-identical output on every run.
 - **Requirement IDs are the primary key** — the same `REQ-001` string is what

@@ -210,6 +210,12 @@ artgraph impact src/auth.ts:validateToken --format json |
 
 典型ワークフロー例 — `Files: src/auth.ts:validateToken` を tasks.md に書いた後、spec.md で `REQ-001 depends_on REQ-007` を追加すると、次の `artgraph plan-coverage` 実行で `impactReqs = ["REQ-001", "REQ-007"]` / `originReqs = ["REQ-001"]` となり、`REQ-007` がドリフト候補として可視化されます。
 
+### 同一 spec.md 内の兄弟 REQ は blast radius に入らない (spec 019)
+
+Spec Kit / Kiro の標準構成は「1 feature = 1 spec.md に複数 REQ」です。`artgraph impact` / `artgraph plan-coverage` の `impactReqs` は、対象の file / symbol が実際にコードで到達する REQ (`@impl` / `imports` 経由) と、spec 側で明示された依存 (`depends_on` / `derives_from`) の到達先だけを含みます。**同じ spec.md に定義されているだけの兄弟 REQ は、コード上の依存が無ければ `impactReqs` / `affectedFiles` / `drifted` に混入しません。**
+
+一方、到達した REQ の親 spec doc は帰属情報として `affectedDocs` に残り続け、**doc 自体は drift 判定の対象のまま**です — spec ファイルの contentHash が lock とずれていれば `drifted` に doc エントリとして現れます(`plan-coverage` にはこの帰属フィールドはありません)。その feature 全体の文脈が必要な場合は、`affectedDocs` に載っている spec ファイルを開いて読んでください — 兄弟 REQ を `impactReqs` に混ぜて渡すのではなく、必要な時に agent 自身が spec を読みに行く設計です。
+
 ### `Files:` syntax 例(symbol 含む)
 
 ```markdown

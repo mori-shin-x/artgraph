@@ -35,7 +35,7 @@ afterEach(() => {
 });
 
 describe("check --diff text output (US3, FR-008)", () => {
-  it("(a) new issues → summary + new detail + suppressed count + impact pointer (§4.1)", async () => {
+  it("(a) new issues → summary + new detail; no pre-existing debt left in scope (§4.1, spec 019 US3)", async () => {
     const dir = track(makeRepoWithDebt("artgraph-out-newa-"));
     introduceNewOrphan(dir);
     const { stdout, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
@@ -46,27 +46,29 @@ describe("check --diff text output (US3, FR-008)", () => {
     // New-issue detail, grouped with a per-category count.
     expect(stdout).toMatch(/ORPHANS \(1\):/);
     expect(stdout).toContain("REQ-999 (implements)");
-    // Pre-existing debt is collapsed to a suppressed count + a pointer.
-    expect(stdout).toMatch(/pre-existing issue(s)? in blast radius (was|were) suppressed\./);
-    expect(stdout).toContain("artgraph impact --diff");
-    // SC-004: the pre-existing uncovered REQ is NOT enumerated in the output.
+    // spec 019 (issue #215): hub.ts's blast radius no longer reaches the
+    // doc-sibling debt REQ-200 (no code dependency between them) — there is
+    // nothing pre-existing left in scope, so neither the suppressed-count
+    // line nor the impact pointer print anymore.
+    expect(stdout).not.toMatch(/pre-existing issue/);
+    expect(stdout).not.toContain("artgraph impact --diff");
+    // SC-004 (unchanged): the pre-existing uncovered REQ is NOT enumerated.
     expect(stdout).not.toContain("REQ-200");
   });
 
-  it("(b) no new issues but pre-existing debt → concise + parenthetical suppressed count (§4.2)", async () => {
+  it("(b) hub.ts edit → doc-sibling debt no longer in scope → bare concise line (was §4.2, spec 019 US3)", async () => {
     const dir = track(makeRepoWithDebt("artgraph-out-preb-"));
     appendFileSync(join(dir, "src", "hub.ts"), "\n// harmless comment\n");
     const { stdout, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain("No new issues introduced by this change.");
-    // Parenthetical suppressed count (§4.2 shape).
-    expect(stdout).toMatch(
-      /\(\d+ pre-existing issue(s)? in blast radius (was|were) suppressed\.\)/,
-    );
-    // SC-004: pre-existing debt list is NOT dumped.
+    // spec 019 (issue #215): REQ-200 is no longer part of hub.ts's blast
+    // radius at all (no code dependency, only same-doc siblinghood) — there
+    // is nothing pre-existing left in scope to suppress, so this scenario
+    // now matches the bare §4.3 shape (no parenthetical suppressed line).
+    expect(stdout).not.toContain("suppressed");
     expect(stdout).not.toContain("REQ-200");
-    // No impact pointer when there are zero new issues.
     expect(stdout).not.toContain("artgraph impact --diff");
   });
 
@@ -83,7 +85,7 @@ describe("check --diff text output (US3, FR-008)", () => {
 });
 
 describe("check --diff json output (US3, FR-009, contract §3)", () => {
-  it("(C7) keeps existing fields and adds newIssues/suppressedCount/baselineStatus", async () => {
+  it("(C7) keeps existing fields and adds newIssues/suppressedCount/baselineStatus (spec 019 US3)", async () => {
     const dir = track(makeRepoWithDebt("artgraph-json-c7-"));
     introduceNewOrphan(dir);
     const { stdout, exitCode } = await runAt(dir, [
@@ -103,15 +105,19 @@ describe("check --diff json output (US3, FR-009, contract §3)", () => {
     expect(Array.isArray(j.coverage)).toBe(true);
     expect(Array.isArray(j.testFailures)).toBe(true);
     expect(Array.isArray(j.warnings)).toBe(true);
-    // scoped orphans include BOTH the new one and (in-scope) content.
+    // scoped orphans include the new one.
     expect(j.orphans).toContain("file:src/hub.ts -> REQ-999 (implements)");
-    // pre-existing uncovered is present in the scoped list…
-    expect(j.uncovered).toContain("REQ-200");
-    // …but suppressed from newIssues.
+    // spec 019 (issue #215): REQ-200 no longer enters scope via doc-sibling
+    // containment — hub.ts's blast radius is exactly REQ-100 (covered), so
+    // there is no pre-existing uncovered REQ left in the scoped list either.
+    expect(j.uncovered).not.toContain("REQ-200");
     expect(j.newIssues.uncovered).not.toContain("REQ-200");
     // Added fields.
     expect(j.newIssues.orphans).toEqual(["file:src/hub.ts -> REQ-999 (implements)"]);
-    expect(j.suppressedCount).toBeGreaterThanOrEqual(1);
+    // Nothing pre-existing is in scope to suppress — the new orphan is the
+    // only scoped issue, and it's new (not suppressed).
+    expect(j.suppressedCount).toBe(0);
+    // The orphan alone is still a scoped issue → baseline is still computed.
     expect(j.baselineStatus).toBe("computed");
     expect(j.pass).toBe(false);
   });
@@ -146,10 +152,15 @@ describe("check --diff matrix: gate × format × baselineStatus", () => {
 
   const cases: Case[] = [
     {
-      name: "computed + no new (pre-existing only)",
+      // spec 019 (issue #215): hub.ts's blast radius no longer reaches the
+      // doc-sibling debt REQ-200 (no code dependency) — the scope is fully
+      // clean (REQ-100 alone, covered), so the lazy-eval short-circuit fires
+      // and baselineStatus is "skipped", not "computed" (was "computed +
+      // no new (pre-existing only)" pre-spec-019).
+      name: "skipped (hub edit — doc-sibling debt out of scope, spec 019)",
       make: () => makeRepoWithDebt("artgraph-mx-comp-clean-"),
       edit: (d) => appendFileSync(join(d, "src", "hub.ts"), "\n// noop\n"),
-      status: "computed",
+      status: "skipped",
       hasNew: false,
     },
     {

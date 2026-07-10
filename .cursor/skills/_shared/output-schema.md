@@ -79,10 +79,11 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
 ```json
 {
   "affectedFiles": ["src/foo.ts"],                     // source file paths transitively impacted
-  "affectedDocs": ["doc:012-skills-expansion/spec.md"],// doc node IDs (prefixed "doc:")
-  "affectedReqs": ["FR-001", "012-skills-expansion/FR-002"],
+  "affectedDocs": ["doc:012-skills-expansion/spec.md"],// parent spec doc(s) of reached REQs/tasks — attribution context, not BFS reach (spec 019)
+  "impactReqs": ["FR-001", "012-skills-expansion/FR-002"], // REQ ids reached by the forward BFS
+  "originReqs": ["FR-001"],                            // REQ ids the start ids @impl-claim directly (1-hop reverse implements)
   "affectedTasks": ["012-skills-expansion/T001"],      // task node IDs (may be empty)
-  "drifted": [                                         // same DriftEntry shape as check
+  "drifted": [                                         // same DriftEntry shape as check; attributed affectedDocs entries participate too
     {
       "nodeId": "FR-001",
       "kind": "req",
@@ -90,7 +91,7 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
       "currentHash": "def456…"
     }
   ],
-  "summary": {                                         // optional — present when impact() returns one
+  "summary": {                                         // always present
     "docs": 12,
     "reqs": 39,
     "files": 0,
@@ -98,6 +99,8 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
   }
 }
 ```
+
+Array order is not part of the contract — treat every array as an unordered set. Same-spec sibling REQs with no code or dependency link of their own never appear in `impactReqs` (spec 019); when you need whole-feature context, open the spec file listed in `affectedDocs` instead.
 
 ## artgraph rename
 

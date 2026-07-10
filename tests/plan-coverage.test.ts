@@ -37,8 +37,14 @@ interface FixtureRoot {
 // implemented by src/auth/login.ts AND src/auth/session.ts; AUTH-002 by
 // src/auth/session.ts only; AUTH-003 by src/auth/logout.ts. tasks.md
 // declares `Files: src/auth/login.ts` only — so the implicit blast from
-// that file should be AUTH-001 (mentioned only if the user wrote it in
-// tasks/plan/spec) and via the doc → other-req hops, AUTH-002 and AUTH-003.
+// that file is AUTH-001 alone (mentioned only if the user wrote it in
+// tasks/plan/spec). Since spec 019 (issue #215), same-spec-doc siblings
+// (AUTH-002 / AUTH-003) are NOT swept in merely because they share
+// doc:auth-design with AUTH-001 — `contains` reverse traversal no longer
+// bridges req -> parent doc -> sibling req. Tests below that need AUTH-002 /
+// AUTH-003 to be reachable explicitly list `session.ts` / `logout.ts` in
+// `Files:` (real code-dependency origin) instead of relying on doc
+// containment.
 function setupFixture(opts?: {
   tasksBody?: string;
   planBody?: string;
@@ -152,15 +158,21 @@ describe("runPlanCoverage — by-sourceFile + by-FR dual axis", () => {
     expect(result.json.implicitImpacts).toBeDefined();
     expect(result.json.implicitImpactsByReq).toBeDefined();
 
-    // Login.ts brings AUTH-001 + (via doc:auth-design containment) AUTH-002
-    // and AUTH-003. None are mentioned in tasks/plan/spec text → all implicit.
+    // spec 019 (FR-010, issue #215): login.ts `@impl`s AUTH-001 only.
+    // AUTH-002 is still legitimately reached — session.ts implements BOTH
+    // AUTH-001 and AUTH-002, so `implements` (unaffected by this spec, still
+    // bidirectional) bridges login.ts -> AUTH-001 -> session.ts -> AUTH-002
+    // via a real shared-implementer file, not doc co-location. AUTH-003
+    // (logout.ts's lone claim, no shared-file bridge to login.ts) must NOT
+    // leak in anymore merely because it shares doc:auth-design with
+    // AUTH-001/002 — that pure same-spec-doc containment amplification is
+    // exactly what issue #215 reported and this spec removes (US1/US2).
     const reqIds = new Set<string>();
     for (const group of result.json.implicitImpacts) {
       for (const req of group.impactReqs) reqIds.add(req.reqId);
     }
-    expect(reqIds.has("AUTH-001")).toBe(true);
-    expect(reqIds.has("AUTH-002")).toBe(true);
-    expect(reqIds.has("AUTH-003")).toBe(true);
+    expect(reqIds).toEqual(new Set(["AUTH-001", "AUTH-002"]));
+    expect(reqIds.has("AUTH-003")).toBe(false);
 
     // by-FR axis is the inversion of the by-sourceFile axis.
     const byReqIds = result.json.implicitImpactsByReq.map((r) => r.reqId);
@@ -1310,5 +1322,167 @@ describe("runPlanCoverage — symbol-mode US1 (Phase 3)", () => {
     });
     expect(result.text).toContain("Drift candidates");
     expect(result.text).toContain("REQ-007");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spec 019 (US2, T006) — dedicated pin for the spec's Independent Test:
+// REQ-001/005/009 declared together in ONE spec.md (Spec Kit standard
+// layout), `docGraph.autoContains` left at its default (true) so `contains`
+// edges actually exist — unlike `setupSymbolFixture` above, which disables
+// autoContains and therefore never exercised the doc-sibling leak issue
+// #215 reports. A symbol-unit `Files:` entry for validateToken must NOT pull
+// its same-spec-doc siblings (REQ-005 / REQ-009) into `impactReqs`.
+// ---------------------------------------------------------------------------
+
+interface SameSpecFixture {
+  root: string;
+  specDir: string;
+  tasksPath: string;
+  planPath: string;
+}
+
+function setupSameSpecFixture(opts?: {
+  tasksBody?: string;
+  /** REQ-001 depends_on REQ-007 (same spec.md) — spec 019 AS2-2. */
+  addReq007DependsOnReq001?: boolean;
+}): SameSpecFixture {
+  const root = mkdtempSync(join(tmpdir(), "artgraph-pc-samespec-"));
+  const specDir = join(root, "specs/001-symbol-demo");
+  mkdirSync(specDir, { recursive: true });
+
+  // Analysis target spec.md — intentionally REQ-ID-free (mirrors
+  // `setupSymbolFixture`) so the mention detector doesn't eclipse implicit
+  // impacts. The REQ-001/005/009 (+ REQ-007) definitions all live TOGETHER
+  // in one external spec.md below — that co-location is the whole point of
+  // this fixture (spec 019 US2 / issue #215's "1 feature = 1 spec.md with
+  // multiple REQs" scenario).
+  writeFileSync(
+    join(specDir, "spec.md"),
+    [
+      "# Symbol Demo Spec (spec 019 US2 fixture)",
+      "",
+      "Intentionally REQ-ID-free body — REQ definitions live in the external",
+      "same-spec-doc catalogue below.",
+      "",
+    ].join("\n"),
+  );
+
+  const reqLines = [
+    "- REQ-001: validateToken must reject empty bearer tokens.",
+    "- REQ-005: issueToken must mint a fresh bearer token tied to a user id.",
+    "- REQ-009: revokeToken must mark a token as revoked.",
+  ];
+  if (opts?.addReq007DependsOnReq001) {
+    reqLines.push("- REQ-007: audit hook. (depends_on: REQ-001)");
+  }
+  const externalSpecDir = join(root, "specs/auth-design");
+  mkdirSync(externalSpecDir, { recursive: true });
+  writeFileSync(
+    join(externalSpecDir, "requirements.md"),
+    [
+      "# Auth Requirements (same spec.md, spec 019 US2 fixture)",
+      "",
+      "## Requirements",
+      "",
+      ...reqLines,
+      "",
+    ].join("\n"),
+  );
+
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(
+    join(root, "src/auth.ts"),
+    [
+      "export function validateToken(token: string): boolean {",
+      "  // @impl REQ-001",
+      "  return token.length > 0;",
+      "}",
+      "export function issueToken(userId: string): string {",
+      "  // @impl REQ-005",
+      "  return `token:${userId}`;",
+      "}",
+      "export function revokeToken(token: string): void {",
+      "  // @impl REQ-009",
+      "  void token;",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  writeFileSync(
+    join(root, ".artgraph.json"),
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.test.ts"],
+      lockFile: ".trace.lock",
+      mode: "symbol",
+      // Deliberately NO `docGraph.autoContains` override — defaults to true,
+      // so `contains` edges exist and this fixture actually exercises the
+      // direction constraint (unlike `setupSymbolFixture`'s autoContains:false).
+    }),
+  );
+
+  const tasksBody =
+    opts?.tasksBody ??
+    ["# Tasks", "", "### T001", "", "Files: src/auth.ts:validateToken", ""].join("\n");
+  const tasksPath = join(specDir, "tasks.md");
+  writeFileSync(tasksPath, tasksBody);
+
+  const planPath = join(specDir, "plan.md");
+  writeFileSync(planPath, "# Plan\n\nNo REQ references.\n");
+  return { root, specDir, tasksPath, planPath };
+}
+
+describe("runPlanCoverage — same-spec REQ siblings excluded from impactReqs (spec 019 US2, T006)", () => {
+  let fx: SameSpecFixture;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("AS2-1: Files: src/auth.ts:validateToken → impactReqs is REQ-001 only (siblings REQ-005/009 excluded)", () => {
+    fx = setupSameSpecFixture();
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    expect(g.impactReqs.map((r: { reqId: string }) => r.reqId)).toEqual(["REQ-001"]);
+    // Two-axis comparison (impactReqs \ originReqs) is empty — no drift.
+    const impactIds = g.impactReqs.map((r: { reqId: string }) => r.reqId);
+    const originIds = g.originReqs.map((r: { reqId: string }) => r.reqId);
+    expect(impactIds.filter((id: string) => !originIds.includes(id))).toEqual([]);
+  });
+
+  it("AS2-2: `REQ-001 depends_on REQ-007` (same spec) → impactReqs = [REQ-001, REQ-007]; siblings still excluded", () => {
+    fx = setupSameSpecFixture({ addReq007DependsOnReq001: true });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    const impactIds = g.impactReqs.map((r: { reqId: string }) => r.reqId).sort();
+    const originIds = g.originReqs.map((r: { reqId: string }) => r.reqId);
+    expect(impactIds).toEqual(["REQ-001", "REQ-007"]);
+    expect(originIds).toEqual(["REQ-001"]);
+    // Drift candidate axis surfaces REQ-007 only — REQ-005/009 never appear.
+    const drift = impactIds.filter((id) => !originIds.includes(id));
+    expect(drift).toEqual(["REQ-007"]);
   });
 });

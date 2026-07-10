@@ -66,6 +66,8 @@ Compare per-entry `impactReqs` against `originReqs`:
 - **Sets equal → no drift.** Claim and reach match.
 - **`originReqs \ impactReqs` non-empty → orphan claim.** Out of scope for this Skill — `artgraph check --gate` (Stop hook) will report it.
 
+**Same-spec siblings are not implicit impacts.** `impactReqs` only lists REQs the `Files:` entry actually reaches — via code (`@impl`, `imports`) or explicit spec relations (`depends_on` / `derives_from`). A REQ that merely lives in the same `spec.md` as a reached REQ does **not** appear here just because they're co-located, even under the common "one spec.md, many REQs" layout. If you need the full feature context (not just this entry's blast radius), run `artgraph impact` on the same file/symbol and read its `affectedDocs` — that points at the spec file(s) worth opening directly.
+
 #### Diagnostics
 
 - `unresolvedSymbol` (`{ sourceFile, symbol, line }`): the file exists but no exported symbol of that name was found in the symbol-mode graph. The entry is excluded from `implicitImpacts`. Ask the user whether to (a) fix the typo, (b) drop the `:symbol` suffix to fall back to file unit, or (c) re-run `<PM-exec> scan` if the symbol was just added.

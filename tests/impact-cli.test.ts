@@ -16,7 +16,7 @@
 //     fixture (FIXTURE_DIR) so we don't pay the symbol-mode scan cost.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, cpSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAt, FIXTURE_DIR } from "./helpers.js";
@@ -473,5 +473,184 @@ describe("CLI: impact — input validation (spec 016 keeps spec 014 behavior)", 
     const { exitCode, stderr } = await runAt(FIXTURE_DIR, ["impact"]);
     expect(exitCode).toBe(1);
     expect(stderr).toMatch(/no.*target|no start source/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spec 019 (T008, SC-001) — issue #215 minimal repro, CLI E2E. `mode: symbol`
+// with `docGraph.autoContains` at its DEFAULT (true) — unlike
+// `setupSymbolModeFixture` above (which sets `autoContains: false` and so
+// never exercises the doc-sibling containment leak). fnA (`@impl REQ-901`) /
+// fnB (`@impl REQ-902`) co-located in one spec.md; fnA has zero code
+// dependency on fnB.
+// ---------------------------------------------------------------------------
+
+function writeContainsReproSpec(root: string, extraReqLine?: string): void {
+  mkdirSync(join(root, "specs"), { recursive: true });
+  writeFileSync(
+    join(root, "specs", "901-demo.md"),
+    [
+      "# 901 Demo Spec (issue #215 minimal repro)",
+      "",
+      "## Requirements",
+      "",
+      "- REQ-901: fnA does X",
+      "- REQ-902: fnB does Y",
+      ...(extraReqLine ? [extraReqLine] : []),
+      "",
+    ].join("\n"),
+  );
+}
+
+function writeArtgraphConfig(root: string): void {
+  writeFileSync(
+    join(root, ".artgraph.json"),
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.test.ts"],
+      lockFile: ".trace.lock",
+      mode: "symbol",
+      // Deliberately NO `docGraph.autoContains` override — defaults to true.
+    }),
+  );
+}
+
+describe("CLI: impact — issue #215 minimal repro (spec 019 contains direction, T008/SC-001)", () => {
+  let root: string;
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("repro step 1 (AS1-1): fnA/fnB same file, no code dependency → impactReqs=[REQ-901] only", async () => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-215-repro1-"));
+    writeContainsReproSpec(root);
+    writeArtgraphConfig(root);
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "sample.ts"),
+      [
+        "export function fnA(): void {",
+        "  // @impl REQ-901",
+        "}",
+        "",
+        "export function fnB(): void {",
+        "  // @impl REQ-902",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const { stdout, exitCode } = await runAt(root, [
+      "impact",
+      "src/sample.ts:fnA",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.impactReqs).toEqual(["REQ-901"]);
+    expect(result.impactReqs).not.toContain("REQ-902");
+    expect(result.drifted.some((d: { nodeId: string }) => d.nodeId === "REQ-902")).toBe(false);
+    // Attribution: the parent spec doc still surfaces as context.
+    expect(result.affectedDocs.length).toBeGreaterThan(0);
+  });
+
+  it("repro step 2 (AS1-2): fnB in a separate file, no code dependency → impactReqs=[REQ-901], other.ts excluded", async () => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-215-repro2-"));
+    writeContainsReproSpec(root);
+    writeArtgraphConfig(root);
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "sample.ts"),
+      ["export function fnA(): void {", "  // @impl REQ-901", "}", ""].join("\n"),
+    );
+    writeFileSync(
+      join(root, "src", "other.ts"),
+      ["export function fnB(): void {", "  // @impl REQ-902", "}", ""].join("\n"),
+    );
+
+    const { stdout, exitCode } = await runAt(root, [
+      "impact",
+      "src/sample.ts:fnA",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.impactReqs).toEqual(["REQ-901"]);
+    expect(result.affectedFiles).not.toContain("src/other.ts");
+  });
+
+  it("repro step 3 (AS1-5): REQ-901/902 split across separate spec docs → behavior unchanged (still excluded)", async () => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-215-repro3-"));
+    mkdirSync(join(root, "specs"), { recursive: true });
+    writeFileSync(
+      join(root, "specs", "901.md"),
+      ["# 901 Spec", "", "## Requirements", "", "- REQ-901: fnA does X", ""].join("\n"),
+    );
+    writeFileSync(
+      join(root, "specs", "902.md"),
+      ["# 902 Spec", "", "## Requirements", "", "- REQ-902: fnB does Y", ""].join("\n"),
+    );
+    writeArtgraphConfig(root);
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "sample.ts"),
+      ["export function fnA(): void {", "  // @impl REQ-901", "}", ""].join("\n"),
+    );
+    writeFileSync(
+      join(root, "src", "other.ts"),
+      ["export function fnB(): void {", "  // @impl REQ-902", "}", ""].join("\n"),
+    );
+
+    const { stdout, exitCode } = await runAt(root, [
+      "impact",
+      "src/sample.ts:fnA",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.impactReqs).toEqual(["REQ-901"]);
+    expect(result.affectedFiles).not.toContain("src/other.ts");
+  });
+
+  it("AS1-3: sample.ts imports fnB → REQ-902 IS included (legit code-dependency blast radius)", async () => {
+    // NOTE: the TS parser attributes cross-file `imports` edges at FILE
+    // grain even in symbol mode (`src/parsers/typescript.ts` `sourceId =
+    // file:${relPath}`, unrelated to spec 019 — barrel/re-export chains are
+    // the one exception, see issue #191). A symbol-unit start (`fnA`,
+    // deliberately excluding its parent file per R-006) would never see
+    // that edge regardless of this fix, so this regression pin uses a
+    // file-unit entry (`src/sample.ts`), which resolveStartIds seeds
+    // together with the file node itself — exactly where the real
+    // `imports` edge is anchored.
+    root = mkdtempSync(join(tmpdir(), "artgraph-215-repro-imports-"));
+    writeContainsReproSpec(root);
+    writeArtgraphConfig(root);
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "other.ts"),
+      ["export function fnB(): void {", "  // @impl REQ-902", "}", ""].join("\n"),
+    );
+    writeFileSync(
+      join(root, "src", "sample.ts"),
+      [
+        'import { fnB } from "./other.js";',
+        "",
+        "export function fnA(): void {",
+        "  // @impl REQ-901",
+        "  fnB();",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const { stdout, exitCode } = await runAt(root, ["impact", "src/sample.ts", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-902"]));
+    expect(result.affectedFiles).toContain("src/other.ts");
   });
 });

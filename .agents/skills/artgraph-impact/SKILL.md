@@ -78,10 +78,13 @@ The result carries the **dual-axis impact view** plus drift:
 | --- | --- |
 | `impactReqs` | REQs reached by forward BFS from the start ids (file or symbol nodes) |
 | `originReqs` | REQs the start ids `@impl`-claim directly (1-hop reverse `implements` edge) |
-| `affectedFiles` / `affectedDocs` / `affectedTasks` | other node kinds reached by the same BFS |
-| `drifted` | lockfile drift on any of the above |
+| `affectedFiles` / `affectedTasks` | other node kinds reached by the same BFS |
+| `affectedDocs` | parent spec doc(s) of every reached REQ/task, attached as **context**, not BFS reach (see below) |
+| `drifted` | lockfile drift on any of the above (`affectedDocs` entries included) |
 
 See [output schema](../_shared/output-schema.md) for the full field shapes.
+
+**Same-spec siblings are not blast radius.** `impactReqs` only contains REQs the edit actually reaches — through code (`@impl`, `imports`) or explicit spec relations (`depends_on` / `derives_from`). A REQ that merely lives in the same `spec.md` as a reached REQ, with no code or dependency link of its own, does **not** appear in `impactReqs` / `affectedFiles` / `drifted`, even under the common Spec Kit / Kiro layout of "one spec.md, many REQs". Its parent spec doc still shows up in `affectedDocs` so you can open that file for full feature context, but don't treat every REQ inside it as touched by this edit — cite only the REQs actually listed in `impactReqs`.
 
 ### 4. Inject into the response
 
