@@ -347,28 +347,28 @@ export function parseMarkdownContent(
               preset.implRe.lastIndex = 0;
               let m: RegExpExecArray | null;
               while ((m = preset.implRe.exec(paragraphText)) !== null) {
-                const target = m[1].trim();
-                if (target === "") continue;
-                edges.push({
-                  source: taskId,
-                  target,
-                  kind: "implements",
-                  provenances: ["task-tag"],
-                });
+                for (const target of splitTagTargets(m[1])) {
+                  edges.push({
+                    source: taskId,
+                    target,
+                    kind: "implements",
+                    provenances: ["task-tag"],
+                  });
+                }
               }
             }
             if (preset.verifiesRe) {
               preset.verifiesRe.lastIndex = 0;
               let m: RegExpExecArray | null;
               while ((m = preset.verifiesRe.exec(paragraphText)) !== null) {
-                const target = m[1].trim();
-                if (target === "") continue;
-                edges.push({
-                  source: taskId,
-                  target,
-                  kind: "verifies",
-                  provenances: ["task-tag"],
-                });
+                for (const target of splitTagTargets(m[1])) {
+                  edges.push({
+                    source: taskId,
+                    target,
+                    kind: "verifies",
+                    provenances: ["task-tag"],
+                  });
+                }
               }
             }
           }
@@ -526,6 +526,21 @@ export function parseMarkdownContent(
   });
 
   return { nodes, edges, warnings, inlineLinks };
+}
+
+// Task-tag target lists are comma-separated (issue #214): a spec-kit
+// `@impl(FR-001, FR-002)` — or any custom implementsTagRe / verifiesTagRe
+// whose capture carries a comma list — yields one edge per ID instead of a
+// single bogus `"FR-001, FR-002"` target that can never match a node. Empty
+// segments (trailing comma, double comma, whitespace-only capture) are
+// dropped silently, matching extractAnnotations' comma grammar. Captures
+// without commas pass through unchanged (single trimmed target), so the
+// builtin presets' single-ID behavior is identical to before.
+function splitTagTargets(capture: string): string[] {
+  return capture
+    .split(",")
+    .map((t) => t.trim())
+    .filter((t) => t !== "");
 }
 
 interface ExtractInlineLinksContext {
