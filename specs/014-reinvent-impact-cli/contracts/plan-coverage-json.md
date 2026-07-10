@@ -151,11 +151,13 @@
 
 | kind | 出力条件 | 付加 field |
 |---|---|---|
-| `"missingFilesSection"` | `--require-files-section` ON で tasks.md の task block に `Files:` セクション無し | `taskId: string` / `line: int` |
+| `"missingFilesSection"` | `--require-files-section` ON で tasks.md の task block(`### T013` 形式の heading、または `- [ ] T013 ...` 形式の flat checklist item — issue #220)に `Files:` セクション無し | `taskId: string` / `line: int` |
 | `"unresolvedFilePath"` | `Files:` セクションに書かれた path が graph にも fs にも存在しない(typo 警告) | `sourceFile: string` / `line: int` |
-| `"emptyExtraction"` | tasks.md / plan.md の両方から file 抽出ゼロ(`unresolvedFilePath` の summary 版) | (なし) |
+| `"emptyExtraction"` | 分析対象ゼロ: (a) tasks.md / plan.md の両方から file 抽出ゼロ、または (b) 抽出 entry が 1 件も graph 上の分析起点に解決できなかった(例: Stage B fallback が fs に実在するだけの非グラフファイル `package.json` 等を拾ったのみ — issue #220 の silent green 対策) | (なし) |
 
 未知 kind が将来追加されるので、consumer は **未知 kind を無視せず warning として表示** することが推奨される。
+
+text format では、暗黙波及ゼロかつ `emptyExtraction` 発出時のメイン行は「No implicit impacts.」ではなく「Nothing to analyze: ...」で始まる(task block が 1 件以上あり `Files:` セクションが 0 件なら `Nothing to analyze: no Files: sections found across N task(s).`)。「No implicit impacts.」は実際に分析が走った上で暗黙波及ゼロだった場合のみ出力する(issue #220)。
 
 ---
 
