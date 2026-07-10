@@ -163,14 +163,18 @@ Wire the scan / reconcile / check loop into a supported SDD tool. See
 [docs/sdd-integration.md](./sdd-integration.md) for the full workflow.
 
 ```bash
-artgraph integrate speckit                 # idempotent
-artgraph integrate speckit --gate          # add the before_implement gate hook
-artgraph integrate speckit --no-gate       # remove the before_implement hook
+artgraph integrate speckit                 # idempotent; before_implement gets a non-blocking check --diff preview
+artgraph integrate speckit --gate          # upgrade before_implement to a blocking gate (check --gate)
+artgraph integrate speckit --no-gate       # remove artgraph's before_implement hook
 artgraph integrate speckit --uninstall     # remove the extension dir + every artgraph hook entry
 artgraph integrate kiro                    # writes .kiro/steering/artgraph.md
 artgraph integrate kiro --force            # overwrite a hand-edited steering file
 artgraph integrate list                    # detected / installed status per tool
 ```
+
+Note: the opt-in `--gate` wires `artgraph check --gate`, an absolute check
+over every REQ — on a brand-new spec it always exits 2 before the first
+implementation lands (expected; see issue #178 for the gating-policy work).
 
 ## `artgraph doctor`
 

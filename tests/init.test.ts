@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { parse as parseYaml } from "yaml";
 import {
   runInit,
   detectProject,
@@ -710,14 +711,25 @@ describe("runInit default behavior (P0)", () => {
     expect(() => runInit(tmp, { noAgentContext: true })).not.toThrow();
   });
 
-  it("integrate-auto passes gate-on to speckit (before_implement hook registered)", () => {
-    // Gate-on is the auto-integrate default for speckit (issue #135); the
-    // standalone `artgraph integrate speckit --no-gate` is the opt-out.
+  it("integrate-auto wires a non-blocking before_implement preview, not the gate (issue #217)", () => {
+    // Issue #217 (supersedes the #135-era gate-on default): the blocking
+    // `check --gate` hook always exits 2 right before the FIRST
+    // /speckit-implement of a new spec, so auto-integrate wires the
+    // non-blocking `check --diff` preview. `artgraph integrate speckit
+    // --gate` is the explicit opt-in for the blocking gate.
     mkdirSync(join(tmp, ".specify"));
     runInit(tmp);
     const yml = readFileSync(join(tmp, ".specify", "extensions.yml"), "utf-8");
-    expect(yml).toMatch(/before_implement:/);
-    expect(yml).toMatch(/command:\s*artgraph\.check-gate/);
+    const parsed = parseYaml(yml) as {
+      hooks: {
+        before_implement?: Array<{ extension: string; command: string; optional: boolean }>;
+      };
+    };
+    const entries = parsed.hooks.before_implement?.filter((e) => e.extension === "artgraph");
+    expect(entries).toHaveLength(1);
+    expect(entries![0]!.command).toBe("artgraph.check-diff");
+    expect(entries![0]!.optional).toBe(true);
+    expect(yml).not.toMatch(/command:\s*artgraph\.check-gate/);
   });
 });
 
