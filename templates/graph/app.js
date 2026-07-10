@@ -83,6 +83,20 @@
       },
     },
     {
+      // spec 020 FR-021: `exercises` edges are execution EVIDENCE (a tagged
+      // green test ran this code), not a declared `implements`/`verifies`
+      // intent — dashed line-style keeps that distinction legible at a
+      // glance, matching the `state-uncovered` node's dashed border
+      // convention above. Declared before the dim/highlight rules so those
+      // "hard overlay" selectors still win layering (they don't touch
+      // line-style, but keeping the cascade order consistent with the rest
+      // of this sheet avoids surprises if they ever do).
+      selector: 'edge[kind = "exercises"]',
+      style: {
+        "line-style": "dashed",
+      },
+    },
+    {
       // Dim rule. Declared BEFORE `.highlighted` and `node.selected` so those
       // "hard overlay" rules win the opacity cascade: a search-dimmed node
       // that is also highlighted or selected (the user tapped it, or it's a
