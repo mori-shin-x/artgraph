@@ -202,7 +202,19 @@ export function excludeStaleEvidence(
   return { ...trace, perReq, reqsByNode };
 }
 
-function ownerFilePath(nodeId: string): string | undefined {
+/**
+ * The repo-relative path of the file a `file:`/`symbol:` node id belongs to
+ * (`file:src/x.ts` -> `src/x.ts`, `symbol:src/x.ts#fn` -> `src/x.ts`),
+ * `undefined` for any other id shape. Exported (spec 020 T022 follow-up,
+ * file-mode `--tests` fix) so `src/commands/impact.ts` can join startIds
+ * against `IngestedTrace.reqsByNode` keys across GRAINS: ingest keys its
+ * evidence at symbol grain regardless of `.artgraph.json`'s `mode` (its name
+ * table resolves hit names from source text; it is `src/graph/builder.ts`
+ * that degrades the merged edge target to file grain in a file-mode graph),
+ * while a file-mode graph's startIds are `file:` grain — so an exact node-id
+ * comparison structurally never matches there.
+ */
+export function ownerFilePath(nodeId: string): string | undefined {
   if (nodeId.startsWith("file:")) return nodeId.slice("file:".length);
   if (nodeId.startsWith("symbol:")) {
     const rest = nodeId.slice("symbol:".length);

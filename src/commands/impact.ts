@@ -267,18 +267,50 @@ export function registerImpactCommand(program: Command): void {
       // tagged-test set (the trace only tracks test membership at REQ grain,
       // not per-node — see `IngestedTrace.perReq[reqId].tests`'s doc).
       if (opts.tests && ingestedTrace) {
+        const { excludeStaleEvidence, ownerFilePath } = await import("../trace/report.js");
         const effectiveTrace = excludeStaleExercises
-          ? (await import("../trace/report.js")).excludeStaleEvidence(
-              ingestedTrace,
-              excludeStaleExercises,
-            )
+          ? excludeStaleEvidence(ingestedTrace, excludeStaleExercises)
           : ingestedTrace;
 
-        const reachingReqIds = new Set<string>();
+        // Grain-aware startId <-> evidence join (file-mode fix, T021a2
+        // regression). `reqsByNode` is keyed at whatever grain INGEST
+        // resolved each hit to (symbol when the name join succeeded, file
+        // on FR-007 fallback) — independent of `.artgraph.json`'s `mode` —
+        // while `startIds` follow the GRAPH's grain (`file:` only in file
+        // mode; `symbol:` + `file:` in symbol mode). Exact node-id equality
+        // therefore structurally never matches in a file-mode project. The
+        // join rules, mirroring `reqExercises`' both-grains philosophy in
+        // `src/trace/report.ts` (FR-007 fail-safe symmetry: compare at
+        // whatever grain the evidence actually landed at):
+        //   1. exact node id match (symbol-mode fast path, unchanged), or
+        //   2. a `file:` startId matches ANY evidence node owned by that
+        //      file (file-unit start covers its members — same semantics as
+        //      `resolveStartIds`' file->symbols expansion), or
+        //   3. a `file:` evidence node (FR-007 fallback) matches any
+        //      startId owned by that file (degraded evidence must still
+        //      reach the REQ, SC-006 — fail-safe, not fail-open).
+        // A symbol-grain startId never matches a DIFFERENT symbol in the
+        // same file (rules 2/3 both require a `file:` grain on one side),
+        // preserving US3-1's symbol-mode precision.
+        const startIdSet = new Set(startIds);
+        const startFilePaths = new Set<string>();
+        const startOwnerPaths = new Set<string>();
         for (const id of startIds) {
-          for (const reqId of effectiveTrace.reqsByNode.get(id) ?? []) {
-            reachingReqIds.add(reqId);
-          }
+          const owner = ownerFilePath(id);
+          if (owner === undefined) continue;
+          startOwnerPaths.add(owner);
+          if (id.startsWith("file:")) startFilePaths.add(owner);
+        }
+
+        const reachingReqIds = new Set<string>();
+        for (const [node, reqIds] of effectiveTrace.reqsByNode) {
+          const owner = ownerFilePath(node);
+          const matches =
+            startIdSet.has(node) ||
+            (owner !== undefined && startFilePaths.has(owner)) ||
+            (node.startsWith("file:") && owner !== undefined && startOwnerPaths.has(owner));
+          if (!matches) continue;
+          for (const reqId of reqIds) reachingReqIds.add(reqId);
         }
 
         const seen = new Set<string>();

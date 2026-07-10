@@ -161,6 +161,94 @@ describe("impact-evidence (T021a, US3-1): --diff --tests lists only the exclusiv
 });
 
 // ---------------------------------------------------------------------------
+// (a2) US3-1 in FILE mode (regression, coordinator repro 2026-07-10): in a
+// default-mode (file) project the graph has no symbol nodes, so `--diff`
+// startIds resolve to `file:<path>` — but `ingestTrace`'s `reqsByNode` is
+// keyed at SYMBOL grain regardless of graph mode (the ingest-side name table
+// resolves `hits` names from source text, independent of `.artgraph.json`'s
+// `mode`; it is `src/graph/builder.ts` that later degrades the edge target
+// to file grain when merging into a file-mode graph). An exact-id lookup of
+// startIds against `reqsByNode` therefore NEVER matches in file mode and
+// `testsToRun` silently comes back `[]` even though `impactReqs` /
+// `reqProvenance` prove the evidence path is intact. FR-018 doesn't restrict
+// grain — file mode must work too.
+// ---------------------------------------------------------------------------
+
+describe("impact-evidence (T021a2, US3-1 file-mode regression): --diff --tests works in a default (file-mode) project", () => {
+  it("file-grain changed node + symbol-grain evidence keys -> REQ-003's tagged test is still listed", async () => {
+    const originalBilling = ["export function charge() {}", ""].join("\n");
+    const tmp = makeRepo(
+      {
+        "src/billing.ts": originalBilling,
+        "src/util.ts": "export function validateEmail() {}\n",
+        "specs/spec.md": [
+          "# Fixture",
+          "",
+          "- REQ-003: charge bills a positive amount.",
+          "- REQ-005: validateEmail (exercised via util.ts, NOT in the diff).",
+          "",
+        ].join("\n"),
+      },
+      { mode: "file" }, // explicit, but identical to omitting `mode` (default)
+    );
+    gitInit(tmp);
+    gitCommitAll(tmp, "init");
+
+    // Working-tree edit to billing.ts only — util.ts stays untouched, so
+    // REQ-005 (which exercises ONLY util.ts) must NOT contribute tests.
+    const editedBilling = [
+      "export function charge() {",
+      "  // billing logic edited after the commit",
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(join(tmp, "src/billing.ts"), editedBilling, "utf-8");
+
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[REQ-003] charge bills a positive amount",
+        testFile: "tests/billing.test.ts",
+        hits: [{ file: "src/billing.ts", fn: "charge" }],
+        hashes: { "src/billing.ts": hashOf(editedBilling) },
+      }),
+      testLine({
+        testName: "[REQ-005] validates an email",
+        testFile: "tests/util.test.ts",
+        hits: [{ file: "src/util.ts", fn: "validateEmail" }],
+        hashes: { "src/util.ts": hashOf("export function validateEmail() {}\n") },
+      }),
+    ]);
+
+    const { stdout, exitCode } = await runAt(tmp, [
+      "impact",
+      "--diff",
+      "--tests",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+
+    // Sanity: the evidence path IS intact at the graph level (file-grain
+    // exercises edge reached REQ-003) — the bug was testsToRun alone
+    // coming back empty.
+    expect(result.impactReqs).toContain("REQ-003");
+
+    expect(result.testsToRun).toEqual([
+      {
+        testFile: "tests/billing.test.ts",
+        testName: "[REQ-003] charge bills a positive amount",
+        reqId: "REQ-003",
+      },
+    ]);
+    // Precision is preserved: REQ-005 exercises only src/util.ts, which is
+    // not in the diff — its test must not be swept in by the grain fix.
+    expect(result.testsToRun.some((t: { reqId: string }) => t.reqId === "REQ-005")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (b) US3-2: static-only vs evidence-only REQ, both reachable, distinguished
 // by provenance.
 // ---------------------------------------------------------------------------
