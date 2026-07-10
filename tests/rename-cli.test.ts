@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { mkdtempSync, cpSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, cpSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { runAt, type RunResult } from "./helpers.js";
 
@@ -374,6 +374,245 @@ describe("CLI: rename --merge/--into", () => {
     expect(exitCode).not.toBe(0);
     expect(stderr).toMatch(/invalid target id/i);
   });
+});
+
+// ---------------------------------------------------------------------------
+// issue #212 — file enumeration is `.artgraph.json`-pattern based, not
+// git-tracked. Untracked (pre-commit) files must be rewritten like committed
+// ones, a zero-hit scan must fail loudly, and JSON output must expose the
+// scanned-file count.
+// ---------------------------------------------------------------------------
+describe("CLI: rename enumeration ignores git tracking state (#212)", () => {
+  /** Fixture copy + config, WITHOUT any commit — files exist but are untracked. */
+  function prepareBareDir(withGit: boolean): string {
+    const tmp = mkdtempSync(resolve(tmpdir(), "artgraph-rename-untracked-"));
+    tempDirs.push(tmp);
+    cpSync(RENAME_FIXTURE, tmp, { recursive: true });
+    writeFileSync(
+      resolve(tmp, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        testPatterns: ["tests/**/*.test.ts"],
+        lockFile: ".trace.lock",
+      }),
+    );
+    if (withGit) execFileSync("git", ["init"], { cwd: tmp, stdio: "pipe" });
+    return tmp;
+  }
+
+  it(
+    "rewrites untracked (never committed) files instead of silently no-opping",
+    { timeout: 30000 },
+    async () => {
+      // `git init` only — the exact state of a Spec Kit specify→implement flow
+      // before the first `git add`, which used to be a silent no-op.
+      const tmp = prepareBareDir(true);
+      await runAt(tmp, ["reconcile"]);
+
+      const { exitCode } = await runCli(["rename", "--from", "REQ-001", "--to", "REQ-100"], tmp);
+      expect(exitCode).toBe(0);
+
+      const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
+      expect(spec).toContain("REQ-100: ユーザー認証");
+      expect(spec).not.toMatch(/^- REQ-001:/m);
+      const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
+      expect(src).toContain("@impl REQ-100");
+      expect(src).not.toContain("@impl REQ-001");
+      const test = readFileSync(resolve(tmp, "tests/feature.test.ts"), "utf-8");
+      expect(test).toContain("[REQ-100]");
+
+      const lock = JSON.parse(readFileSync(resolve(tmp, ".trace.lock"), "utf-8"));
+      expect(lock["REQ-100"]).toBeDefined();
+      expect(lock["REQ-001"]).toBeUndefined();
+    },
+  );
+
+  it("works in a directory that is not a git repository at all", { timeout: 30000 }, async () => {
+    // Used to die with `Error: Failed to run git ls-files`.
+    const tmp = prepareBareDir(false);
+    await runAt(tmp, ["reconcile"]);
+
+    const { exitCode } = await runCli(["rename", "--from", "REQ-001", "--to", "REQ-100"], tmp);
+    expect(exitCode).toBe(0);
+    expect(readFileSync(resolve(tmp, "src/feature.ts"), "utf-8")).toContain("@impl REQ-100");
+  });
+
+  it("reports filesScanned in JSON output, including --dry-run", { timeout: 30000 }, async () => {
+    const tmp = await prepareTempDir();
+    const { exitCode, stdout } = await runCli(
+      ["rename", "--from", "REQ-001", "--to", "REQ-100", "--dry-run", "--format", "json"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    // Fixture scope: specs/feature.md + src/feature.ts + tests/feature.test.ts.
+    expect(result.filesScanned).toBe(3);
+    expect(result.applied).toBe(false);
+  });
+
+  it(
+    "fails (non-zero) when --from exists in the graph but no scanned file is rewritable",
+    { timeout: 30000 },
+    async () => {
+      // A kiro heading req can only be renamed to another `Requirement-N` ID;
+      // renaming it to `REQ-500` finds zero rewritable references. This used to
+      // report success while touching nothing but the lock (safety valve #212).
+      const tmp = await prepareTempDir();
+      writeFileSync(
+        resolve(tmp, "specs/kiro.md"),
+        ["# Kiro spec", "", "### Requirement 1: 認証フロー", ""].join("\n"),
+        "utf-8",
+      );
+      await runAt(tmp, ["reconcile"]);
+      const before = readFileSync(resolve(tmp, "specs/kiro.md"), "utf-8");
+
+      const { exitCode, stderr } = await runCli(
+        ["rename", "--from", "Requirement-1", "--to", "REQ-500"],
+        tmp,
+      );
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toMatch(/was not found in any of the \d+ files/);
+      expect(readFileSync(resolve(tmp, "specs/kiro.md"), "utf-8")).toBe(before);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// issue #213 — `--split`/`--merge` with a brand-new `--into` ID must scaffold
+// the new ID ONLY in the spec file that defines the split source. No stub
+// insertion into `.claude/`, `.specify/`, AGENTS.md/CLAUDE.md or unrelated
+// specs — even when those files are git-tracked.
+// ---------------------------------------------------------------------------
+describe("CLI: split scaffolds are limited to the source spec file (#213)", () => {
+  const OUT_OF_SCOPE_FILES = [
+    ".claude/skills/foo/SKILL.md",
+    ".specify/templates/tasks-template.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+  ] as const;
+
+  async function prepareMultiSpecDir(): Promise<string> {
+    const tmp = mkdtempSync(resolve(tmpdir(), "artgraph-rename-split-scope-"));
+    tempDirs.push(tmp);
+
+    writeFileSync(
+      resolve(tmp, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        testPatterns: ["tests/**/*.test.ts"],
+        lockFile: ".trace.lock",
+      }),
+    );
+    for (const dir of [
+      "specs/feat-a",
+      "specs/feat-b",
+      ".claude/skills/foo",
+      ".specify/templates",
+      "src",
+      "tests",
+    ]) {
+      mkdirSync(resolve(tmp, dir), { recursive: true });
+    }
+    writeFileSync(resolve(tmp, "specs/feat-a/spec.md"), "# Feat A\n\n- REQ-022: 分割元要件\n");
+    writeFileSync(resolve(tmp, "specs/feat-b/spec.md"), "# Feat B\n\n- REQ-001: 無関係な要件\n");
+    writeFileSync(
+      resolve(tmp, ".claude/skills/foo/SKILL.md"),
+      "# SKILL\n\nDistributed skill doc.\n",
+    );
+    writeFileSync(
+      resolve(tmp, ".specify/templates/tasks-template.md"),
+      "# Tasks template\n\n- [ ] task\n",
+    );
+    writeFileSync(resolve(tmp, "AGENTS.md"), "# AGENTS\n");
+    writeFileSync(resolve(tmp, "CLAUDE.md"), "# CLAUDE\n");
+    writeFileSync(resolve(tmp, "src/impl.ts"), "// @impl REQ-022\nexport const impl = 1;\n");
+    writeFileSync(resolve(tmp, "tests/impl.test.ts"), "// [REQ-022]\nexport {};\n");
+
+    // Everything is committed (tracked): the out-of-scope files must be
+    // protected by scan-scope enumeration, not by git-tracking accidents.
+    execFileSync("git", ["init"], { cwd: tmp, stdio: "pipe" });
+    gitCommit(tmp, "init");
+    await runAt(tmp, ["reconcile"]);
+    gitCommit(tmp, "add lock");
+    return tmp;
+  }
+
+  it(
+    "dry-run proposes spec changes only in the file defining the split source",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareMultiSpecDir();
+
+      const { exitCode, stdout } = await runCli(
+        [
+          "rename",
+          "--split",
+          "REQ-022",
+          "--into",
+          "REQ-022",
+          "REQ-027",
+          "--dry-run",
+          "--format",
+          "json",
+        ],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
+
+      const result = JSON.parse(stdout);
+      const changedFiles = [
+        ...new Set(result.changes.map((c: { filePath: string }) => c.filePath)),
+      ];
+      expect(changedFiles).toEqual(["specs/feat-a/spec.md"]);
+
+      // The brand-new ID is scaffolded in the source spec file…
+      const scaffolds = result.changes.filter((c: { after: string }) =>
+        c.after.startsWith("- REQ-027:"),
+      );
+      expect(scaffolds).toHaveLength(1);
+      expect(scaffolds[0].filePath).toBe("specs/feat-a/spec.md");
+
+      // …the code side stays a manual-assignment warning, and the scanned set
+      // is the 4 in-scope files (2 specs + 1 src + 1 test).
+      expect(result.warnings).toEqual([
+        {
+          type: "manual-assignment-needed",
+          filePath: "src/impl.ts",
+          oldId: "REQ-022",
+          newIds: ["REQ-022", "REQ-027"],
+        },
+      ]);
+      expect(result.filesScanned).toBe(4);
+    },
+  );
+
+  it(
+    "applied split leaves tracked out-of-scope markdown and unrelated specs byte-identical",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareMultiSpecDir();
+      const untouched = [...OUT_OF_SCOPE_FILES, "specs/feat-b/spec.md"];
+      const orig = snapshot(tmp, untouched);
+
+      const { exitCode } = await runCli(
+        ["rename", "--split", "REQ-022", "--into", "REQ-022", "REQ-027"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
+
+      expect(snapshot(tmp, untouched)).toEqual(orig);
+
+      const specA = readFileSync(resolve(tmp, "specs/feat-a/spec.md"), "utf-8");
+      expect(specA).not.toContain("REQ-022: 分割元要件");
+      expect(specA).toContain("- REQ-022: (TODO: describe this requirement)");
+      expect(specA).toContain("- REQ-027: (TODO: describe this requirement)");
+
+      const lock = JSON.parse(readFileSync(resolve(tmp, ".trace.lock"), "utf-8"));
+      expect(lock["REQ-027"]).toBeDefined();
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
