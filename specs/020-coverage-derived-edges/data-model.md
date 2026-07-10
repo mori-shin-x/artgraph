@@ -68,7 +68,7 @@ exercises?: string[]   // exercises エッジの target nodeId、[...new Set()].
 untagged | exercised | impl-only | verified
 ```
 
-- `exercised` は `trace.acceptExercises: true` 時のみ出現(FR-014)。定義: 「`implements` エッジなし ∧ 排他的 `exercises` エッジあり ∧ stale でない」。
+- `exercised` は `trace.acceptExercises: true` 時のみ出現(FR-014)。定義: 「`implements` エッジなし ∧ 排他的(被 exercises REQ 数 = 1 のシンボルへの)`exercises` エッジが 1 本以上 ∧ stale でない」。
 - 宣言済み REQ(impl-only / verified)の評価軸は不変。タグ有無と証拠有無は独立軸。
 
 ## 7. check 所見(新規 3 種)
@@ -76,7 +76,7 @@ untagged | exercised | impl-only | verified
 | 所見 | 定義(集合演算) | 前提 |
 | --- | --- | --- |
 | `unexercisedClaims` | { (req, symbol) : `implements` あり ∧ 当該 req の non-stale exercises に symbol が含まれない } | trace 存在時のみ(FR-012) |
-| `suggestedImpls` | { (req, symbol) : `implements` なし ∧ symbol の被 exercises req 数 < `sharedThreshold` ∧ 単一 req に排他的 } | 同上(FR-013) |
+| `suggestedImpls` | { (req, symbol) : `implements` なし ∧ symbol の被 exercises req 数 **= 1**(排他) } | 同上(FR-013)。req 数 ≥ `sharedThreshold` は `infrastructure` 区分、2 〜 閾値−1 は silent(エッジは impact 到達に残る) |
 | `staleEvidence` | { (req, symbols[]) : hashesAtTrace[symbol] ≠ graph.contentHash } | `staleness` 設定で扱い分岐(FR-015) |
 
 ## 8. 設定(`.artgraph.json`)

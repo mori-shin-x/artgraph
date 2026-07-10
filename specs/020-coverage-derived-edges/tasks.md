@@ -4,7 +4,7 @@
 
 ## 進め方 (TDD: Red ⇒ Green、Phase A → Gate → B → C)
 
-各コンポーネントは失敗テスト(Red)を先に書き、実装で Green にする。**7 観点**(①境界条件 ②条件分岐の組み合わせ ③不正な状態遷移 ④例外系・失敗時挙動 ⑤実運用の事故パターン ⑥エッジケース ⑦変更外ファイルへの影響=回帰)を各 Red タスクに明示的に割り当てる(末尾のカバレッジ行列で網羅を検証)。**Constitution Gate**: T017 以降(Phase B/C)は憲法 v1.2.0 改訂 PR のマージが着手条件(plan.md Gate 裁定)。
+各コンポーネントは失敗テスト(Red)を先に書き、実装で Green にする。**7 観点**(①境界条件 ②条件分岐の組み合わせ ③不正な状態遷移 ④例外系・失敗時挙動 ⑤実運用の事故パターン ⑥エッジケース ⑦変更外ファイルへの影響=回帰)を各 Red タスクに明示的に割り当てる(末尾のカバレッジ行列で網羅を検証)。**Constitution Gate**: T014 以降(Phase B/C)は憲法 v1.2.0 改訂 PR のマージが着手条件(plan.md Gate 裁定)。
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -19,7 +19,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 `package.json` に exports `./vitest` / `./vitest/config` と `optionalPeerDependencies: { vitest: ">=3 <5" }` を追加し、`knip.json` / `tsconfig.json` を新 entry(`src/vitest/`, `src/trace/`)に対応させる。CLI 本体から `vitest/runners` への import が漏れない knip 構成にする(plan.md Structure Decision)
+- [ ] T001 `package.json` に exports `./vitest` / `./vitest/config` と `peerDependencies: { vitest: ">=3 <5" }` + `peerDependenciesMeta: { vitest: { optional: true } }` を追加し、`knip.json` / `tsconfig.json` を新 entry(`src/vitest/`, `src/trace/`)に対応させる。CLI 本体から `vitest/runners` への import が漏れない knip 構成にする(plan.md Structure Decision)
 - [ ] T002 [P] `.artgraph.json` の `trace.*` 設定(`artifacts` / `acceptExercises` / `staleness` / `sharedThreshold`)のパース・検証を `src/config.ts` + `src/types.ts` に追加。**Red→Green 同タスク内**: `tests/config.test.ts` に ①境界: `sharedThreshold` = 0 / 1 / 負値 / 非整数を canonical エラーで拒否(1 は合法)、④例外: `staleness` に不正値 → 既存 config 検証と同スタイルのエラー、`trace` キー省略 → 全既定値、を先に書く
 
 ## Phase 2: Foundational — shard スキーマ (runner ↔ ingest の SSOT)
@@ -31,11 +31,11 @@
 
 - [ ] T005 [US1] **Red**: `tests/e2e/vitest-runner.e2e.ts` — 実 vitest を temp プロジェクトで起動する E2E: (a) per-test 分離(REQ-001 テストの hits に `signIn` のみ、US1-1 の採取側)、(b) ②分岐組合せ: pool {forks, threads} × テスト {pass, fail} × タグ {あり, なし} の行列で shard レコードが契約どおり、(c) ③不正遷移: `it.concurrent` → `kind: "skipped", reason: "concurrent"` が記録されカバレッジレコードが**出ない**(FR-003)、(d) ⑥エッジ: module-init のみ実行するテスト → hits 空(FR-007 前段)、テストファイル自身・node_modules が hits に現れない、(e) ④失敗時: テストが throw してもランナーが shard を壊さない(部分 shard が読める)
 - [ ] T006 [US1] `src/vitest/runner.ts` を実装して T005 を **Green** に: `VitestTestRunner` 拡張 + ワーカー内 inspector セッション(`detailed: false`、research.md D1/D2)、リポジトリ相対パス正規化、module-init 除外、`hashes` 記録(FR-005)、ワーカー別 shard 追記(FR-002)
-- [ ] T007 [P] [US1] `src/vitest/setup.ts`(`withTrace()` config ラッパー + globalSetup)を **Red→Green** で実装: ⑤事故パターン: 前回 run の旧 shard が残ったまま再実行 → globalSetup が削除し世代混入しない(古い世代の亡霊エッジ防止)、ラッパーがユーザーの既存 `test` 設定(reporters / setupFiles)を破壊しない(②組合せ)— `tests/vitest-setup.test.ts`
+- [ ] T007 [P] [US1] `src/vitest/setup.ts`(`withTrace()` config ラッパー + globalSetup)を **Red→Green** で実装: ⑤事故パターン: 前回 run の旧 shard が残ったまま再実行 → globalSetup が削除し世代混入しない(古い世代の亡霊エッジ防止)、ラッパーがユーザーの既存 `test` 設定(reporters / setupFiles)を破壊しない(②組合せ)、既存スナップショットテストの作成・照合・更新挙動が runner 有効時も不変(FR-001 / G2)— `tests/vitest-setup.test.ts` + T005 の E2E fixture にスナップショットケースを追加
 
 ## Phase A-2: ingest + 名前表 + trace CLI (US2 レポート先行)
 
-- [ ] T008 [US1] **Red**: `tests/trace-ingest.test.ts` — REQ join と名前 join を固定: (a) describe 祖先継承・dedup が spec 006 の `extractReqTags` 規則と一致(⑦: `src/test-results.ts` の既存挙動を流用し二重実装しない)、(b) ②分岐組合せ: {passed, failed} × {タグあり, なし} × {シンボル解決可, 不可} の 8 通りで「green かつタグありかつ解決可」のみ symbol エッジ化(D6 / FR-006-007)、(c) ①境界: `sharedThreshold` ちょうど(REQ 数 = 2 は排他扱い、= 3 でインフラ降格; 既定 3)、(d) ⑥エッジ: 同名 export が同一ファイルに複数 / V8 合成名 (`<instance_members_initializer>`) / 無名 default → file 粒度フォールバックで REQ 到達は維持(fail-safe、SC-006)、クラス member 名 → クラス symbol へ集約、(e) ④例外: hits が消滅ファイルを指す(⑤: trace 取得後に `git rm`)→ dangling 診断、`include` 境界外ファイル → エッジ化しない、(f) N:M: 同一 REQ の複数テストの和集合(US1-4)
+- [ ] T008 [US1] **Red**: `tests/trace-ingest.test.ts` — REQ join と名前 join を固定: (a) describe 祖先継承・dedup が spec 006 の `extractReqTags` 規則と一致(⑦: `src/test-results.ts` の既存挙動を流用し二重実装しない)、(b) ②分岐組合せ: {passed, failed} × {タグあり, なし} × {シンボル解決可, 不可} の 8 通りで「green かつタグありかつ解決可」のみ symbol エッジ化(D6 / FR-006-007)、(c) ①境界: 排他 = **正確に 1 REQ**(FR-013)。REQ 数 = 1 → suggested、= 2 → silent(suggested にも infrastructure にも現れず、エッジは impact 到達に残る)、= `sharedThreshold`(既定 3)→ infrastructure 降格、(d) ⑥エッジ: 同名 export が同一ファイルに複数 / V8 合成名 (`<instance_members_initializer>`) / 無名 default → file 粒度フォールバックで REQ 到達は維持(fail-safe、SC-006)、クラス member 名 → クラス symbol へ集約、(e) ④例外: hits が消滅ファイルを指す(⑤: trace 取得後に `git rm`)→ dangling 診断、`include` 境界外ファイル → エッジ化しない、(f) N:M: 同一 REQ の複数テストの和集合(US1-4)
 - [ ] T009 [US1] `src/trace/ingest.ts` + 名前表ビルダを実装して T008 を **Green** に(`extractSymbols` 再利用、data-model.md §2-3)
 - [ ] T010 [US2] **Red**: `tests/trace-cli.test.ts` — `artgraph trace status` / `trace report`: (a) 偽 `@impl REQ-003` を植えた fixture → `unexercisedClaims` に検出(SC-003 の Phase A 版)、排他実行+タグなし → `suggestedImpls`、共有ヘルパ → `infrastructure`(quickstart Phase A と同シナリオ)、(b) ④例外: shard ゼロ → exit 1 + runner 導入ガイダンス(FR-018 と同文言・対称)、(c) `--format json|text` 両出力(CLI 規約 Cat5)、(d) ⑤事故: stale shard(hashes 不一致)混在時に report が stale 件数を診断表示
 - [ ] T011 [US2] `src/commands/trace.ts` を実装し CLI に配線して T010 を **Green** に(グラフ / lock は**読み取りのみ・非改変**が Phase A の契約)
@@ -53,11 +53,11 @@
 - [ ] T015 [US1] `src/types.ts`(kind `exercises` + provenance `coverage` + `EDGE_PROVENANCE_VALUES`)と `src/graph/builder.ts`(trace 合流)を実装して T014 を **Green** に。⑦: spec 011 SC-008 の union↔Set 同期テストを `coverage` 込みで更新
 - [ ] T016 [US1] **Red→Green**: `tests/lock.test.ts` 拡張 + `src/lock.ts` — `exercises?: string[]`(`impl` と同じ dedupe+sort 規約)、`entriesStructurallyEqual` への配列比較追加、reconcile 冪等性(2 回目で `lastReconciled` 不変)。①境界: exercises 空配列はフィールド省略。⑦回帰: exercises なし lock の round-trip が既存と byte-identical
 - [ ] T017 [P] **Red→Green**: `tests/rename*.test.ts` 拡張 + rename 系 — trace shard 内 REQ ID の `--from/--to` / `--split` / `--merge` 書換え(FR-016)。③不正遷移: 未知 `schemaVersion` shard は書換え対象外として警告(旧世代 trace の扱い、Edge Case)。書換えサマリに trace が表示される
-- [ ] T018 [P] [US1] `scan --serve` の exercises エッジ破線描画+凡例追加(`src/serve/` 相当箇所)。E2E は HTML 内に凡例文字列が出ることの確認に留める(`tests/e2e/graph-serve.e2e.ts` 拡張)
+- [ ] T018 [P] [US1] `scan --serve` / `--output` の exercises エッジ視覚区別+凡例追加(FR-021、`src/serve/` 相当箇所。具体形は実装定義 — 破線を推奨)。E2E は HTML 内に凡例文字列が出ることの確認に留める(`tests/e2e/graph-serve.e2e.ts` 拡張)
 
 ## Phase C: check / impact / Skills (US2〜US6)
 
-- [ ] T019 [US2][US4][US5] **Red**: `tests/check-evidence.test.ts` — 所見と充足の行列を固定: (a) ②分岐組合せ: {trace あり/なし} × {acceptExercises on/off} × {staleness warn/exclude/gate} × {--gate あり/なし} の判定行列(US2-1〜6 / US4-1〜3 / US5-1〜3 を包含)、(b) ③不正遷移: trace 生成 → シンボル編集 → stale 検出 → テスト再実行(世代置換)→ stale 解消(US5-4 のライフサイクル、data-model.md §9)、(c) ①境界: `sharedThreshold` 境界値で `suggestedImpls` / `exercised` 充足の出入り(SC-004)、(d) ④例外: trace なし時に所見 3 種が一切出ない(US2-5 — 証拠の不在は反証ではない)、(e) ⑤事故: 全テスト fail の trace(CI 落ちのまま scan)→ エッジ・充足ゼロで uncovered が既定どおり残る
+- [ ] T019 [US2][US4][US5] **Red**: `tests/check-evidence.test.ts` — 所見と充足の行列を固定: (a) ②分岐組合せ: {trace あり/なし} × {acceptExercises on/off} × {staleness warn/exclude/gate} × {--gate あり/なし} の判定行列(US2-1〜6 / US4-1〜3 / US5-1〜3 を包含)、(b) ③不正遷移: trace 生成 → シンボル編集 → stale 検出 → テスト再実行(世代置換)→ stale 解消(US5-4 のライフサイクル、data-model.md §9)、(c) ①境界: 排他(= 1 REQ)/ silent(2 〜 閾値−1)/ infrastructure(≥ `sharedThreshold`)の 3 区分で `suggestedImpls` / `exercised` 充足の出入り(SC-004 / FR-013 裁定)、(d) ④例外: trace なし時に所見 3 種が一切出ず、`check` 出力が導入前と **byte-identical**(US2-5 / FR-010 / G1 — 証拠の不在は反証ではない)、(e) ⑤事故: 全テスト fail の trace(CI 落ちのまま scan)→ エッジ・充足ゼロで uncovered が既定どおり残る
 - [ ] T020 [US2][US4][US5] `src/coverage.ts` / `src/check.ts` を実装して T019 を **Green** に: 所見 3 種(data-model.md §7 の集合定義)、ステータス `exercised`(FR-014)、staleness 3 値(FR-015)、text 出力見出し(`UNEXERCISED CLAIM:` 等 — contracts/cli-surface.md §4)
 - [ ] T021 [US3] **Red**: `tests/impact-evidence.test.ts` — (a) US3-1/2/3(--tests 列挙・静的/証拠の由来区別・trace なし exit 1)、(b) ⑥エッジ: stale エッジは `staleness: exclude` で不走査(FR-017)、(c) ⑦回帰: spec 019 の contains 方向制約テストが exercises 辺追加後も green(干渉なし — plan.md Cat7)、既存 `impact` の JSON スキーマが trace 不在時に不変
 - [ ] T022 [US3] `src/graph/traverse.ts` + `src/commands/impact.ts`(`--tests`)を実装して T021 を **Green** に
@@ -68,7 +68,7 @@
 
 - [ ] T025 [P] perf テスト `tests/perf/trace-overhead.perf.test.ts`: 500 テスト級 fixture で runner 有効時のスイート実行時間増が **≤ 50%**(SC-005、PoC 実測 33% 基準)
 - [ ] T026 quickstart.md の Phase A/B/C 手順を E2E で通し(SC-001: 3 手順でタグゼロ可視化)、artgraph 自身に runner を有効化して `trace report` を実行(dogfooding — 既存 `@impl` 23 ファイルの corroborated/unexercised 内訳を PR 本文に記載)。`artgraph check --diff` が green のまま(Stop hook 互換)
-- [ ] T027 全 suite 最終確認: `pnpm typecheck && pnpm test:unit && pnpm test:e2e && pnpm test:perf && pnpm knip`。⑦: `git diff --stat` を精査し、план外ファイル(CHANGELOG / version / 無関係 spec)への変更が混入していないことを確認(release-please 管理物は不可侵)
+- [ ] T027 全 suite 最終確認: `pnpm typecheck && pnpm test:unit && pnpm test:e2e && pnpm test:perf && pnpm knip`。⑦: `git diff --stat` を精査し、plan 外ファイル(CHANGELOG / version / 無関係 spec)への変更が混入していないことを確認(release-please 管理物は不可侵)
 
 ---
 

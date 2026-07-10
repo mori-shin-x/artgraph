@@ -14,7 +14,7 @@ export default defineConfig(withTrace({ test: { /* 既存設定 */ } }));
 ```
 
 - `package.json#exports` 追加: `./vitest`(runner)、`./vitest/config`(ラッパー)
-- vitest は optionalPeerDependencies(`>=3 <5`)。CLI 単体利用時に vitest 不在でもインストール可能であること
+- vitest は `peerDependencies`(`>=3 <5`)+ `peerDependenciesMeta: { vitest: { optional: true } }`。CLI 単体利用時に vitest 不在でもインストール可能であること
 
 ## 2. `artgraph trace <subcommand>`(Phase A)
 
