@@ -323,6 +323,34 @@ function validateTaskRegexField(
   }
 }
 
+// issue #216 — `ignoreIdPrefixes` validation. Each entry must be a bare ID
+// prefix in the requirement-ID grammar (`[A-Z][A-Za-z]*` — the part before the
+// `-<digits>`), e.g. "SC" to exclude Spec Kit Success Criteria. Rejecting
+// anything else (empty string, lowercase start, `SC-`, `SC-\d+` regex-ish
+// input) up front keeps the builder's prefix matcher trivially regex-safe and
+// gives the author an actionable message instead of a silently-ignored entry.
+const ID_PREFIX_RE = /^[A-Z][A-Za-z]*$/;
+
+function validateIgnoreIdPrefixes(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error("Invalid ignoreIdPrefixes: must be an array of strings");
+  }
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry === "") {
+      throw new Error("Invalid ignoreIdPrefixes: every entry must be a non-empty string");
+    }
+    if (!ID_PREFIX_RE.test(entry)) {
+      throw new Error(
+        `Invalid ignoreIdPrefixes: "${entry}" must be a bare ID prefix matching [A-Z][A-Za-z]* (e.g. "SC", not "SC-" or "SC-\\d+")`,
+      );
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
 // spec 014 — `.artgraph.json` `planCoverage` section validation. Currently
 // only `requireFilesSection: boolean` is recognised; unknown fields are
 // silently dropped (no warning) so the schema can grow without breaking
@@ -404,6 +432,8 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
     validateReqPatterns(raw.reqPatterns);
   }
 
+  const ignoreIdPrefixes = validateIgnoreIdPrefixes(raw.ignoreIdPrefixes);
+
   const disabledBuiltins = validateDisableBuiltins(raw.disableBuiltinTaskConventions);
   validateTaskConventions(raw.taskConventions, new Set(disabledBuiltins ?? []));
 
@@ -425,6 +455,7 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
     lockFile,
     packageManager: validatePackageManager(raw.packageManager),
     reqPatterns: raw.reqPatterns,
+    ignoreIdPrefixes,
     docGraph: raw.docGraph,
     mode: raw.mode === "symbol" ? "symbol" : "file",
     testResultPaths: raw.testResultPaths,

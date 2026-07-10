@@ -2,9 +2,9 @@
 
 `.artgraph.json` at the repo root controls how the graph is built. All blocks
 below are optional — the defaults produce the graph shown in the top-level
-README's end-to-end example. This page documents the four blocks users
-typically touch: `reqPatterns`, `docGraph`, `taskConventions`, and how edge
-provenance is surfaced.
+README's end-to-end example. This page documents the blocks users typically
+touch: `reqPatterns`, `ignoreIdPrefixes`, `docGraph`, `taskConventions`, and
+how edge provenance is surfaced.
 
 ## `reqPatterns` — requirement ID grammar
 
@@ -26,6 +26,55 @@ To accept a custom grammar (e.g. `FEAT-`, `US-`, `#123`), extend
 Each pattern is validated: ≤ 200 chars, no nested quantifiers, must match a
 capture group, must be a valid JavaScript regex. Patterns are OR-ed together
 at match time.
+
+### ID prefixes are free-form
+
+The default ID grammar is `[A-Z][A-Za-z]*-\d+` — the prefix carries no special
+meaning, so `REQ-001`, `FR-001`, `AUTH-2`, and `US-12` all work with **zero
+configuration**. In particular, Spec Kit's spec-template generates `FR-NNN`
+(Functional Requirements) by default: keep them as-is; there is no need to
+rename them to the `REQ-` prefix used in this documentation's examples.
+
+## `ignoreIdPrefixes` — exclude specific ID prefixes from tracking
+
+Sometimes a spec contains IDs that share the requirement-ID grammar but are
+*not* implementation-trackable requirements. The canonical case is Spec Kit's
+mandatory `## Success Criteria` section (`SC-001`, `SC-002`, …): success
+criteria are measurable, technology-agnostic *outcomes* — usually several
+requirements and tests contribute to one — so tagging them individually with
+`@impl` rarely makes sense, and by default each `SC-NNN` becomes a req node
+that `artgraph check` reports as permanently UNCOVERED.
+
+`ignoreIdPrefixes` removes such IDs from the graph entirely:
+
+```jsonc
+// .artgraph.json
+{
+  "ignoreIdPrefixes": ["SC"]
+}
+```
+
+With `"SC"` listed:
+
+- spec-side `SC-NNN` list items / headings no longer become `req` nodes, so
+  `check` stops reporting them as UNCOVERED;
+- code-side `@impl SC-NNN` tags, test markers (`[SC-NNN]` / `req: "SC-NNN"`),
+  task tags, and inline annotations referencing an ignored ID emit no edges —
+  including namespaced forms like `013-foo/SC-001` — so they never surface as
+  orphan warnings either.
+
+Rules:
+
+- **Default is empty** — nothing is ignored; existing behavior is unchanged.
+- Each entry must be a bare prefix matching `[A-Z][A-Za-z]*` (e.g. `"SC"`,
+  not `"SC-"`).
+- Matching is exact-shape: an ID is ignored only when its bare token is
+  `<prefix>-<digits>`, so `"SC"` ignores `SC-001` but not `SCX-001` or a doc
+  named `SC-overview.md`.
+- Whether to ignore `SC-` is a per-project decision: some projects (artgraph
+  itself included — see issue #134) deliberately claim SC tags from code, which
+  is why nothing is excluded by default and `artgraph integrate speckit` does
+  not write this setting for you.
 
 ## `docGraph` — doc nodes and their relations
 

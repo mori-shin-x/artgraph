@@ -319,9 +319,14 @@ export interface InstallOptions {
   force?: boolean;
   /**
    * Spec Kit の --gate / --no-gate 宣言型フラグ（FR-003）。
-   * - true: before_implement に check --gate hook を追加
+   * - true: before_implement に blocking な check --gate hook を追加
+   *   （既存の artgraph エントリは置換）
    * - false: artgraph が登録した before_implement hook を削除
-   * - undefined: 何もしない（gate なし状態と等価。明示削除はしない）
+   * - undefined（デフォルト）: artgraph の before_implement エントリが
+   *   未登録の場合のみ、非ブロッキングの check --diff プレビュー hook を
+   *   追加する。登録済み（過去の --gate 選択を含む）なら触らない
+   *   （issue #217: 新規 spec の初回実装で必ず落ちる blocking gate を
+   *   デフォルト配線しない）。
    *
    * 注: speckit 以外の provider は本フラグを無視する。
    */
@@ -485,6 +490,16 @@ export interface ArtgraphConfig {
    */
   packageManager?: PackageManager;
   reqPatterns?: ReqPatternConfig;
+  /**
+   * issue #216 — requirement-ID prefixes to exclude from tracking. An ID whose
+   * bare token (after an optional `namespace/` qualifier) is exactly
+   * `<prefix>-<digits>` for any listed prefix is invisible to the graph: no
+   * req node is registered from specs, and code/test/task tags referencing it
+   * emit no edges (so it can never surface as UNCOVERED or an orphan).
+   * Canonical use case: Spec Kit's Success Criteria (`"ignoreIdPrefixes":
+   * ["SC"]`). Default is empty — nothing is ignored.
+   */
+  ignoreIdPrefixes?: string[];
   docGraph?: DocGraphConfig;
   mode?: "file" | "symbol";
   testResultPaths?: string[];

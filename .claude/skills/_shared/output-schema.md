@@ -110,6 +110,7 @@ The same shape is emitted for `--from/--to`, `--split/--into`, and `--merge/--in
   "to": "REQ-100",                                     // rename/merge: target ID; absent on split
   "sourceIds": ["REQ-001", "REQ-002"],                 // split: [splitId]; merge: all source IDs; absent on rename
   "intoIds": ["REQ-100", "REQ-101"],                   // split: new IDs; merge: [intoId]; absent on rename
+  "filesScanned": 42,                                  // files enumerated from .artgraph.json include/specDirs/testPatterns and scanned for references
   "changes": [                                         // RewriteChange[] — text edits to source/doc files
     {
       "filePath": "src/foo.ts",                        // relative path (NOT "file")
