@@ -17,7 +17,7 @@
 // only side effects are reads of `<rootDir>/...` and `templates/skills/`.
 
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import {
   AGENT_DESCRIPTORS,
@@ -210,14 +210,12 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
       // config. Skip rather than throw — unlike the `opts.agents` path this
       // isn't direct per-call caller input.
       if (!d) continue;
-      const dist = resolve(rootAbs, d.skillsPath);
-      let stat;
-      try {
-        stat = lstatSync(dist);
-      } catch {
-        stat = undefined;
-      }
-      if (stat && stat.isDirectory()) {
+      // PR #233 review (any-artifact check) — a recorded agent is only
+      // "missing" (→ `agent-recorded-but-missing`) when NEITHER its Skills
+      // directory nor its wrapper file is on disk. `--no-skills
+      // --agents=X` still leaves the wrapper (CLAUDE.md); requiring the
+      // Skills directory alone would flag that as missing.
+      if (isAgentDistributionOnDisk(rootAbs, d, canonicalTopLevels)) {
         detectedDescriptors.push(d);
       } else {
         absentDescriptors.push(d);
@@ -272,6 +270,16 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
     } else {
       const recordedSet = new Set<AgentId>(config.agents);
       for (const d of absentDescriptors) {
+        // PR #233 review (MAJOR) — the old message ("update the config to
+        // drop it") pointed at a nonexistent CLI affordance: union-only
+        // persistence means there is no `artgraph` flag to remove an agent
+        // from `.artgraph.json` today. Be honest about the two real options
+        // — restore via `--force`, or hand-edit the JSON — and point at the
+        // tracked follow-up (#131) for a proper `artgraph uninstall`.
+        const artifactsDesc =
+          d.wrapperFile !== null
+            ? `no ${d.skillsPath}/ and no ${d.wrapperFile}`
+            : `no ${d.skillsPath}/`;
         configFindings.push({
           severity: "fail",
           agent: d.id,
@@ -279,7 +287,7 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
           path: d.skillsPath,
           expected: "distribution present",
           actual: "no distribution directory",
-          message: `Agent "${d.id}" is recorded in .artgraph.json but its distribution directory ${d.skillsPath} is missing. Re-run \`artgraph init --force --agents=${d.id}\` to restore or update the config to drop it.`,
+          message: `Agent "${d.id}" is recorded in .artgraph.json but no distribution artifacts are on disk (${artifactsDesc}). Re-run \`artgraph init --force --agents=${d.id}\` to restore, or hand-edit .artgraph.json to drop it. (A dedicated \`artgraph uninstall\` command is tracked in #131.)`,
         });
       }
       for (const descriptor of AGENT_DESCRIPTORS) {
@@ -389,10 +397,10 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
 // ---------------------------------------------------------------------------
 
 // spec 013 follow-up (#158) — same D5 "has at least one canonical top-level"
-// test as the legacy auto-detect loop in `runDoctor`, factored out so the
-// `agent-installed-not-recorded` cross-check (which must scan every Tier 1
-// descriptor regardless of `config.agents` membership) can reuse it.
-function isAgentDistributionOnDisk(
+// test as the legacy auto-detect loop in `runDoctor`, factored out so
+// `isAgentDistributionOnDisk` (and any other caller needing the Skills-only
+// half of the check) can reuse it.
+function skillsDirHasCanonicalTopLevel(
   rootAbs: string,
   descriptor: AgentDescriptor,
   canonicalTopLevels: Set<string>,
@@ -412,6 +420,23 @@ function isAgentDistributionOnDisk(
     return false;
   }
   return entries.some((e) => canonicalTopLevels.has(e));
+}
+
+// PR #233 review — an agent is "installed" if EITHER its Skills directory
+// has canonical content OR its wrapper file exists. `--no-skills
+// --agents=X` still leaves CLAUDE.md, so requiring both would produce a
+// false-positive `agent-recorded-but-missing` (BLOCKER, #158 review).
+// `existsSync` (not `lstatSync`) is enough here — the wrapper is a regular
+// file the init writer creates; symlinks aren't an expected shape.
+function isAgentDistributionOnDisk(
+  rootAbs: string,
+  descriptor: AgentDescriptor,
+  canonicalTopLevels: Set<string>,
+): boolean {
+  const skillsPresent = skillsDirHasCanonicalTopLevel(rootAbs, descriptor, canonicalTopLevels);
+  const wrapperPresent =
+    descriptor.wrapperFile !== null && existsSync(resolve(rootAbs, descriptor.wrapperFile));
+  return skillsPresent || wrapperPresent;
 }
 
 function addSkillFindings(
