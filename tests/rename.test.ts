@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
+import { tmpdir } from "node:os";
 import {
   rewriteSpecListItem,
   rewriteSpecHeading,
@@ -16,6 +17,8 @@ import type { ArtgraphConfig } from "../src/types.js";
 import { renameLockKey, splitLockKey, mergeLockKeys } from "../src/rename-lock.js";
 import { isValidTargetId } from "../src/rename-validate-id.js";
 import type { LockFile } from "../src/types.js";
+import { rewriteTraceShardContent, rewriteTraceShards } from "../src/rename-trace.js";
+import { SCHEMA_VERSION } from "../src/trace/schema.js";
 
 // ── rewriteSpecListItem ─────────────────────────────────────────────
 
@@ -917,5 +920,232 @@ describe("rewriteFile (.md) — annotation target rewriting (T024)", () => {
     } finally {
       rmSync(tmpRoot, { recursive: true, force: true });
     }
+  });
+});
+
+// ── spec 020 T017 — trace shard REQ ID rewrite ──────────────────────
+// FR-016 / Edge Cases "REQ の rename / split / merge". `rewriteTraceShardContent`
+// is the pure, file-system-free core (one shard's raw JSONL text in, rewritten
+// text + line-level changes out); `rewriteTraceShards` is the glob-discovery +
+// schemaVersion-gating wrapper around it.
+
+function testMetaLine(): string {
+  return JSON.stringify({
+    schemaVersion: SCHEMA_VERSION,
+    kind: "meta",
+    runToken: "tok-1",
+    pool: "forks",
+    vitest: "4.1.10",
+    startedAt: "2026-07-10T00:00:00.000Z",
+  });
+}
+
+function testRecordLine(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    kind: "test",
+    testName: "[REQ-001] signIn accepts valid credentials",
+    suitePath: ["auth"],
+    testFile: "tests/auth.test.ts",
+    passed: true,
+    hits: [{ file: "src/auth.ts", fn: "signIn" }],
+    hashes: { "src/auth.ts": "sha256:abc" },
+    ...overrides,
+  });
+}
+
+describe("rewriteTraceShardContent", () => {
+  it("rewrites [REQ-001] inside testName", () => {
+    const shard = [testMetaLine(), testRecordLine()].join("\n");
+    const { content, changes } = rewriteTraceShardContent(shard, [["REQ-001", "REQ-100"]]);
+
+    expect(content).toContain('"testName":"[REQ-100] signIn accepts valid credentials"');
+    expect(content).not.toContain("REQ-001");
+    expect(changes).toHaveLength(1);
+    expect(changes[0].line).toBe(2);
+  });
+
+  it("rewrites [REQ-001] inside suitePath describe-ancestor entries", () => {
+    const shard = [
+      testMetaLine(),
+      testRecordLine({
+        testName: "signIn accepts valid credentials",
+        suitePath: ["[REQ-001] auth"],
+      }),
+    ].join("\n");
+    const { content } = rewriteTraceShardContent(shard, [["REQ-001", "REQ-100"]]);
+
+    expect(content).toContain('"suitePath":["[REQ-100] auth"]');
+  });
+
+  it("rewrites a skipped record's testName (concurrent-test diagnostic)", () => {
+    const skipped = JSON.stringify({
+      kind: "skipped",
+      testName: "[REQ-001] concurrent one",
+      testFile: "tests/auth.test.ts",
+      reason: "concurrent",
+    });
+    const { content, changes } = rewriteTraceShardContent(skipped, [["REQ-001", "REQ-100"]]);
+    expect(content).toContain('"testName":"[REQ-100] concurrent one"');
+    expect(changes).toHaveLength(1);
+  });
+
+  it("is byte-conservative: untouched lines (meta, non-matching test) pass through verbatim", () => {
+    const meta = testMetaLine();
+    const untouchedTest = testRecordLine({
+      testName: "[REQ-002] unrelated",
+      suitePath: ["other"],
+    });
+    const shard = [meta, untouchedTest].join("\n");
+    const { content, changes } = rewriteTraceShardContent(shard, [["REQ-001", "REQ-100"]]);
+
+    expect(content).toBe(shard);
+    expect(changes).toHaveLength(0);
+  });
+
+  it("preserves field order, hits, and hashes exactly when a line does change", () => {
+    const shard = testRecordLine();
+    const { content } = rewriteTraceShardContent(shard, [["REQ-001", "REQ-100"]]);
+    const parsed = JSON.parse(content);
+
+    expect(Object.keys(parsed)).toEqual([
+      "kind",
+      "testName",
+      "suitePath",
+      "testFile",
+      "passed",
+      "hits",
+      "hashes",
+    ]);
+    expect(parsed.hits).toEqual([{ file: "src/auth.ts", fn: "signIn" }]);
+    expect(parsed.hashes).toEqual({ "src/auth.ts": "sha256:abc" });
+    expect(parsed.testFile).toBe("tests/auth.test.ts");
+    expect(parsed.passed).toBe(true);
+  });
+
+  it("merge semantics: collapses multiple source IDs into one target ID via chained pairs", () => {
+    const shard = [
+      testRecordLine({ testName: "[REQ-001] a", suitePath: [] }),
+      testRecordLine({ testName: "[REQ-002] b", suitePath: [] }),
+    ].join("\n");
+    const { content } = rewriteTraceShardContent(shard, [
+      ["REQ-001", "REQ-100"],
+      ["REQ-002", "REQ-100"],
+    ]);
+
+    expect(content).toContain('"testName":"[REQ-100] a"');
+    expect(content).toContain('"testName":"[REQ-100] b"');
+  });
+
+  it("empty idPairs is a pure no-op (degenerate --merge X --into X)", () => {
+    const shard = [testMetaLine(), testRecordLine()].join("\n");
+    const { content, changes } = rewriteTraceShardContent(shard, []);
+    expect(content).toBe(shard);
+    expect(changes).toHaveLength(0);
+  });
+
+  it("corrupted (unparseable) lines pass through untouched rather than throwing", () => {
+    const shard = [testMetaLine(), "{not valid json", testRecordLine()].join("\n");
+    expect(() => rewriteTraceShardContent(shard, [["REQ-001", "REQ-100"]])).not.toThrow();
+    const { content } = rewriteTraceShardContent(shard, [["REQ-001", "REQ-100"]]);
+    expect(content).toContain("{not valid json");
+  });
+});
+
+describe("rewriteTraceShards (file-system integration)", () => {
+  function makeConfig(overrides: Partial<ArtgraphConfig> = {}): ArtgraphConfig {
+    return {
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.test.ts"],
+      lockFile: ".trace.lock",
+      ...overrides,
+    };
+  }
+
+  function withTmpDir(fn: (tmp: string) => void): void {
+    const tmp = mkdtempSync(resolve(tmpdir(), "artgraph-rename-trace-"));
+    try {
+      fn(tmp);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  it("discovers and rewrites shards under the default .artgraph/trace/*.jsonl glob", () => {
+    withTmpDir((tmp) => {
+      const traceDir = resolve(tmp, ".artgraph/trace");
+      mkdirSync(traceDir, { recursive: true });
+      const shardPath = resolve(traceDir, "w1-tok.jsonl");
+      const original = [testMetaLine(), testRecordLine()].join("\n") + "\n";
+      writeFileSync(shardPath, original, "utf-8");
+
+      const result = rewriteTraceShards(tmp, makeConfig(), [["REQ-001", "REQ-100"]]);
+
+      expect(result.unknownSchemaShards).toEqual([]);
+      expect(result.changes).toHaveLength(1);
+      expect(result.changes[0].filePath).toBe(".artgraph/trace/w1-tok.jsonl");
+      expect(result.changes[0].kind).toBe("trace-shard");
+      expect(result.filesToWrite.get(shardPath)).toContain("REQ-100");
+      expect(result.filesToWrite.get(shardPath)).not.toContain("REQ-001");
+    });
+  });
+
+  it("honours a custom trace.artifacts glob over the default", () => {
+    withTmpDir((tmp) => {
+      const customDir = resolve(tmp, "custom-trace");
+      mkdirSync(customDir, { recursive: true });
+      const shardPath = resolve(customDir, "shard.jsonl");
+      writeFileSync(shardPath, [testMetaLine(), testRecordLine()].join("\n"), "utf-8");
+
+      const cfg = makeConfig({ trace: { artifacts: ["custom-trace/*.jsonl"] } });
+      const result = rewriteTraceShards(tmp, cfg, [["REQ-001", "REQ-100"]]);
+
+      expect(result.changes).toHaveLength(1);
+      expect(result.filesToWrite.has(shardPath)).toBe(true);
+    });
+  });
+
+  it("③不正遷移: a shard with an unknown schemaVersion is left untouched and named in unknownSchemaShards", () => {
+    withTmpDir((tmp) => {
+      const traceDir = resolve(tmp, ".artgraph/trace");
+      mkdirSync(traceDir, { recursive: true });
+      const shardPath = resolve(traceDir, "stale.jsonl");
+      const staleMeta = JSON.stringify({
+        schemaVersion: SCHEMA_VERSION + 999,
+        kind: "meta",
+        runToken: "tok-2",
+        pool: "forks",
+        vitest: "4.1.10",
+        startedAt: "2026-07-10T00:00:00.000Z",
+      });
+      const original = [staleMeta, testRecordLine()].join("\n");
+      writeFileSync(shardPath, original, "utf-8");
+
+      const result = rewriteTraceShards(tmp, makeConfig(), [["REQ-001", "REQ-100"]]);
+
+      expect(result.unknownSchemaShards).toEqual([".artgraph/trace/stale.jsonl"]);
+      expect(result.changes).toEqual([]);
+      expect(result.filesToWrite.has(shardPath)).toBe(false);
+      expect(readFileSync(shardPath, "utf-8")).toBe(original);
+    });
+  });
+
+  it("⑦回帰: no shard files present → empty result, nothing scanned or warned", () => {
+    withTmpDir((tmp) => {
+      const result = rewriteTraceShards(tmp, makeConfig(), [["REQ-001", "REQ-100"]]);
+      expect(result.changes).toEqual([]);
+      expect(result.unknownSchemaShards).toEqual([]);
+      expect(result.filesToWrite.size).toBe(0);
+    });
+  });
+
+  it("⑦回帰: trace config absent uses the default glob and still no-ops when nothing matches", () => {
+    withTmpDir((tmp) => {
+      const result = rewriteTraceShards(tmp, makeConfig({ trace: undefined }), [
+        ["REQ-001", "REQ-100"],
+      ]);
+      expect(result.changes).toEqual([]);
+      expect(result.filesToWrite.size).toBe(0);
+    });
   });
 });
