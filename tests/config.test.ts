@@ -513,6 +513,23 @@ describe("loadConfig", () => {
       }
     });
 
+    it("T234-13: cites the shortest surviving ancestor, not a dropped intermediate one (MINOR 2)", () => {
+      writeConfig({ specDirs: ["a/x", "a", "a/x/y"] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(TMP_DIR);
+        expect(cfg.specDirs).toEqual(["a"]);
+        expect(
+          warnSpy.mock.calls.some(
+            (call) =>
+              String(call[0]).includes('"a/x/y"') && String(call[0]).includes('descendant of "a"'),
+          ),
+        ).toBe(true);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
     it("T234-6: filters descendant even when it appears before the ancestor", () => {
       writeConfig({ specDirs: ["specs/sub", "specs"] });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -544,6 +561,82 @@ describe("loadConfig", () => {
         // this alone wouldn't have caught the ghost-doc regression — pinned
         // here anyway to document the "req: 1" behavior from issue #234.
         expect([...graph.nodes.keys()].filter((k) => /^REQ-/.test(k))).toHaveLength(1);
+      } finally {
+        warnSpy.mockRestore();
+        rmSync(tmpRoot, { recursive: true });
+      }
+    });
+
+    it("T234-8: trailing slash on ancestor still triggers descendant filter", () => {
+      writeConfig({ specDirs: ["specs/", "specs/sub"] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(TMP_DIR);
+        expect(cfg.specDirs).toEqual(["specs"]); // canonicalized, no trailing slash
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("descendant"));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("T234-9: ./ prefix on descendant still triggers filter", () => {
+      writeConfig({ specDirs: ["specs", "./specs/sub"] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(TMP_DIR);
+        expect(cfg.specDirs).toEqual(["specs"]);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("descendant"));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("T234-10: mixed trailing slash and ./ prefix still normalize+filter correctly", () => {
+      writeConfig({ specDirs: ["./specs/", "specs/sub/"] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(TMP_DIR);
+        expect(cfg.specDirs).toEqual(["specs"]);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("T234-11: malformed non-string entry throws (matches sibling validators)", () => {
+      writeConfig({ specDirs: ["specs", 42, "specs/sub"] });
+      expect(() => loadConfig(TMP_DIR)).toThrow(/Invalid specDirs\[1\]/);
+    });
+
+    it("T234-12: explicit empty specDirs array is preserved (pre-PR behavior)", () => {
+      writeConfig({ specDirs: [] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(TMP_DIR);
+        expect(cfg.specDirs).toEqual([]);
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("T234-14: builder gets no ghost doc for trailing-slash ancestor + child", () => {
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-specdirs-234-trailing-slash");
+      const tmpSub = resolve(tmpRoot, "specs", "sub");
+      mkdirSync(tmpSub, { recursive: true });
+      writeFileSync(resolve(tmpSub, "x.md"), "- REQ-1: something\n");
+      writeFileSync(
+        resolve(tmpRoot, ".artgraph.json"),
+        JSON.stringify({ specDirs: ["specs/", "specs/sub"], mode: "file" }),
+      );
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(tmpRoot);
+        expect(cfg.specDirs).toEqual(["specs"]);
+        const { graph } = scan(tmpRoot, cfg);
+        const docIds = [...graph.nodes.keys()].filter((k) => k.startsWith("doc:"));
+        expect(docIds).toEqual(["doc:sub/x.md"]);
+        expect(docIds).toHaveLength(1);
       } finally {
         warnSpy.mockRestore();
         rmSync(tmpRoot, { recursive: true });

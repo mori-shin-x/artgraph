@@ -392,43 +392,83 @@ function validateAgents(value: unknown): AgentId[] | undefined {
 //
 // Rules: POSIX segment-aware ancestor check (`specs` is an ancestor of
 // `specs/sub` but not of `specs2` — plain startsWith would prefix-collide);
-// exact duplicates are also deduped. Every drop gets a `console.warn` (order
-// doesn't matter: dirs.find scans the whole original array per entry).
+// exact duplicates are also deduped. Every drop gets a `console.warn`.
+//
+// PR #238 adversarial review: raw-string comparison was byte-sensitive, so a
+// trailing slash (`"specs/"`) or leading `./` (`"./specs/sub"`) silently
+// defeated both the ancestor check AND the exact-duplicate check, letting the
+// same ghost-doc corruption from #234 slip back in. `normalizeSpecDir`
+// canonicalizes every entry (strip leading `./`, collapse `//`, strip
+// trailing `/`) before it's compared OR persisted, so downstream consumers
+// (builder.ts) only ever see canonical paths regardless of how the user typed
+// them in `.artgraph.json`.
+function normalizeSpecDir(dir: string): string {
+  let s = dir;
+  while (s.startsWith("./")) s = s.slice(2);
+  s = s.replace(/\/+/g, "/"); // collapse repeated slashes
+  while (s.endsWith("/") && s.length > 1) s = s.slice(0, -1);
+  return s;
+}
+
+function isAncestorOf(ancestor: string, descendant: string): boolean {
+  if (ancestor === descendant) return false;
+  // The `\\` branch is dead on POSIX (this project targets WSL2, not native
+  // Windows — see .github/workflows/ci.yml) but is kept as cheap defensive
+  // belt-and-braces for a stray mixed-slash input like `spec\sub`.
+  return descendant.startsWith(ancestor + "/") || descendant.startsWith(ancestor + "\\");
+}
+
 function validateSpecDirs(value: unknown): string[] | undefined {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
-    // Lenient posture, matching validatePackageManager: a malformed field
-    // silently drops to the DEFAULT_CONFIG.specDirs fallback in loadConfig
-    // rather than throwing.
+  if (!Array.isArray(value)) {
+    // Lenient posture, matching validatePackageManager: a wholly malformed
+    // field (not even an array) silently drops to the DEFAULT_CONFIG.specDirs
+    // fallback in loadConfig rather than throwing.
     return undefined;
+  }
+  // Shape check is strict, though: a single non-string entry must not
+  // silently discard the user's other, valid entries by falling all the way
+  // back to DEFAULT_CONFIG.specDirs. Match the sibling validators
+  // (validateIgnoreIdPrefixes et al.) and throw with an actionable message.
+  for (const [i, v] of value.entries()) {
+    if (typeof v !== "string") {
+      throw new Error(
+        `Invalid specDirs[${i}]: expected string, got ${typeof v} (${JSON.stringify(v)})`,
+      );
+    }
   }
 
   const dirs = value as string[];
 
-  const isAncestorOf = (ancestor: string, descendant: string): boolean => {
-    if (ancestor === descendant) return false;
-    return descendant.startsWith(ancestor + "/") || descendant.startsWith(ancestor + "\\");
-  };
-
   const kept: string[] = [];
   const seen = new Set<string>();
   for (const dir of dirs) {
-    if (seen.has(dir)) {
+    const normalized = normalizeSpecDir(dir);
+    if (seen.has(normalized)) {
       console.warn(`WARNING: specDirs contains duplicate entry "${dir}"; ignoring the duplicate.`);
       continue;
     }
-    seen.add(dir);
-    const ancestor = dirs.find((other) => isAncestorOf(other, dir));
+    seen.add(normalized);
+    // Cite the SHORTEST matching ancestor: with e.g. `["a/x", "a", "a/x/y"]`,
+    // multiple prior entries can be ancestors of `a/x/y`, but only the
+    // shortest one (`"a"`) is guaranteed to survive filtering itself (a
+    // longer ancestor like `"a/x"` may get dropped as a descendant of `"a"`
+    // in the same pass). Citing a dropped ancestor in the warning would
+    // mislead the user about which specDirs entry actually remains.
+    const ancestor = dirs
+      .map(normalizeSpecDir)
+      .filter((other) => isAncestorOf(other, normalized))
+      .sort((a, b) => a.length - b.length)[0];
     if (ancestor !== undefined) {
       console.warn(
         `WARNING: specDirs entry "${dir}" is a descendant of "${ancestor}" and is redundant; ignoring "${dir}". See issue #234.`,
       );
       continue;
     }
-    kept.push(dir);
+    kept.push(normalized);
   }
 
-  return kept.length > 0 ? kept : undefined;
+  return kept;
 }
 
 // spec 014 — `.artgraph.json` `planCoverage` section validation. Currently
