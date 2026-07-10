@@ -2,6 +2,7 @@
 
 import { Command } from "commander";
 import type { ArtifactGraph, CheckResult } from "../types.js";
+import type { BaselineIssues } from "../baseline.js";
 import { pathsToEntries, resolveTestResults } from "./shared.js";
 import { printWarnings } from "./presenters/warnings.js";
 import { printCheckText } from "./presenters/check.js";
@@ -27,7 +28,8 @@ export function registerCheckCommand(program: Command): void {
 
       let result: CheckResult;
       if (opts.diff) {
-        const { getGitDiffFiles } = await import("../diff.js");
+        const { getGitDiffFiles, getGitRenameMap, getHeadTrackedPaths } =
+          await import("../diff.js");
         const { impact, resolveStartIds } = await import("../graph/traverse.js");
         const { computeBaselineIssues } = await import("../baseline.js");
         const diffFiles = getGitDiffFiles(rootDir);
@@ -79,6 +81,19 @@ export function registerCheckCommand(program: Command): void {
         const entries = pathsToEntries(diffFiles);
         const { startIds: currentStartIds } = resolveStartIds(graph, entries);
 
+        // issue #229 review — rename-aware baseline entry resolution: a diff
+        // that renames a file AND deletes its sole @impl edge in the same
+        // change resolves only the NEW path via getGitDiffFiles; the
+        // baseline graph only knows the OLD path, so translate through
+        // git's rename detection so the baseline side still resolves.
+        const renameMap = getGitRenameMap(rootDir);
+        const inverseRenameMap = new Map<string, string>();
+        for (const [oldPath, newPath] of renameMap) inverseRenameMap.set(newPath, oldPath);
+        const baselineEntries = entries.map((e) => {
+          const oldPath = inverseRenameMap.get(e.path);
+          return oldPath === undefined ? e : { ...e, path: oldPath };
+        });
+
         // issue #229 — eager baseline for `--diff`. This used to be a lazy
         // R6/SC-005 optimization (only build the base-ref worktree when the
         // CURRENT-graph scope already had an issue), but that made the gate
@@ -86,18 +101,46 @@ export function registerCheckCommand(program: Command): void {
         // to a REQ: removing the edge from the current graph makes the REQ
         // unreachable from the changed file, so it never entered scope and
         // `hasScopedIssue` was false — the baseline worktree was never even
-        // built. The baseline is now always computed for `--diff` and its
-        // graph is reused below to also compute scope on the BASELINE side,
-        // so a REQ reachable via an edge that exists on EITHER side of the
-        // diff still lands in scope. Correctness over SC-005's perf win.
-        // Phase 1 pins the base ref to HEAD (FR-002); the internal API
-        // already takes a `baseRef` parameter so Phase 2 can expose `--base`
-        // (FR-012).
-        const baseline = computeBaselineIssues(rootDir, "HEAD", lock, config);
-        const baselineGraph = baseline.graph;
-        const baselineStartIds = baselineGraph
-          ? resolveStartIds(baselineGraph, entries).startIds
-          : [];
+        // built. The baseline is now (subject to the skip check just below)
+        // computed for `--diff` and its graph is reused below to also
+        // compute scope on the BASELINE side, so a REQ reachable via an edge
+        // that exists on EITHER side of the diff still lands in scope.
+        // Correctness over SC-005's perf win. Phase 1 pins the base ref to
+        // HEAD (FR-002); the internal API already takes a `baseRef`
+        // parameter so Phase 2 can expose `--base` (FR-012).
+        //
+        // issue #229 review (Finding 2) — the fully-unconditional eager
+        // baseline above regressed the case where the diff touches only
+        // files outside the graph entirely (e.g. an untracked README): the
+        // baseline `git worktree add` + `scan()` (~2-3s) ran and was then
+        // immediately discarded by the "not tracked" early exit below,
+        // ~5x'ing that case's latency versus pre-#229. `getHeadTrackedPaths`
+        // is a cheap probe (`git ls-tree -r HEAD`, no worktree) for whether
+        // any diff path was ever tracked at HEAD; if NONE were (and the
+        // current graph resolved nothing, and no diff path is a rename
+        // NEW-path), the baseline graph could not possibly resolve a
+        // startId either, so building it would only be thrown away. Building
+        // is still the default whenever there's any chance it's needed —
+        // this only ever skips work that would provably go unused.
+        const headTrackedPaths = getHeadTrackedPaths(
+          rootDir,
+          entries.map((e) => e.path),
+        );
+        const anyBaselineResolvable =
+          currentStartIds.length > 0 ||
+          headTrackedPaths.size > 0 ||
+          entries.some((e) => inverseRenameMap.has(e.path));
+
+        let baseline: BaselineIssues | undefined;
+        let baselineGraph: ArtifactGraph | undefined;
+        let baselineStartIds: string[] = [];
+        if (anyBaselineResolvable) {
+          baseline = computeBaselineIssues(rootDir, "HEAD", lock, config);
+          baselineGraph = baseline.graph;
+          baselineStartIds = baselineGraph
+            ? resolveStartIds(baselineGraph, baselineEntries).startIds
+            : [];
+        }
 
         // "Not tracked in the graph" only when NEITHER side resolves a
         // startId. Checking only the current graph (pre-#229 behavior) would
@@ -168,12 +211,17 @@ export function registerCheckCommand(program: Command): void {
         const scopedNodeIds = new Set([...currentScope, ...baselineScope]);
 
         // One `check()` call: baseline is already available (computed
-        // eagerly above), so there is no more "preliminary, then maybe
-        // rebuild with baseline" two-phase call. `diffRequested` (spec 017
-        // Critical fix B6/D2) stays `true` here regardless — it exists so
-        // `check()` can tell a `--diff` run apart from a plain check when
-        // `baseline` is omitted, which no longer happens on this path but
-        // the signal is kept for parity with the non-diff branch below.
+        // above, subject to the Finding 2 skip check), so there is no more
+        // "preliminary, then maybe rebuild with baseline" two-phase call.
+        // `baseline` can only be `undefined` here when `anyBaselineResolvable`
+        // was false, which forces `baselineStartIds` to stay `[]` — and since
+        // that condition also requires `currentStartIds` to be empty, the
+        // "not tracked" early exit above always fires first, so this line
+        // never actually runs with `baseline === undefined`.
+        // `diffRequested` (spec 017 Critical fix B6/D2) stays `true` here
+        // regardless — it exists so `check()` can tell a `--diff` run apart
+        // from a plain check when `baseline` is omitted, kept for parity
+        // with the non-diff branch below.
         result = check(graph, lock, scopedNodeIds, testResults, baseline, true);
       } else {
         result = check(graph, lock, undefined, testResults, undefined, false);

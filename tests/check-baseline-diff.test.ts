@@ -344,6 +344,40 @@ describe("check --diff --gate catches a deleted sole @impl/@verifies edge (issue
     expect(json.uncovered).not.toContain("REQ-200");
     expect(json.newIssues.uncovered).not.toContain("REQ-200");
   });
+
+  // issue #229 review (Finding 1, PR #237, BLOCKER) — a `git mv` AND a
+  // deletion of the sole `@impl` edge in the SAME diff. `getGitDiffFiles`
+  // (modern git default `diff.renames = true`) reports only the NEW path
+  // (`src/renamed.ts`); the current graph resolves it fine (the file still
+  // exists there), but the OLD path (`src/target.ts`) is what the baseline
+  // graph actually has a node for. Without rename-aware baseline entry
+  // resolution, `resolveStartIds(baselineGraph, entries)` misses entirely
+  // (`file:src/renamed.ts` was never in the baseline graph), so the
+  // baseline-side scope never re-discovers REQ-500 either, and the gate
+  // fails open exactly like the original issue #229 bug.
+  it("(T229-5) git mv + delete sole @impl in same diff → new uncovered → exit 2 (rename-aware baseline resolve)", async () => {
+    const dir = repoSoleImpl("artgraph-229-rename-and-delete-");
+    // git mv the file THEN drop the @impl REQ-500 line — baseline (HEAD)
+    // sees src/target.ts with the @impl, working tree sees src/renamed.ts
+    // without.
+    execFileSync("git", ["mv", "src/target.ts", "src/renamed.ts"], {
+      cwd: dir,
+      stdio: "pipe",
+    });
+    const renamedPath = join(dir, "src", "renamed.ts");
+    const before = readFileSync(renamedPath, "utf-8");
+    const after = before
+      .split("\n")
+      .filter((l) => !l.includes("@impl REQ-500"))
+      .join("\n");
+    expect(after).not.toEqual(before);
+    writeFileSync(renamedPath, after);
+
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(2);
+    expect(json.pass).toBe(false);
+    expect(json.newIssues.uncovered).toContain("REQ-500");
+  });
 });
 
 // spec 017 US2 (T021) — baselineStatus invariants (data-model §1.1). The state
@@ -400,6 +434,26 @@ describe("check --diff --gate edge cases (T022)", () => {
     const { stdout, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Changed files are not tracked in the graph.");
+  });
+});
+
+// issue #229 review (Finding 2, PR #237, MAJOR) — a diff that touches ONLY
+// files outside the graph (e.g. an untracked README) must not eagerly build
+// the baseline `git worktree add` + `scan()` only to immediately discard it
+// at the "not tracked" early exit — that regressed this specific case's
+// latency ~5x versus pre-#229. This is a correctness test (CI can't reliably
+// time itself): it asserts `baselineStatus === "skipped"` rather than
+// "computed", which is only true if the baseline scan was actually skipped.
+describe("check --diff --gate untracked-only diff skips eager baseline (issue #229 review, Finding 2)", () => {
+  it("(T229-perf) diff touches only files outside the graph → baseline scan is skipped, not computed (perf fix)", async () => {
+    const dir = repo("artgraph-229-untracked-perf-");
+    writeFileSync(join(dir, "unrelated.md"), "# Notes\n");
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(0);
+    expect(json.message).toContain("Changed files are not tracked in the graph.");
+    // Pre-#229 lazy-eval path is restored for this specific case: no
+    // baseline was built because no diff path was tracked at HEAD.
+    expect(json.baselineStatus).toBe("skipped");
   });
 });
 
