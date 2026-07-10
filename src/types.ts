@@ -6,7 +6,11 @@ export type EdgeKind =
   | "implements"
   | "verifies"
   | "imports"
-  | "contains";
+  | "contains"
+  // spec 020 (data-model.md §4, FR-006/007/008) — req -> symbol|file, forward
+  // only. Execution evidence: "this REQ's tagged green tests ran this code",
+  // as opposed to `implements`'s declared intent. Never generated in reverse.
+  | "exercises";
 
 // Tuple type alias enforcing "at least one element" statically.
 // See specs/011-edge-provenance/contracts/edge-provenance-type.md.
@@ -23,7 +27,13 @@ export type EdgeProvenance =
   | "task-tag"
   | "inline-link"
   | "ts-import"
-  | "structural";
+  | "structural"
+  // spec 020 (data-model.md §4, FR-009) — execution evidence (per-test
+  // coverage join, `src/trace/ingest.ts`). Sole provenance on `exercises`
+  // edges; appended to an existing `implements` edge's provenances when a
+  // declared claim and evidence agree on the same (req, symbol|file) pair
+  // (FR-008).
+  | "coverage";
 
 // Run-time value set for the EdgeProvenance literal union. Kept in sync with
 // the type union above so format.ts / lock.ts can validate a provenance
@@ -38,6 +48,7 @@ export const EDGE_PROVENANCE_VALUES: ReadonlySet<EdgeProvenance> = new Set([
   "inline-link",
   "ts-import",
   "structural",
+  "coverage",
 ]);
 
 export interface GraphNode {
@@ -85,6 +96,11 @@ export interface LockEntry {
   contentHash: string;
   impl?: string[];
   tests?: string[];
+  // spec 020 (data-model.md §5, FR-011) — target nodeIds of this req's
+  // `exercises` edges (`[...new Set()].sort()`, same dedupe+sort convention
+  // as `impl`/`tests`). Omitted when empty so a project with no trace
+  // artifacts round-trips byte-identical to pre-spec-020 lock output.
+  exercises?: string[];
   // Schema v2: structured to carry provenance per reference.
   // See specs/011-edge-provenance/contracts/lock-schema-v2.md.
   dependsOn?: Array<{ id: string; provenances: EdgeProvenance[] }>;
