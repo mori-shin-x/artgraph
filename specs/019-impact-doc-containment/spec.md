@@ -18,8 +18,9 @@
 - [#122](https://github.com/mori-shin-x/artgraph/issues/122) (closed) — tag-zero impact UX。`ts-import` エッジのみの経路で req / doc ノードを経由しないため、本 spec の変更の影響を受けない。既存 brownfield E2E が回帰ガードになる。
 - spec 008 (document-graph) — doc↔doc の `derives_from` / `depends_on` 辺。本 spec は `contains` 辺のみを対象とし、doc 間辺のセマンティクスは変更しない。
 - spec 017 (check-gate-baseline-diff) — `check --diff` の scoped arrays は impact() の到達集合から計算されるため、本 spec により縮小する(US3)。
+- [#229](https://github.com/mori-shin-x/artgraph/issues/229) — コードのみ diff での `@impl` タグ削除がスコープ外に落ちる境界問題。現行でも確実には検出されておらず(doc 経由の偶然の検出のみ)、本 spec の設計レビューで切り出したフォローアップ。本 spec のスコープ外 (FR-014)。
 
-**前提**: artgraph は pre-1.0 につき、本 spec は後方互換を考慮せず traversal セマンティクスを clean に変更する。兄弟 REQ 到達を assert している既存テスト・fixture は新セマンティクスに書き直す(削除ではなく期待値の反転として明示的にレビュー可能にする)。
+**前提**: artgraph は公開済みだが 0.1 であり実利用者はいない想定。作者判断 (2026-07-10 設計レビュー) により**破壊的変更を許容**する — 後方互換・移行導線・非推奨期間は一切考慮せず、traversal セマンティクスを clean に変更する。兄弟 REQ 到達を assert している既存テスト・fixture は新セマンティクスに書き直す(削除ではなく期待値の反転として明示的にレビュー可能にする)。
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -73,7 +74,9 @@
 
 ---
 
-### User Story 4 — 兄弟 REQ の情報専用軸 `sameSpecReqs` (Priority: P2)
+### User Story 4 — 兄弟 REQ の情報専用軸 `sameSpecReqs` (Priority: Deferred — 本 spec では実装しない)
+
+> **設計レビュー裁定 (2026-07-10)**: 実装見送り。理由: (a) FR-004 の帰属アトリビューションにより「文脈が欲しければ `affectedDocs` の spec を読む」という迂回路が常に存在し、agent ワークフローはそれで足りる (Skill に 1 行書けば済む)。(b) 出力フィールドは後から足すのは非破壊だが消すのは破壊的で、非対称性は延期に有利。(c) ドッグフーディング 4 ループで文脈不足の実需は観測されておらず、困っていたのは常に文脈過多だった。絞った出力をドッグフーディングした上で、具体的なワークフローが要求したら足す。以下の記述は将来の設計スケッチとして残置する。
 
 「同じ spec の兄弟 REQ も参考情報としては見たい」ユーザー(例: agent が変更前に feature 全体の文脈を掴みたいケース)のために、`artgraph impact` の出力に `sameSpecReqs` — affected docs に含まれる REQ のうち `impactReqs` に入らなかったもの — を**情報専用の別軸**として載せる。この軸は Drift candidates に一切寄与せず、text 出力でも「Same-spec REQs (informational)」として明確に区別される。
 
@@ -93,7 +96,7 @@
 
 ### User Story 5 — ドキュメント / Skill / dogfood テンプレートの追随 (Priority: P2)
 
-traversal セマンティクスの SSOT が変わるため、(a) `src/graph/traverse.ts` 冒頭の設計コメント(旧「意図された設計」宣言)を本 spec 準拠に書き換え、(b) README / docs/skills-guide.md の impact 説明、(c) `artgraph-impact` / `artgraph-plan-coverage` Skill の出力解説(`sameSpecReqs` の読み方を含む)、(d) 5 agent path に配布される dogfood テンプレート(byte-identical 同期テストあり)を更新する。
+traversal セマンティクスの SSOT が変わるため、(a) `src/graph/traverse.ts` 冒頭の設計コメント(旧「意図された設計」宣言)を本 spec 準拠に書き換え、(b) README / docs/skills-guide.md の impact 説明、(c) `artgraph-impact` / `artgraph-plan-coverage` Skill の出力解説、(d) 5 agent path に配布される dogfood テンプレート(byte-identical 同期テストあり)を更新する。
 
 **Why this priority**: コメント・ドキュメントが旧設計を「意図」と主張したまま実装だけ変わると、次の開発者(або agent)が回帰させるリスクが高い。#215 の調査でも traverse.ts のコメントが「これはバグではなく設計」という誤誘導の起点になった。
 
@@ -113,6 +116,8 @@ traversal セマンティクスの SSOT が変わるため、(a) `src/graph/trav
 - **lock に親 doc が存在しない場合**: 既存の drift 判定と同じく skip(`lock[id]` が無ければ判定しない)。
 - **起点自体が doc / spec パスの場合** (`artgraph impact specs/auth.md`): `resolveStartIds` の filePath fallback が doc ノードと全 req ノードを直接 seed するため、方向制約後も spec→code 方向の全展開が維持される。加えて doc ノードからの順方向 contains 展開も従来どおり機能する。
 - **req↔doc の往復による無限ループ**: 方向制約により構造的に発生しなくなる(従来は visited set で抑止していた)。
+- **1 つの task が複数 REQ を参照する場合** (`T010 ... [REQ-901, REQ-902]`): `REQ-901 → (逆implements) T010 → (順implements) REQ-902` のブリッジは**残る(意図)**。doc 同居と異なり「作者が明示的に 1 つの作業単位に束ねた」という task-tag 由来の宣言であり、因果的に意味がある。ただし Spec Kit convergence phase のような「1 task に大量の REQ 列挙」パターンがノイズ源になるかはドッグフーディングで観測する (watch item)。
+- **コードのみ diff での `@impl` タグ削除**: 削除で `implements` 辺ごと消えるため、新たに uncovered になった REQ へ到達できずスコープ外に落ちる。現行実装でも最小構成では素通りしており (doc 経由で偶然捕まる場合があるだけ)、本 spec の退行ではなく既存の境界問題。[#229](https://github.com/mori-shin-x/artgraph/issues/229) で独立に扱う (FR-014g)。
 
 ## Requirements *(mandatory)*
 
@@ -122,7 +127,7 @@ traversal セマンティクスの SSOT が変わるため、(a) `src/graph/trav
 
 - **FR-001**: `impact()` の BFS は `contains` 辺を**順方向のみ** (edge.source = doc → edge.target = req|task) 辿る。逆方向 (req|task → 親 doc) はトラバースしない。
 - **FR-002**: `contains` 以外の 5 辺種 (`depends_on` / `derives_from` / `implements` / `verifies` / `imports`) の双方向トラバース、および file→symbol 展開 (spec 016 R-006 の挙動) は一切変更しない。
-- **FR-003**: 方向制約は `contains` 辺の target 種別 (req / task) を問わず一律に適用する。
+- **FR-003**: 方向制約は `contains` 辺の target 種別 (req / task) を問わず一律に適用する。**これは一貫性のためではなく修正の成立条件である**: task preset が有効なプロジェクト (Spec Kit の `T\d{3}` 等) では tasks.md の各 task が参照 REQ への `implements` 辺 (task-tag provenance) を持ち、feature の tasks.md は集合としてその feature のほぼ全 REQ を参照する。req のみ制約して task を除外すると、`REQ → (逆implements) task → (逆contains) doc:tasks.md → (順contains) 兄弟 task → (順implements) feature 全 REQ` の経路で #215 の症状がほぼ完全に復活する。
 
 #### 親 doc の帰属アトリビューション
 
@@ -130,7 +135,7 @@ traversal セマンティクスの SSOT が変わるため、(a) `src/graph/trav
 - **FR-005**: 帰属アトリビューションで追加された doc も、BFS で直接到達した doc と同様に drift 判定 (lock との contentHash 比較) の対象とする。
 - **FR-006**: 帰属アトリビューションで追加された doc から先へのグラフ展開は行わない (その doc の子 req が `impactReqs` / `affectedFiles` / `drifted` に寄与しない)。
 
-#### `sameSpecReqs` 情報軸 (P2)
+#### `sameSpecReqs` 情報軸 (Deferred — 実装対象外、将来の設計スケッチ)
 
 - **FR-007**: `sameSpecReqs` は「`affectedDocs` (BFS 到達 + 帰属アトリビューション) の contains 子 req のうち `impactReqs` に含まれないもの」と定義し、dedup + reqId 昇順で返す。
 - **FR-008**: `sameSpecReqs` は `artgraph impact` の JSON / text 出力にのみ載せる。text 出力では Impact reqs / Drift candidates と明確に区別された informational セクションとする。`sameSpecReqs` の要素は `drifted` の対象にならない。
@@ -144,16 +149,16 @@ traversal セマンティクスの SSOT が変わるため、(a) `src/graph/trav
 #### ドキュメント / Skill
 
 - **FR-012**: `src/graph/traverse.ts` 冒頭の設計コメント (spec 014/016 由来の「bidirectional は意図」宣言) を本 spec 準拠に書き換え、spec 019 を参照させる。maxDepth による回避策の記述を削除する。
-- **FR-013**: README / docs/skills-guide.md / `artgraph-impact` / `artgraph-plan-coverage` Skill テンプレートの impact 出力説明を更新し (`sameSpecReqs` の読み方を含む)、dogfood テンプレート 5 agent path の byte-identical 同期を維持する。
+- **FR-013**: README / docs/skills-guide.md / `artgraph-impact` / `artgraph-plan-coverage` Skill テンプレートの impact 出力説明を新セマンティクス (同一 spec 同居は blast radius に入らない・feature 文脈は `affectedDocs` の spec を読む) に更新し、dogfood テンプレート 5 agent path の byte-identical 同期を維持する。
 
 #### Scope exclusion (明示)
 
-- **FR-014**: 以下は本 spec のスコープ外: (a) #218 クラスメソッド粒度、(b) REQ-ID 直接入力の受理 (spec 016 FR-012 の rejection を維持)、(c) `maxDepth` のデフォルト値変更、(d) doc↔doc 辺 (`derives_from` / `depends_on`) のセマンティクス変更、(e) `contains` 辺の**生成側** (builder.ts) の変更、(f) `plan-coverage` / `check` 出力スキーマへの `sameSpecReqs` 追加。
+- **FR-014**: 以下は本 spec のスコープ外: (a) #218 クラスメソッド粒度、(b) REQ-ID 直接入力の受理 (spec 016 FR-012 の rejection を維持)、(c) `maxDepth` のデフォルト値変更、(d) doc↔doc 辺 (`derives_from` / `depends_on`) のセマンティクス変更、(e) `contains` 辺の**生成側** (builder.ts) の変更、(f) `sameSpecReqs` の実装 (Deferred — US4)、(g) コードのみ diff での `@impl` タグ削除による新規 uncovered の検出 (baseline 側グラフ辺のスコープ計算への併用 — [#229](https://github.com/mori-shin-x/artgraph/issues/229) として切り出し済み。現行でも確実には検出されていないため本 spec の退行ではない)。
 
 ### Key Entities
 
 - **`contains` 辺**: 生成 (builder.ts、provenance `structural`、doc→req|task) は不変。**消費側 (traverse) のセマンティクスのみ変更**。
-- **`ImpactResult`**: 既存フィールドの型は不変。`affectedDocs` の算出方法が「BFS 到達」から「BFS 到達 ∪ 帰属アトリビューション」に変わる。`sameSpecReqs` は CLI 層で合成する出力フィールドであり、`resolveOriginReqs` / `originReqs` と同じ責務分担に従う。
+- **`ImpactResult`**: US4 の deferral により**型・JSON フィールド構成は完全に不変**。変わるのは各フィールドの値(到達集合の中身)のみで、`affectedDocs` の算出方法が「BFS 到達」から「BFS 到達 ∪ 帰属アトリビューション」に変わる。(将来 `sameSpecReqs` を実装する場合は `resolveOriginReqs` / `originReqs` と同じ責務分担 — traverse 層ヘルパー + CLI 層合成 — に従う。)
 - **`DriftEntry`**: 型・判定ロジック不変。母集合 (visited + attributed docs) の変化のみ。
 
 ## Success Criteria *(mandatory)*
@@ -171,13 +176,13 @@ traversal セマンティクスの SSOT が変わるため、(a) `src/graph/trav
 | 案 | 内容 | 裁定 |
 |----|------|------|
 | 案 1: contains 方向制約 | BFS で doc contains を双方向に辿らない。req→doc は帰属メタデータとしてのみ扱う | **採用 (core)**。根本原因の除去。帰属は事後アトリビューション (FR-004) で温存 |
-| 案 2: `sameSpecReqs` 分離 | 兄弟 REQ を別カテゴリに分離し Drift candidates に混ぜない | **部分採用 (P2)**。案 1 の上に情報専用軸として載せる。案 1 なしの案 2 単独 (BFS は今のまま出力だけ分類) は、affectedFiles / check スコープ / plan-coverage の汚染が残るため不採用 |
+| 案 2: `sameSpecReqs` 分離 | 兄弟 REQ を別カテゴリに分離し Drift candidates に混ぜない | **採用見送り (Deferred)**。設計レビュー (2026-07-10) で実装対象外と裁定 — 理由は US4 冒頭の裁定注記を参照。案 1 なしの案 2 単独 (BFS は今のまま出力だけ分類) は、affectedFiles / check スコープ / plan-coverage の汚染が残るため元より不採用 |
 | 案 3: docs 明記のみ | 「1 spec.md 複数 REQ で impact は spec 単位」と制約を明記 | **不採用**。最も一般的な構成で中核価値提案が壊れたままになる。#177/#179/#188/spec 016 の投資も回収不能 |
 | 変形案: 経路依存 BFS | reverse contains で到達した doc を「非展開ノード」としてマークし BFS 内で処理 | **不採用**。訪問順で結果が変わりうる経路依存性を BFS に持ち込み、決定性の検証コストが上がる。事後アトリビューションが同じ出力をより単純に達成する |
 
 ## Assumptions
 
-- pre-1.0 の挙動変更として許容する (リリースノートで traversal セマンティクス変更を明示する。既存ユーザーの `impact` / `check --diff` / `plan-coverage` の出力は狭くなる方向にのみ変わる)。
+- 公開済みだが 0.1 で実利用者はいない想定。作者判断 (2026-07-10 設計レビュー) により破壊的変更を許容し、移行導線・非推奨期間は設けない。出力は狭くなる方向にのみ変わる。
 - `contains` 辺の生成は builder.ts の 1 箇所 (provenance `structural`) のみであり、方向制約の適用点は traverse 層に閉じる。
 - traverse.ts 冒頭コメントおよび spec 014/016 の「bidirectional は意図」という記述は、同一 doc 内の狭い fixture では妥当に見えたが、Spec Kit / Kiro の標準構成 (1 spec.md = 1 feature = 複数 REQ) に対する検証を欠いていた。#215 の 3 段階切り分け (dogfooding で実証) を優先し、本 spec で設計判断を更新する。
 - `visited` 集合ベースの現行 BFS 実装は方向制約後も決定的であり、出力順序の契約 (INV-S2 等) に影響しない。
