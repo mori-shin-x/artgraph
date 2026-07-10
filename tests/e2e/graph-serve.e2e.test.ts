@@ -121,11 +121,22 @@ describe("e2e: scan --serve", () => {
       const html = root.body.toString("utf-8");
       expect(html).toContain('id="artgraph-data"');
       expect(html).toContain("cytoscape.min.js");
+      // spec 020 T018 / FR-021: the exercises legend entry is static markup
+      // (like the Layers/State sections), so it renders even for this
+      // fixture, which has no `exercises` edges — legend entry always
+      // present is the chosen design (consistency over conditional UI).
+      expect(html).toMatch(/legend-swatch[^"]*edge-exercises/);
+      expect(html).toContain("exercises");
 
       const app = await fetchOnce(`http://127.0.0.1:${PORT}/app.js`);
       expect(app.status).toBe(200);
       expect(app.contentType).toMatch(/text\/javascript/);
       expect(app.body.length).toBeGreaterThan(100);
+      const appJs = app.body.toString("utf-8");
+      // The cytoscape stylesheet distinguishes `exercises` edges (coverage
+      // evidence) from declared edges with a dashed line-style.
+      expect(appJs).toMatch(/edge\[\s*kind\s*=\s*["']exercises["']\s*\]/);
+      expect(appJs).toMatch(/"line-style"\s*:\s*"dashed"/);
 
       const vendor = await fetchOnce(`http://127.0.0.1:${PORT}/vendor/cytoscape.min.js`);
       expect(vendor.status).toBe(200);
