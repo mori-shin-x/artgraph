@@ -49,8 +49,8 @@
 
 ## Phase B: scan / lock / rename 統合 (US1 完成)
 
-- [ ] T014 [US1] **Red**: `tests/trace-graph.test.ts` — グラフ合流を固定: (a) US1-1/2/4/5/6 の受け入れシナリオ(exercises エッジ・provenance `coverage`・交差なし・和集合・fail-safe・module-init 非エッジ化)、(b) ②分岐: 宣言一致対 → `implements.provenances` に `coverage` 追記+独立 `exercises` エッジなし / 証拠のみ対 → `exercises` エッジ(FR-008 の排他)、(c) ⑦回帰: trace 不在 → グラフ JSON が導入前と **byte-identical**(US1-3 / FR-010)、(d) 決定性: 同一入力 2 回 scan → byte-identical(US1-2 / SC-002)
-- [ ] T015 [US1] `src/types.ts`(kind `exercises` + provenance `coverage` + `EDGE_PROVENANCE_VALUES`)と `src/graph/builder.ts`(trace 合流)を実装して T014 を **Green** に。⑦: spec 011 SC-008 の union↔Set 同期テストを `coverage` 込みで更新
+- [X] T014 [US1] **Red**: `tests/trace-graph.test.ts` — グラフ合流を固定: (a) US1-1/2/4/5/6 の受け入れシナリオ(exercises エッジ・provenance `coverage`・交差なし・和集合・fail-safe・module-init 非エッジ化)、(b) ②分岐: 宣言一致対 → `implements.provenances` に `coverage` 追記+独立 `exercises` エッジなし / 証拠のみ対 → `exercises` エッジ(FR-008 の排他)、(c) ⑦回帰: trace 不在 → グラフ JSON が導入前と **byte-identical**(US1-3 / FR-010)、(d) 決定性: 同一入力 2 回 scan → byte-identical(US1-2 / SC-002)
+- [X] T015 [US1] `src/types.ts`(kind `exercises` + provenance `coverage` + `EDGE_PROVENANCE_VALUES`)と `src/graph/builder.ts`(trace 合流)を実装して T014 を **Green** に。⑦: spec 011 SC-008 の union↔Set 同期テストを `coverage` 込みで更新
 - [ ] T016 [US1] **Red→Green**: `tests/lock.test.ts` 拡張 + `src/lock.ts` — `exercises?: string[]`(`impl` と同じ dedupe+sort 規約)、`entriesStructurallyEqual` への配列比較追加、reconcile 冪等性(2 回目で `lastReconciled` 不変)。①境界: exercises 空配列はフィールド省略。⑦回帰: exercises なし lock の round-trip が既存と byte-identical
 - [ ] T017 [P] **Red→Green**: `tests/rename*.test.ts` 拡張 + rename 系 — trace shard 内 REQ ID の `--from/--to` / `--split` / `--merge` 書換え(FR-016)。③不正遷移: 未知 `schemaVersion` shard は書換え対象外として警告(旧世代 trace の扱い、Edge Case)。書換えサマリに trace が表示される
 - [ ] T018 [P] [US1] `scan --serve` / `--output` の exercises エッジ視覚区別+凡例追加(FR-021、`src/serve/` 相当箇所。具体形は実装定義 — 破線を推奨)。E2E は HTML 内に凡例文字列が出ることの確認に留める(`tests/e2e/graph-serve.e2e.ts` 拡張)
