@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, writeFileSync, rmSync } from "node:fs";
+import { appendFileSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runAt } from "./helpers.js";
 import {
@@ -8,6 +8,7 @@ import {
   makeUnbornRepo,
   introduceNewOrphan,
   makeRepoWithOrphan,
+  makeRepoWithSoleImplTag,
 } from "./helpers.js";
 
 // spec 017 US1 (T011/T014) — `check --diff --gate` must be decided by NEW
@@ -18,6 +19,9 @@ import {
 const repos: string[] = [];
 function repo(prefix: string): string {
   return track(makeRepoWithDebt(prefix));
+}
+function repoSoleImpl(prefix: string): string {
+  return track(makeRepoWithSoleImplTag(prefix));
 }
 // Register an already-created temp repo for afterEach cleanup.
 function track(dir: string): string {
@@ -62,9 +66,12 @@ describe("check --diff --gate baseline diff (US1)", () => {
     const { exitCode, json } = await checkJson(dir);
     expect(exitCode).toBe(0);
     expect(json.pass).toBe(true);
-    // Scope is now fully clean (REQ-100 alone, and it's covered) → the
-    // lazy-eval short-circuit fires; no baseline worktree is built.
-    expect(json.baselineStatus).toBe("skipped");
+    // issue #229 — baseline is now eagerly computed for every `--diff` run
+    // with a non-empty diff (the old lazy-eval short-circuit on a clean
+    // scope was removed: it was never compatible with US2 AS3). Scope is
+    // still fully clean (REQ-100 alone, and it's covered) — only how we got
+    // there changed, not the outcome.
+    expect(json.baselineStatus).toBe("computed");
     expect(json.uncovered).not.toContain("REQ-200");
     expect(json.uncovered).toEqual([]);
     expect(json.newIssues.uncovered).toEqual([]);
@@ -104,30 +111,35 @@ describe("check --diff --gate baseline diff (US1)", () => {
     expect(json.message).toContain("Changed files are not tracked in the graph.");
   });
 
-  it("(d) clean scope (covered file) → baseline skipped, no worktree built (SC-005)", async () => {
+  it("(d) clean scope (covered file) → baseline still computed eagerly (issue #229 union scope)", async () => {
     const dir = repo("artgraph-debt-us1d-");
     // clean.ts's blast radius only reaches the fully-covered REQ-001 — zero
-    // scoped issues, so the lazy-eval short-circuit must fire.
+    // scoped issues. Pre-#229 this was the SC-005 lazy-eval short-circuit
+    // ("skipped"); the fix makes `--diff` always build the baseline so a
+    // deleted-edge diff can't silently skip it, so this is now "computed"
+    // even though the outcome (no issues) is unchanged.
     appendFileSync(join(dir, "src", "clean.ts"), "\n// harmless comment\n");
 
     const { exitCode, json } = await checkJson(dir);
     expect(exitCode).toBe(0);
     expect(json.pass).toBe(true);
-    expect(json.baselineStatus).toBe("skipped");
+    expect(json.baselineStatus).toBe("computed");
   });
 
-  it("(e) hub-only edit → scope carries no pre-existing debt anymore → baseline skipped → exit 0 (spec 019 US3)", async () => {
+  it("(e) hub-only edit → scope carries no pre-existing debt, baseline still computed eagerly (spec 019 US3 / issue #229)", async () => {
     const dir = repo("artgraph-debt-us1e-");
     // spec 019 (issue #215): this used to be the "pre-existing debt only"
     // scenario (REQ-200 dragged in via the shared doc, then suppressed as
     // pre-existing). With the doc-sibling leak fixed, hub.ts's blast radius
-    // is just REQ-100 (covered) — there is no debt in scope to suppress, so
-    // this now takes the exact same "skipped" lazy-eval path as (b)/(d).
+    // is just REQ-100 (covered) — there is no debt in scope to suppress.
+    // issue #229 removed the SC-005 lazy-eval short-circuit this used to
+    // take ("skipped"): the baseline is now always built for a non-empty
+    // `--diff`, so this is "computed" even though nothing ends up scoped.
     appendFileSync(join(dir, "src", "hub.ts"), "\n// another harmless comment\n");
 
     const { exitCode, json } = await checkJson(dir);
     expect(exitCode).toBe(0);
-    expect(json.baselineStatus).toBe("skipped");
+    expect(json.baselineStatus).toBe("computed");
     // Nothing was ever in scope → nothing new, nothing suppressed.
     expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
     expect(json.suppressedCount).toBe(0);
@@ -243,12 +255,141 @@ describe("check --diff --gate catches newly introduced issues (US2)", () => {
   });
 });
 
+// issue #229 (spec 017 US2 AS3) — deleting the ONLY `@impl`/`@verifies` edge
+// to a REQ is a code-only diff, so the pre-fix CURRENT-graph-only scope
+// calculation could no longer reach the REQ at all (the edge that used to
+// carry it into scope is gone from the graph being walked) and the gate
+// silently passed. The fix computes scope on BOTH the current graph and the
+// eagerly-built baseline graph and unions them, so the REQ still enters
+// scope via the side where the edge is still present (the baseline).
+// @impl 017-check-gate-baseline-diff/US2-AS3
+describe("check --diff --gate catches a deleted sole @impl/@verifies edge (issue #229)", () => {
+  it("(T229-1) deleting the sole @impl REQ-500 line (code-only edit) → new uncovered → exit 2", async () => {
+    const dir = repoSoleImpl("artgraph-229-impl-edit-");
+    const targetPath = join(dir, "src", "target.ts");
+    const before = readFileSync(targetPath, "utf-8");
+    // Remove ONLY the `@impl REQ-500` comment line — fnTarget's body stays,
+    // so this is a pure edge deletion, not a file/symbol deletion.
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("@impl REQ-500"))
+      .join("\n");
+    expect(after).not.toEqual(before);
+    writeFileSync(targetPath, after);
+
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(2);
+    expect(json.pass).toBe(false);
+    expect(json.uncovered).toContain("REQ-500");
+    expect(json.newIssues.uncovered).toContain("REQ-500");
+    expect(json.baselineStatus).toBe("computed");
+  });
+
+  it("(T229-2) deleting the sole @verifies [REQ-501] tag does NOT spuriously flag REQ-501 (findUncovered ignores verifies)", async () => {
+    const dir = repoSoleImpl("artgraph-229-verifies-edit-");
+    // REQ-501 keeps its `@impl` in src/target.ts untouched — only the test
+    // file's `[REQ-501]` verifies tag is removed. `findUncovered` never looks
+    // at `verifies` edges, so this must NOT turn into a new uncovered/orphan
+    // issue; it's a negative-control pin so the union-scope fix (which now
+    // ALSO reaches REQ-501 via the baseline side) doesn't over-trigger.
+    const testPath = join(dir, "tests", "target.test.ts");
+    const before = readFileSync(testPath, "utf-8");
+    const after = before.replace(" [REQ-501]", "");
+    expect(after).not.toEqual(before);
+    writeFileSync(testPath, after);
+
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(0);
+    expect(json.pass).toBe(true);
+    expect(json.uncovered).not.toContain("REQ-501");
+    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+  });
+
+  it("(T229-3) git rm of the sole-@impl file → new uncovered → exit 2", async () => {
+    const dir = repoSoleImpl("artgraph-229-rm-");
+    // Unstaged working-tree deletion (no commit) — src/target.ts is gone
+    // from the CURRENT graph entirely, so `resolveStartIds` on the current
+    // graph can't resolve it at all; only the baseline (HEAD) side can.
+    execFileSync("git", ["rm", "src/target.ts"], { cwd: dir, stdio: "pipe" });
+
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(2);
+    expect(json.pass).toBe(false);
+    expect(json.uncovered).toContain("REQ-500");
+    expect(json.newIssues.uncovered).toContain("REQ-500");
+    expect(json.baselineStatus).toBe("computed");
+  });
+
+  it("(T229-4) deleting an already-uncovered REQ's spec line stays suppressed → exit 0", async () => {
+    const dir = repo("artgraph-229-spec-del-");
+    // REQ-200 has no @impl anywhere in makeRepoWithDebt — it's pre-existing
+    // uncovered debt at HEAD. Deleting its spec line entirely removes the
+    // node from the CURRENT graph, so it can't be reported as newly
+    // uncovered (there's no REQ-200 node left to flag) — but the union-scope
+    // fix pulls REQ-200 into scope via the BASELINE side (the line still
+    // exists there), so this pins that the fix doesn't turn a REQ's removal
+    // into a false "new" issue.
+    const specPath = join(dir, "specs", "debt.md");
+    const before = readFileSync(specPath, "utf-8");
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("REQ-200"))
+      .join("\n");
+    expect(after).not.toEqual(before);
+    writeFileSync(specPath, after);
+
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(0);
+    expect(json.pass).toBe(true);
+    expect(json.uncovered).not.toContain("REQ-200");
+    expect(json.newIssues.uncovered).not.toContain("REQ-200");
+  });
+
+  // issue #229 review (Finding 1, PR #237, BLOCKER) — a `git mv` AND a
+  // deletion of the sole `@impl` edge in the SAME diff. `getGitDiffFiles`
+  // (modern git default `diff.renames = true`) reports only the NEW path
+  // (`src/renamed.ts`); the current graph resolves it fine (the file still
+  // exists there), but the OLD path (`src/target.ts`) is what the baseline
+  // graph actually has a node for. Without rename-aware baseline entry
+  // resolution, `resolveStartIds(baselineGraph, entries)` misses entirely
+  // (`file:src/renamed.ts` was never in the baseline graph), so the
+  // baseline-side scope never re-discovers REQ-500 either, and the gate
+  // fails open exactly like the original issue #229 bug.
+  it("(T229-5) git mv + delete sole @impl in same diff → new uncovered → exit 2 (rename-aware baseline resolve)", async () => {
+    const dir = repoSoleImpl("artgraph-229-rename-and-delete-");
+    // git mv the file THEN drop the @impl REQ-500 line — baseline (HEAD)
+    // sees src/target.ts with the @impl, working tree sees src/renamed.ts
+    // without.
+    execFileSync("git", ["mv", "src/target.ts", "src/renamed.ts"], {
+      cwd: dir,
+      stdio: "pipe",
+    });
+    const renamedPath = join(dir, "src", "renamed.ts");
+    const before = readFileSync(renamedPath, "utf-8");
+    const after = before
+      .split("\n")
+      .filter((l) => !l.includes("@impl REQ-500"))
+      .join("\n");
+    expect(after).not.toEqual(before);
+    writeFileSync(renamedPath, after);
+
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(2);
+    expect(json.pass).toBe(false);
+    expect(json.newIssues.uncovered).toContain("REQ-500");
+  });
+});
+
 // spec 017 US2 (T021) — baselineStatus invariants (data-model §1.1). The state
 // machine must never emit an incoherent combination.
 describe("check --diff --gate baselineStatus invariants (T021)", () => {
   it("skipped ⇒ newIssues all-empty AND scoped arrays all-empty AND pass", async () => {
     const dir = repo("artgraph-inv-skip-");
-    appendFileSync(join(dir, "src", "clean.ts"), "\n// harmless\n");
+    // issue #229 — "skipped" is reachable ONLY via the `diffFiles.length ===
+    // 0` short-circuit now (no edit at all): the old SC-005 lazy-eval path
+    // that reached "skipped" on a clean-but-nonempty diff was removed, since
+    // it was never compatible with US2 AS3 (it's what let a deleted `@impl`
+    // edge silently skip the baseline entirely).
     const { json } = await checkJson(dir);
     expect(json.baselineStatus).toBe("skipped");
     expect(json.pass).toBe(true);
@@ -293,6 +434,26 @@ describe("check --diff --gate edge cases (T022)", () => {
     const { stdout, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
     expect(exitCode).toBe(0);
     expect(stdout).toContain("Changed files are not tracked in the graph.");
+  });
+});
+
+// issue #229 review (Finding 2, PR #237, MAJOR) — a diff that touches ONLY
+// files outside the graph (e.g. an untracked README) must not eagerly build
+// the baseline `git worktree add` + `scan()` only to immediately discard it
+// at the "not tracked" early exit — that regressed this specific case's
+// latency ~5x versus pre-#229. This is a correctness test (CI can't reliably
+// time itself): it asserts `baselineStatus === "skipped"` rather than
+// "computed", which is only true if the baseline scan was actually skipped.
+describe("check --diff --gate untracked-only diff skips eager baseline (issue #229 review, Finding 2)", () => {
+  it("(T229-perf) diff touches only files outside the graph → baseline scan is skipped, not computed (perf fix)", async () => {
+    const dir = repo("artgraph-229-untracked-perf-");
+    writeFileSync(join(dir, "unrelated.md"), "# Notes\n");
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(0);
+    expect(json.message).toContain("Changed files are not tracked in the graph.");
+    // Pre-#229 lazy-eval path is restored for this specific case: no
+    // baseline was built because no diff path was tracked at HEAD.
+    expect(json.baselineStatus).toBe("skipped");
   });
 });
 
@@ -367,12 +528,13 @@ describe("impact --diff blast radius is preserved (US4)", () => {
     expect(ij.impactReqs).not.toContain("REQ-200");
     expect(ij.summary.reqs).toBe(1);
 
-    // check --diff's scope agrees: nothing pre-existing is in scope, so the
-    // lazy-eval short-circuit fires (baselineStatus "skipped") rather than
-    // computing a baseline to suppress a debt REQ that was never reached.
+    // check --diff's scope agrees: nothing pre-existing is in scope, so there
+    // is no debt REQ to suppress. issue #229 removed the lazy-eval
+    // short-circuit that used to keep baselineStatus "skipped" here — the
+    // baseline is now always computed for a non-empty `--diff`.
     const gate = await checkJson(dir);
     expect(gate.exitCode).toBe(0);
-    expect(gate.json.baselineStatus).toBe("skipped");
+    expect(gate.json.baselineStatus).toBe("computed");
     expect(gate.json.newIssues.uncovered).not.toContain("REQ-200");
     expect(gate.json.uncovered).not.toContain("REQ-200");
   });

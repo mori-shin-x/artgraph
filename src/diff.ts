@@ -84,6 +84,72 @@ export function getGitDiffFiles(rootDir: string): string[] {
  * path invisible to this diff). `git mv` — which stages both sides — always
  * is, and is the case baseline normalization needs (spec.md C2).
  */
+/**
+ * issue #229 review (Finding 2, PR #237) — cheap probe for which of `paths`
+ * were tracked in the git index at `HEAD`. `src/commands/check.ts` uses this
+ * as a skip-optimization gate for `check --diff`'s eager baseline build: if
+ * NONE of a diff's paths were ever tracked at HEAD (and no other
+ * baseline-resolvable condition holds — see check.ts), the baseline graph
+ * could not possibly resolve a startId for any of them either, so the
+ * ~2-3s `git worktree add` + `scan()` can be skipped entirely and the
+ * pre-existing "not tracked in the graph" early exit is reached directly,
+ * matching pre-#229 latency for a diff that touches only files outside the
+ * graph (e.g. an untracked README).
+ *
+ * Returns the SUBSET of `paths` that `git ls-tree -r HEAD` reports as
+ * present at HEAD. An empty `paths` array short-circuits to an empty set
+ * without invoking `git` at all.
+ *
+ * Batched at `LS_TREE_BATCH_SIZE` paths per `git ls-tree` invocation so a
+ * huge diff (tens of thousands of files) never risks tripping a platform
+ * argv length limit; each batch is queried independently.
+ *
+ * Safe-on-failure, but conservative in the one direction that matters for
+ * the caller: this is only ever consulted to decide whether it's safe to
+ * SKIP the baseline build. If a batch's `git ls-tree` call itself fails
+ * (corrupted repo state, `git` missing, permissions, ...), that batch's
+ * paths are added to the result as if they WERE tracked at HEAD — never
+ * silently treated as "not tracked" — so a probe failure always biases the
+ * caller back toward building the baseline eagerly (the always-correct,
+ * pre-existing behavior) instead of ever skipping it on uncertain
+ * information.
+ */
+const LS_TREE_BATCH_SIZE = 500;
+
+export function getHeadTrackedPaths(rootDir: string, paths: string[]): Set<string> {
+  const tracked = new Set<string>();
+  if (paths.length === 0) return tracked;
+
+  for (let i = 0; i < paths.length; i += LS_TREE_BATCH_SIZE) {
+    const batch = paths.slice(i, i + LS_TREE_BATCH_SIZE);
+    try {
+      const output = execFileSync(
+        "git",
+        [
+          "-c",
+          "core.quotePath=false",
+          "ls-tree",
+          "-r",
+          "HEAD",
+          "--name-only",
+          "-z",
+          "--",
+          ...batch,
+        ],
+        { cwd: rootDir, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
+      );
+      for (const p of parseNulSeparated(output)) tracked.add(p);
+    } catch {
+      // Conservative fallback (see JSDoc above) — treat this whole batch as
+      // tracked so a probe failure can never cause the caller to skip a
+      // baseline build it actually needed.
+      for (const p of batch) tracked.add(p);
+    }
+  }
+
+  return tracked;
+}
+
 export function getGitRenameMap(rootDir: string): Map<string, string> {
   const map = new Map<string, string>();
   let output: string;

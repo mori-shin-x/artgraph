@@ -72,9 +72,12 @@ describe("check --diff text output (US3, FR-008)", () => {
     expect(stdout).not.toContain("artgraph impact --diff");
   });
 
-  it("(c) baseline skipped (clean scope) → bare concise line, no suppressed count (§4.3)", async () => {
+  it("(c) clean scope (baseline computed, nothing new) → bare concise line, no suppressed count (§4.3)", async () => {
     const dir = track(makeRepoWithDebt("artgraph-out-skipc-"));
-    // clean.ts's blast radius has zero scoped issues → lazy-eval skip.
+    // clean.ts's blast radius has zero scoped issues. issue #229 removed the
+    // SC-005 lazy-eval short-circuit (baseline is now always computed for a
+    // non-empty `--diff`), but the text output is unaffected either way —
+    // "computed" with nothing new prints the same bare line as "skipped" did.
     appendFileSync(join(dir, "src", "clean.ts"), "\n// harmless comment\n");
     const { stdout, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
 
@@ -154,13 +157,14 @@ describe("check --diff matrix: gate × format × baselineStatus", () => {
     {
       // spec 019 (issue #215): hub.ts's blast radius no longer reaches the
       // doc-sibling debt REQ-200 (no code dependency) — the scope is fully
-      // clean (REQ-100 alone, covered), so the lazy-eval short-circuit fires
-      // and baselineStatus is "skipped", not "computed" (was "computed +
-      // no new (pre-existing only)" pre-spec-019).
-      name: "skipped (hub edit — doc-sibling debt out of scope, spec 019)",
+      // clean (REQ-100 alone, covered). issue #229 removed the SC-005
+      // lazy-eval short-circuit that used to make this "skipped": `--diff`
+      // now always builds the baseline for a non-empty diff, so this is
+      // "computed" even though nothing ends up new.
+      name: "computed (hub edit — doc-sibling debt out of scope, spec 019)",
       make: () => makeRepoWithDebt("artgraph-mx-comp-clean-"),
       edit: (d) => appendFileSync(join(d, "src", "hub.ts"), "\n// noop\n"),
-      status: "skipped",
+      status: "computed",
       hasNew: false,
     },
     {
@@ -171,10 +175,13 @@ describe("check --diff matrix: gate × format × baselineStatus", () => {
       hasNew: true,
     },
     {
-      name: "skipped (clean scope)",
+      // issue #229 — same eager-baseline change as the case above: this used
+      // to be the SC-005 lazy-eval "skipped" path (scope carries zero
+      // issues), now always "computed".
+      name: "computed (clean scope)",
       make: () => makeRepoWithDebt("artgraph-mx-skip-"),
       edit: (d) => appendFileSync(join(d, "src", "clean.ts"), "\n// noop\n"),
-      status: "skipped",
+      status: "computed",
       hasNew: false,
     },
     {
