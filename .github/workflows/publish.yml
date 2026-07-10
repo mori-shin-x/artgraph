@@ -51,3 +51,5 @@ jobs:
       # lifecycle hook — no separate step needed here.
       - name: Publish
         run: npm publish --access public --provenance
+        env:
+          ARTGRAPH_E2E_PACK: "1"

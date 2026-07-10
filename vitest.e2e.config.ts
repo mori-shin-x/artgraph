@@ -10,6 +10,11 @@ export default defineConfig({
     include: ["tests/e2e/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/dist/**", "**/.claude/**"],
     testTimeout: 60000,
+    // beforeAll in tests/e2e/bin.e2e.test.ts pack path may take up to 5 min
+    // (pnpm pack spawnSync timeout 120s + npm install spawnSync timeout 180s).
+    // Vitest default hookTimeout (10s) is far too short and would kill the
+    // hook before its own internal timeouts fire. See PR #231 review.
+    hookTimeout: 300000,
     pool: "forks",
     forks: { singleFork: true },
     fileParallelism: false,
