@@ -33,6 +33,18 @@ export interface BaselineIssues {
   // into `CheckResult.baselineError` (data-model.md §1.1, contracts/
   // baseline-diff.md §1.2).
   error?: string;
+  /**
+   * The raw base-ref worktree scan graph, defined only when
+   * `status === "computed"`. issue #229 — `check --diff`'s scope used to be
+   * computed on the CURRENT graph alone, so a diff that DELETES the only
+   * `@impl`/`@verifies` edge to a REQ removes that edge from the current
+   * graph before `impact()` ever walks it: the REQ never enters scope and
+   * the newly-uncovered REQ silently escapes the gate. `src/commands/check.ts`
+   * reuses this graph to also compute impact/scope on the BASELINE side and
+   * union the two, so an edge that exists on only one side of the diff still
+   * pulls its REQ into scope. See spec 017 US2 AS3.
+   */
+  graph?: ArtifactGraph;
 }
 
 // ── issue identity keys (SSOT, data-model §6 / R4) ──────────────────────────
@@ -215,7 +227,9 @@ export function computeBaselineIssues(
     // REAL repo, not the throwaway `worktree` checkout of `baseRef`, which
     // has no working-tree changes of its own to diff).
     const renameMap = getGitRenameMap(rootDir);
-    return { keys: collectIssueKeys(graph, currentLock, renameMap), status: "computed" };
+    // `graph` (issue #229) — reused by `src/commands/check.ts` for `--diff`
+    // scope expansion; see the `BaselineIssues.graph` JSDoc above.
+    return { keys: collectIssueKeys(graph, currentLock, renameMap), status: "computed", graph };
   } catch (e) {
     // fix B1 (Critical, issue #182 review) — surface *why* the baseline
     // could not be built instead of a single generic "unavailable". Covers
