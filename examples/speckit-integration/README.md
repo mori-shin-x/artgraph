@@ -6,14 +6,15 @@ during the Spec Kit workflow, and how to gate `/speckit-implement` on drift.
 
 ## The three hooks
 
-`artgraph integrate speckit` registers two hooks by default and a third
-opt-in gate:
+`artgraph integrate speckit` registers three hooks by default; `--gate`
+upgrades the third one to a blocking gate:
 
 | Spec Kit checkpoint | Hook                | What artgraph does                            |
 | ------------------- | ------------------- | --------------------------------------------- |
 | `after_tasks`       | `scan && reconcile` | Snapshots a fresh `.trace.lock` baseline      |
 | `after_implement`   | `check --diff`      | Reports drift / orphans / uncovered on the diff |
-| `before_implement`  | `check --gate`      | Blocks `/speckit-implement` on drift (opt-in via `--gate`) |
+| `before_implement`  | `check --diff` (default, non-blocking preview) | Shows the current traceability state; never halts `/speckit-implement` |
+| `before_implement`  | `check --gate` (opt-in via `--gate`, blocking) | Blocks `/speckit-implement` on drift / uncovered — always fails on a brand-new spec (see Step 3) |
 
 ## Layout
 
@@ -98,6 +99,15 @@ hooks:
     prompt: Run artgraph check --diff to verify coverage/orphan/drift?
     description: Verify artgraph traceability after implementation
     condition: null
+  before_implement:
+  - extension: artgraph
+    command: artgraph.check-diff
+    enabled: true
+    optional: true
+    priority: 50
+    prompt: Preview artgraph traceability (check --diff, non-blocking) before implementing?
+    description: Preview artgraph traceability before implementation (non-blocking)
+    condition: null
 ```
 
 Other extensions' hooks in `extensions.yml` are never touched. The integration
@@ -152,15 +162,18 @@ COVERAGE:
 ## Step 3 — Add the `--gate`
 
 To **block** `/speckit-implement` whenever drift / orphans / uncovered are
-present (instead of just reporting after the fact):
+present (instead of just previewing / reporting after the fact):
 
 ```bash
-node ../../dist/cli.js integrate speckit --gate    # add before_implement gate
-node ../../dist/cli.js integrate speckit --no-gate # remove it again
+node ../../dist/cli.js integrate speckit --gate    # upgrade before_implement to a blocking gate
+node ../../dist/cli.js integrate speckit --no-gate # remove artgraph's before_implement hook
 ```
 
-`--gate` is _declarative_: setting it adds the hook, `--no-gate` removes it,
-omitting the flag leaves whatever state is already on disk. The added entry:
+`--gate` is _declarative_: setting it replaces artgraph's `before_implement`
+entry with the blocking gate, `--no-gate` removes the entry entirely, and
+omitting the flag preserves whatever variant is already wired (re-running
+without a flag only adds the non-blocking preview when no artgraph entry
+exists). The `--gate` entry:
 
 ```yaml
   before_implement:
@@ -176,6 +189,14 @@ omitting the flag leaves whatever state is already on disk. The added entry:
 
 `check --gate` exits with code 2 when drift / uncovered are present, so Spec
 Kit halts before `/speckit-implement` runs.
+
+> **Warning**: `check --gate` is an absolute check over every REQ. On a
+> brand-new spec, the first `/speckit-implement` fires this gate while every
+> REQ is still uncovered, so **the gate always fails (exit 2) before the
+> first implementation lands — this is expected; proceed anyway**. If that
+> noise bothers you, keep the default non-blocking preview instead. Gating
+> policy for in-progress work is tracked in
+> [#178](https://github.com/mori-shin-x/artgraph/issues/178).
 
 ## Step 4 — Uninstall
 

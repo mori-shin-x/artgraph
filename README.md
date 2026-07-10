@@ -141,10 +141,10 @@ you rarely type `artgraph check` yourself:
    turn if drift is detected. Similar hook shapes exist for other Tier 1
    agents where the runtime supports it.
 3. **At SDD checkpoints** — with Spec Kit or Kiro installed,
-   `artgraph integrate` wires `after_tasks` / `after_implement` (and opt-in
-   `before_implement --gate`) into the SDD workflow, so `tasks.md` /
-   `plan.md` changes are checked at the right moment instead of a batch pass
-   later.
+   `artgraph integrate` wires `after_tasks` / `after_implement` / a
+   non-blocking `before_implement` preview (opt-in blocking gate via
+   `--gate`) into the SDD workflow, so `tasks.md` / `plan.md` changes are
+   checked at the right moment instead of a batch pass later.
 
 Every hook reduces to `artgraph check` on the same graph, and `--diff`
 compares against `.trace.lock`. No LLM in the loop.
@@ -256,19 +256,25 @@ for the trade-off and the `impactReqs` / `originReqs` dual-axis drift guide.
 
 `artgraph integrate` wires the scan / reconcile / check loop into the SDD
 tool you already use. Built-in targets are Spec Kit
-(`.specify/extensions/artgraph/` with `after_tasks` / `after_implement` +
-optional `before_implement --gate`) and Kiro (`.kiro/steering/artgraph.md`).
+(`.specify/extensions/artgraph/` with `after_tasks` / `after_implement` + a
+non-blocking `before_implement` preview; the blocking gate is opt-in via
+`--gate`) and Kiro (`.kiro/steering/artgraph.md`).
 
 ```bash
 artgraph integrate speckit          # idempotent; hooks into .specify/
-artgraph integrate speckit --gate   # add the before_implement gate
+artgraph integrate speckit --gate   # upgrade before_implement to a blocking gate
 artgraph integrate kiro             # writes .kiro/steering/artgraph.md
 artgraph integrate list             # detected / installed per tool
 ```
 
 `artgraph init` auto-integrates every detected SDD tool by default (Spec Kit
-gets the `before_implement` gate hook; pass `--no-integrate` to skip). Worked
-examples: [`examples/speckit-integration/`](./examples/speckit-integration)
+gets the non-blocking `before_implement` preview; pass `--no-integrate` to
+skip). Note that the opt-in `--gate` runs an absolute check, so it always
+fails right before the *first* implementation of a new spec (every REQ is
+still uncovered) — expected behavior, see
+[#178](https://github.com/mori-shin-x/artgraph/issues/178) for the gating
+policy work. Worked examples:
+[`examples/speckit-integration/`](./examples/speckit-integration)
 and [`examples/kiro-integration/`](./examples/kiro-integration). Full detail
 in [docs/sdd-integration.md](./docs/sdd-integration.md).
 

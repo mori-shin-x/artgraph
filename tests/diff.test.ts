@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseDiffFiles, getGitRenameMap } from "../src/diff.js";
+import { parseDiffFiles, getGitRenameMap, getGitTrackedFiles } from "../src/diff.js";
 import { gitInit, gitCommitAll } from "./helpers.js";
 
 describe("parseDiffFiles", () => {
@@ -22,6 +22,41 @@ describe("parseDiffFiles", () => {
   it("should return empty array for empty diff", () => {
     const files = parseDiffFiles("");
     expect(files).toEqual([]);
+  });
+});
+
+// issue #212 — `rename` no longer consumes getGitTrackedFiles (its file
+// enumeration is `.artgraph.json`-pattern based now), but the helper stays
+// exported for git-scoped tooling. Pin its contract in isolation: tracked
+// files only, NUL-separated so non-ASCII paths survive unescaped.
+describe("getGitTrackedFiles", () => {
+  const dirs: string[] = [];
+  function track(dir: string): string {
+    dirs.push(dir);
+    return dir;
+  }
+  afterEach(() => {
+    while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true });
+  });
+
+  it("returns tracked files verbatim (incl. non-ASCII) and excludes untracked ones", () => {
+    const dir = track(mkdtempSync(join(tmpdir(), "artgraph-lsfiles-")));
+    gitInit(dir);
+    mkdirSync(join(dir, "specs"));
+    writeFileSync(join(dir, "specs", "日本語.md"), "# spec\n");
+    writeFileSync(join(dir, "a.txt"), "a\n");
+    gitCommitAll(dir, "init");
+    writeFileSync(join(dir, "untracked.txt"), "u\n");
+
+    const files = getGitTrackedFiles(dir);
+    expect(files).toContain("a.txt");
+    expect(files).toContain("specs/日本語.md");
+    expect(files).not.toContain("untracked.txt");
+  });
+
+  it("throws with an explicit message for a non-git directory", () => {
+    const dir = track(mkdtempSync(join(tmpdir(), "artgraph-lsfiles-nogit-")));
+    expect(() => getGitTrackedFiles(dir)).toThrow(/git ls-files/);
   });
 });
 

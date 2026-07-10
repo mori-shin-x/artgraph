@@ -128,7 +128,9 @@ artgraph reconcile
 Renames, splits or merges a requirement ID and rewrites **every** reference to it
 (spec list items / headings, `@impl` tags, test tags, frontmatter
 `depends_on` / `derives_from`, and `.trace.lock` keys) in one pass, limited to
-git-tracked files.
+the files `.artgraph.json` puts in scan scope (`specDirs` markdown plus
+`include` / `testPatterns` code and tests). Git tracking state is irrelevant:
+uncommitted and untracked files are rewritten too.
 
 ```bash
 artgraph rename --from REQ-001 --to REQ-100
@@ -140,8 +142,8 @@ artgraph rename --from REQ-001 --to REQ-100 --format json
 
 Notes:
 
-- **Always commit first** — rename writes to tracked files in place. Use
-  `--dry-run` to preview.
+- **Always commit first** — rename writes files in place (untracked ones
+  included). Use `--dry-run` to preview.
 - **Target IDs are validated**: they must match the requirement-ID grammar
   (`REQ-001`, `auth/FR-2`, `Requirement-3`) or the `doc:` prefix, so the
   renamed ID is guaranteed to be re-discoverable by the next scan.
@@ -161,14 +163,18 @@ Wire the scan / reconcile / check loop into a supported SDD tool. See
 [docs/sdd-integration.md](./sdd-integration.md) for the full workflow.
 
 ```bash
-artgraph integrate speckit                 # idempotent
-artgraph integrate speckit --gate          # add the before_implement gate hook
-artgraph integrate speckit --no-gate       # remove the before_implement hook
+artgraph integrate speckit                 # idempotent; before_implement gets a non-blocking check --diff preview
+artgraph integrate speckit --gate          # upgrade before_implement to a blocking gate (check --gate)
+artgraph integrate speckit --no-gate       # remove artgraph's before_implement hook
 artgraph integrate speckit --uninstall     # remove the extension dir + every artgraph hook entry
 artgraph integrate kiro                    # writes .kiro/steering/artgraph.md
 artgraph integrate kiro --force            # overwrite a hand-edited steering file
 artgraph integrate list                    # detected / installed status per tool
 ```
+
+Note: the opt-in `--gate` wires `artgraph check --gate`, an absolute check
+over every REQ — on a brand-new spec it always exits 2 before the first
+implementation lands (expected; see issue #178 for the gating-policy work).
 
 ## `artgraph doctor`
 

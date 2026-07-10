@@ -89,6 +89,11 @@ describe("E2E: artgraph integrate speckit — quickstart Scenario 1", () => {
     expect(yml).toMatch(/installed:[\s\S]*- artgraph/);
     expect(yml).toMatch(/after_tasks:/);
     expect(yml).toMatch(/after_implement:/);
+    // issue #217: default before_implement wiring is the NON-BLOCKING
+    // check --diff preview; the blocking check --gate hook entry is --gate
+    // opt-in only.
+    expect(yml).toMatch(/before_implement:/);
+    expect(yml).not.toMatch(/command: artgraph\.check-gate/);
     // Other extension's entry preserved
     expect(yml).toMatch(/command: speckit\.agent-context\.update/);
     // M-H1 regression: must be block style YAML, not single-line flow style.
@@ -487,15 +492,26 @@ describe("E2E: artgraph init — auto-detect integration (Scenario 4)", () => {
     expect(ki).toBeGreaterThan(sp);
   });
 
-  it("applies the speckit before_implement gate by default (issue #135)", async () => {
-    // Gate-on is the auto-integrate default; `artgraph integrate speckit
-    // --no-gate` remains the opt-out.
+  it("wires a non-blocking before_implement preview by default (issue #217)", async () => {
+    // Issue #217 (supersedes the #135-era gate-on default): the blocking
+    // `check --gate` hook is a guaranteed exit 2 right before the FIRST
+    // /speckit-implement of a new spec (every REQ is still uncovered), so
+    // auto-integrate wires the NON-BLOCKING `check --diff` preview instead.
+    // `artgraph integrate speckit --gate` remains the explicit opt-in.
     seedSpecKitRepo(tmp);
     const r = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context"], tmp);
     expect(r.exitCode).toBe(0);
     const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
-    expect(yml).toMatch(/before_implement:/);
-    expect(yml).toMatch(/command:\s*artgraph\.check-gate/);
+    const parsed = parseYaml(yml) as {
+      hooks: {
+        before_implement?: Array<{ extension: string; command: string; optional: boolean }>;
+      };
+    };
+    const entries = parsed.hooks.before_implement?.filter((e) => e.extension === "artgraph");
+    expect(entries).toHaveLength(1);
+    expect(entries![0]!.command).toBe("artgraph.check-diff");
+    expect(entries![0]!.optional).toBe(true);
+    expect(yml).not.toMatch(/command:\s*artgraph\.check-gate/);
   });
 
   // M-H2 regression: `--force` on the outer `init` command must reach the
@@ -617,8 +633,9 @@ describe("E2E: SpecKitProvider rollback on partial failure — quickstart Scenar
 // ---------------------------------------------------------------------------
 // Phase 7 — T063: SC-006 / FR-017 gate halt verification
 //
-// After init's auto-integrate registers the before_implement hook (gate-on
-// default), calling the actual `artgraph check --gate` command on a repo that
+// After the user explicitly opts in to the blocking gate (`integrate speckit
+// --gate` — issue #217 made auto-integrate wire only the non-blocking
+// preview), calling the actual `artgraph check --gate` command on a repo that
 // has uncovered REQs must exit with code 2 and surface a reconcile hint —
 // this is the exact condition that stops Spec Kit's /speckit-implement
 // workflow.
@@ -635,15 +652,17 @@ describe("E2E: artgraph check --gate halts on uncovered REQs (SC-006 / FR-017)",
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  it("exits 2 from `check --gate` after init's auto-integrate registers the hook", async () => {
+  it("exits 2 from `check --gate` after the explicit --gate opt-in registers the hook", async () => {
     // (a) Stage the gate-failure fixture (uncovered REQs + seeded extensions.yml).
     cpSync(join(FIXTURES, "specify-with-gate-failure"), tmp, { recursive: true });
 
-    // (b) Install the artgraph gate via init's auto-integrate (gate-on is
-    // the default). We also run `init --no-scan` so .artgraph.json exists
-    // for subsequent scan/check.
+    // (b) Run `init --no-scan` so .artgraph.json exists for subsequent
+    // scan/check (auto-integrate only wires the non-blocking preview since
+    // issue #217), then opt in to the blocking gate explicitly.
     const integrate = await runCli(["init", "--no-scan", "--no-skills", "--no-agent-context"], tmp);
     expect(integrate.exitCode).toBe(0);
+    const gateOptIn = await runCli(["integrate", "speckit", "--gate"], tmp);
+    expect(gateOptIn.exitCode).toBe(0);
     // The gate hook is registered in extensions.yml.
     const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
     expect(yml).toMatch(/before_implement:/);
