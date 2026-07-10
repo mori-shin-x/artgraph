@@ -124,6 +124,36 @@ describe("SpecKitProvider", () => {
       expect(yml).toMatch(/installed:[\s\S]*- artgraph/);
       expect(yml).toMatch(/after_tasks:/);
       expect(yml).toMatch(/after_implement:/);
+      // issue #217: the default install also wires a NON-BLOCKING
+      // before_implement preview (check --diff), never the blocking gate.
+      expect(yml).toMatch(/before_implement:/);
+      expect(yml).not.toMatch(/artgraph\.check-gate/);
+    });
+
+    it("default install wires before_implement as a non-blocking check --diff preview (issue #217)", () => {
+      copyFixture(join(FIXTURES, "specify-empty"), tmp);
+      provider.install(tmp, {});
+      const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
+      const parsed = parseYaml(yml) as {
+        hooks: {
+          before_implement?: Array<{
+            extension: string;
+            command: string;
+            optional: boolean;
+            enabled: boolean;
+          }>;
+        };
+      };
+      // Structural assertion: exactly one artgraph entry, pointing at the
+      // informational check --diff command, skippable (optional: true). The
+      // blocking `artgraph check --gate` variant is a guaranteed exit 2 on a
+      // fresh spec (every REQ still uncovered), so it must be --gate opt-in
+      // only.
+      const entries = parsed.hooks.before_implement?.filter((e) => e.extension === "artgraph");
+      expect(entries).toHaveLength(1);
+      expect(entries![0]!.command).toBe("artgraph.check-diff");
+      expect(entries![0]!.optional).toBe(true);
+      expect(entries![0]!.enabled).toBe(true);
     });
 
     it("is idempotent: second install with same opts is noop and disk unchanged", () => {
@@ -163,6 +193,24 @@ describe("SpecKitProvider", () => {
       expect(yml).toMatch(/command: artgraph\.check-gate/);
     });
 
+    it("--gate=true replaces the default non-blocking preview with the blocking gate (no duplicates)", () => {
+      copyFixture(join(FIXTURES, "specify-empty"), tmp);
+      // Default install first → non-blocking check --diff preview is wired.
+      provider.install(tmp, {});
+      // Explicit opt-in upgrades it in place.
+      provider.install(tmp, { gate: true });
+      const yml = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
+      const parsed = parseYaml(yml) as {
+        hooks: {
+          before_implement?: Array<{ extension: string; command: string; optional: boolean }>;
+        };
+      };
+      const entries = parsed.hooks.before_implement?.filter((e) => e.extension === "artgraph");
+      expect(entries).toHaveLength(1);
+      expect(entries![0]!.command).toBe("artgraph.check-gate");
+      expect(entries![0]!.optional).toBe(false);
+    });
+
     it("--gate=false removes only artgraph's before_implement entry, preserving others", () => {
       copyFixture(join(FIXTURES, "specify-empty"), tmp);
       // Seed: add another extension's before_implement entry + artgraph's via gate=true
@@ -197,14 +245,17 @@ describe("SpecKitProvider", () => {
       expect(parsed.hooks.after_implement?.some((e) => e.extension === "artgraph")).toBe(true);
     });
 
-    it("--gate=undefined does not touch before_implement", () => {
+    it("--gate=undefined preserves an existing artgraph before_implement entry (opted-in gate survives re-install)", () => {
       copyFixture(join(FIXTURES, "specify-empty"), tmp);
       provider.install(tmp, { gate: true });
       const before = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
-      // gate undefined → should not add nor remove
+      // gate undefined → the default only wires the non-blocking preview
+      // when artgraph has NO before_implement entry yet; a previously chosen
+      // gate must not be downgraded (issue #217).
       provider.install(tmp, {});
       const after = readFileSync(join(tmp, ".specify/extensions.yml"), "utf-8");
       expect(after).toBe(before);
+      expect(after).toMatch(/command: artgraph\.check-gate/);
     });
 
     // M-H4 regression: previously every rollback test started from a fresh

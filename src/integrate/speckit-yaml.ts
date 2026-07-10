@@ -128,6 +128,21 @@ export function addHookEntry(doc: Document, trigger: HookTrigger, entry: HookEnt
 }
 
 /**
+ * Return true when `hooks.<trigger>` already contains an entry belonging to
+ * `extensionId` (regardless of its command/flags). Used by the speckit
+ * provider to avoid clobbering a previously chosen `before_implement`
+ * variant (issue #217: the default install only adds the non-blocking
+ * preview hook when artgraph has no entry yet).
+ */
+export function hasHookEntry(doc: Document, trigger: HookTrigger, extensionId: string): boolean {
+  const hooks = doc.get("hooks");
+  if (!isMap(hooks)) return false;
+  const arr = (hooks as YAMLMap).get(trigger);
+  if (!isSeq(arr)) return false;
+  return (arr as YAMLSeq).items.some((it) => extensionOf(it) === extensionId);
+}
+
+/**
  * Remove the entry under `hooks.<trigger>` whose `extension` field matches
  * `extensionId`. Other entries are preserved. Returns true on mutation.
  *

@@ -6,7 +6,12 @@ description: "Verify coverage/orphan/drift on the current diff"
 
 ## Behavior
 
-Runs `artgraph check --diff` scoped to the current git diff. Reports orphan `@impl` tags, drifted nodes, and uncovered claimed REQs. Use after `/speckit-implement`.
+Runs `artgraph check --diff` scoped to the current git diff. Reports orphan `@impl` tags, drifted nodes, and uncovered claimed REQs. **Non-blocking**: exits 0 even when issues are reported (informational only — `--gate` is not passed).
+
+Used in two places:
+
+- **after_implement** — verify traceability after `/speckit-implement`.
+- **before_implement** (default wiring) — preview the current traceability state before implementing. It never halts the workflow; unimplemented REQs of a fresh spec are expected here and are display-only.
 
 ## Execution
 

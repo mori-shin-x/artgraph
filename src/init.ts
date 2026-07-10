@@ -749,11 +749,14 @@ function runAutoIntegrations(
     try {
       const r = runIntegrate(rootDir, id, {
         // Only speckit consumes `gate`; other providers ignore unknown opts.
-        // Gate-on is the auto-integrate default (contracts/cli-flags.md
-        // §integrate-gate, spec.md §FR-003) so a fresh Spec Kit repo gets
-        // the `before_implement` gate hook; `artgraph integrate speckit
-        // --no-gate` is the opt-out.
-        gate: true,
+        // Issue #217: auto-integrate deliberately does NOT pass `gate: true`
+        // anymore. The blocking `before_implement` gate (`artgraph check
+        // --gate`) is a guaranteed exit 2 right before the FIRST
+        // `/speckit-implement` of a new spec (every REQ is still uncovered),
+        // so wiring it by default trained users to ignore the gate. With
+        // `gate` left undefined the provider wires a non-blocking
+        // `check --diff` preview instead; `artgraph integrate speckit
+        // --gate` remains the explicit opt-in for the blocking gate.
         // FR-024: --force on `init` must reach the integration provider so
         // that drifted extension/steering files are regenerated alongside
         // the rest of the project.
