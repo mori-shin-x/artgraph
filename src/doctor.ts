@@ -28,6 +28,7 @@ import {
 import { buildAgentsMdBody, inspectMarkerBlock } from "./agents/agent-context.js";
 import { detectPackageManager } from "./package-manager.js";
 import { readSkillSource, type SkillSource } from "./agents/source.js";
+import { loadConfig } from "./config.js";
 
 /** Skip files larger than this when hashing / walking (C-adj-1). Prevents an
  * accidentally-planted multi-GB file inside a Skills dir from OOM-ing the
@@ -60,7 +61,29 @@ export type DoctorFindingKind =
   | "wrapper-broken-marker"
   | "extraneous-file"
   | "walk-error"
-  | "distribution-absent";
+  | "distribution-absent"
+  /**
+   * spec 013 follow-up (#158) — `.artgraph.json` has no `agents` field
+   * (legacy config predating this feature) while at least one Tier 1 agent
+   * distribution is present on disk. Advisory only (severity `pass`) — never
+   * flips the doctor exit code.
+   */
+  | "config-missing-agents-field"
+  /**
+   * spec 013 follow-up (#158) — `.artgraph.json`'s `agents` field lists an
+   * id whose distribution directory is missing on disk. Actionable drift
+   * (severity `fail`) — replaces `distribution-absent` when the absent set
+   * was derived from config.agents rather than an explicit `opts.agents`
+   * override.
+   */
+  | "agent-recorded-but-missing"
+  /**
+   * spec 013 follow-up (#158) — a Tier 1 agent has a distribution directory
+   * on disk that isn't listed in `.artgraph.json`'s `agents` field. Advisory
+   * only (severity `pass`) — the on-disk state itself isn't broken, just
+   * unrecorded.
+   */
+  | "agent-installed-not-recorded";
 
 export interface DoctorFinding {
   severity: DoctorFindingSeverity;
@@ -125,18 +148,36 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   // Quiet mode — doctor never prints its own PM detection warning.
   const detectedPm = detectPackageManager(rootAbs, { quiet: true });
 
+  // spec 013 follow-up (#158) — load `.artgraph.json` so the default
+  // (no `opts.agents`) detection path can trust `config.agents` as SSOT
+  // instead of blind on-disk observation, when the field is present.
+  const config = loadConfig(rootAbs);
+
   // Step 1 — detect agents.
   //   - explicit `opts.agents`: trust the caller; the CLI parser has already
   //     enforced lowercase + Tier 1 membership. If an id has no distribution
   //     directory on disk, we record it in `absentDescriptors` and emit a
   //     single `distribution-absent` finding (D1) instead of flooding with
-  //     N `skill-file-missing` entries.
-  //   - default: every descriptor whose `<rootDir>/<skillsPath>` directory
-  //     exists on disk AND contains at least one canonical top-level (D5),
-  //     using `lstatSync` so a symlink-to-/dev-null does not crash the
-  //     doctor (C-adj-2). Zero detected → return an empty report.
+  //     N `skill-file-missing` entries. Explicit override — the config.agents
+  //     cross-check below is skipped entirely.
+  //   - `config.agents` defined (persisted state, #158): trust the config,
+  //     cross-checking each recorded id against disk. Ids present on disk go
+  //     to `detectedDescriptors`; ids missing on disk go to
+  //     `absentDescriptors` and get an `agent-recorded-but-missing` finding
+  //     (not `distribution-absent`) below. A separate pass then flags any
+  //     on-disk agent NOT recorded in config.agents as
+  //     `agent-installed-not-recorded`.
+  //   - legacy fallback (config.agents undefined): every descriptor whose
+  //     `<rootDir>/<skillsPath>` directory exists on disk AND contains at
+  //     least one canonical top-level (D5), using `lstatSync` so a
+  //     symlink-to-/dev-null does not crash the doctor (C-adj-2). An
+  //     advisory `config-missing-agents-field` finding is emitted once when
+  //     at least one agent was detected this way.
+  //   Zero detected (and no config cross-check findings) → return an empty
+  //   report.
   const detectedDescriptors: AgentDescriptor[] = [];
   const absentDescriptors: AgentDescriptor[] = [];
+  const usingConfigAgents = !(opts.agents && opts.agents.length > 0) && config.agents !== undefined;
   if (opts.agents && opts.agents.length > 0) {
     for (const id of opts.agents) {
       const d = findDescriptor(id);
@@ -148,6 +189,27 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
           `Unknown agent id: "${id}". Supported values: ${AGENT_DESCRIPTORS.map((x) => x.id).join(", ")}`,
         );
       }
+      const dist = resolve(rootAbs, d.skillsPath);
+      let stat;
+      try {
+        stat = lstatSync(dist);
+      } catch {
+        stat = undefined;
+      }
+      if (stat && stat.isDirectory()) {
+        detectedDescriptors.push(d);
+      } else {
+        absentDescriptors.push(d);
+      }
+    }
+  } else if (usingConfigAgents) {
+    for (const id of config.agents as AgentId[]) {
+      const d = findDescriptor(id);
+      // Defensive: `validateAgents` already restricts `config.agents` to
+      // `AGENT_IDS`, so this only fires for a hand-edited/pre-validation
+      // config. Skip rather than throw — unlike the `opts.agents` path this
+      // isn't direct per-call caller input.
+      if (!d) continue;
       const dist = resolve(rootAbs, d.skillsPath);
       let stat;
       try {
@@ -186,7 +248,67 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
     }
   }
 
-  if (detectedDescriptors.length === 0 && absentDescriptors.length === 0) {
+  // spec 013 follow-up (#158) — config ↔ disk cross-check findings. Computed
+  // before the empty-report short-circuit so a config-only signal (e.g. an
+  // agent recorded but never distributed, or an on-disk agent recorded
+  // nowhere) still produces output even when both `detectedDescriptors` and
+  // `absentDescriptors` are otherwise empty (e.g. `config.agents: []`).
+  // Skipped entirely for the explicit `opts.agents` override path.
+  const configFindings: DoctorFinding[] = [];
+  if (!(opts.agents && opts.agents.length > 0)) {
+    if (config.agents === undefined) {
+      if (detectedDescriptors.length > 0) {
+        configFindings.push({
+          severity: "pass",
+          agent: null,
+          kind: "config-missing-agents-field",
+          path: ".artgraph.json",
+          expected: "agents field present",
+          actual: "agents field absent",
+          message:
+            '.artgraph.json has no "agents" field — run `artgraph init --force --agents=<csv>` to persist the current install for reliable doctor / rename / uninstall cross-checks.',
+        });
+      }
+    } else {
+      const recordedSet = new Set<AgentId>(config.agents);
+      for (const d of absentDescriptors) {
+        configFindings.push({
+          severity: "fail",
+          agent: d.id,
+          kind: "agent-recorded-but-missing",
+          path: d.skillsPath,
+          expected: "distribution present",
+          actual: "no distribution directory",
+          message: `Agent "${d.id}" is recorded in .artgraph.json but its distribution directory ${d.skillsPath} is missing. Re-run \`artgraph init --force --agents=${d.id}\` to restore or update the config to drop it.`,
+        });
+      }
+      for (const descriptor of AGENT_DESCRIPTORS) {
+        if (recordedSet.has(descriptor.id)) continue;
+        if (isAgentDistributionOnDisk(rootAbs, descriptor, canonicalTopLevels)) {
+          // Also feed it into `detectedDescriptors` — it IS installed on
+          // disk, just unrecorded, so it should still get the full Step
+          // 3/4/5 skill-file / wrapper diagnostics (and show up in
+          // `summary.agents`) rather than only this advisory.
+          detectedDescriptors.push(descriptor);
+          configFindings.push({
+            severity: "pass",
+            agent: descriptor.id,
+            kind: "agent-installed-not-recorded",
+            path: descriptor.skillsPath,
+            expected: "recorded in .artgraph.json agents",
+            actual: "not recorded",
+            message: `Agent "${descriptor.id}" has a distribution directory at ${descriptor.skillsPath} but is not recorded in .artgraph.json's "agents". Run \`artgraph init --force --agents=${descriptor.id}\` to persist it (union with existing).`,
+          });
+        }
+      }
+    }
+  }
+
+  if (
+    detectedDescriptors.length === 0 &&
+    absentDescriptors.length === 0 &&
+    configFindings.length === 0
+  ) {
     return {
       version: 1,
       summary: {
@@ -202,18 +324,28 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   const findings: DoctorFinding[] = [];
 
   // D1 — explicit --agents ids whose distribution dir does not exist get a
-  // single `distribution-absent` finding, no per-file scanning.
-  for (const d of absentDescriptors) {
-    findings.push({
-      severity: "fail",
-      agent: d.id,
-      kind: "distribution-absent",
-      path: d.skillsPath,
-      expected: "distribution present",
-      actual: "no distribution directory",
-      message: `${d.displayName} distribution is not installed under ${d.skillsPath}/. Run \`artgraph init --agents=${d.id}\` to install it.`,
-    });
+  // single `distribution-absent` finding, no per-file scanning. Skipped when
+  // `absentDescriptors` was derived from `config.agents` (#158, usingConfigAgents)
+  // — those ids get the more specific `agent-recorded-but-missing` finding
+  // instead, pushed via `configFindings` below.
+  if (!usingConfigAgents) {
+    for (const d of absentDescriptors) {
+      findings.push({
+        severity: "fail",
+        agent: d.id,
+        kind: "distribution-absent",
+        path: d.skillsPath,
+        expected: "distribution present",
+        actual: "no distribution directory",
+        message: `${d.displayName} distribution is not installed under ${d.skillsPath}/. Run \`artgraph init --agents=${d.id}\` to install it.`,
+      });
+    }
   }
+
+  // spec 013 follow-up (#158) — config ↔ disk cross-check findings computed
+  // above (config-missing-agents-field / agent-recorded-but-missing /
+  // agent-installed-not-recorded).
+  findings.push(...configFindings);
 
   // Step 3 — per-agent Skills + extraneous-file diagnostics.
   for (const descriptor of detectedDescriptors) {
@@ -255,6 +387,32 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
 // ---------------------------------------------------------------------------
 // Sub-checks
 // ---------------------------------------------------------------------------
+
+// spec 013 follow-up (#158) — same D5 "has at least one canonical top-level"
+// test as the legacy auto-detect loop in `runDoctor`, factored out so the
+// `agent-installed-not-recorded` cross-check (which must scan every Tier 1
+// descriptor regardless of `config.agents` membership) can reuse it.
+function isAgentDistributionOnDisk(
+  rootAbs: string,
+  descriptor: AgentDescriptor,
+  canonicalTopLevels: Set<string>,
+): boolean {
+  const dist = resolve(rootAbs, descriptor.skillsPath);
+  let stat;
+  try {
+    stat = lstatSync(dist);
+  } catch {
+    return false;
+  }
+  if (!stat.isDirectory()) return false;
+  let entries: string[];
+  try {
+    entries = readdirSync(dist);
+  } catch {
+    return false;
+  }
+  return entries.some((e) => canonicalTopLevels.has(e));
+}
 
 function addSkillFindings(
   rootAbs: string,
@@ -634,16 +792,31 @@ export function formatDoctorReportText(report: DoctorReport): string {
     lines.push("");
   }
 
-  // AGENTS.md section — single shared finding (or its FAIL variants).
-  const sharedFindings = report.findings.filter((f) => f.agent === null);
-  for (const f of sharedFindings) {
+  // AGENTS.md section — single shared finding (or its FAIL variants). Scoped
+  // to `agents-md-*` kinds specifically (not just `agent === null`) since
+  // #158 added a second `agent: null` finding kind (config-missing-agents-field)
+  // that is NOT about AGENTS.md's marker block.
+  const agentsMdFindings = report.findings.filter(
+    (f) => f.agent === null && f.kind.startsWith("agents-md"),
+  );
+  for (const f of agentsMdFindings) {
     if (f.severity === "pass") {
       lines.push(`AGENTS.md: ✓ marker block intact`);
     } else {
       lines.push(`AGENTS.md: ✗ ${f.kind} — ${f.message}`);
     }
   }
-  if (sharedFindings.length > 0) lines.push("");
+  if (agentsMdFindings.length > 0) lines.push("");
+
+  // spec 013 follow-up (#158) — config-level advisory, surfaced once as a
+  // NOTICE line (mirrors the agents-md-body-stale NOTICE convention).
+  const configLevelFindings = report.findings.filter(
+    (f) => f.agent === null && f.kind === "config-missing-agents-field",
+  );
+  for (const f of configLevelFindings) {
+    lines.push(`NOTICE: ${f.message}`);
+  }
+  if (configLevelFindings.length > 0) lines.push("");
 
   lines.push(`Summary: ${report.summary.passCount} pass, ${report.summary.failCount} fail`);
   return lines.join("\n");

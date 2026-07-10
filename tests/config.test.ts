@@ -611,6 +611,65 @@ describe("loadConfig", () => {
     );
   });
 
+  describe("agents validation (spec 013 follow-up, #158)", () => {
+    it("should accept a valid agents array, alpha-sorted", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ agents: ["cursor", "claude"] }));
+      expect(loadConfig(TMP_DIR).agents).toEqual(["claude", "cursor"]);
+    });
+
+    it("should be undefined when the field is absent (legacy config round-trips as undefined)", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, "{}");
+      expect(loadConfig(TMP_DIR).agents).toBeUndefined();
+    });
+
+    it("should accept an empty array (explicit opt-out)", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ agents: [] }));
+      expect(loadConfig(TMP_DIR).agents).toEqual([]);
+    });
+
+    it("should reject a non-array value", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ agents: "claude" }));
+      expect(() => loadConfig(TMP_DIR)).toThrow(/must be an array of strings/);
+    });
+
+    it("should reject an invalid agent id (windsurf is not Tier 1)", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ agents: ["windsurf"] }));
+      expect(() => loadConfig(TMP_DIR)).toThrow(/not a supported agent id/);
+    });
+
+    it("should reject duplicate entries", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ agents: ["claude", "claude"] }));
+      expect(() => loadConfig(TMP_DIR)).toThrow(/duplicate entry/);
+    });
+
+    it("should reject a non-string entry", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ agents: [42] }));
+      expect(() => loadConfig(TMP_DIR)).toThrow(/non-empty string/);
+    });
+
+    it("should reject an empty-string entry", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ agents: [""] }));
+      expect(() => loadConfig(TMP_DIR)).toThrow(/non-empty string/);
+    });
+
+    it("should accept all 5 Tier 1 ids", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({ agents: ["kiro", "copilot", "codex", "cursor", "claude"] }),
+      );
+      expect(loadConfig(TMP_DIR).agents).toEqual(["claude", "codex", "copilot", "cursor", "kiro"]);
+    });
+  });
+
   describe("top-level JSON shape", () => {
     // Hand-edited configs can accidentally produce a non-object root
     // (array / number / string / null). The old code silently fell back to

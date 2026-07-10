@@ -1076,3 +1076,53 @@ describe("runInit — packageManager recording (spec 015, FR-007/008, SC-002)", 
     expect(readPm()).toBe("pnpm");
   });
 });
+
+describe("runInit — agents field persistence (#158)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(tmp);
+  });
+
+  const readAgents = (): unknown =>
+    JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8")).agents;
+
+  it("fresh init writes the agents field, alpha-sorted, when --agents=claude,cursor is given", () => {
+    runInit(tmp, { minimal: true, agents: ["cursor", "claude"] });
+    expect(readAgents()).toEqual(["claude", "cursor"]);
+  });
+
+  it("fresh init without --agents does NOT write an agents field", () => {
+    runInit(tmp, { minimal: true });
+    const config = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
+    expect("agents" in config).toBe(false);
+  });
+
+  it('--force --agents=cursor on an existing config with agents:["claude"] unions to ["claude","cursor"]', () => {
+    writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify({ agents: ["claude"] }));
+    runInit(tmp, { force: true, minimal: true, agents: ["cursor"] });
+    expect(readAgents()).toEqual(["claude", "cursor"]);
+  });
+
+  it('--force --agents=cursor on an existing legacy config (no agents field) writes just ["cursor"]', () => {
+    writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify({ include: ["src/**/*.ts"] }));
+    runInit(tmp, { force: true, minimal: true, agents: ["cursor"] });
+    expect(readAgents()).toEqual(["cursor"]);
+  });
+
+  it("--force re-init with no --agents preserves a previously persisted agents field", () => {
+    writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify({ agents: ["claude", "codex"] }));
+    runInit(tmp, { force: true, minimal: true });
+    expect(readAgents()).toEqual(["claude", "codex"]);
+  });
+
+  it("dedupes when the same agent id is requested again on --force", () => {
+    writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify({ agents: ["claude"] }));
+    runInit(tmp, { force: true, minimal: true, agents: ["claude"] });
+    expect(readAgents()).toEqual(["claude"]);
+  });
+});

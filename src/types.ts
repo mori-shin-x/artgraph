@@ -516,6 +516,15 @@ export interface ArtgraphConfig {
    * project; the CLI treats every nested field as defaulted to false.
    */
   planCoverage?: PlanCoverageConfig;
+  /**
+   * spec 013 follow-up (#158) — Tier 1 agent ids persisted by `artgraph init
+   * --agents=<csv>`. Alpha-sorted, deduped. When defined, `artgraph doctor`
+   * cross-checks against on-disk agent distribution directories and reports
+   * drift. When `undefined` (legacy configs pre-dating this field), doctor
+   * falls back to on-disk observation and emits an advisory finding.
+   * Empty array is an explicit opt-out (--minimal / --no-skills).
+   */
+  agents?: import("./agents/descriptors.js").AgentId[];
 }
 
 export const DEFAULT_CONFIG: ArtgraphConfig = {

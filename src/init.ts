@@ -697,6 +697,29 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     }
   }
 
+  // spec 013 follow-up (#158) — persist the effective `--agents=<csv>` set so
+  // downstream tooling (doctor cross-check, future rename Skill etc.) can
+  // trust `.artgraph.json` as SSOT instead of blind on-disk observation.
+  //
+  // `config.agents` at this point already reflects whichever agents were
+  // previously persisted: `loadConfig(abs)` populated it on a `--force`
+  // re-init (existing config), and `generateConfig()` never sets it on a
+  // fresh init. Union with existing config.agents on --force so re-running
+  // init doesn't silently drop previously installed agents. undefined
+  // (legacy config / fresh init) is treated as an empty base — new agents
+  // get persisted fresh.
+  const existingAgentsDefined = config.agents !== undefined;
+  const existingAgentsSet = new Set<AgentId>(config.agents ?? []);
+  for (const id of agentsList) existingAgentsSet.add(id);
+  const finalAgents: AgentId[] = [...existingAgentsSet].sort();
+  // Only write the field when it has content OR it was already defined —
+  // don't write an empty-array field on a fresh init that didn't touch
+  // agents (keeps configs minimal). Once populated, preserve it even if the
+  // union comes out empty for some weird reason: that's still user state.
+  if (finalAgents.length > 0 || existingAgentsDefined) {
+    config.agents = finalAgents;
+  }
+
   // B3 — atomic write. Previously a raw `writeFileSync` on `.artgraph.json`
   // could leave a truncated/empty JSON on SIGKILL / ENOSPC mid-write, and
   // the next `runInit` would throw on `loadConfig`. `atomicWriteFile` stages
