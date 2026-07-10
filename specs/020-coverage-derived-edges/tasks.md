@@ -20,7 +20,7 @@
 ## Phase 1: Setup
 
 - [X] T001 `package.json` に exports `./vitest` / `./vitest/config` と `peerDependencies: { vitest: ">=3 <5" }` + `peerDependenciesMeta: { vitest: { optional: true } }` を追加し、`knip.json` / `tsconfig.json` を新 entry(`src/vitest/`, `src/trace/`)に対応させる。CLI 本体から `vitest/runners` への import が漏れない knip 構成にする(plan.md Structure Decision)
-- [ ] T002 [P] `.artgraph.json` の `trace.*` 設定(`artifacts` / `acceptExercises` / `staleness` / `sharedThreshold`)のパース・検証を `src/config.ts` + `src/types.ts` に追加。**Red→Green 同タスク内**: `tests/config.test.ts` に ①境界: `sharedThreshold` = 0 / 1 / 負値 / 非整数を canonical エラーで拒否(1 は合法)、④例外: `staleness` に不正値 → 既存 config 検証と同スタイルのエラー、`trace` キー省略 → 全既定値、を先に書く
+- [X] T002 [P] `.artgraph.json` の `trace.*` 設定(`artifacts` / `acceptExercises` / `staleness` / `sharedThreshold`)のパース・検証を `src/config.ts` + `src/types.ts` に追加。**Red→Green 同タスク内**: `tests/config.test.ts` に ①境界: `sharedThreshold` = 0 / 1 / 負値 / 非整数を canonical エラーで拒否(1 は合法)、④例外: `staleness` に不正値 → 既存 config 検証と同スタイルのエラー、`trace` キー省略 → 全既定値、を先に書く
 
 ## Phase 2: Foundational — shard スキーマ (runner ↔ ingest の SSOT)
 

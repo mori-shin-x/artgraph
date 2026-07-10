@@ -461,6 +461,39 @@ export interface DocGraphConfig {
   };
 }
 
+/**
+ * spec 020 (contracts/cli-surface.md §7, data-model.md §8) — `.artgraph.json`
+ * `trace` section: shard artifact discovery + `exercises`-edge policy for
+ * coverage-derived traceability. The section itself and every field are
+ * optional (mirrors `DocGraphConfig`) — an absent field means "use the
+ * documented default", applied by each downstream consumer (`src/trace/`,
+ * `src/coverage.ts`, `src/commands/trace.ts`) rather than eagerly baked in
+ * here, consistent with `docGraph`'s convention elsewhere in this file.
+ */
+export interface TraceConfig {
+  /** Glob(s) for TraceShard JSONL files. Default: [".artgraph/trace/*.jsonl"]. */
+  artifacts?: string[];
+  /**
+   * Opt-in to the `exercised` coverage status (data-model.md §6): a REQ with
+   * no `implements` edge but an exclusive `exercises` edge counts as covered.
+   * Default: false.
+   */
+  acceptExercises?: boolean;
+  /**
+   * How stale evidence (hashesAtTrace mismatched against the current graph)
+   * is treated: "warn" surfaces a diagnostic only, "exclude" drops stale
+   * `exercises` edges from traversal, "gate" additionally fails `--gate`
+   * (FR-015). Default: "warn".
+   */
+  staleness?: "warn" | "exclude" | "gate";
+  /**
+   * A symbol/file exercised by this many distinct REQs' tests or more is
+   * classified `infrastructure` rather than a `suggestedImpls` candidate
+   * (FR-013). Must be a positive integer (>= 1). Default: 3.
+   */
+  sharedThreshold?: number;
+}
+
 export interface PlanCoverageConfig {
   /**
    * When true, `artgraph plan-coverage` adds a `missingFilesSection`
@@ -525,6 +558,12 @@ export interface ArtgraphConfig {
    * Empty array is an explicit opt-out (--minimal / --no-skills).
    */
   agents?: import("./agents/descriptors.js").AgentId[];
+  /**
+   * spec 020 (contracts/cli-surface.md §7) — coverage-derived traceability
+   * configuration. `undefined` when `.artgraph.json` omits the `trace` key
+   * (every field falls back to its documented default downstream).
+   */
+  trace?: TraceConfig;
 }
 
 export const DEFAULT_CONFIG: ArtgraphConfig = {

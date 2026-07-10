@@ -670,6 +670,155 @@ describe("loadConfig", () => {
     });
   });
 
+  // spec 020 (contracts/cli-surface.md §7, data-model.md §8) — `.artgraph.json`
+  // `trace` section. Mirrors `docGraph`: absent key/field => undefined,
+  // downstream consumers apply the documented default.
+  describe("trace config (spec 020, contracts/cli-surface.md §7)", () => {
+    it("defaults to undefined when the trace key is omitted", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({}));
+      const config = loadConfig(TMP_DIR);
+      expect(config.trace).toBeUndefined();
+    });
+
+    it("loads a fully-specified trace section", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          trace: {
+            artifacts: [".artgraph/trace/*.jsonl", "ci-shards/*.jsonl"],
+            acceptExercises: true,
+            staleness: "exclude",
+            sharedThreshold: 5,
+          },
+        }),
+      );
+      const config = loadConfig(TMP_DIR);
+      expect(config.trace).toEqual({
+        artifacts: [".artgraph/trace/*.jsonl", "ci-shards/*.jsonl"],
+        acceptExercises: true,
+        staleness: "exclude",
+        sharedThreshold: 5,
+      });
+    });
+
+    it("leaves unspecified trace fields undefined (per-field default, not eager merge)", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { sharedThreshold: 4 } }));
+      const config = loadConfig(TMP_DIR);
+      expect(config.trace).toEqual({ sharedThreshold: 4 });
+      expect(config.trace?.artifacts).toBeUndefined();
+      expect(config.trace?.acceptExercises).toBeUndefined();
+      expect(config.trace?.staleness).toBeUndefined();
+    });
+
+    it("rejects trace as a non-object (e.g. array)", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify({ trace: [1, 2, 3] }));
+      expect(() => loadConfig(TMP_DIR)).toThrow("Invalid trace: must be an object");
+    });
+
+    describe("trace.artifacts validation", () => {
+      it("rejects a non-array artifacts", () => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { artifacts: "x.jsonl" } }));
+        expect(() => loadConfig(TMP_DIR)).toThrow("trace.artifacts: must be an array of strings");
+      });
+
+      it("rejects a non-string entry", () => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { artifacts: [123] } }));
+        expect(() => loadConfig(TMP_DIR)).toThrow("trace.artifacts: every entry must be a string");
+      });
+    });
+
+    describe("trace.acceptExercises validation", () => {
+      it("rejects a non-boolean", () => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { acceptExercises: "true" } }));
+        expect(() => loadConfig(TMP_DIR)).toThrow("trace.acceptExercises: must be a boolean");
+      });
+    });
+
+    describe("trace.staleness validation (FR-015)", () => {
+      it.each(["warn", "exclude", "gate"] as const)("accepts the valid value %s", (staleness) => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { staleness } }));
+        expect(loadConfig(TMP_DIR).trace?.staleness).toBe(staleness);
+      });
+
+      it("rejects an invalid staleness value in the same style as other config errors", () => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { staleness: "ignore" } }));
+        expect(() => loadConfig(TMP_DIR)).toThrow(
+          'Invalid trace.staleness: must be one of "warn", "exclude", "gate"',
+        );
+      });
+    });
+
+    // ①境界: sharedThreshold = 0 / 1 / 負値 / 非整数。1 のみ合法、他は canonical エラー。
+    describe("trace.sharedThreshold validation (FR-013 boundary)", () => {
+      it("accepts 1 (the minimum legal value)", () => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { sharedThreshold: 1 } }));
+        expect(loadConfig(TMP_DIR).trace?.sharedThreshold).toBe(1);
+      });
+
+      it("accepts the default-shaped value 3", () => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { sharedThreshold: 3 } }));
+        expect(loadConfig(TMP_DIR).trace?.sharedThreshold).toBe(3);
+      });
+
+      it("rejects 0", () => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { sharedThreshold: 0 } }));
+        expect(() => loadConfig(TMP_DIR)).toThrow(
+          "Invalid trace.sharedThreshold: must be a positive integer (>= 1)",
+        );
+      });
+
+      it("rejects a negative value", () => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { sharedThreshold: -1 } }));
+        expect(() => loadConfig(TMP_DIR)).toThrow(
+          "Invalid trace.sharedThreshold: must be a positive integer (>= 1)",
+        );
+      });
+
+      it("rejects a non-integer", () => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { sharedThreshold: 1.5 } }));
+        expect(() => loadConfig(TMP_DIR)).toThrow(
+          "Invalid trace.sharedThreshold: must be a positive integer (>= 1)",
+        );
+      });
+
+      it("rejects a non-number (e.g. string)", () => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ trace: { sharedThreshold: "3" } }));
+        expect(() => loadConfig(TMP_DIR)).toThrow(
+          "Invalid trace.sharedThreshold: must be a positive integer (>= 1)",
+        );
+      });
+    });
+
+    it("does not interfere with other top-level fields", () => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(
+        CONFIG_PATH,
+        JSON.stringify({
+          trace: { sharedThreshold: 5 },
+          reqPatterns: { listItem: "^(JIRA-\\d+)[:\\s]" },
+        }),
+      );
+      const config = loadConfig(TMP_DIR);
+      expect(config.trace?.sharedThreshold).toBe(5);
+      expect(config.reqPatterns?.listItem).toBe("^(JIRA-\\d+)[:\\s]");
+    });
+  });
+
   describe("top-level JSON shape", () => {
     // Hand-edited configs can accidentally produce a non-object root
     // (array / number / string / null). The old code silently fell back to

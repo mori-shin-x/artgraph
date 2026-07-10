@@ -7,6 +7,7 @@ import {
   type PlanCoverageConfig,
   type ReqPatternConfig,
   type TaskConventionPreset,
+  type TraceConfig,
 } from "./types.js";
 import { AGENT_IDS, type AgentId } from "./agents/descriptors.js";
 
@@ -421,6 +422,70 @@ function validatePlanCoverage(value: unknown): PlanCoverageConfig | undefined {
   return out;
 }
 
+// spec 020 (contracts/cli-surface.md §7, data-model.md §8) — `.artgraph.json`
+// `trace` section validation. Mirrors `validatePlanCoverage`: `undefined`
+// round-trips as `undefined` (both the section itself and every unspecified
+// field), unknown-shaped values are rejected up front, and each present
+// field is validated independently so a typo in one field doesn't mask a
+// valid sibling.
+const TRACE_STALENESS_VALUES = ["warn", "exclude", "gate"] as const;
+
+function validateTraceConfig(value: unknown): TraceConfig | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Invalid trace: must be an object");
+  }
+  const raw = value as Record<string, unknown>;
+  const out: TraceConfig = {};
+
+  if ("artifacts" in raw) {
+    const artifacts = raw.artifacts;
+    if (!Array.isArray(artifacts)) {
+      throw new Error("Invalid trace.artifacts: must be an array of strings");
+    }
+    for (const entry of artifacts) {
+      if (typeof entry !== "string") {
+        throw new Error(
+          `Invalid trace.artifacts: every entry must be a string (got ${typeof entry})`,
+        );
+      }
+    }
+    out.artifacts = artifacts;
+  }
+
+  if ("acceptExercises" in raw) {
+    const acceptExercises = raw.acceptExercises;
+    if (typeof acceptExercises !== "boolean") {
+      throw new Error("Invalid trace.acceptExercises: must be a boolean");
+    }
+    out.acceptExercises = acceptExercises;
+  }
+
+  if ("staleness" in raw) {
+    const staleness = raw.staleness;
+    if (!(TRACE_STALENESS_VALUES as readonly unknown[]).includes(staleness)) {
+      throw new Error(
+        `Invalid trace.staleness: must be one of "warn", "exclude", "gate" (got ${JSON.stringify(staleness)})`,
+      );
+    }
+    out.staleness = staleness as (typeof TRACE_STALENESS_VALUES)[number];
+  }
+
+  if ("sharedThreshold" in raw) {
+    const sharedThreshold = raw.sharedThreshold;
+    if (
+      typeof sharedThreshold !== "number" ||
+      !Number.isInteger(sharedThreshold) ||
+      sharedThreshold < 1
+    ) {
+      throw new Error("Invalid trace.sharedThreshold: must be a positive integer (>= 1)");
+    }
+    out.sharedThreshold = sharedThreshold;
+  }
+
+  return out;
+}
+
 // `testResultPaths` is fed straight into glob, so a non-string element (e.g.
 // `[123]`) would crash deep inside globSync with an opaque error. Validate the
 // shape up front and fail with a clear, actionable message instead.
@@ -473,6 +538,8 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
 
   const agents = validateAgents(raw.agents);
 
+  const trace = validateTraceConfig(raw.trace);
+
   const lockFile = raw.lockFile ?? DEFAULT_CONFIG.lockFile;
   const resolvedLock = resolve(rootDir, lockFile);
   const relFromRoot = relative(rootDir, resolvedLock);
@@ -495,5 +562,6 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
     disableBuiltinTaskConventions: disabledBuiltins,
     planCoverage,
     agents,
+    trace,
   };
 }
