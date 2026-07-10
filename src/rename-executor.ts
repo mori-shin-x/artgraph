@@ -453,6 +453,11 @@ function referencesId(line: string, id: string): boolean {
  * Split a markdown spec: remove the definition line(s) for `splitId`, append a
  * scaffold list item per new ID, and expand any frontmatter dependency on the
  * split ID to all new IDs (F5). Fenced code blocks are never touched (F6).
+ *
+ * Scaffolds are appended ONLY to a file that actually hosted the split
+ * source's definition (issue #213) — mirroring mergeMarkdown's
+ * `removedAnyDefinition` gate. Without this, every enumerated markdown file
+ * received one scaffold per new ID.
  */
 function splitMarkdown(
   relPath: string,
@@ -466,6 +471,7 @@ function splitMarkdown(
   const changes: RewriteChange[] = [];
 
   const kept: string[] = [];
+  let removedAnyDefinition = false;
   for (let i = 0; i < lines.length; i++) {
     if (!fenced.has(i) && specDefinitionId(lines[i], opts) === splitId) {
       changes.push({
@@ -475,21 +481,24 @@ function splitMarkdown(
         before: lines[i],
         after: "(removed)",
       });
+      removedAnyDefinition = true;
       continue;
     }
     kept.push(lines[i]);
   }
 
-  for (const newId of intoIds) {
-    const scaffold = `- ${newId}: ${SCAFFOLD_PLACEHOLDER}`;
-    kept.push(scaffold);
-    changes.push({
-      filePath: relPath,
-      line: kept.length,
-      kind: "spec-list-item",
-      before: "",
-      after: scaffold,
-    });
+  if (removedAnyDefinition) {
+    for (const newId of intoIds) {
+      const scaffold = `- ${newId}: ${SCAFFOLD_PLACEHOLDER}`;
+      kept.push(scaffold);
+      changes.push({
+        filePath: relPath,
+        line: kept.length,
+        kind: "spec-list-item",
+        before: "",
+        after: scaffold,
+      });
+    }
   }
 
   // Expand frontmatter dependency references.
