@@ -1,0 +1,59 @@
+name: pack-smoke
+
+# Mirrors publish.yml's `prepublishOnly` pack path: `npm publish` runs
+# `pnpm pack` + a real `npm install` of the packed tarball (gated behind
+# ARTGRAPH_E2E_PACK=1, see #211 / #228) as part of its `prepublishOnly`
+# lifecycle hook. That path had never once run in CI before #228 shipped —
+# its first execution was during an actual `npm publish` attempt (#230).
+#
+# This job re-runs test:e2e with ARTGRAPH_E2E_PACK=1 directly, but only on
+# the release-please Release PR (branch `release-please--branches--*`), so
+# pack breakage is caught before the Release PR is merged and published,
+# not during the publish itself.
+#
+# Not wired into ci.yml: running the pack+install path on every PR would add
+# cost for no signal on ordinary PRs (per ci.yml's own design-policy comment
+# on keeping matrix/step cost proportional to what changed). Scoping to the
+# release-please branch keeps the extra cost to once per release.
+#
+# Closes #230.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: pack-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pack-smoke:
+    name: pack-smoke
+    # All non-release-please PRs get an instant no-op skip here.
+    # PR-author gate hardens against branch-name spoofing from forks/misuse.
+    if: >-
+      startsWith(github.head_ref, 'release-please--branches--')
+      && github.event.pull_request.user.login == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm test:e2e
+        env:
+          ARTGRAPH_E2E_PACK: "1"
