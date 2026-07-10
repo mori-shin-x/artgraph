@@ -42,8 +42,9 @@ export type ExtractResult = {
   stage: "files-section" | "regex-fallback" | "empty";
   diagnostics: Diagnostic[];
   /**
-   * heading-delimited task blocks と `Files:` 宣言有無。`### T<NNN>` 形式の
-   * 見出しが無い入力では空配列 / undefined。
+   * task blocks (heading-delimited `### T<NNN>` または flat checklist
+   * `- [ ] T<NNN>`、issue #219/#220) と `Files:` 宣言有無。どちらの形式も
+   * 無い入力では空配列 / undefined。
    */
   taskBlocks?: TaskBlock[];
 };

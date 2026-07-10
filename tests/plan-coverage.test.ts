@@ -507,6 +507,172 @@ describe("runPlanCoverage — empty extraction", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Spec Kit standard flat checklist — issues #219 / #220
+// ---------------------------------------------------------------------------
+
+describe("runPlanCoverage — Spec Kit flat checklist (issues #219 / #220)", () => {
+  let fx: FixtureRoot;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  // Spec Kit's tasks-template emits a headingless flat checklist. Tasks
+  // reference files that do not exist yet (greenfield), plus incidental
+  // fs-existing paths like `package.json` that are NOT graph nodes.
+  function setupFlatChecklistFixture(): FixtureRoot {
+    const fixture = setupFixture({
+      tasksBody: [
+        "# Tasks: Todo CLI",
+        "",
+        "## Phase 1: Setup",
+        "",
+        "- [ ] T001 Initialize project with package.json",
+        "- [ ] T002 Define Todo type in src/todo-types.ts",
+        "- [ ] T003 Create CLI entry scaffold in src/todo-cli.ts",
+        "",
+      ].join("\n"),
+    });
+    // On the filesystem but not in the graph: Stage B accepts it as an
+    // entry, yet it resolves to no start node — before the fix this made
+    // `entries.length > 0` and skipped the emptyExtraction diagnostic
+    // entirely (the issue #220 silent green).
+    writeFileSync(join(fixture.root, "package.json"), "{}\n");
+    return fixture;
+  }
+
+  it("#219: Files: block bounded by the next checklist task emits no bogus unresolvedFilePath", () => {
+    fx = setupFixture({
+      tasksBody: [
+        "# Tasks",
+        "",
+        "- [ ] T001 Tweak login in src/auth/login.ts",
+        "",
+        "Files: src/auth/login.ts",
+        "- [ ] T002 Tweak logout (argv parsing, command dispatch table, shared",
+        "  helpers) in src/auth/logout.ts",
+        "",
+      ].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    // Before the fix, the T002 line was swallowed as a Files: bullet and
+    // surfaced as `unresolvedFilePath` with the task text as sourceFile.
+    expect(result.json.diagnostics.filter((d) => d.kind === "unresolvedFilePath")).toEqual([]);
+    expect(result.json.implicitImpacts.map((g) => g.sourceFile)).toEqual(["src/auth/login.ts"]);
+  });
+
+  it("#220: emptyExtraction fires when extracted entries resolve to no analyzable start node", () => {
+    fx = setupFlatChecklistFixture();
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.json.summary.totalAffected).toBe(0);
+    expect(result.json.implicitImpacts).toEqual([]);
+    expect(result.json.diagnostics.find((d) => d.kind === "emptyExtraction")).toBeDefined();
+  });
+
+  it("#220: text output says 'Nothing to analyze' with the task count instead of 'No implicit impacts.'", () => {
+    fx = setupFlatChecklistFixture();
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "text",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.text).toContain("Nothing to analyze: no Files: sections found across 3 task(s).");
+    expect(result.text).not.toContain("No implicit impacts.");
+  });
+
+  it("#220: --gate trips (exit 1) on the nothing-analyzed state", () => {
+    fx = setupFlatChecklistFixture();
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: true,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("keeps 'No implicit impacts.' when analysis ran and every REQ is mentioned", () => {
+    fx = setupFixture({
+      tasksBody: [
+        "# Tasks",
+        "",
+        "### T001: tweak login",
+        "",
+        "Files: src/auth/login.ts",
+        "Considered: AUTH-001, AUTH-002, AUTH-003",
+        "",
+      ].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "text",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.text).toContain("No implicit impacts.");
+    expect(result.text).not.toContain("Nothing to analyze");
+    expect(result.json.diagnostics).toEqual([]);
+  });
+
+  it("requireFilesSection ON flags flat-checklist tasks lacking a Files: section", () => {
+    fx = setupFixture({
+      tasksBody: [
+        "# Tasks",
+        "",
+        "- [ ] T001 tweak login",
+        "",
+        "Files: src/auth/login.ts",
+        "- [ ] T002 no files declared",
+        "- [ ] T003 also none",
+        "",
+      ].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: true,
+    });
+    const missing = result.json.diagnostics.filter((d) => d.kind === "missingFilesSection");
+    expect(missing.map((d) => (d as { taskId: string }).taskId)).toEqual(["T002", "T003"]);
+  });
+});
+
 describe("runPlanCoverage — text format dual view", () => {
   let fx: FixtureRoot;
   afterEach(() => {

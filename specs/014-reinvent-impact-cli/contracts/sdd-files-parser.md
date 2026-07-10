@@ -36,8 +36,9 @@ add a "Files:" section, or check that referenced paths exist in graph or filesys
 
 ### Scope
 
-- ヘッダ行から次の **markdown heading 行**(`^#+\s`)、または **空行 2 連** まで
-- 同一 task block 内のみ考慮(`### T013` のような heading で区切られた区間)
+- ヘッダ行から次の **markdown heading 行**(`^#+\s`)、次の **checklist item 行**(`^\s*[-*]\s+\[[ xX]\]`)、または **空行 2 連** まで(いずれか早い方)
+- 同一 task block 内のみ考慮(`### T013` のような heading、または `- [ ] T013 ...` のような checklist item で区切られた区間)
+- checklist item 行は Spec Kit 標準の「見出し無しフラットチェックリスト」における次タスクの開始マーカーなので、Stage A スコープの終端とする(issue #219)。checklist マーカー(`[ ]` / `[x]`)が `Files:` の値として有効になることはないため、この終端で失われる情報はない
 
 ### 値の書き方(2 形式サポート)
 
@@ -140,6 +141,17 @@ Files:
 ```
 
 → Stage A は抽出ゼロ → Stage B を実行(Stage A 失敗時のみ Stage B にフォールバック)。
+
+### 見出し無しフラットチェックリスト直後の次タスク行(issue #219)
+
+```markdown
+- [ ] T002 Define Todo type in src/todo.ts
+
+Files: src/todo.ts
+- [ ] T003 Create CLI entry scaffold (argv parsing, ...) in src/cli.ts
+```
+
+→ `- [ ] T003 ...` は checklist item 行なので Stage A スコープはここで終端する。抽出は `src/todo.ts` のみ、diagnostics 無し。旧仕様(heading / 空行 2 連のみが終端)では T003 行を bullet 値として飲み込み、タスク記述文がまるごと `unresolvedFilePath` として誤出力されていた。
 
 ### Bullet 形の入れ子リスト
 
