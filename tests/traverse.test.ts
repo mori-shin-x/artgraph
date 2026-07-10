@@ -786,3 +786,89 @@ describe("impact: contains 辺方向制約 — US1 (issue #215 repro, spec 019)"
     expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-902"]));
   });
 });
+
+describe("impact: spec 019 review follow-up — attribution guard & intentional task bridge", () => {
+  it("attribution ignores contains edges whose source is dangling or not a doc node", () => {
+    const nodes = new Map<string, GraphNode>();
+    nodes.set("REQ-1", { id: "REQ-1", kind: "req", filePath: "specs/a.md", contentHash: "r1" });
+    nodes.set("file:src/a.ts", {
+      id: "file:src/a.ts",
+      kind: "file",
+      filePath: "src/a.ts",
+      contentHash: "fa",
+    });
+    nodes.set("symbol:src/a.ts#f", {
+      id: "symbol:src/a.ts#f",
+      kind: "symbol",
+      filePath: "src/a.ts",
+      contentHash: "sf",
+    });
+    const edges: GraphEdge[] = [
+      {
+        source: "symbol:src/a.ts#f",
+        target: "REQ-1",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
+      // Malformed by construction — builder.ts never emits these, but
+      // impact() also receives hand-built graphs: a dangling doc id and a
+      // non-doc source must not leak into affectedDocs.
+      { source: "doc:ghost", target: "REQ-1", kind: "contains", provenances: ["structural"] },
+      { source: "file:src/a.ts", target: "REQ-1", kind: "contains", provenances: ["structural"] },
+    ];
+    const graph: ArtifactGraph = { nodes, edges };
+
+    const result = impact(graph, ["symbol:src/a.ts#f"], {});
+    expect(result.impactReqs).toEqual(["REQ-1"]);
+    expect(result.affectedDocs).toEqual([]);
+  });
+
+  it("pins the INTENTIONAL multi-REQ task bridge (spec 019 Edge Cases watch item)", () => {
+    // T020 bundles REQ-901 + REQ-902 into one declared unit of work
+    // (task-tag `implements`). Reaching REQ-901 from code legitimately pulls
+    // in T020 and, through it, REQ-902 — unlike doc co-residency this is an
+    // author-declared causal link and must keep working. Sibling task T021
+    // (connected only via doc:tasks `contains`) must stay unreachable.
+    const nodes = new Map<string, GraphNode>();
+    nodes.set("doc:tasks", {
+      id: "doc:tasks",
+      kind: "doc",
+      filePath: "specs/tasks.md",
+      contentHash: "dt",
+    });
+    nodes.set("T020", { id: "T020", kind: "task", filePath: "specs/tasks.md", contentHash: "t20" });
+    nodes.set("T021", { id: "T021", kind: "task", filePath: "specs/tasks.md", contentHash: "t21" });
+    nodes.set("REQ-901", { id: "REQ-901", kind: "req", filePath: "specs/f.md", contentHash: "h1" });
+    nodes.set("REQ-902", { id: "REQ-902", kind: "req", filePath: "specs/f.md", contentHash: "h2" });
+    nodes.set("REQ-903", { id: "REQ-903", kind: "req", filePath: "specs/f.md", contentHash: "h3" });
+    nodes.set("symbol:src/a.ts#fnA", {
+      id: "symbol:src/a.ts#fnA",
+      kind: "symbol",
+      filePath: "src/a.ts",
+      contentHash: "fna",
+    });
+    const edges: GraphEdge[] = [
+      {
+        source: "symbol:src/a.ts#fnA",
+        target: "REQ-901",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
+      { source: "T020", target: "REQ-901", kind: "implements", provenances: ["task-tag"] },
+      { source: "T020", target: "REQ-902", kind: "implements", provenances: ["task-tag"] },
+      { source: "T021", target: "REQ-903", kind: "implements", provenances: ["task-tag"] },
+      { source: "doc:tasks", target: "T020", kind: "contains", provenances: ["structural"] },
+      { source: "doc:tasks", target: "T021", kind: "contains", provenances: ["structural"] },
+    ];
+    const graph: ArtifactGraph = { nodes, edges };
+
+    const result = impact(graph, ["symbol:src/a.ts#fnA"], {});
+    expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-902"]));
+    expect(result.affectedTasks).toContain("T020");
+    // The sibling-task path stays closed: T021 / REQ-903 merely co-reside.
+    expect(result.affectedTasks).not.toContain("T021");
+    expect(result.impactReqs).not.toContain("REQ-903");
+    // tasks.md is attributed as T020's home for context.
+    expect(result.affectedDocs).toContain("doc:tasks");
+  });
+});

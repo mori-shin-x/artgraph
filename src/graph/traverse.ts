@@ -121,6 +121,11 @@ export function impact(
     const target = graph.nodes.get(edge.target);
     if (!target || (target.kind !== "req" && target.kind !== "task")) continue;
     if (!visited.has(edge.target)) continue;
+    // Symmetric with the target guard above: builder.ts only ever emits
+    // `contains` from doc nodes, but impact() also receives hand-built
+    // graphs (tests, embedders) — a dangling or non-doc source must not
+    // leak into `affectedDocs`.
+    if (graph.nodes.get(edge.source)?.kind !== "doc") continue;
     affectedDocsSet.add(edge.source);
   }
 
