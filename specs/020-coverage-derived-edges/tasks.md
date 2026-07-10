@@ -29,9 +29,9 @@
 
 ## Phase A-1: runner (US1 採取側)
 
-- [ ] T005 [US1] **Red**: `tests/e2e/vitest-runner.e2e.ts` — 実 vitest を temp プロジェクトで起動する E2E: (a) per-test 分離(REQ-001 テストの hits に `signIn` のみ、US1-1 の採取側)、(b) ②分岐組合せ: pool {forks, threads} × テスト {pass, fail} × タグ {あり, なし} の行列で shard レコードが契約どおり、(c) ③不正遷移: `it.concurrent` → `kind: "skipped", reason: "concurrent"` が記録されカバレッジレコードが**出ない**(FR-003)、(d) ⑥エッジ: module-init のみ実行するテスト → hits 空(FR-007 前段)、テストファイル自身・node_modules が hits に現れない、(e) ④失敗時: テストが throw してもランナーが shard を壊さない(部分 shard が読める)
-- [ ] T006 [US1] `src/vitest/runner.ts` を実装して T005 を **Green** に: `VitestTestRunner` 拡張 + ワーカー内 inspector セッション(`detailed: false`、research.md D1/D2)、リポジトリ相対パス正規化、module-init 除外、`hashes` 記録(FR-005)、ワーカー別 shard 追記(FR-002)
-- [ ] T007 [P] [US1] `src/vitest/setup.ts`(`withTrace()` config ラッパー + globalSetup)を **Red→Green** で実装: ⑤事故パターン: 前回 run の旧 shard が残ったまま再実行 → globalSetup が削除し世代混入しない(古い世代の亡霊エッジ防止)、ラッパーがユーザーの既存 `test` 設定(reporters / setupFiles)を破壊しない(②組合せ)、既存スナップショットテストの作成・照合・更新挙動が runner 有効時も不変(FR-001 / G2)— `tests/vitest-setup.test.ts` + T005 の E2E fixture にスナップショットケースを追加
+- [X] T005 [US1] **Red**: `tests/e2e/vitest-runner.e2e.ts` — 実 vitest を temp プロジェクトで起動する E2E: (a) per-test 分離(REQ-001 テストの hits に `signIn` のみ、US1-1 の採取側)、(b) ②分岐組合せ: pool {forks, threads} × テスト {pass, fail} × タグ {あり, なし} の行列で shard レコードが契約どおり、(c) ③不正遷移: `it.concurrent` → `kind: "skipped", reason: "concurrent"` が記録されカバレッジレコードが**出ない**(FR-003)、(d) ⑥エッジ: module-init のみ実行するテスト → hits 空(FR-007 前段)、テストファイル自身・node_modules が hits に現れない、(e) ④失敗時: テストが throw してもランナーが shard を壊さない(部分 shard が読める)
+- [X] T006 [US1] `src/vitest/runner.ts` を実装して T005 を **Green** に: `VitestTestRunner` 拡張 + ワーカー内 inspector セッション(`detailed: false`、research.md D1/D2)、リポジトリ相対パス正規化、module-init 除外、`hashes` 記録(FR-005)、ワーカー別 shard 追記(FR-002)
+- [X] T007 [P] [US1] `src/vitest/setup.ts`(`withTrace()` config ラッパー + globalSetup)を **Red→Green** で実装: ⑤事故パターン: 前回 run の旧 shard が残ったまま再実行 → globalSetup が削除し世代混入しない(古い世代の亡霊エッジ防止)、ラッパーがユーザーの既存 `test` 設定(reporters / setupFiles)を破壊しない(②組合せ)、既存スナップショットテストの作成・照合・更新挙動が runner 有効時も不変(FR-001 / G2)— `tests/vitest-setup.test.ts` + T005 の E2E fixture にスナップショットケースを追加
 
 ## Phase A-2: ingest + 名前表 + trace CLI (US2 レポート先行)
 
