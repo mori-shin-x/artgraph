@@ -12,7 +12,7 @@
 // claim/evidence comparison happens.
 
 import type { ArtifactGraph } from "../types.js";
-import type { IngestedTrace } from "./ingest.js";
+import type { IngestedTrace, ReqCoverage } from "./ingest.js";
 
 export const DEFAULT_SHARED_THRESHOLD = 3;
 
@@ -61,6 +61,19 @@ function reqExercises(trace: IngestedTrace, reqId: string, node: string): boolea
 }
 
 /**
+ * FR-013 exclusivity predicate: exactly one distinct REQ's evidence reaches
+ * `node`. Factored out of `classifyEvidence` (below) so `src/coverage.ts`'s
+ * `exercised` status computation (FR-014) shares the EXACT same "what counts
+ * as exclusive" rule instead of re-deriving it — one classifier, every
+ * exclusivity-gated consumer (`trace report`'s `suggestedImpls`, `check`'s
+ * `suggestedImpls` + `unexercisedClaims`' corroboration check via
+ * `reqExercises`, and `check`/`coverage.ts`'s `exercised` status all agree).
+ */
+export function isExclusiveNode(trace: IngestedTrace, node: string): boolean {
+  return (trace.reqsByNode.get(node)?.size ?? 0) === 1;
+}
+
+/**
  * FR-012/013 classification. `sharedThreshold` mirrors
  * `.artgraph.json`'s `trace.sharedThreshold` (default 3, `DEFAULT_SHARED_THRESHOLD`
  * here — callers resolve the config value themselves, this function only
@@ -104,7 +117,7 @@ export function classifyEvidence(
     if (claimedNodes.has(node)) continue; // already handled above (FR-013: "implements なし" only)
     if (reqIds.size >= sharedThreshold) {
       infrastructure.push({ node, reqCount: reqIds.size });
-    } else if (reqIds.size === 1) {
+    } else if (isExclusiveNode(trace, node)) {
       const [reqId] = reqIds;
       suggestedImpls.push({ reqId: reqId!, node });
     }
@@ -140,6 +153,53 @@ export function computeStaleNodeIds(graph: ArtifactGraph, trace: IngestedTrace):
     if (!fileNode || fileNode.contentHash !== tracedHash) stale.add(nodeId);
   }
   return stale;
+}
+
+/**
+ * FR-015 / US5-2 (`trace.staleness === "exclude"`): produce an `IngestedTrace`
+ * with every stale nodeId (per `computeStaleNodeIds`) removed from both
+ * `perReq[reqId].symbols`/`.files` AND `reqsByNode` — so a stale symbol
+ * neither contributes to a REQ's evidence set NOR counts toward another
+ * node's exclusivity tally. `perReq[reqId].tests` (the raw tagged-test list)
+ * is left untouched: staleness is a property of EXECUTED-CODE evidence, not
+ * of "did this test run" (a stale test's own tagged-test membership is not
+ * itself evidence of anything — `impact --tests`, T022, still wants to know
+ * a REQ HAS tests even if today's coverage snapshot of them is stale).
+ *
+ * Pure: returns a new `IngestedTrace`; never mutates `trace`. `hashesAtTrace`
+ * / `diagnostics` / `shardCount` pass through unchanged — staleness exclusion
+ * only touches the evidence-membership maps that findings/exercised-status
+ * computations read.
+ *
+ * Shared by `src/coverage.ts` (T020, `exercised` status) and
+ * `src/check.ts` (T020, `unexercisedClaims`/`suggestedImpls`) so both
+ * consumers apply the exact same staleness-exclusion rule as
+ * `src/graph/traverse.ts`'s `impact()` (T022, FR-017) does for traversal —
+ * one exclusion rule, several consumers, per this module's existing
+ * "one classifier" design note above.
+ */
+export function excludeStaleEvidence(
+  trace: IngestedTrace,
+  staleNodeIds: ReadonlySet<string>,
+): IngestedTrace {
+  if (staleNodeIds.size === 0) return trace;
+
+  const perReq = new Map<string, ReqCoverage>();
+  for (const [reqId, coverage] of trace.perReq) {
+    perReq.set(reqId, {
+      symbols: coverage.symbols.filter((s) => !staleNodeIds.has(s)),
+      files: coverage.files.filter((f) => !staleNodeIds.has(f)),
+      tests: coverage.tests,
+    });
+  }
+
+  const reqsByNode = new Map<string, Set<string>>();
+  for (const [node, reqIds] of trace.reqsByNode) {
+    if (staleNodeIds.has(node)) continue;
+    reqsByNode.set(node, new Set(reqIds));
+  }
+
+  return { ...trace, perReq, reqsByNode };
 }
 
 function ownerFilePath(nodeId: string): string | undefined {

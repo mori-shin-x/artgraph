@@ -109,7 +109,13 @@ export interface LockEntry {
 
 export type LockFile = Record<string, LockEntry>;
 
-export type CoverageStatus = "untagged" | "impl-only" | "verified";
+// spec 020 (data-model.md §6, FR-014) — `exercised` is the 4th coverage
+// status, appearing ONLY when `.artgraph.json`'s `trace.acceptExercises` is
+// true: an untagged REQ (no `implements` edge) with >=1 non-stale, exclusive
+// `exercises` edge. It is a rescue for untagged REQs only — `impl-only` /
+// `verified` REQs never become `exercised` (the declared-REQ evaluation axis
+// is unchanged, data-model.md §6).
+export type CoverageStatus = "untagged" | "exercised" | "impl-only" | "verified";
 
 export interface ImpactResult {
   affectedFiles: string[];
@@ -146,6 +152,25 @@ export interface DriftEntry {
   kind: NodeKind;
   lockedHash: string;
   currentHash: string;
+}
+
+// spec 020 (data-model.md §7, FR-012/013) — one `(reqId, node)` pair, shared
+// shape for both `check`'s `unexercisedClaims`/`suggestedImpls` findings and
+// `src/trace/report.ts`'s Phase A `ClaimEvidencePair` (kept as a structurally
+// identical, independently-defined type here rather than importing from
+// `trace/report.ts` — that module already imports THIS file for
+// `ArtifactGraph`, so importing back would be circular).
+export interface CoverageClaimEvidencePair {
+  reqId: string;
+  node: string;
+}
+
+// spec 020 (data-model.md §7, FR-015) — one REQ's stale evidence: the subset
+// of its `exercises`-evidence nodeIds whose trace-capture-time hash no
+// longer matches the current graph (`computeStaleNodeIds`), sorted.
+export interface StaleEvidenceEntry {
+  reqId: string;
+  symbols: string[];
 }
 
 export interface CheckResult {
@@ -194,6 +219,28 @@ export interface CheckResult {
   // generic "unavailable" string. Always a non-empty string when present;
   // unset (undefined) for every other `baselineStatus` value.
   baselineError?: string;
+
+  // ── spec 020 Phase C additions (contracts/cli-surface.md §4, data-model.md
+  // §7) — present ONLY when a trace was ingested (shard files exist, FR-010:
+  // trace-absent output must stay byte-identical, so these keys are omitted
+  // entirely rather than set to `[]`/`false` when there is no trace). ──
+  /** `@impl` claims whose claiming REQ's non-stale exercises evidence never
+   * reaches the claimed node (FR-012, SC-003). */
+  unexercisedClaims?: CoverageClaimEvidencePair[];
+  /** No `@impl` claim anywhere, exactly one REQ's evidence reaches the node
+   * (FR-013 exclusivity; `sharedThreshold`-or-more is `infrastructure` and
+   * intentionally has no `check` finding — only `trace report` surfaces it). */
+  suggestedImpls?: CoverageClaimEvidencePair[];
+  /** Per-REQ stale exercises evidence (FR-015), computed from the trace
+   * regardless of `trace.staleness` mode — the mode only changes whether
+   * stale evidence still COUNTS for the findings/status above and whether
+   * `staleGate` trips, not whether it is reported here. */
+  staleEvidence?: StaleEvidenceEntry[];
+  /** `trace.staleness === "gate"` AND `staleEvidence.length > 0` — the
+   * signal `src/commands/check.ts` uses to exit 2 under `--gate`, kept
+   * separate from `pass` (spec 017's baseline-diff gate) since staleness
+   * gating is not part of the new-vs-pre-existing baseline model (FR-015). */
+  staleGate?: boolean;
 }
 
 // spec 017 (data-model §1.1) — the subset of scoped issues that are NEW

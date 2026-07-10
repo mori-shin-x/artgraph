@@ -24,6 +24,25 @@ export function registerCheckCommand(program: Command): void {
 
       const testResults = await resolveTestResults(config, rootDir);
 
+      // spec 020 (contracts/cli-surface.md §4, FR-010〜015) — cheap glob-only
+      // existence probe first (mirrors `src/commands/trace.ts`'s Phase A
+      // precedent): a trace-absent project must reach `check()` WITHOUT the
+      // 7th argument at all, not with an empty/zero-cost `IngestedTrace`, so
+      // `CheckResult` never gains the new optional keys (FR-010 byte-identical).
+      const { hasTraceShards, ingestTrace } = await import("../trace/ingest.js");
+      let traceOptions: import("../check.js").TraceCheckOptions | undefined;
+      if (hasTraceShards(config, rootDir)) {
+        const { computeStaleNodeIds } = await import("../trace/report.js");
+        const trace = ingestTrace(config, rootDir);
+        traceOptions = {
+          trace,
+          staleNodeIds: computeStaleNodeIds(graph, trace),
+          acceptExercises: config.trace?.acceptExercises ?? false,
+          staleness: config.trace?.staleness ?? "warn",
+          sharedThreshold: config.trace?.sharedThreshold,
+        };
+      }
+
       let scopedNodeIds: Set<string> | undefined;
       if (opts.diff) {
         const { getGitDiffFiles } = await import("../diff.js");
@@ -124,7 +143,15 @@ export function registerCheckCommand(program: Command): void {
       // (spec 017 Critical fix B6/D2) tells `check()` whether an omitted
       // `baseline` means "plain check, baseline concept doesn't apply"
       // (`not_applicable`) or "`--diff` lazy-eval about to run" (`skipped`).
-      let result = check(graph, lock, scopedNodeIds, testResults, undefined, !!opts.diff);
+      let result = check(
+        graph,
+        lock,
+        scopedNodeIds,
+        testResults,
+        undefined,
+        !!opts.diff,
+        traceOptions,
+      );
 
       // spec 017 (data-model §5, R6) — lazy baseline diff. Only build the
       // base-ref worktree when a `--diff` run actually has a scoped issue: a
@@ -146,7 +173,7 @@ export function registerCheckCommand(program: Command): void {
         // Phase 1 pins the base ref to HEAD (FR-002); the internal API already
         // takes a `baseRef` parameter so Phase 2 can expose `--base` (FR-012).
         const baseline = computeBaselineIssues(rootDir, "HEAD", lock, config);
-        result = check(graph, lock, scopedNodeIds, testResults, baseline, true);
+        result = check(graph, lock, scopedNodeIds, testResults, baseline, true, traceOptions);
       }
 
       if (opts.format === "json") {
@@ -173,6 +200,17 @@ export function registerCheckCommand(program: Command): void {
 
       // Exit code 2 (contract §2): `--gate` and a NEW issue was introduced.
       if (opts.gate && !result.pass) {
+        process.exit(2);
+      }
+
+      // spec 020 (FR-015, contracts/cli-surface.md §4) — `trace.staleness:
+      // "gate"` composes with `--gate` as an INDEPENDENT failure class from
+      // spec 017's baseline-diff gate above: stale evidence isn't part of the
+      // new-vs-pre-existing baseline model (it has no baseline concept at
+      // all), so it gets its own exit-2 check rather than folding into
+      // `pass`/`newIssues`. `warn` (default) and `exclude` never set
+      // `staleGate`, so this is a no-op for them regardless of `--gate`.
+      if (opts.gate && result.staleGate) {
         process.exit(2);
       }
     });

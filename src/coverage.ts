@@ -1,4 +1,6 @@
 import type { ArtifactGraph, CoverageStatus, TestResultMap } from "./types.js";
+import { isExclusiveNode } from "./trace/report.js";
+import type { IngestedTrace } from "./trace/ingest.js";
 
 export interface CoverageEntry {
   reqId: string;
@@ -7,11 +9,43 @@ export interface CoverageEntry {
   testFiles: string[];
 }
 
+// spec 020 (data-model.md §6, FR-014) — opt-in `exercised` status input.
+// Callers (`src/check.ts`) build this ONLY when `trace.acceptExercises` is
+// true; its mere presence is what turns the rescue on (no separate boolean
+// here) — `computeCoverage` itself doesn't know or care about the config
+// flag, it just answers "was a trace evidence set supplied". `trace` should
+// already be staleness-filtered by the caller (`excludeStaleEvidence`) when
+// `trace.staleness === "exclude"` — this module has no staleness policy of
+// its own (single responsibility: exclusivity + status, not staleness).
+export interface CoverageTraceOptions {
+  trace: IngestedTrace;
+}
+
 export function computeCoverage(
   graph: ArtifactGraph,
   testResults?: TestResultMap,
+  traceOptions?: CoverageTraceOptions,
 ): CoverageEntry[] {
   const entries: CoverageEntry[] = [];
+
+  // FR-014: an untagged REQ becomes `exercised` when its trace evidence
+  // includes at least one node exclusively reached by it (FR-013's
+  // exclusivity rule, `isExclusiveNode` — same predicate `trace
+  // report`/`check`'s `suggestedImpls` use, so a symbol that would be
+  // SUGGESTED IMPL is exactly the kind of evidence that also qualifies its
+  // REQ for `exercised`).
+  const isExercisedEligible = (reqId: string): boolean => {
+    if (!traceOptions) return false;
+    const coverage = traceOptions.trace.perReq.get(reqId);
+    if (!coverage) return false;
+    for (const node of coverage.symbols) {
+      if (isExclusiveNode(traceOptions.trace, node)) return true;
+    }
+    for (const node of coverage.files) {
+      if (isExclusiveNode(traceOptions.trace, node)) return true;
+    }
+    return false;
+  };
 
   // Index edges by target once (O(edges)) rather than re-scanning every edge for
   // each requirement (O(REQ × edges)). This matters as test-result imports grow
@@ -46,7 +80,7 @@ export function computeCoverage(
 
     let status: CoverageStatus;
     if (implFiles.length === 0) {
-      status = "untagged";
+      status = isExercisedEligible(id) ? "exercised" : "untagged";
     } else if (testFiles.length === 0) {
       status = "impl-only";
     } else if (testResults) {
