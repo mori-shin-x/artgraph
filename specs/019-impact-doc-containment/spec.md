@@ -115,6 +115,7 @@ traversal セマンティクスの SSOT が変わるため、(a) `src/graph/trav
 - **`autoContains: false` 構成**: contains 辺が存在しないため帰属アトリビューションは空集合。従来との差分なし。
 - **lock に親 doc が存在しない場合**: 既存の drift 判定と同じく skip(`lock[id]` が無ければ判定しない)。
 - **起点自体が doc / spec パスの場合** (`artgraph impact specs/auth.md`): `resolveStartIds` の filePath fallback が doc ノードと全 req ノードを直接 seed するため、方向制約後も spec→code 方向の全展開が維持される。加えて doc ノードからの順方向 contains 展開も従来どおり機能する。
+- **seed された doc からの doc↔doc 辺経由の到達**: 起点 / diff に spec ファイルが入った場合、その doc から `depends_on` / `derives_from` (inline link / frontmatter / convention) で繋がる別 doc とその配下 REQ には従来どおり到達する (旧実装と同一挙動 — doc↔doc 辺セマンティクスは FR-014(d) でスコープ外)。US3 / FR-011 の「当該 spec の全 REQ がスコープに入る」は、この既存の doc 間到達を制限する意図ではない (PR #232 レビューで確認した列挙ギャップの補記)。
 - **req↔doc の往復による無限ループ**: 方向制約により構造的に発生しなくなる(従来は visited set で抑止していた)。
 - **1 つの task が複数 REQ を参照する場合** (`T010 ... [REQ-901, REQ-902]`): `REQ-901 → (逆implements) T010 → (順implements) REQ-902` のブリッジは**残る(意図)**。doc 同居と異なり「作者が明示的に 1 つの作業単位に束ねた」という task-tag 由来の宣言であり、因果的に意味がある。ただし Spec Kit convergence phase のような「1 task に大量の REQ 列挙」パターンがノイズ源になるかはドッグフーディングで観測する (watch item)。
 - **コードのみ diff での `@impl` タグ削除**: 削除で `implements` 辺ごと消えるため、新たに uncovered になった REQ へ到達できずスコープ外に落ちる。現行実装でも最小構成では素通りしており (doc 経由で偶然捕まる場合があるだけ)、本 spec の退行ではなく既存の境界問題。[#229](https://github.com/mori-shin-x/artgraph/issues/229) で独立に扱う (FR-014g)。
