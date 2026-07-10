@@ -45,7 +45,7 @@
 
 ## 🚧 Constitution Gate — 憲法 v1.2.0 改訂 PR のマージ確認(T013 以降の着手条件)
 
-- [ ] T013 改訂 PR(docs/constitution-v1-2-0)がマージ済みであることを確認し、`.specify/memory/constitution.md` が v1.2.0 であることを main から取り込む(rebase)。未マージなら Phase B に着手しない(plan.md Gate 裁定)
+- [X] T013 改訂 PR(docs/constitution-v1-2-0)がマージ済みであることを確認し、`.specify/memory/constitution.md` が v1.2.0 であることを main から取り込む(rebase)。未マージなら Phase B に着手しない(plan.md Gate 裁定)— **PR #236 を 2026-07-10 に squash マージ、rebase 取り込み済み**
 
 ## Phase B: scan / lock / rename 統合 (US1 完成)
 
