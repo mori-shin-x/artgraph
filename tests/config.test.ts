@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { resolve } from "node:path";
-import { writeFileSync, existsSync, unlinkSync, mkdirSync } from "node:fs";
+import { writeFileSync, existsSync, unlinkSync, mkdirSync, rmSync } from "node:fs";
 import { loadConfig } from "../src/config.js";
+import { scan } from "../src/scan.js";
 
 const TMP_DIR = resolve(import.meta.dirname, "fixtures/config-test");
 const CONFIG_PATH = resolve(TMP_DIR, ".artgraph.json");
@@ -437,6 +438,116 @@ describe("loadConfig", () => {
         }),
       );
       expect(() => loadConfig(TMP_DIR)).toThrow("implementsTagRe: must not be empty");
+    });
+  });
+
+  // issue #234 — parent/child specDirs (e.g. `["specs", "specs/sub"]`) made
+  // builder.ts glob the same file twice under two different specDirPrefixes,
+  // producing two doc nodes for one physical file. loadConfig now filters
+  // descendant entries and warns instead of letting the collision reach the
+  // builder.
+  describe("specDirs parent/child dedup (issue #234)", () => {
+    const writeConfig = (obj: Record<string, unknown>) => {
+      mkdirSync(TMP_DIR, { recursive: true });
+      writeFileSync(CONFIG_PATH, JSON.stringify(obj));
+    };
+
+    it("T234-1: filters descendant specDirs and warns", () => {
+      writeConfig({ specDirs: ["specs", "specs/sub"] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(TMP_DIR);
+        expect(cfg.specDirs).toEqual(["specs"]);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("specs/sub"));
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('descendant of "specs"'));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("T234-2: dedups exact-duplicate specDirs", () => {
+      writeConfig({ specDirs: ["specs", "specs"] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(TMP_DIR);
+        expect(cfg.specDirs).toEqual(["specs"]);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("duplicate entry"));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("T234-3: does not filter unrelated sibling specDirs", () => {
+      writeConfig({ specDirs: ["specs", "docs"] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(TMP_DIR);
+        expect(cfg.specDirs).toEqual(["specs", "docs"]);
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("T234-4: prefix collision is not mistaken for ancestor (specs vs specs2)", () => {
+      writeConfig({ specDirs: ["specs", "specs2"] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(TMP_DIR);
+        expect(cfg.specDirs).toEqual(["specs", "specs2"]);
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("T234-5: filters all descendants regardless of depth", () => {
+      writeConfig({ specDirs: ["specs", "specs/a", "specs/a/b"] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(TMP_DIR);
+        expect(cfg.specDirs).toEqual(["specs"]);
+        expect(warnSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("T234-6: filters descendant even when it appears before the ancestor", () => {
+      writeConfig({ specDirs: ["specs/sub", "specs"] });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(TMP_DIR);
+        expect(cfg.specDirs).toEqual(["specs"]);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("T234-7: builder does not create ghost doc nodes for parent+child specDirs", () => {
+      const tmpRoot = resolve(import.meta.dirname, "fixtures/tmp-specdirs-234");
+      const tmpSub = resolve(tmpRoot, "specs", "sub");
+      mkdirSync(tmpSub, { recursive: true });
+      writeFileSync(resolve(tmpSub, "x.md"), "- REQ-1: something\n");
+      writeFileSync(
+        resolve(tmpRoot, ".artgraph.json"),
+        JSON.stringify({ specDirs: ["specs", "specs/sub"], mode: "file" }),
+      );
+
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const cfg = loadConfig(tmpRoot);
+        const { graph } = scan(tmpRoot, cfg);
+        const docIds = [...graph.nodes.keys()].filter((k) => k.startsWith("doc:"));
+        expect(docIds).toEqual(["doc:sub/x.md"]);
+        // REQ nodes dedup by ID regardless of the parent/child specDirs bug, so
+        // this alone wouldn't have caught the ghost-doc regression — pinned
+        // here anyway to document the "req: 1" behavior from issue #234.
+        expect([...graph.nodes.keys()].filter((k) => /^REQ-/.test(k))).toHaveLength(1);
+      } finally {
+        warnSpy.mockRestore();
+        rmSync(tmpRoot, { recursive: true });
+      }
     });
   });
 

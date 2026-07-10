@@ -381,6 +381,56 @@ function validateAgents(value: unknown): AgentId[] | undefined {
   return [...seen].sort() as AgentId[];
 }
 
+// issue #234 — `.artgraph.json` specDirs with a parent/child pair (e.g.
+// `["specs", "specs/sub"]`) makes builder.ts's `for (const specDirName of
+// config.specDirs)` loop (graph/builder.ts) glob-match the same physical file
+// twice with two different `specDirPrefix`es, producing two doc nodes for one
+// file (e.g. `doc:sub/x.md` and `doc:x.md`). REQ nodes dedup by ID so this
+// silently corrupts the doc-node count without a visible collision. Filter
+// descendant entries here, at config-load time, so the builder only ever
+// sees non-overlapping specDirs.
+//
+// Rules: POSIX segment-aware ancestor check (`specs` is an ancestor of
+// `specs/sub` but not of `specs2` — plain startsWith would prefix-collide);
+// exact duplicates are also deduped. Every drop gets a `console.warn` (order
+// doesn't matter: dirs.find scans the whole original array per entry).
+function validateSpecDirs(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || !value.every((v) => typeof v === "string")) {
+    // Lenient posture, matching validatePackageManager: a malformed field
+    // silently drops to the DEFAULT_CONFIG.specDirs fallback in loadConfig
+    // rather than throwing.
+    return undefined;
+  }
+
+  const dirs = value as string[];
+
+  const isAncestorOf = (ancestor: string, descendant: string): boolean => {
+    if (ancestor === descendant) return false;
+    return descendant.startsWith(ancestor + "/") || descendant.startsWith(ancestor + "\\");
+  };
+
+  const kept: string[] = [];
+  const seen = new Set<string>();
+  for (const dir of dirs) {
+    if (seen.has(dir)) {
+      console.warn(`WARNING: specDirs contains duplicate entry "${dir}"; ignoring the duplicate.`);
+      continue;
+    }
+    seen.add(dir);
+    const ancestor = dirs.find((other) => isAncestorOf(other, dir));
+    if (ancestor !== undefined) {
+      console.warn(
+        `WARNING: specDirs entry "${dir}" is a descendant of "${ancestor}" and is redundant; ignoring "${dir}". See issue #234.`,
+      );
+      continue;
+    }
+    kept.push(dir);
+  }
+
+  return kept.length > 0 ? kept : undefined;
+}
+
 // spec 014 — `.artgraph.json` `planCoverage` section validation. Currently
 // only `requireFilesSection: boolean` is recognised; unknown fields are
 // silently dropped (no warning) so the schema can grow without breaking
@@ -482,7 +532,7 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
 
   return {
     include: raw.include ?? DEFAULT_CONFIG.include,
-    specDirs: raw.specDirs ?? DEFAULT_CONFIG.specDirs,
+    specDirs: validateSpecDirs(raw.specDirs) ?? DEFAULT_CONFIG.specDirs,
     testPatterns: raw.testPatterns ?? DEFAULT_CONFIG.testPatterns,
     lockFile,
     packageManager: validatePackageManager(raw.packageManager),
