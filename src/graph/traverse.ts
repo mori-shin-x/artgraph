@@ -2,23 +2,43 @@ import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import type { ArtifactGraph, DriftEntry, ImpactResult, SymbolEntry } from "../types.js";
 import type { LockFile } from "../types.js";
 
-// spec 016 (R-006, data-model.md §2.3) — `impact()` BFS body is **unchanged
-// from spec 014**. The redesign reroutes the startId construction (now via
-// `resolveStartIds` taking `SymbolEntry[]`) and adds an out-of-band
-// `originReqs` axis (via `resolveOriginReqs`) computed at the CLI / plan-
-// coverage layer. The BFS traversal itself is BIDIRECTIONAL: edges are
-// followed in both directions regardless of their declared source/target.
-// This means:
-//   - From a req node, traversal reaches the parent doc (via reverse contains edge)
-//   - From a doc node, traversal reaches child reqs (via forward contains edge)
-//   - Starting from any req, the blast radius includes sibling reqs in the same doc
-//     (req -> parent doc -> sibling reqs -> their implementations)
-// Pass maxDepth to limit traversal when contains edges cause unexpectedly wide reach.
+// spec 019 (FR-001〜006, issue #215) — `contains` (doc -> req|task) is the
+// ONE edge kind the BFS below does not treat as bidirectional. Every other
+// edge kind (`depends_on` / `derives_from` / `implements` / `verifies` /
+// `imports`) and the file→symbol expansion (the `node.kind === "file"`
+// branch below) keep the spec 014/016 bidirectional semantics unchanged.
+//
+// Why: Spec Kit / Kiro's standard layout is "1 feature = 1 spec.md with
+// multiple REQs". Treating `contains` as bidirectional let a symbol-unit
+// BFS walk req -> (reverse contains) parent doc -> (forward contains)
+// sibling req -> sibling req's implementors, dragging the WHOLE feature's
+// REQ set into `impactReqs` / `affectedFiles` / `drifted` even when the
+// target symbol has zero code dependency on the sibling. That defeated the
+// per-change-context value proposition `artgraph impact` exists for (see
+// specs/019-impact-doc-containment/spec.md US1). The same amplification
+// happens one hub further for tasks: a task's `implements` edge to its REQ
+// plus tasks.md's `contains` edges to every sibling task reconstructs the
+// same blowup through the task layer, so the direction constraint applies
+// uniformly to `contains` edges regardless of whether the target is a req
+// or a task node (FR-003) — restricting only req targets leaves the task
+// path wide open and the symptom returns almost unchanged.
+//
+// The parent doc is not simply dropped: after the BFS below completes,
+// `impact()` re-attaches each visited req/task's parent doc(s) via a
+// one-hop, non-recursive post-processing pass (FR-004〜006, "attribution").
+// Attributed docs land in `affectedDocs` and participate in drift detection
+// exactly like BFS-reached docs, but nothing is expanded FROM an attributed
+// doc — so attribution restores "which spec is this REQ's home" context
+// without reopening the sibling-REQ leak. `maxDepth` no longer needs to
+// double as a `contains`-blast-radius mitigation (the old comment's
+// workaround is gone): attribution is a depth-independent post-BFS step,
+// so `maxDepth` keeps its one meaning — how many graph-edge hops the BFS
+// itself takes.
 //
 // File→symbol expansion (the `node.kind === "file"` branch below) is the
 // reason a file startId still drags in same-file symbols; for symbol startIds
 // `resolveStartIds` deliberately omits the parent file node so a symbol-unit
-// input doesn't sweep up its siblings (R-006 mitigation).
+// input doesn't sweep up its siblings (spec 016 R-006 mitigation).
 export function impact(
   graph: ArtifactGraph,
   startIds: string[],
@@ -52,14 +72,17 @@ export function impact(
       if (edge.source === id && !visited.has(edge.target)) {
         queue.push({ id: edge.target, depth: depth + 1 });
       }
-      if (edge.target === id && !visited.has(edge.source)) {
+      // spec 019 (FR-001〜003): reverse traversal (target -> source) skips
+      // `contains` edges so a req/task node cannot walk "backwards" into its
+      // parent doc during BFS. Every other edge kind keeps reverse traversal.
+      if (edge.target === id && edge.kind !== "contains" && !visited.has(edge.source)) {
         queue.push({ id: edge.source, depth: depth + 1 });
       }
     }
   }
 
   const affectedFileSet = new Set<string>();
-  const affectedDocs: string[] = [];
+  const affectedDocsSet = new Set<string>();
   const impactReqs: string[] = [];
   const affectedTasks: string[] = [];
   const drifted: DriftEntry[] = [];
@@ -75,7 +98,7 @@ export function impact(
         affectedFileSet.add(node.filePath);
         break;
       case "doc":
-        affectedDocs.push(id);
+        affectedDocsSet.add(id);
         break;
       case "req":
         impactReqs.push(id);
@@ -86,16 +109,43 @@ export function impact(
         affectedTasks.push(id);
         break;
     }
+  }
 
-    if ((node.kind === "req" || node.kind === "doc") && lock[id]) {
-      if (lock[id].contentHash !== node.contentHash) {
-        drifted.push({
-          nodeId: id,
-          kind: node.kind,
-          lockedHash: lock[id].contentHash,
-          currentHash: node.contentHash,
-        });
-      }
+  // spec 019 (FR-004〜006) — post-BFS attribution: resolve the parent doc(s)
+  // of every visited req/task node via `contains` edges and union them into
+  // `affectedDocs`. This is a one-hop, non-recursive lookup over `visited`
+  // (not a queue push), so an attributed doc never seeds further expansion —
+  // its OTHER children never enter `impactReqs` / `affectedFiles`.
+  for (const edge of graph.edges) {
+    if (edge.kind !== "contains") continue;
+    const target = graph.nodes.get(edge.target);
+    if (!target || (target.kind !== "req" && target.kind !== "task")) continue;
+    if (!visited.has(edge.target)) continue;
+    affectedDocsSet.add(edge.source);
+  }
+
+  const affectedDocs = [...affectedDocsSet];
+
+  // spec 019 (FR-005) — attributed docs are drift-checked exactly like any
+  // other visited node; docs unioned in above are added to `visited` here
+  // (`Set.add` on an already-visited req is a no-op) purely so the shared
+  // drift loop below covers both BFS-reached and attribution-reached docs
+  // without duplicating the lock-comparison logic.
+  for (const id of affectedDocs) {
+    visited.add(id);
+  }
+
+  for (const id of visited) {
+    const node = graph.nodes.get(id);
+    if (!node || (node.kind !== "req" && node.kind !== "doc")) continue;
+    if (!lock[id]) continue;
+    if (lock[id].contentHash !== node.contentHash) {
+      drifted.push({
+        nodeId: id,
+        kind: node.kind,
+        lockedHash: lock[id].contentHash,
+        currentHash: node.contentHash,
+      });
     }
   }
 
