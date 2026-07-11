@@ -1,12 +1,15 @@
 ---
 name: "artgraph-setup"
-description: "Installs artgraph in the current project, detects the package manager (npm / pnpm / Bun / Deno; default and Yarn fallback are pnpm), and wires up Skills, hooks, agent-context snippet, and any detected SDD-tool integration in one turn. Use when the user asks to install / set up / add artgraph, asks whether artgraph is set up or what is installed, or wants to wire artgraph into an SDD tool (Spec Kit / Kiro) added after artgraph. Make sure to use this skill whenever the user mentions artgraph for the first time and `artgraph` CLI is not yet available."
+description: "Installs artgraph in the current project, detects the package manager (npm / pnpm / Bun / Deno; default and Yarn fallback are pnpm), and wires up Skills, hooks, agent-context snippet, and any detected SDD-tool integration. Use when the user asks to install / set up / add artgraph, asks whether artgraph is set up or what is installed, or wants to wire artgraph into an SDD tool (Spec Kit / Kiro) added after artgraph. Make sure to use this skill whenever the user mentions artgraph for the first time and `artgraph` CLI is not yet available."
 allowed-tools:
   - "Bash(npm install*)"
   - "Bash(npm i*)"
   - "Bash(pnpm add*)"
+  - "Bash(pnpm install*)"
   - "Bash(bun add*)"
+  - "Bash(bun install*)"
   - "Bash(deno add*)"
+  - "Bash(deno install*)"
   - "Bash(npx artgraph *)"
   - "Bash(npx --no-install artgraph *)"
   - "Bash(pnpm exec artgraph *)"
@@ -20,7 +23,7 @@ disable-model-invocation: false
 
 ## Purpose
 
-Installs artgraph using the project's detected package manager and runs `artgraph init` to lay down the full agent-native setup — Skills, hooks, agent-context snippet, and SDD-tool integration — in a single turn.
+Installs artgraph using the project's detected package manager and runs `artgraph init` to lay down the full agent-native setup — Skills, hooks, agent-context snippet, and SDD-tool integration. If artgraph is already installed, it inspects and reports the current setup state instead of reinstalling.
 
 ## Steps
 
@@ -49,26 +52,38 @@ Inspect the project root and apply these rules in order — first match wins. Th
 
 Relay any warning to the user verbatim (see the backticked wording above — the TS detector writes the same strings to stderr, and CI enforces the match). On detection failure, ask which PM (npm / pnpm / bun / deno) and use that answer for the rest of the steps. Remember the chosen PM for steps 3-6.
 
+### 2.5 Determine the target agents
+
+Decide the `--agents=<list>` value used in Step 3's table and Step 5's `init`, in order:
+
+1. Enumerate all five canonical skills paths (`.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, `.kiro/skills/`) and use the agent id(s) (`claude` / `codex` / `cursor` / `copilot` / `kiro`) of every path that already carries a distributed `artgraph-*` Skill — respect the distribution the repo already chose.
+2. If none of the five paths carries any Skills yet, use the id of the host agent you are currently running as (e.g. `claude` for Claude Code).
+3. If still undetermined, ask the user which agent(s) to target (supported: claude, codex, copilot, cursor, kiro).
+
 ### 3. Get explicit user consent
 
 Look up the detected PM in this table and show the user the three commands that will run. Wait for confirmation before proceeding; if the user declines, exit and tell them they can run the commands manually.
 
 | PM | install | init | check |
 | --- | --- | --- | --- |
-| npm | `npm install -D artgraph` | `npx artgraph init` | `npx artgraph check` |
-| pnpm | `pnpm add -D artgraph` | `pnpm exec artgraph init` | `pnpm exec artgraph check` |
-| bun | `bun add -d artgraph` | `bunx artgraph init` | `bunx artgraph check` |
-| deno | `deno add npm:artgraph` | `deno run -A npm:artgraph/cli init` | `deno run -A npm:artgraph/cli check` |
+| npm | `npm install -D artgraph` | `npx artgraph init --agents=<agents>` | `npx artgraph check` |
+| pnpm | `pnpm add -D artgraph` | `pnpm exec artgraph init --agents=<agents>` | `pnpm exec artgraph check` |
+| bun | `bun add -d artgraph` | `bunx artgraph init --agents=<agents>` | `bunx artgraph check` |
+| deno | `deno add npm:artgraph` | `deno run -A npm:artgraph/cli init --agents=<agents>` | `deno run -A npm:artgraph/cli check` |
 
-`init` runs the full default flow (config + scan + Skills + integrate-auto for detected SDD tools + Stop hook + agent context).
+`<agents>` is the comma-separated list decided in Step 2.5. `init` runs the full default flow (config + scan + Skills + integrate-auto for detected SDD tools + Stop hook + agent context).
 
 ### 4. Install the CLI
 
-Pick the row in the table above for the detected PM and run the **install** command as one Bash call. If install fails (network, registry timeout, lockfile conflict, etc.), report the stderr to the user and stop. Do not retry without consent.
+Check `package.json` first: if artgraph is already listed under `dependencies` or `devDependencies`, run the plain install command for the detected PM instead of the row's install command — `npm install` / `pnpm install` / `bun install` / `deno install`. A plain install restores the lockfile-pinned version; the row's add-style command re-resolves the registry's latest and can drift from a committed lockfile.
+
+Otherwise, pick the row in the table above for the detected PM and run the **install** command as one Bash call. If install fails (network, registry timeout, lockfile conflict, etc.), report the stderr to the user and stop. Do not retry without consent.
 
 ### 5. Run init
 
-Run the **init** command from the same row as one Bash call. On non-zero exit, surface the stderr to the user without retry — `init` reports which sub-step failed (config / scan / Skills / integrate / hook / agent context).
+Check whether `.artgraph.json` already exists at the project root. If it does, **skip init** and go straight to Step 6 (check) — the project is already initialized (e.g. you joined a repo where distributed Skills and config were already committed by a teammate), and `init` would fail with "already exists. Use --force". Do not pass `--force`: it would overwrite the team's committed config.
+
+Otherwise, run the **init** command from the same row as one Bash call. On non-zero exit, surface the stderr to the user without retry — `init` reports which sub-step failed (config / scan / Skills / integrate / hook / agent context).
 
 ### 6. Verify
 
