@@ -237,6 +237,7 @@ artgraph impact src/auth.ts:Sample.methodA
 - **`maxDepth` への影響** — クラス起点からメソッドの REQ への到達は class→method→REQ の 2 hop になります (従来のクラス収束では 1 hop)。traverse API の `maxDepth` オプションで BFS 深さを制限している場合は、必要 hop 数が 1 増える点に注意してください。
 - **barrel 経由のメソッド指定は不可** — メソッド symbol は origin ファイル側にのみ存在するため、`Files: src/barrel.ts:Sample.methodA` は `unresolvedSymbol` 診断になります。origin を直接指定してください (`src/auth.ts:Sample.methodA`)。
 - **シンボル化されないメンバー** — computed property name (`[Symbol.iterator]` 等)、private `#member`、データプロパティ (関数値でない initializer) などの直上タグは従来どおりクラス symbol に帰属します。非 export クラスのメンバーは従来どおりファイル帰属です。
+- **同名メンバーは 1 シンボルに収束** — getter/setter ペア・static と instance の同名・オーバーロード宣言群は 1 つのメソッド symbol (`#ClassName.<name>`) に収束するため、片方 (例: getter) だけに付けたタグも同じシンボルへの claim として同名の他方 (setter) と合算され、per-change context の精度がその分薄まります。
 
 ### `Files:` syntax 例(symbol 含む)
 

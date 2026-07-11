@@ -494,6 +494,10 @@ type OxcComment = OxcParseResult["comments"][number];
 //     an `Identifier`-typed AST node (e.g. `[x]() {}`).
 //   - private member (`#m`) — `key.type === "PrivateIdentifier"`, never
 //     `"Identifier"`.
+//   - string/numeric LITERAL key (`"foo"() {}` / `123() {}`) — `key.type` is
+//     `"StringLiteral"` / `"NumericLiteral"`, never `"Identifier"`, so the
+//     same `el.key?.type !== "Identifier"` guard that excludes computed names
+//     excludes these too (PR #242 review D2 / spec 021 Edge Cases).
 //   - data property (non-function initializer) — `value.type` fails the
 //     Arrow/FunctionExpression check.
 //   - `accessor` field — a STRUCTURALLY DIFFERENT ClassElement type

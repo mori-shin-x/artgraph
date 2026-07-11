@@ -330,6 +330,12 @@ See [docs/commands.md](./docs/commands.md) for the detailed reference on every
 flag, including `scan --serve`, `doctor` finding taxonomy, and the `rename`
 split/merge caveats.
 
+Note that `reconcile` rebuilds `.trace.lock` entirely from the current graph:
+after upgrading to a version that changes symbol-extraction granularity, the
+next `reconcile` may rewrite the lock's symbol entries and `@impl`
+attributions accordingly. The 0.x series ships no migration tooling for
+this — review the `.trace.lock` diff before committing it.
+
 ## Documentation
 
 - [Getting Started](./docs/getting-started.md) — Windows CRLF, committing Skills, Stop hook troubleshooting

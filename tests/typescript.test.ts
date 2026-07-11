@@ -1606,3 +1606,46 @@ describe("createTSParser (symbol mode — declare class member suppression, PR #
     expect(bySource("REQ-1071")).toBe("symbol:src/ambient.ts#ConcreteSample.methodA");
   });
 });
+
+// PR #242 review G3 / spec 021 Edge Cases — several members opening on ONE
+// physical line with a trailing `// @impl` on that same line: every member
+// range covers the line at the same (smallest) size, so the pre-existing
+// registration-order first-wins tie-break picks the FIRST member in source
+// order. This pins the current behavior — it is an inherited property of the
+// generic tie-break, not new semantics, and a formatter (oxfmt/prettier)
+// naturally dissolves the construct into one-member-per-line.
+describe("createTSParser (symbol mode — same-line multi-member trailing tag pin, PR #242 review G3)", () => {
+  let root: string;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-sameline-members-"));
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "multi.ts"),
+      [
+        "export class MultiSample {",
+        "  methodA(): void {} methodB(): void {} // @impl REQ-1080",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a trailing tag on a line with two members attributes to the FIRST member (registration order)", () => {
+    const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "REQ-1080",
+    );
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/multi.ts#MultiSample.methodA");
+    // Determinism: a second parse agrees.
+    const again = createTSParser(root, ["src/**/*.ts"], "symbol")
+      .parse()
+      .edges.filter((e) => e.kind === "implements" && e.target === "REQ-1080");
+    expect(again).toEqual(implEdges);
+  });
+});
