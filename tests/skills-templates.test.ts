@@ -483,6 +483,58 @@ describe("templates/skills metatest", () => {
     });
   });
 
+  // issue #256 / PR #253 review followups: pin the SKILL.md body-text fixes
+  // that came out of the PR #253 review round (spec 013 --agents required,
+  // "in one turn" overclaim removal, plain-install allowed-tools, and the
+  // partial-init (.artgraph.json without a lock) detection in Step 5).
+  describe("artgraph-setup PR #253 review fixes (issue #256)", () => {
+    it("Step 3 table's init cells all carry --agents=<agents> (issue #256 / PR #253)", () => {
+      const skill = readSkill("artgraph-setup");
+      // Table rows start with `|`; only rows whose cells mention the init
+      // subcommand are init cells (this also skips the header/separator rows).
+      const initRows = skill.body
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith("|") && /\bartgraph init\b/.test(line));
+      expect(initRows.length, "expected at least one init row in the Step 3 table").toBeGreaterThan(
+        0,
+      );
+      for (const row of initRows) {
+        expect(row, `Step 3 init row must carry --agents=<agents>: ${row}`).toContain(
+          "--agents=<agents>",
+        );
+      }
+    });
+
+    it("frontmatter description does not overclaim 'in one turn' (issue #256 / PR #253)", () => {
+      const skill = readSkill("artgraph-setup");
+      const description = skill.frontmatter.description as string;
+      expect(description.toLowerCase()).not.toContain("in one turn");
+    });
+
+    it("allowed-tools pre-approves plain install for pnpm/bun/deno (issue #256 / PR #253)", () => {
+      const skill = readSkill("artgraph-setup");
+      const tools = (skill.frontmatter["allowed-tools"] as string[]) ?? [];
+      for (const entry of ["Bash(pnpm install*)", "Bash(bun install*)", "Bash(deno install*)"]) {
+        expect(tools, `allowed-tools must include "${entry}"`).toContain(entry);
+      }
+    });
+
+    it("Step 5 distinguishes .artgraph.json-without-lock as a partial init (issue #256 / PR #253)", () => {
+      const skill = readSkill("artgraph-setup");
+      const stepMatch = skill.body.match(/### 5\. Run init([\s\S]*?)(?=\n### 6\.)/);
+      expect(stepMatch, "expected a '### 5. Run init' section before '### 6.'").not.toBeNull();
+      const stepBody = stepMatch![1];
+      expect(stepBody, "Step 5 must reference .artgraph.json").toContain(".artgraph.json");
+      const mentionsLock = /\.trace\.lock/.test(stepBody) || /lockFile/.test(stepBody);
+      expect(
+        mentionsLock,
+        "Step 5 must reference the lock file (.trace.lock or lockFile) alongside .artgraph.json " +
+          "so a config-without-lock partial init is not mistaken for a full one",
+      ).toBe(true);
+    });
+  });
+
   // US4 (spec 016): symbol-level + dual-axis guidance must appear in the two
   // updated Skills, in docs/skills-guide.md, and in README.md (FR-026..FR-029).
   // The Skill body-line cap (≤ 100 lines, FR-030) is enforced by the generic
