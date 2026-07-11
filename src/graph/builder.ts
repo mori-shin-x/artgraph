@@ -49,7 +49,13 @@ export interface BuildWarning {
     // the TS parser's `TsParseWarning[]` (see parse-cache.ts's
     // `TsFragment.warnings`) below. NOT silent — shown by default, unlike
     // the two `phantom-import-repaired` / `dangling-import` types above.
-    | "class-member-collision";
+    | "class-member-collision"
+    // issue #247 — a file whose bracket nesting exceeds
+    // MAX_BRACKET_NESTING_DEPTH was skipped entirely (no symbols, imports,
+    // or @impl tags extracted) to avoid a native oxc-parser crash. Rare and
+    // high-impact when it does fire (a whole file goes uncovered), so NOT
+    // silent — shown by default like `class-member-collision` above.
+    | "pathological-bracket-nesting";
   id: string;
   files: string[];
   message?: string;

@@ -69,6 +69,17 @@ export function printWarnings(warnings: BuildWarning[]) {
           `WARNING: ${w.message ?? `class-member-collision "${w.id}" in ${w.files.join(", ")}`}`,
         );
         break;
+      // issue #247 — pathological bracket-nesting guard skipped a file
+      // entirely. Shown by default (NOT in SILENT_WARNING_TYPES): the file's
+      // symbols/imports/@impl tags are all missing from the graph, which the
+      // author needs to see. The parser-built message carries the file,
+      // observed depth, and threshold, so print it verbatim with the id as
+      // fallback.
+      case "pathological-bracket-nesting":
+        console.error(
+          `WARNING: ${w.message ?? `pathological-bracket-nesting "${w.id}" in ${w.files.join(", ")}`}`,
+        );
+        break;
       // Filtered above via `isSilentWarning`, but the switch still needs
       // cases so the exhaustiveness check below stays happy.
       case "phantom-import-repaired":
