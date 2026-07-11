@@ -41,7 +41,7 @@ See [install-check](../_shared/install-check.md) for the standard pre-flight che
 
 > `<PM-exec>` is the project's package runner: `npx` (npm), `pnpm exec`, `bunx`, or `deno run -A npm:artgraph/cli`. Substitute the one detected by `_shared/package-manager.md` (or written in `.artgraph.json#packageManager`).
 
-**Symbol-level input** (`src/auth.ts:validateToken`) additionally requires the graph to have been scanned with symbol nodes enabled — set `"mode": "symbol"` in `.artgraph.json` and re-run `<PM-exec> scan`. Without symbol nodes the CLI exits 1 with `symbol-level input requires a symbol-mode graph`. See [Skills Guide — file vs symbol mode](../../../docs/skills-guide.md#file-mode-vs-symbol-mode) for the trade-off and config example.
+**Symbol-level input** (`src/auth.ts:validateToken`, or class-method grain `src/auth.ts:Sample.methodA`) additionally requires the graph to have been scanned with symbol nodes enabled — set `"mode": "symbol"` in `.artgraph.json` and re-run `<PM-exec> scan`. Without symbol nodes the CLI exits 1 with `symbol-level input requires a symbol-mode graph`. See [Skills Guide — file vs symbol mode](../../../docs/skills-guide.md#file-mode-vs-symbol-mode) for the trade-off and config example.
 
 ### 2. Pick a mode and run
 
@@ -66,6 +66,9 @@ git status --porcelain
 
   # Symbol-level input — limits forward BFS to one export
   <PM-exec> impact src/auth.ts:validateToken --format json
+
+  # Class-method grain — methods of inline-exported classes are symbols too
+  <PM-exec> impact src/auth.ts:Sample.methodA --format json
 
   # Test-selection: only the tests worth re-running for this diff
   <PM-exec> impact --diff --tests --format json
@@ -94,6 +97,8 @@ See [output schema](../_shared/output-schema.md) for the full field shapes.
 **Static vs evidence provenance (spec 020 FR-017).** `impactReqs` now includes REQs reached two ways: **static** (an `@impl` declaration or a structural edge like `imports`/`contains` — a claim or a mechanical fact) and **evidence** (a coverage-derived `exercises` edge — a REQ's tagged tests were observed actually running the changed code). `reqProvenance` tells you which; a REQ can carry both if a declared `@impl` is also corroborated by evidence. Both fields — and `testsToRun` — are omitted entirely when no trace artifact is configured (FR-010, byte-identical pre-spec-020 output); do not expect them on a trace-less project. A stale `exercises` edge (source changed since the trace was captured) is excluded from `reqProvenance` under `trace.staleness: "exclude"`, so evidence-only REQs can silently drop out after an edit — re-run tests to refresh if that looks wrong.
 
 **Same-spec siblings are not blast radius.** `impactReqs` only contains REQs the edit actually reaches — through code (`@impl`, `imports`) or explicit spec relations (`depends_on` / `derives_from`). A REQ that merely lives in the same `spec.md` as a reached REQ, with no code or dependency link of its own, does **not** appear in `impactReqs` / `affectedFiles` / `drifted`, even under the common Spec Kit / Kiro layout of "one spec.md, many REQs". Its parent spec doc still shows up in `affectedDocs` so you can open that file for full feature context, but don't treat every REQ inside it as touched by this edit — cite only the REQs actually listed in `impactReqs`.
+
+**Method units are in-file precision queries.** A `path:ClassName.methodName` start id (`src/auth.ts:Sample.methodA`; `default.methodName` for a default-export class) resolves to that method's own symbol. Its `impactReqs` contains only the REQs the method itself claims or reaches — **not** sibling methods' REQs and **not** a REQ claimed directly above the `class` declaration (that is the class-contract claim). Its `affectedFiles` does **not** include consumer files that import the class: the intentional trade is precision inside the file. When the user needs the consumer-side blast radius, use the class unit (`src/auth.ts:Sample`), the file unit, or `--diff` — the class unit expands forward through class→method containment to every method's REQs. Two caveats: consumers bounding the traversal depth (the programmatic `maxDepth` option) need one extra hop — class→method→REQ is 2 hops instead of the pre-method-grain 1; and method symbols exist only on their origin file, so `barrel.ts:Sample.methodA` fails with `unresolvedSymbol` — target the origin file directly.
 
 ### 4. Inject into the response
 

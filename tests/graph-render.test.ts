@@ -120,6 +120,105 @@ describe("renderGraphData: layer mapping specifics", () => {
   });
 });
 
+// spec 021 (T025, issue #218) — the renderer is generic over node.kind /
+// edge.kind (layerFor + the task-exclusion filter are the only kind-specific
+// branches); a class -> method `contains` edge (symbol -> symbol, provenance
+// "structural") is just another `symbol`-kind node pair and an edge whose
+// kind happens to be `contains` — no renderer code path special-cases doc ->
+// req/task containment, so this confirms no crash / no silent drop for the
+// method-grain shape.
+describe("renderGraphData: class -> method `contains` (symbol -> symbol) — spec 021 / issue #218", () => {
+  it("both the class and method symbols map to the `code` layer, and the `contains` edge survives unmodified", () => {
+    const graph = makeGraph(
+      [
+        makeNode({ id: "symbol:src/sample.ts#Sample", kind: "symbol", filePath: "src/sample.ts" }),
+        makeNode({
+          id: "symbol:src/sample.ts#Sample.methodA",
+          kind: "symbol",
+          filePath: "src/sample.ts",
+        }),
+        makeNode({ id: "REQ-902", kind: "req", filePath: "specs/req.md" }),
+      ],
+      [
+        {
+          source: "symbol:src/sample.ts#Sample",
+          target: "symbol:src/sample.ts#Sample.methodA",
+          kind: "contains",
+          provenances: ["structural"],
+        },
+        {
+          source: "symbol:src/sample.ts#Sample.methodA",
+          target: "REQ-902",
+          kind: "implements",
+          provenances: ["code-tag"],
+        },
+      ],
+    );
+
+    const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+
+    const byId = new Map(out.nodes.map((n) => [n.id, n]));
+    expect(byId.get("symbol:src/sample.ts#Sample")!.layer).toBe("code");
+    expect(byId.get("symbol:src/sample.ts#Sample.methodA")!.layer).toBe("code");
+    expect(out.edges).toContainEqual({
+      source: "symbol:src/sample.ts#Sample",
+      target: "symbol:src/sample.ts#Sample.methodA",
+      kind: "contains",
+    });
+    // Dotted symbol ids don't confuse the determinism sort (string `<`/`>`).
+    expect(out.nodes.map((n) => n.id)).toEqual([
+      "REQ-902",
+      "symbol:src/sample.ts#Sample",
+      "symbol:src/sample.ts#Sample.methodA",
+    ]);
+  });
+
+  it("check-result state (drift/orphan/uncovered) applies to a method symbol id exactly like any other node id", () => {
+    const graph = makeGraph(
+      [
+        makeNode({ id: "symbol:src/sample.ts#Sample", kind: "symbol", filePath: "src/sample.ts" }),
+        makeNode({
+          id: "symbol:src/sample.ts#Sample.methodA",
+          kind: "symbol",
+          filePath: "src/sample.ts",
+        }),
+      ],
+      [
+        {
+          source: "symbol:src/sample.ts#Sample",
+          target: "symbol:src/sample.ts#Sample.methodA",
+          kind: "contains",
+          provenances: ["structural"],
+        },
+      ],
+    );
+
+    const checkResult: CheckResult = {
+      drifted: [
+        {
+          nodeId: "symbol:src/sample.ts#Sample.methodA",
+          kind: "symbol",
+          lockedHash: "old",
+          currentHash: "new",
+        },
+      ],
+      orphans: [],
+      orphanNodeIds: [],
+      uncovered: [],
+      coverage: [],
+      testFailures: [],
+      pass: false,
+    };
+
+    const out = renderGraphData(graph, { rootDir: ".", checkResult, generatedAt: FIXED_TS });
+    const byId = new Map(out.nodes.map((n) => [n.id, n]));
+    expect(byId.get("symbol:src/sample.ts#Sample.methodA")!.state).toBe("drift");
+    // The class symbol itself carries no lock entry drift of its own here —
+    // it stays ok (drift is per-node, not inherited through `contains`).
+    expect(byId.get("symbol:src/sample.ts#Sample")!.state).toBe("ok");
+  });
+});
+
 describe("renderGraphData: label fallback", () => {
   it("uses basename(filePath) for non-req nodes without label", () => {
     const graph = makeGraph([

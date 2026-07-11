@@ -568,8 +568,16 @@ export * as ns from "./re-export-target.js";
       expected: [["default", "export default function () { return 1; }"]],
     },
     {
+      // spec 021 (T024, issue #218): expectation INVERTED — the pre-spec-021
+      // assumption "classes never carry member symbols" no longer holds.
+      // `export default class { m() {} }` now ALSO materializes a
+      // `#default.m` member symbol alongside the class's own `#default`
+      // node (which stays byte-identical — same id, same span, same hash).
       rel: "src/default-anon-class.ts",
-      expected: [["default", "export default class { m() {} }"]],
+      expected: [
+        ["default", "export default class { m() {} }"],
+        ["default.m", "m() {}"],
+      ],
     },
     { rel: "src/default-paren.ts", expected: [["default", "(foo)"]] },
     {
