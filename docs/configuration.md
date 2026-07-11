@@ -231,6 +231,16 @@ shards (FR-010: output stays byte-identical to before the feature existed).
 | `staleness` | `"warn"` | How `check` treats exercises evidence whose recorded content hash no longer matches the current graph. `"warn"` reports `staleEvidence` only (exit code unchanged); `"exclude"` drops stale evidence from every judgment (UNEXERCISED CLAIM / SUGGESTED IMPL / `exercised`) while the underlying `exercises` edge stays in the graph for `impact`; `"gate"` makes `check --gate` exit `2` when any stale evidence is present, independent of the spec 017 baseline-diff gate. |
 | `sharedThreshold` | `3` | A symbol exercised by this many or more distinct REQs' tests is classified as shared infrastructure, not a candidate `@impl`. |
 
+> **Runner setup: prefer `withTrace()` over a bare `test.runner`.** Trace
+> evidence is generation-replaced, not appended — each run supersedes the
+> last. `withTrace()` enforces that by also wiring a `globalSetup` that
+> deletes the previous run's `*.jsonl` shards before the run starts. Setting
+> `test.runner: "artgraph/vitest"` directly skips that cleanup, so shards
+> accumulate across runs (including interrupted ones) and outdated evidence
+> keeps matching `artifacts` and feeding the graph. If you can't use the
+> wrapper, wire the cleanup yourself via
+> `test.globalSetup: ["artgraph/vitest/config"]` or clean the trace dir in CI.
+
 ### Exclusivity / silent / infrastructure
 
 `suggestedImpls` (and the `exercised` coverage status) only fire for symbols

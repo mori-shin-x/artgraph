@@ -162,6 +162,8 @@ import { withTrace } from "artgraph/vitest/config";
 export default defineConfig(withTrace({ test: { /* ...既存設定... */ } }));
 ```
 
+`test.runner: "artgraph/vitest"` を直接指定しても動きますが、`withTrace()` を推奨します。`withTrace()` は前回実行分の shard を削除する `globalSetup` も合わせて設定するため、証拠は実行のたびに世代置き換えされます — 素の runner 指定だけでは過去の (中断された実行を含む) shard が蓄積し、古い証拠がグラフに流れ込み続けます。
+
 あとはいつも通りテストを実行するだけ (`vitest run`) — artgraph が正規化された per-test 実行証拠を `.artgraph/trace/` に書き出します。次の `artgraph scan` で、`[REQ-NNN]` タグ付きテストの REQ から、そのテストが実際に実行したシンボルへの `exercises` エッジが埋まります。**コード側の `@impl` タグはゼロのまま** — タグゼロ・トレーサビリティです。
 
 `artgraph trace report` は「捏造できない」ことの核となる機能です。`@impl` の主張を実行証拠と突き合わせ、REQ-001 のテストが一度も実行していないシンボルに `@impl REQ-001` が付いていれば **UNEXERCISED CLAIM**(宣言はあるが証拠がない)として検出します。逆に、`@impl` は無いが REQ のテストだけが排他的に実行しているシンボルは **SUGGESTED IMPL** として提案されます。

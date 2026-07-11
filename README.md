@@ -225,6 +225,12 @@ import { withTrace } from "artgraph/vitest/config";
 export default defineConfig(withTrace({ test: { /* ...your config... */ } }));
 ```
 
+Setting `test.runner: "artgraph/vitest"` directly also works, but prefer
+`withTrace()`: it additionally wires a `globalSetup` that wipes the previous
+run's shards, so evidence is replaced per run instead of accumulating —
+with the bare runner, shards from earlier (including interrupted) runs
+linger and keep feeding outdated evidence into the graph.
+
 Run your suite as usual (`vitest run`), and artgraph writes normalized
 per-test evidence to `.artgraph/trace/`. The next `artgraph scan` fills in
 `exercises` edges for every `[REQ-NNN]`-tagged test's REQ → the symbols it
