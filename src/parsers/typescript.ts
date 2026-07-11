@@ -345,9 +345,21 @@ function orderByDirectoryDepth(files: string[]): string[] {
 // on this machine (Node 24, WSL2, oxc-parser 0.137.0 AND 0.139.0): 3,000
 // nested brackets parses fine, 3,500 crashes the process. Statement-level
 // nesting (for/if/block/arrow chains) stayed safe at the same 3,000-deep
-// probe — only BRACKET nesting inside an expression triggers the native
-// crash, which is why the guard below counts bracket characters only, not
-// statement/block depth.
+// probe — bracket nesting inside an expression is the DOMINANT, shallowest
+// crashing shape, which is why the guard below counts bracket characters
+// only, not statement/block depth.
+//
+// Known blind spot (issue #262): TS generic nesting (`Array<Array<...>>`)
+// and JSX element nesting also crash the native parser — at depth ~5,000 and
+// ~20,000 respectively in the same probe, both with bracket-nesting depth
+// staying at 0 throughout — so this guard does not see them at all and lets
+// them reach `parseSync` unguarded. They are not folded into the same
+// character count because `<` / `>` are not reliably nesting delimiters in
+// TS source: a comparison expression (`i < n`) or an arrow-function `=>`
+// contains a bare `<` or `>` with no nesting meaning, so counting them the
+// same way `maxBracketNestingDepth` counts `([{` would drift the depth
+// counter arbitrarily on ordinary code, unlike brackets which have no such
+// ambiguity in this over-approximation.
 //
 // 1000 gives a ~3.5x margin below the observed 3,500 crash threshold.
 // Real-world code nests well under 100 brackets deep; anything past 1000 is
@@ -356,7 +368,13 @@ function orderByDirectoryDepth(files: string[]): string[] {
 // property (thread stack size, oxc/rust per-frame size) so it can vary by
 // environment/Node version/platform/thread — this is set conservatively
 // rather than tuned to the exact observed number, since the threshold can
-// only shift DOWN in an unfavorable environment.
+// only shift DOWN in an unfavorable environment. Concretely: this margin
+// assumes Node's default ~8MB main-thread stack (where the crash boundary is
+// ~3,500); probing smaller stacks showed a roughly linear relationship
+// (~3,500 at 8MB, ~2,000 at 4MB, ~500 at 1MB, ~900 at 2048KB) — an
+// environment configured with an unusually small thread stack can crash
+// below this guard's 1000 threshold, and this guard cannot protect against
+// that case.
 export const MAX_BRACKET_NESTING_DEPTH = 1000;
 
 // O(n) single pass over the raw source text counting `( [ {` as depth++ and
@@ -373,10 +391,17 @@ export const MAX_BRACKET_NESTING_DEPTH = 1000;
 //   shallow, e.g. a string literal containing many bracket characters) are
 //   possible and are accepted — a spuriously skipped, warned-about file is
 //   far better than a SIGSEGV that leaves no diagnostic at all.
-// - False negatives (real nesting the parser would crash on, but this
-//   function undercounts) are NOT possible: counting every bracket
-//   character can only ever equal or exceed the true syntactic nesting
-//   depth, never fall short of it.
+// - False negatives are NOT possible WITHIN THIS FUNCTION'S OWN MODEL —
+//   bracket-CHARACTER undercounting cannot happen: counting every bracket
+//   character can only ever equal or exceed the true syntactic bracket
+//   nesting depth, never fall short of it. This does NOT mean every
+//   native-crashing recursive shape is covered: TS generics (`Array<Array<
+//   ...>>`) and JSX element nesting are a DIFFERENT recursive shape this
+//   function has no model of at all (see MAX_BRACKET_NESTING_DEPTH's doc
+//   comment / issue #262) — a file that crashes via deep generic or JSX
+//   nesting alone, with bracket-character depth staying near 0, is a real
+//   false negative of the GUARD (not of this counting function), and is
+//   out of scope for this guard as currently designed.
 export function maxBracketNestingDepth(content: string): number {
   let depth = 0;
   let max = 0;
@@ -461,8 +486,9 @@ function parseTSFile(
       filePath: relPath,
       message:
         `pathological bracket nesting depth ${depth} exceeds ${limit}; skipped parsing ` +
-        `"${relPath}" to avoid a native oxc-parser crash (issue #247). No symbols, imports, ` +
-        "or @impl tags were extracted from this file.",
+        `"${relPath}" to avoid a native oxc-parser crash (issue #247). No symbols or imports ` +
+        "were extracted from this file; text-scanned tags (`@impl` comments, `[REQ-…]` test " +
+        "titles) are still honored.",
     });
   }
 
@@ -1870,20 +1896,34 @@ function isModuleFile(filePath: string, ctx: ResolverContext): boolean {
     const content = stripBom(readFileSync(filePath, "utf-8"));
     // issue #247 — same depth guard as the main parse path. No warnings
     // channel here (this helper is a pure boolean probe called deep inside
-    // import resolution), so a depth-guard skip and a genuine parseSync
-    // throw both fall through to the same `result = false` — the guard's
-    // only job on this path is to never let the pathological input reach
-    // the native parser and crash the process.
-    const { parsed } = safeParseSync(filePath, content);
-    result =
-      parsed !== undefined &&
-      (parsed.module.hasModuleSyntax ||
-        parsed.program.body.some(
-          (stmt) =>
-            stmt.type === "TSExportAssignment" ||
-            (stmt.type === "TSImportEqualsDeclaration" &&
-              stmt.moduleReference.type === "TSExternalModuleReference"),
-        ));
+    // import resolution), so it never lets the pathological input reach the
+    // native parser and crash the process. But unlike a genuine parseSync
+    // throw, a depthExceeded skip must NOT fall through to `result = false`:
+    // on main (pre-guard), files in the empirically-safe-but-still-deep
+    // range (depth ~1001-3499) parsed FINE and were correctly treated as
+    // modules, so an importer's import edge to them was created. If this
+    // guard answered `false` here, that edge would silently disappear (a
+    // regression vs. main, not just a new pathological-input behavior) AND
+    // a warm cache fragment (written pre-guard, when the file parsed
+    // successfully) would disagree with a cold rebuild post-guard for the
+    // exact same content — violating the warm ≡ cold invariant (INV-L4).
+    // Assuming "is a module" when depth-exceeded keeps the edge alive; if
+    // the target is actually out of scan scope, the pre-existing
+    // dangling-import warning path (unrelated to this guard) still fires.
+    const { parsed, depthExceeded } = safeParseSync(filePath, content);
+    if (depthExceeded) {
+      result = true;
+    } else {
+      result =
+        parsed !== undefined &&
+        (parsed.module.hasModuleSyntax ||
+          parsed.program.body.some(
+            (stmt) =>
+              stmt.type === "TSExportAssignment" ||
+              (stmt.type === "TSImportEqualsDeclaration" &&
+                stmt.moduleReference.type === "TSExternalModuleReference"),
+          ));
+    }
   } catch {
     result = false;
   }

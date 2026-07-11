@@ -540,6 +540,53 @@ describe("templates/skills metatest", () => {
     });
   });
 
+  // Three separate PRs (#198 initial doc, #242 class-member-collision, #261
+  // pathological-bracket-nesting) each added a new BuildWarning["type"]
+  // variant to src/graph/builder.ts but forgot to update the documented
+  // `warnings[].type` union in templates/skills/_shared/output-schema.md —
+  // the SAME drift, three times in a row. Extract the type union directly
+  // from builder.ts's SOURCE TEXT via regex (BuildWarning is a type-only
+  // construct with no runtime representation to import and reflect on) and
+  // assert every literal is present in the documented union, so a fourth
+  // silent drop of this kind fails CI instead of quietly stale docs.
+  describe("output-schema.md warnings[].type union sync (issues #198, #242, #261)", () => {
+    function extractBuildWarningTypeLiterals(): string[] {
+      const builderPath = resolve(import.meta.dirname, "..", "src", "graph", "builder.ts");
+      const content = readFileSync(builderPath, "utf8");
+      const start = content.indexOf("export interface BuildWarning {");
+      expect(start, "BuildWarning interface not found in src/graph/builder.ts").not.toBe(-1);
+      const end = content.indexOf("id: string;", start);
+      expect(end, "BuildWarning.id field not found in src/graph/builder.ts").not.toBe(-1);
+      const typeUnionBlock = content.slice(start, end);
+      const literals = [...typeUnionBlock.matchAll(/"([a-z-]+)"/g)].map((m) => m[1]);
+      expect(
+        literals.length,
+        "extracted zero string literals from BuildWarning's type union -- regex likely stale",
+      ).toBeGreaterThan(0);
+      return literals;
+    }
+
+    it('every BuildWarning["type"] literal in builder.ts appears in output-schema.md\'s warnings[].type union', () => {
+      const literals = extractBuildWarningTypeLiterals();
+
+      const schemaPath = resolve(TEMPLATES_SKILLS_DIR, "_shared", "output-schema.md");
+      const schemaContent = readFileSync(schemaPath, "utf8");
+      const unionLineMatch = schemaContent.match(/`warnings\[\]\.type` is one of: `([^`]+)`/);
+      expect(
+        unionLineMatch,
+        'output-schema.md must contain a "`warnings[].type` is one of: ..." union line',
+      ).not.toBeNull();
+      const unionLine = unionLineMatch![1];
+
+      const missing = literals.filter((lit) => !unionLine.includes(`"${lit}"`));
+      expect(
+        missing,
+        `output-schema.md's warnings[].type union is missing type(s) present in ` +
+          `src/graph/builder.ts's BuildWarning: ${missing.join(", ")}`,
+      ).toEqual([]);
+    });
+  });
+
   // issue #141: SKILL.md templates were written Claude-only (`ls
   // .claude/skills/`) and POSIX-bash-only (`||`, `2>/dev/null`, ...). These
   // tests pin the "semantic prose" convention the templates are being

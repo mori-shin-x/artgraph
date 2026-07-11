@@ -201,6 +201,15 @@ describe("oxc-parser canary (issue #247): native crash on pathological bracket n
 
     const result = spawnSync(process.execPath, ["-e", script], { timeout: 10_000 });
 
+    // spawnSync sets `result.error` (with `.code === "ETIMEDOUT"`) when the
+    // child had to be killed for exceeding the `timeout` option above — that
+    // is a test-infra timeout (e.g. an overloaded CI runner), not evidence
+    // of the native SIGSEGV this canary exists to prove. A timeout-killed
+    // child also reports a signal, so without this assertion it would be
+    // indistinguishable from `crashed === true` below and this canary could
+    // pass green for the wrong reason.
+    expect((result.error as NodeJS.ErrnoException | undefined)?.code).not.toBe("ETIMEDOUT");
+
     // A native SIGSEGV kills the child via a signal rather than a normal
     // exit — Node's spawnSync surfaces that as `signal: "SIGSEGV"` with
     // `status: null` (the OS-shell-level "128 + signal number" = 139
@@ -215,6 +224,19 @@ describe("oxc-parser canary (issue #247): native crash on pathological bracket n
     // this depth — good news, but it means MAX_BRACKET_NESTING_DEPTH's
     // justification (issue #247) should be re-examined: the guard may no
     // longer be necessary at all, or its safe margin may have changed.
+
+    // The exit-code branch of `crashed` (no signal, nonzero status) is also
+    // what a child would report if it failed BEFORE ever reaching
+    // `oxc.parseSync` — e.g. `require(oxcEntry)` throwing because the
+    // resolved native-binary path is wrong for this platform/arch
+    // (`Cannot find module`, `ERR_MODULE_NOT_FOUND`). That would make
+    // `crashed` true for the wrong reason: a hollow green that never
+    // actually exercised the crash. Signal-based kills (SIGSEGV itself)
+    // don't have this failure mode, so this check only applies to the
+    // no-signal path.
+    if (result.signal === null) {
+      expect(result.stderr?.toString() ?? "").not.toMatch(/Cannot find module|ERR_MODULE/);
+    }
   }, 15_000);
 });
 
@@ -301,6 +323,126 @@ describe("integration: createTSParser survives a pathological file in the scan s
           e.kind === "implements" &&
           e.source === "symbol:src/normal.ts#normalFn" &&
           e.target === "CANARY-001",
+      ),
+    ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pin: a pathological file's OWN text-scanned tags (PR #261 review).
+// extractImplTags is a plain-text regex scan over `content`, entirely
+// independent of the AST — it runs unconditionally regardless of whether
+// safeParseSync actually parsed the file. These three cases pin exactly what
+// that means for a depth-guard-skipped file ITSELF (not an importER of one,
+// which the block above already covers):
+//
+//   1. A real `// @impl` line comment in a pathological file still produces
+//      an `implements` edge, at file grain (symbolRanges is always empty for
+//      a file the parser never walked, so sourceIds stays [fileSourceId]).
+//   2. A pathological TEST file's `[REQ-…]` title tag still produces a
+//      `verifies` edge — testReqRe scans raw text unconditionally.
+//   3. A FAKE `// @impl` tag sitting inside a STRING LITERAL (not a real
+//      comment) ALSO produces an edge when the file is depth-guard-skipped —
+//      a documented fail-open. The D6 "is this really a `//` comment" guard
+//      (`matchInLineComment`) needs `parsed.comments` from a successful
+//      parse to reject a string-literal false match; a depth-guard-skipped
+//      file has no `comments` at all (`parsed` is undefined), so
+//      extractImplTags falls back to its pre-D6 regex-only behavior (see the
+//      `comments` param check inside extractImplTags). An ordinarily-parsed
+//      file would correctly reject this same fake tag. Pinned here as
+//      documented CURRENT behavior, not a guarantee — if this is ever
+//      tightened, this test should fail and force a deliberate update.
+// ---------------------------------------------------------------------------
+
+describe("pin: a pathological file's own @impl / test-title tags (PR #261 review)", () => {
+  let root: string;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-oxc-canary-tags-"));
+    write(
+      root,
+      "src/pathological-impl.ts",
+      [
+        "// @impl CANARY-002",
+        `export const alsoPathological = ${"(".repeat(2000)}1${")".repeat(2000)};`,
+        "",
+      ].join("\n"),
+    );
+    // testReqRe (unlike implRe/extractImplTags) has no AST/comment gating at
+    // all — it scans raw file text unconditionally whenever isTest is true.
+    // This repo dogfoods artgraph on itself (testPatterns: `**/*.test.ts`
+    // matches THIS file), so a bracketed CANARY-003 tag written contiguously
+    // directly in this file's own source would ALSO be picked up by
+    // artgraph's own self-scan as a (fake) verifies edge on THIS test file,
+    // and show up as a new orphan in `check --diff` on this repo. Build the
+    // tag via concatenation (opening bracket, id, closing bracket kept as
+    // separate string literals, deliberately not written next to each other
+    // anywhere in this file including comments) so the fixture file written
+    // below still gets the exact literal substring at runtime, while this
+    // file's own source text never contains it contiguously.
+    const fixtureTestTag = "[" + "CANARY-003" + "]";
+    write(
+      root,
+      "src/pathological.test.ts",
+      [
+        `it("${fixtureTestTag} does something", () => {`,
+        `  const x = ${"(".repeat(2000)}1${")".repeat(2000)};`,
+        "});",
+        "",
+      ].join("\n"),
+    );
+    write(
+      root,
+      "src/pathological-fake-tag.ts",
+      [
+        'export const stringContainingFakeTag = "// @impl CANARY-004";',
+        `export const alsoPathological = ${"(".repeat(2000)}1${")".repeat(2000)};`,
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a genuine `// @impl` comment in a depth-guard-skipped file still produces an implements edge (file grain)", () => {
+    const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    expect(
+      result.edges.some(
+        (e) =>
+          e.kind === "implements" &&
+          e.source === "file:src/pathological-impl.ts" &&
+          e.target === "CANARY-002",
+      ),
+    ).toBe(true);
+  });
+
+  it("a depth-guard-skipped TEST file's `[REQ-…]` title still produces a verifies edge", () => {
+    const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    expect(
+      result.edges.some(
+        (e) =>
+          e.kind === "verifies" &&
+          e.source === "file:src/pathological.test.ts" &&
+          e.target === "CANARY-003",
+      ),
+    ).toBe(true);
+  });
+
+  it("documented current fail-open: a FAKE `// @impl` tag inside a string literal still produces an edge for a depth-guard-skipped file (no `parsed.comments` to reject it with)", () => {
+    const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    // NOT a guarantee — this is the accepted fail-open cost of the
+    // pathological path having no `parsed.comments` to run the D6
+    // real-comment check against (see extractImplTags's `comments` param).
+    // If the code ever changes to reject this case too, update this pin
+    // deliberately rather than letting it silently start failing.
+    expect(
+      result.edges.some(
+        (e) =>
+          e.kind === "implements" &&
+          e.source === "file:src/pathological-fake-tag.ts" &&
+          e.target === "CANARY-004",
       ),
     ).toBe(true);
   });
