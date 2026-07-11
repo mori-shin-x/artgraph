@@ -1,12 +1,15 @@
 ---
 name: "artgraph-setup"
-description: "Installs artgraph in the current project, detects the package manager (npm / pnpm / Bun / Deno; default and Yarn fallback are pnpm), and wires up Skills, hooks, agent-context snippet, and any detected SDD-tool integration in one turn. Use when the user asks to install / set up / add artgraph, asks whether artgraph is set up or what is installed, or wants to wire artgraph into an SDD tool (Spec Kit / Kiro) added after artgraph. Make sure to use this skill whenever the user mentions artgraph for the first time and `artgraph` CLI is not yet available."
+description: "Installs artgraph in the current project, detects the package manager (npm / pnpm / Bun / Deno; default and Yarn fallback are pnpm), and wires up Skills, hooks, agent-context snippet, and any detected SDD-tool integration. Use when the user asks to install / set up / add artgraph, asks whether artgraph is set up or what is installed, or wants to wire artgraph into an SDD tool (Spec Kit / Kiro) added after artgraph. Make sure to use this skill whenever the user mentions artgraph for the first time and `artgraph` CLI is not yet available."
 allowed-tools:
   - "Bash(npm install*)"
   - "Bash(npm i*)"
   - "Bash(pnpm add*)"
+  - "Bash(pnpm install*)"
   - "Bash(bun add*)"
+  - "Bash(bun install*)"
   - "Bash(deno add*)"
+  - "Bash(deno install*)"
   - "Bash(npx artgraph *)"
   - "Bash(npx --no-install artgraph *)"
   - "Bash(pnpm exec artgraph *)"
@@ -20,7 +23,7 @@ disable-model-invocation: false
 
 ## Purpose
 
-Installs artgraph using the project's detected package manager and runs `artgraph init` to lay down the full agent-native setup — Skills, hooks, agent-context snippet, and SDD-tool integration — in a single turn.
+Installs artgraph using the project's detected package manager and runs `artgraph init` to lay down the full agent-native setup — Skills, hooks, agent-context snippet, and SDD-tool integration. If artgraph is already installed, it inspects and reports the current setup state instead of reinstalling.
 
 ## Steps
 
@@ -49,30 +52,48 @@ Inspect the project root and apply these rules in order — first match wins. Th
 
 Relay any warning to the user verbatim (see the backticked wording above — the TS detector writes the same strings to stderr, and CI enforces the match). On detection failure, ask which PM (npm / pnpm / bun / deno) and use that answer for the rest of the steps. Remember the chosen PM for steps 3-6.
 
+### 2.5 Determine the target agents
+
+Decide the `--agents=<list>` value used in Step 3's table and Step 5's `init`, in order:
+
+1. Enumerate all five canonical skills paths (`.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, `.kiro/skills/`) and use the agent id(s) (`claude` / `codex` / `cursor` / `copilot` / `kiro`) of every path that already contains an `artgraph-*` subdirectory with a `SKILL.md` — respect the distribution the repo already chose.
+2. If none of the five paths contains an `artgraph-*` Skill yet, use the id of the host agent you are currently running as (e.g. `claude` for Claude Code).
+3. If still undetermined, ask the user which agent(s) to target (supported: claude, codex, copilot, cursor, kiro).
+
 ### 3. Get explicit user consent
 
 Look up the detected PM in this table and show the user the three commands that will run. Wait for confirmation before proceeding; if the user declines, exit and tell them they can run the commands manually.
 
 | PM | install | init | check |
 | --- | --- | --- | --- |
-| npm | `npm install -D artgraph` | `npx artgraph init` | `npx artgraph check` |
-| pnpm | `pnpm add -D artgraph` | `pnpm exec artgraph init` | `pnpm exec artgraph check` |
-| bun | `bun add -d artgraph` | `bunx artgraph init` | `bunx artgraph check` |
-| deno | `deno add npm:artgraph` | `deno run -A npm:artgraph/cli init` | `deno run -A npm:artgraph/cli check` |
+| npm | `npm install -D artgraph` | `npx artgraph init --agents=<agents>` | `npx artgraph check` |
+| pnpm | `pnpm add -D artgraph` | `pnpm exec artgraph init --agents=<agents>` | `pnpm exec artgraph check` |
+| bun | `bun add -d artgraph` | `bunx artgraph init --agents=<agents>` | `bunx artgraph check` |
+| deno | `deno add npm:artgraph` | `deno run -A npm:artgraph/cli init --agents=<agents>` | `deno run -A npm:artgraph/cli check` |
 
-`init` runs the full default flow (config + scan + Skills + integrate-auto for detected SDD tools + Stop hook + agent context).
+`<agents>` is the comma-separated list decided in Step 2.5. `init` runs the full default flow (config + scan + Skills + integrate-auto for detected SDD tools + Stop hook + agent context).
 
 ### 4. Install the CLI
 
-Pick the row in the table above for the detected PM and run the **install** command as one Bash call. If install fails (network, registry timeout, lockfile conflict, etc.), report the stderr to the user and stop. Do not retry without consent.
+Check whether artgraph is already a declared dependency: for npm/pnpm/bun, check `package.json`'s `dependencies`/`devDependencies`; for deno (which by definition has no `package.json` — see Step 2 rule 2), check `deno.json` / `deno.jsonc`'s `imports` map for an `artgraph` entry instead. If already declared, run the plain install command for the detected PM instead of the row's install command — `npm install` / `pnpm install` / `bun install` / `deno install`. A plain install restores the lockfile-pinned version; the row's add-style command re-resolves the registry's latest and can drift from a committed lockfile.
+
+Otherwise, pick the row in the table above for the detected PM and run the **install** command as one Bash call.
+
+Either way, if the install command fails (network, registry timeout, lockfile conflict, etc.), report the stderr to the user and stop. Do not retry without consent.
 
 ### 5. Run init
 
-Run the **init** command from the same row as one Bash call. On non-zero exit, surface the stderr to the user without retry — `init` reports which sub-step failed (config / scan / Skills / integrate / hook / agent context).
+Check the project root for both `.artgraph.json` and its configured lock file (the config's `lockFile` field, default `.trace.lock`) — a config without a lock is a partial init, not a full one, since a missing lock reads as empty and would let `check` pass with nothing to compare against.
+
+- **Both present** -> already fully initialized (e.g. a teammate committed distributed Skills and config already); **skip init** and go straight to Step 6. Also check the "SDD tool installed after artgraph" section below in case an SDD tool was added after that init.
+- **Config present, lock missing** -> partially initialized (a fresh clone of a repo that doesn't commit the lock, or a prior `init --minimal`). Do not run init or pass `--force`; instead run the **scan** command once via the PM runner (e.g. `pnpm exec artgraph scan`) to generate the lock locally, tell the user you did so, then go to Step 6.
+- **Neither present** -> run the **init** command from the same row as one Bash call. On non-zero exit, surface the stderr to the user without retry — `init` reports which sub-step failed (config / scan / Skills / integrate / hook / agent context).
+
+In the first two cases, do not pass `--force`: it would overwrite the team's committed config.
 
 ### 6. Verify
 
-Run the **check** command from the same row as one Bash call. A clean exit confirms the install succeeded and the project's traceability graph reconciled without drift.
+Run the **check** command from the same row as one Bash call. `check` exits 0 by default even when it reports drift or uncovered requirements (that gating only happens with `--gate`, which this Skill does not pass) — do not read the exit code as pass/fail. Inspect the printed output instead: no drift/uncovered lines means the graph reconciled cleanly; if any lines are reported, relay them to the user verbatim.
 
 If the `init` output from Step 5 included `Zero-tag ready:` (no specs or `@impl` claims detected yet), a clean `check` here is expected but not meaningful — there are no req/doc nodes yet for it to reconcile. Note that to the user and recommend `artgraph impact --diff` instead (or in addition): it already works off the project's TS imports and demonstrates value before any tagging is done.
 
@@ -88,6 +109,8 @@ When the Step 1 probe succeeds, inspect and report instead of reinstalling. The 
 - Which `artgraph-*` Skills are installed: enumerate all five canonical skills paths (`.claude/skills/`, `.agents/skills/`, `.cursor/skills/`, `.github/skills/`, `.kiro/skills/` — a project may have any subset) and list the subdirectories that contain a `SKILL.md`.
 
 Report which `artgraph-*` Skills are present. The canonical set is: `artgraph-bootstrap`, `artgraph-impact`, `artgraph-plan-coverage`, `artgraph-rename`, `artgraph-setup`, `artgraph-verify`. Missing entries suggest the user ran `init --minimal` or `--no-skills`, or deleted Skills manually. To reinstall only the Skills without touching hooks / integration, run the **init** command from the Step 3 table with `--force --agents=<list> --no-scan --no-integrate --no-hooks --no-agent-context` appended (`--force` is required because `.artgraph.json` already exists).
+
+If the state report shows `config: missing`, this is not a dead end: rejoin the numbered flow at Step 2.5 (determine agents, get consent, then run init) instead of stopping.
 
 ## SDD tool installed after artgraph
 
