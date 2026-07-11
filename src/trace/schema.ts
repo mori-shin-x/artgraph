@@ -3,7 +3,7 @@
 // `src/trace/ingest.ts`. Both import ONLY this module for the wire shape
 // (plan.md Cat2-(b)) so the schema never drifts between writer and reader.
 //
-// spec 021 (tasks.md T004, research.md V3/V5) also hoists here the
+// spec 022 (tasks.md T004, research.md V3/V5) also hoists here the
 // hash / exclusion-rule / instrumentation-registry-contract primitives
 // shared by `src/vitest/plugin.ts` (main process) and `src/vitest/runner.ts`
 // (worker, both engines) — this module is their SSOT so the two never drift
@@ -24,7 +24,7 @@ import { isAbsolute } from "node:path";
 export const SCHEMA_VERSION = 1;
 
 // ---------------------------------------------------------------------------
-// spec 021 (T004, research.md V5) — contentHash SSOT.
+// spec 022 (T004, research.md V5) — contentHash SSOT.
 //
 // The repo's own file-mode `contentHash` (originally `src/parsers/typescript.ts`,
 // pinned byte-for-byte against it by `tests/hash-equivalence.test.ts`): BOM
@@ -43,7 +43,7 @@ export function hashContent(content: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// spec 021 (T004, research.md V3) — exclusion-rule SSOT, shared by the
+// spec 022 (T004, research.md V3) — exclusion-rule SSOT, shared by the
 // plugin (skip transform) and both runner engines (cdp: hits filtering;
 // instrument: plugin already excluded at transform time, but the runner
 // still consults this for any path arithmetic it does itself).
@@ -57,7 +57,7 @@ export function hashContent(content: string): string {
 // substring match: a naive `relPath.includes("node_modules/")` would also
 // match a directory that merely starts with that name (e.g.
 // `my_node_modules/foo.ts` literally contains the substring
-// `"node_modules/"` starting right after `my_`) — spec 021 tasks.md T003
+// `"node_modules/"` starting right after `my_`) — spec 022 tasks.md T003
 // pins this exact boundary (観点1).
 // ---------------------------------------------------------------------------
 
@@ -73,7 +73,7 @@ export function isExcludedRelPath(relPath: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// spec 021 (T004, research.md V3) — instrumentation registry contract SSOT.
+// spec 022 (T004, research.md V3) — instrumentation registry contract SSOT.
 // See contracts/instrumentation-runtime.md: the plugin (`src/vitest/plugin.ts`,
 // main process) and the runner's instrument engine (`src/vitest/runner.ts`,
 // worker) share nothing but the `globalThis` shape defined here — this

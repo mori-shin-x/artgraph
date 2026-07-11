@@ -3,7 +3,7 @@
 // wrapper that wires this package's runner (T006) + a shard-cleanup
 // `globalSetup` into a user's vitest config (contracts/cli-surface.md §1).
 //
-// Dependency boundary (plan.md Structure Decision; revised spec 021 tasks.md
+// Dependency boundary (plan.md Structure Decision; revised spec 022 tasks.md
 // T015): this module runs in the MAIN process (it builds a vitest config
 // object, never a worker), so — unlike runner.ts, which must stay
 // vitest/runners-free for the worker boundary — it MAY import the v2
@@ -42,7 +42,7 @@ const SETUP_PATH = fileURLToPath(import.meta.url);
  * other key (any Vite/Vitest option) passes through untouched via the index
  * signature.
  *
- * `plugins` (spec 021 T015, contracts/config-surface.md §plugin の適用範囲)
+ * `plugins` (spec 022 T015, contracts/config-surface.md §plugin の適用範囲)
  * is a top-level Vite config key, not a `test.*` one — mirrored here as a
  * loosely-typed structural array (not `vite`'s own `PluginOption[]`, for the
  * same not-a-direct-dependency reason `WithTraceConfig` itself isn't `vite`'s
@@ -59,10 +59,10 @@ export interface WithTraceConfig {
   [key: string]: unknown;
 }
 
-/** spec 021 (contracts/config-surface.md §`withTrace(config, options?)`). */
+/** spec 022 (contracts/config-surface.md §`withTrace(config, options?)`). */
 export type TraceEngine = "instrument" | "cdp";
 
-/** `withTrace`'s new, optional second argument (spec 021 T015). */
+/** `withTrace`'s new, optional second argument (spec 022 T015). */
 export interface WithTraceOptions {
   /**
    * Capture engine to wire up. Default `'instrument'`. Invalid values throw
@@ -90,7 +90,7 @@ const ENV_ENGINE_KEY = "ARTGRAPH_TRACE_ENGINE";
  * (string or array), this package's entry is appended, not substituted
  * (idempotent — appending twice is a no-op).
  *
- * `options.engine` (spec 021 T015, default `'instrument'`) picks the capture
+ * `options.engine` (spec 022 T015, default `'instrument'`) picks the capture
  * engine — subject to contracts/config-surface.md §環境変数's priority
  * order (high → low): the process environment variable
  * `ARTGRAPH_TRACE_ENGINE` (read HERE, at config-evaluation time in the main

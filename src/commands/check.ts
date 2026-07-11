@@ -13,9 +13,28 @@ export function registerCheckCommand(program: Command): void {
     .description("Check for drift, orphans, and uncovered REQs")
     .option("--gate", "Exit 2 on any issue (for Stop hook)")
     .option("--diff", "Scope check to files changed in git diff")
+    .option(
+      "--ignore <csv>",
+      "Comma-separated REQ-IDs to drop from newIssues.uncovered (one-shot; not persisted). See issue #178.",
+      "",
+    )
     .option("--format <format>", "Output format: json | text", "text")
     .action(async (opts) => {
       const rootDir = process.cwd();
+
+      // issue #178 — one-shot escape hatch, mirrors `plan-coverage --ignore`.
+      // Parse before the `--diff` branch so the WARNING below can fire on the
+      // plain-check path too. Empty entries are dropped silently so
+      // `--ignore ""` or trailing commas don't generate spurious IDs.
+      const ignoreUncoveredIds = new Set(
+        ((opts.ignore as string) ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0),
+      );
+      if (ignoreUncoveredIds.size > 0 && !opts.diff) {
+        console.error("WARNING: --ignore is only effective with --diff; ignoring.");
+      }
       const { loadConfig } = await import("../config.js");
       const { scan } = await import("../scan.js");
       const { readLock } = await import("../lock.js");
@@ -85,7 +104,12 @@ export function registerCheckCommand(program: Command): void {
                 coverage: [],
                 testFailures: [],
                 pass: true,
-                newIssues: { drifted: [], orphans: [], uncovered: [], testFailures: [] },
+                newIssues: {
+                  drifted: [],
+                  orphans: [],
+                  uncovered: [],
+                  testFailures: [],
+                },
                 suppressedCount: 0,
                 baselineStatus: "skipped",
                 warnings: isCI ? [...warnings, ciWarning] : warnings,
@@ -183,7 +207,12 @@ export function registerCheckCommand(program: Command): void {
                 coverage: [],
                 testFailures: [],
                 pass: true,
-                newIssues: { drifted: [], orphans: [], uncovered: [], testFailures: [] },
+                newIssues: {
+                  drifted: [],
+                  orphans: [],
+                  uncovered: [],
+                  testFailures: [],
+                },
                 suppressedCount: 0,
                 baselineStatus: "skipped",
                 warnings,
@@ -244,6 +273,42 @@ export function registerCheckCommand(program: Command): void {
         result = check(graph, lock, scopedNodeIds, testResults, baseline, true, traceOptions);
       } else {
         result = check(graph, lock, undefined, testResults, undefined, false, traceOptions);
+      }
+
+      // issue #178 — apply `--ignore` only for `--diff` runs: plain `check`
+      // has no `newIssues` concept for it to act on. Rebuild `result` rather
+      // than mutating in place so `pass` is re-derived consistently (a
+      // baseline-`"unavailable"` run must stay non-passing regardless of
+      // what `--ignore` drops).
+      if (ignoreUncoveredIds.size > 0 && opts.diff) {
+        // PR #250 review — the INFO line below must list only the IDs that
+        // ACTUALLY suppressed something (intersection of `--ignore` with the
+        // pre-filter `newIssues.uncovered`), NOT the raw requested set. A
+        // typo'd or misspelled ID in the CSV would otherwise appear in the
+        // "suppressed" list even though it never matched anything, defeating
+        // the diagnostic purpose of the message.
+        const actuallySuppressed = result.newIssues.uncovered.filter((id) =>
+          ignoreUncoveredIds.has(id),
+        );
+        const filteredUncovered = result.newIssues.uncovered.filter(
+          (id) => !ignoreUncoveredIds.has(id),
+        );
+        result = {
+          ...result,
+          newIssues: { ...result.newIssues, uncovered: filteredUncovered },
+          pass:
+            result.baselineStatus === "unavailable"
+              ? false
+              : result.newIssues.drifted.length === 0 &&
+                result.newIssues.orphans.length === 0 &&
+                filteredUncovered.length === 0 &&
+                result.newIssues.testFailures.length === 0,
+        };
+        if (actuallySuppressed.length > 0) {
+          console.error(
+            `INFO: --ignore suppressed ${actuallySuppressed.length} REQ(s) from newIssues.uncovered: ${[...actuallySuppressed].sort().join(", ")}`,
+          );
+        }
       }
 
       if (opts.format === "json") {

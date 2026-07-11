@@ -96,7 +96,7 @@ jobs:
       - run: pnpm test:perf
         continue-on-error: true
 
-  # spec 021 (tasks.md T024, FR-014 — analysis finding C2: "3.x/4.x を実際に
+  # spec 022 (tasks.md T024, FR-014 — analysis finding C2: "3.x/4.x を実際に
   # 回すマトリクスは現状存在しない"): the `build` job above always installs
   # whatever `pnpm-lock.yaml` pins (currently vitest 4.x) — nothing actually
   # exercises the OTHER end of this project's own declared peer range

@@ -55,7 +55,7 @@ interface ScriptCoverage {
   functions: FunctionCoverage[];
 }
 
-// spec 021 (tasks.md T004, research.md V5): `stripBom` / `hashContent` and
+// spec 022 (tasks.md T004, research.md V5): `stripBom` / `hashContent` and
 // the exclusion rule (`isExcludedRelPath` / `TEST_FILE_RE`) used to be
 // hand-duplicated here against `src/parsers/typescript.ts`'s file-mode
 // contentHash. Both are now hoisted to `src/trace/schema.ts` (this module's
@@ -136,7 +136,7 @@ function suitePathOf(test: RunnerTask): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// spec 021 (tasks.md T009, research.md V1/V3/V6) — instrument-engine (v2)
+// spec 022 (tasks.md T009, research.md V1/V3/V6) — instrument-engine (v2)
 // support: engine selection, registry drain, and the batch-flush buffer.
 // Exported as pure functions (no `this`, no vitest types) so
 // `tests/vitest-runner-unit.test.ts` (T008) can pin their behavior directly
@@ -147,7 +147,7 @@ export type Engine = "instrument" | "cdp";
 
 /**
  * data-model.md §3 決定優先順位: `ARTGRAPH_TRACE_ENGINE` env var (worker-
- * visible; `withTrace`/`test.env` is how it gets there — spec 021 T015,
+ * visible; `withTrace`/`test.env` is how it gets there — spec 022 T015,
  * out of this task's scope) > default `'instrument'`. An unrecognized value
  * throws immediately (fail-fast, silent fallback forbidden — contracts/
  * config-surface.md), which — called from the runner constructor — fails
@@ -285,11 +285,11 @@ export default class ArtgraphTraceRunner extends VitestTestRunner {
   // every test, so this turns per-test path work into a single Map lookup
   // (and is where the symlink double-relativize cost is amortized away).
   private readonly relPathMemo = new Map<string, string | undefined>();
-  // spec 021 (tasks.md T016, research.md V8) — cdp-path-only relPath →
+  // spec 022 (tasks.md T016, research.md V8) — cdp-path-only relPath →
   // contentHash memo (see `memoizedHash`'s doc comment for the rationale).
   private readonly hashMemo = new Map<string, string>();
 
-  // spec 021 (T009) — instrument-engine (v2) state. `sawAnyRegistration` /
+  // spec 022 (T009) — instrument-engine (v2) state. `sawAnyRegistration` /
   // `warnedVersionMismatch` / `warnedNoRegistration` and `drain()` stay
   // unused on the `cdp` path (registry/no-plugin diagnostics don't apply to
   // an inspector-driven run); `buffer` / `bufferedTestFile` are now SHARED
@@ -486,7 +486,7 @@ export default class ArtgraphTraceRunner extends VitestTestRunner {
   }
 
   // -------------------------------------------------------------------------
-  // spec 021 (T009) — instrument engine (v2). Reads `globalThis[REGISTRY_KEY]`
+  // spec 022 (T009) — instrument engine (v2). Reads `globalThis[REGISTRY_KEY]`
   // (written by `src/vitest/plugin.ts`'s preamble — contracts/
   // instrumentation-runtime.md) instead of driving an inspector session.
   // -------------------------------------------------------------------------

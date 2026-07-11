@@ -240,7 +240,7 @@ describe("normalizeTrace", () => {
   });
 });
 
-// spec 021 (tasks.md T003, contracts/instrumentation-runtime.md §変換のスキップ) —
+// spec 022 (tasks.md T003, contracts/instrumentation-runtime.md §変換のスキップ) —
 // boundary tests for the exclusion-rule SSOT (観点1: 境界条件). Shared by
 // `src/vitest/plugin.ts` (skip transform) and both runner engines via
 // `src/trace/schema.ts`'s `isExcludedRelPath` / `TEST_FILE_RE`.
@@ -289,7 +289,7 @@ describe("isExcludedRelPath", () => {
   });
 });
 
-// spec 021 (tasks.md T005, contracts/instrumentation-runtime.md) — SSOT pair
+// spec 022 (tasks.md T005, contracts/instrumentation-runtime.md) — SSOT pair
 // (c) equivalence: the `globalThis[REGISTRY_KEY]` shape this module defines
 // must match the contract doc's literal description, byte-for-byte on the
 // two constants and structurally on `ModuleRegistration`.

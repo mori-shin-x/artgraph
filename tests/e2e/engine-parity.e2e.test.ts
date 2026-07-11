@@ -1,4 +1,4 @@
-// spec 021 (tasks.md T011-T013, research.md V4/V7, US2) — differential E2E:
+// spec 022 (tasks.md T011-T013, research.md V4/V7, US2) — differential E2E:
 // the SAME fixture, spawned through a REAL vitest run under BOTH capture
 // engines (`instrument` = v2, `cdp` = legacy inspector), asserting the
 // ingest-normalized edge set (NOT raw shard bytes — research.md V7's "生

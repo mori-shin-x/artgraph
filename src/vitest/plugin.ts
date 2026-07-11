@@ -1,4 +1,4 @@
-// spec 021 (tasks.md T007, research.md V1-V5) — trace capture engine v2:
+// spec 022 (tasks.md T007, research.md V1-V5) — trace capture engine v2:
 // a Vite plugin that statically instruments every project source module's
 // function entries with a branchless execution-hit stamp, and registers a
 // self-contained `ModuleRegistration` into `globalThis[REGISTRY_KEY]`
@@ -8,7 +8,7 @@
 // (research.md V1) — the whole point is to make per-test capture cost
 // independent of how many modules are loaded.
 //
-// Dependency boundary (plan.md Structure Decision; spec 021 tasks.md T007):
+// Dependency boundary (plan.md Structure Decision; spec 022 tasks.md T007):
 // this module is the MAIN-PROCESS half of the v2 engine — it runs inside
 // vite-node's transform pipeline (main process, once per module, cached and
 // shared across worker forks/threads), never inside a worker. It may import

@@ -35,7 +35,7 @@ import {
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const RUNNER_PATH = resolve(REPO_ROOT, "dist/vitest/runner.js");
-// spec 021 (tasks.md T010) — the v2 engine's two build artifacts: the
+// spec 022 (tasks.md T010) — the v2 engine's two build artifacts: the
 // instrumentation plugin (main-process half) and this package's own
 // globalSetup (generation cleanup, unrelated to engine choice — reused
 // directly here rather than through `withTrace()`, which is out of this
@@ -154,7 +154,7 @@ beforeAll(() => {
     )},\n  },\n};\n`,
   );
 
-  // spec 021 (tasks.md T010) — the SAME fixture (auth.js/util.js/
+  // spec 022 (tasks.md T010) — the SAME fixture (auth.js/util.js/
   // auth.test.js above) run through the `instrument` engine instead: the
   // plugin is injected via `plugins` (an actual Plugin instance — unlike
   // `runner`/`globalSetup`, which are plain path strings Vitest resolves
@@ -180,7 +180,7 @@ beforeAll(() => {
     ].join("\n"),
   );
 
-  // spec 021 (tasks.md T010) — dedicated fixture for the worker-kill /
+  // spec 022 (tasks.md T010) — dedicated fixture for the worker-kill /
   // partial-shard scenario: two test files so a within-worker file-boundary
   // flush (V6) actually occurs, isolated under its own `include` glob (and
   // its own directory, `partial-tests/`) so this scenario never mixes with
@@ -258,7 +258,7 @@ beforeAll(() => {
     ].join("\n"),
   );
 
-  // spec 021 (tasks.md T016, research.md V3, 観点5) — dedicated fixture for
+  // spec 022 (tasks.md T016, research.md V3, 観点5) — dedicated fixture for
   // the registry-REPLACEMENT scenario: two test files that both import the
   // SAME shared source module (`src/auth.js`), isolated under its own
   // `registry-tests/` directory/`include` glob so it never mixes with the
@@ -353,7 +353,7 @@ interface RunVitestOptions {
    * `vitest.config.mjs` — every pre-021 call site keeps that default. */
   configPath?: string;
   /** Extra env vars layered on top of the base env (e.g.
-   * `ARTGRAPH_TRACE_ENGINE`) — spec 021 T010's instrument-engine scenarios
+   * `ARTGRAPH_TRACE_ENGINE`) — spec 022 T010's instrument-engine scenarios
    * use this; no pre-021 call site passes it. */
   extraEnv?: Record<string, string>;
 }
@@ -368,12 +368,12 @@ function runVitest(
   const env = {
     ...process.env,
     ARTGRAPH_TRACE_DIR: traceDir,
-    // spec 021: the runner's engine now defaults to `instrument`, but this
+    // spec 022: the runner's engine now defaults to `instrument`, but this
     // fixture's `vitest.config.mjs` sets ONLY `test.runner` (no plugin) —
     // exactly the "従来どおり動作する" `test.runner`-direct configuration
     // contracts/config-surface.md documents, which now REQUIRES this pin to
     // keep exercising the `cdp`/inspector path every pre-021 call site here
-    // was written to test. `extraEnv` (spec 021's instrument-engine call
+    // was written to test. `extraEnv` (spec 022's instrument-engine call
     // sites) overrides this below.
     ARTGRAPH_TRACE_ENGINE: "cdp",
     // Force deterministic "create missing snapshots and pass" behavior
@@ -561,7 +561,7 @@ describe("vitest runner e2e — symlinked project root (macOS tmpdir regression)
   });
 });
 
-// spec 021 (tasks.md T010) — instrument engine (v2) E2E: the SAME auth
+// spec 022 (tasks.md T010) — instrument engine (v2) E2E: the SAME auth
 // fixture as the `pool=%s` suite above, run through `vitest.config.
 // instrument.mjs` (plugin injected via `plugins`, `ARTGRAPH_TRACE_ENGINE=
 // instrument`) instead of `test.runner` alone. The `cdp` suite above is
@@ -667,7 +667,7 @@ describe.each(["forks", "threads"] as const)(
   },
 );
 
-// spec 021 (tasks.md T010) — generation management (spec 020's globalSetup
+// spec 022 (tasks.md T010) — generation management (spec 020's globalSetup
 // shard cleanup) still works when wired directly (no `withTrace()`) under
 // the instrument engine: a stale leftover `*.jsonl` from a hypothetical
 // prior interrupted run must be gone once a fresh run starts.
@@ -692,7 +692,7 @@ describe("vitest runner e2e — instrument engine, generation management (global
   });
 });
 
-// spec 021 (tasks.md T010, research.md V6, 観点5) — worker kill mid-run: the
+// spec 022 (tasks.md T010, research.md V6, 観点5) — worker kill mid-run: the
 // batch-flush design means a kill can only lose the still-buffered batch
 // (at most one test file's worth since the last flush) — everything
 // flushed before the kill must remain a column of complete, individually-
@@ -758,7 +758,7 @@ describe("vitest runner e2e — instrument engine, worker kill mid-run (partial 
   }, 30000);
 });
 
-// spec 021 (tasks.md T016, research.md V3, 観点5) — module re-evaluation →
+// spec 022 (tasks.md T016, research.md V3, 観点5) — module re-evaluation →
 // registry REPLACEMENT, exercised via a REAL vitest run (not just the pure
 // `drainTraceRegistry` "同 relPath 再登録" unit pin in
 // tests/vitest-runner-unit.test.ts) under BOTH isolate settings:

@@ -270,7 +270,7 @@ differential-tested to produce equivalent shard output, so switching engines
 does not change `check` / `trace report` / `impact` results.
 
 See
-[specs/021-instrumented-trace-engine/contracts/config-surface.md](../specs/021-instrumented-trace-engine/contracts/config-surface.md)
+[specs/022-instrumented-trace-engine/contracts/config-surface.md](../specs/022-instrumented-trace-engine/contracts/config-surface.md)
 for the full `withTrace()` options contract.
 
 ### Exclusivity / silent / infrastructure

@@ -1,4 +1,4 @@
-// spec 021 (tasks.md T006 — Red; made Green by T007's src/vitest/plugin.ts)
+// spec 022 (tasks.md T006 — Red; made Green by T007's src/vitest/plugin.ts)
 // — unit tests calling the trace-instrumentation Vite plugin's `transform`
 // hook directly (not through a real Vite pipeline). Covers tasks.md T006's
 // full bullet list: the V4 naming table (functions/arrows/methods/getters/

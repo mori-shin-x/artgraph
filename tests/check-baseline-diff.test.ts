@@ -1,7 +1,15 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  writeFileSync,
+  rmSync,
+  readFileSync,
+  mkdirSync,
+  mkdtempSync,
+} from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { runAt } from "./helpers.js";
 import {
   makeRepoWithDebt,
@@ -9,6 +17,8 @@ import {
   introduceNewOrphan,
   makeRepoWithOrphan,
   makeRepoWithSoleImplTag,
+  gitInit,
+  gitCommitAll,
 } from "./helpers.js";
 
 // spec 017 US1 (T011/T014) — `check --diff --gate` must be decided by NEW
@@ -105,7 +115,12 @@ describe("check --diff --gate baseline diff (US1)", () => {
     const json = JSON.parse(stdout);
     expect(json.pass).toBe(true);
     expect(json.baselineStatus).toBe("skipped");
-    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+    expect(json.newIssues).toEqual({
+      drifted: [],
+      orphans: [],
+      uncovered: [],
+      testFailures: [],
+    });
     expect(json.suppressedCount).toBe(0);
     expect(Array.isArray(json.warnings)).toBe(true);
     expect(json.message).toContain("Changed files are not tracked in the graph.");
@@ -141,7 +156,12 @@ describe("check --diff --gate baseline diff (US1)", () => {
     expect(exitCode).toBe(0);
     expect(json.baselineStatus).toBe("computed");
     // Nothing was ever in scope → nothing new, nothing suppressed.
-    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+    expect(json.newIssues).toEqual({
+      drifted: [],
+      orphans: [],
+      uncovered: [],
+      testFailures: [],
+    });
     expect(json.suppressedCount).toBe(0);
   });
 });
@@ -251,7 +271,12 @@ describe("check --diff --gate catches newly introduced issues (US2)", () => {
     appendFileSync(join(dir, "src", "hub.ts"), "\n// harmless\n");
     const { exitCode, json } = await checkJson(dir);
     expect(exitCode).toBe(0);
-    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+    expect(json.newIssues).toEqual({
+      drifted: [],
+      orphans: [],
+      uncovered: [],
+      testFailures: [],
+    });
   });
 });
 
@@ -302,7 +327,12 @@ describe("check --diff --gate catches a deleted sole @impl/@verifies edge (issue
     expect(exitCode).toBe(0);
     expect(json.pass).toBe(true);
     expect(json.uncovered).not.toContain("REQ-501");
-    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+    expect(json.newIssues).toEqual({
+      drifted: [],
+      orphans: [],
+      uncovered: [],
+      testFailures: [],
+    });
   });
 
   it("(T229-3) git rm of the sole-@impl file → new uncovered → exit 2", async () => {
@@ -397,7 +427,12 @@ describe("check --diff --gate baselineStatus invariants (T021)", () => {
     for (const arr of [json.drifted, json.orphans, json.uncovered, json.testFailures]) {
       expect(arr).toEqual([]);
     }
-    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+    expect(json.newIssues).toEqual({
+      drifted: [],
+      orphans: [],
+      uncovered: [],
+      testFailures: [],
+    });
     expect(json.suppressedCount).toBe(0);
   });
 
@@ -470,7 +505,10 @@ describe("check --diff --gate untracked-only diff skips eager baseline (issue #2
 describe("check --diff --gate rename-aware baseline normalization (C2)", () => {
   it("(T-rename-1) git mv of a pre-existing-orphan file → exit 0, orphan stays suppressed", async () => {
     const dir = track(makeRepoWithOrphan("artgraph-c2-rename-1-"));
-    execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], {
+      cwd: dir,
+      stdio: "pipe",
+    });
 
     const { exitCode, json } = await checkJson(dir);
     expect(exitCode).toBe(0);
@@ -485,7 +523,10 @@ describe("check --diff --gate rename-aware baseline normalization (C2)", () => {
 
   it("(T-rename-2) rename stays suppressed even when a genuinely new orphan is introduced elsewhere → exit 2 for the new one only", async () => {
     const dir = track(makeRepoWithOrphan("artgraph-c2-rename-2-"));
-    execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], {
+      cwd: dir,
+      stdio: "pipe",
+    });
     // A brand-new orphan on a DIFFERENT, previously-clean file — must still
     // be caught, so the rename normalization can't be a blanket amnesty.
     // (String literal split with concatenation to avoid the artgraph scanner
@@ -573,6 +614,191 @@ describe("check --diff scope purification — same-spec REQ-A/REQ-B (spec 019 US
   });
 });
 
+// issue #178 — `check --diff --gate --ignore <csv>` is a one-shot escape
+// hatch so an in-progress SDD implementation (tasks.md-driven, REQs landing
+// one at a time) doesn't get gate-blocked on a REQ that legitimately isn't
+// implemented yet. Same CSV-parsing contract as `plan-coverage --ignore`
+// (trim + silent empty-entry drop); no persistence.
+describe("check --diff --gate --ignore suppresses newIssues.uncovered (issue #178)", () => {
+  it("(T178-1) --ignore REQ-500 suppresses new uncovered REQ-500 → exit 0", async () => {
+    const dir = repoSoleImpl("artgraph-178-ignore-");
+    const targetPath = join(dir, "src", "target.ts");
+    const before = readFileSync(targetPath, "utf-8");
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("@impl REQ-500"))
+      .join("\n");
+    expect(after).not.toEqual(before);
+    writeFileSync(targetPath, after);
+
+    // --ignore なし: exit 2 (既存 T229-1 挙動)
+    const noIgnore = await checkJson(dir);
+    expect(noIgnore.exitCode).toBe(2);
+    expect(noIgnore.json.newIssues.uncovered).toContain("REQ-500");
+
+    // --ignore REQ-500: exit 0
+    const withIgnore = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+      "--ignore",
+      "REQ-500",
+    ]);
+    expect(withIgnore.exitCode).toBe(0);
+    const json = JSON.parse(withIgnore.stdout);
+    expect(json.pass).toBe(true);
+    expect(json.newIssues.uncovered).not.toContain("REQ-500");
+    expect(withIgnore.stderr).toContain("--ignore suppressed 1 REQ");
+    expect(withIgnore.stderr).toContain("REQ-500");
+  });
+
+  it("(T178-2) multiple REQ-IDs via CSV are all suppressed (trim + trailing comma)", async () => {
+    const dir = repoSoleImpl("artgraph-178-ignore-multi-");
+    const targetPath = join(dir, "src", "target.ts");
+    const before = readFileSync(targetPath, "utf-8");
+    // Drop BOTH sole @impl edges so REQ-500 and REQ-501 are both newly
+    // uncovered (deleting only the [REQ-501] verifies tag, per T229-2,
+    // would NOT make REQ-501 uncovered — findUncovered ignores verifies).
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("@impl REQ-500") && !line.includes("@impl REQ-501"))
+      .join("\n");
+    expect(after).not.toEqual(before);
+    writeFileSync(targetPath, after);
+
+    const noIgnore = await checkJson(dir);
+    expect(noIgnore.exitCode).toBe(2);
+    expect(noIgnore.json.newIssues.uncovered).toEqual(
+      expect.arrayContaining(["REQ-500", "REQ-501"]),
+    );
+
+    // Trailing comma + surrounding whitespace must be tolerated, same as
+    // `plan-coverage --ignore`'s CSV contract.
+    const withIgnore = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+      "--ignore",
+      " REQ-500 ,REQ-501,",
+    ]);
+    expect(withIgnore.exitCode).toBe(0);
+    const json = JSON.parse(withIgnore.stdout);
+    expect(json.pass).toBe(true);
+    expect(json.newIssues.uncovered).not.toContain("REQ-500");
+    expect(json.newIssues.uncovered).not.toContain("REQ-501");
+    expect(withIgnore.stderr).toContain("--ignore suppressed 2 REQ");
+    expect(withIgnore.stderr).toContain("REQ-500");
+    expect(withIgnore.stderr).toContain("REQ-501");
+  });
+
+  it("(T178-3) --ignore without --diff emits a WARNING and has no effect on plain check", async () => {
+    const dir = repoSoleImpl("artgraph-178-no-diff-");
+    const { stdout, stderr, exitCode } = await runAt(dir, [
+      "check",
+      "--ignore",
+      "REQ-500",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain("WARNING: --ignore is only effective with --diff; ignoring.");
+    const json = JSON.parse(stdout);
+    // Plain check: REQ-500 has a live @impl, nothing uncovered.
+    expect(json.uncovered).not.toContain("REQ-500");
+  });
+
+  it('(T178-4) --ignore "" (empty) has no effect and no warning/info', async () => {
+    const dir = repoSoleImpl("artgraph-178-empty-ignore-");
+    const targetPath = join(dir, "src", "target.ts");
+    const before = readFileSync(targetPath, "utf-8");
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("@impl REQ-500"))
+      .join("\n");
+    writeFileSync(targetPath, after);
+
+    const { stdout, stderr, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+      "--ignore",
+      "",
+    ]);
+    expect(exitCode).toBe(2);
+    const json = JSON.parse(stdout);
+    expect(json.newIssues.uncovered).toContain("REQ-500");
+    expect(stderr).not.toContain("--ignore suppressed");
+    expect(stderr).not.toContain("WARNING: --ignore is only effective with --diff");
+  });
+
+  it("(T178-5) --ignore of a REQ not present in newIssues.uncovered is silent (no INFO)", async () => {
+    const dir = repoSoleImpl("artgraph-178-noop-ignore-");
+    const targetPath = join(dir, "src", "target.ts");
+    const before = readFileSync(targetPath, "utf-8");
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("@impl REQ-500"))
+      .join("\n");
+    writeFileSync(targetPath, after);
+
+    const { stdout, stderr, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+      "--ignore",
+      "REQ-999",
+    ]);
+    // REQ-999 doesn't match the actual new uncovered REQ-500, so it's
+    // unaffected — the gate still catches REQ-500.
+    expect(exitCode).toBe(2);
+    const json = JSON.parse(stdout);
+    expect(json.newIssues.uncovered).toContain("REQ-500");
+    expect(stderr).not.toContain("--ignore suppressed");
+  });
+
+  it("(T178-6) INFO message lists only IDs that ACTUALLY suppressed something (PR #250 review)", async () => {
+    // Adversarial review MAJOR: the pre-fix INFO line spelled out the full
+    // requested --ignore CSV even for IDs that didn't match anything, so a
+    // typo'd ID would appear in the "suppressed" list. Pin the correct
+    // behavior: count and list are computed from the intersection with the
+    // pre-filter newIssues.uncovered.
+    const dir = repoSoleImpl("artgraph-178-info-list-");
+    const targetPath = join(dir, "src", "target.ts");
+    const before = readFileSync(targetPath, "utf-8");
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("@impl REQ-500"))
+      .join("\n");
+    writeFileSync(targetPath, after);
+
+    // Mix of real (REQ-500) and non-matching (T001, REQ-999) IDs in the CSV.
+    const { stderr, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+      "--ignore",
+      "REQ-500,T001,REQ-999",
+    ]);
+    expect(exitCode).toBe(0);
+    // Count reflects only actually-suppressed IDs.
+    expect(stderr).toContain("--ignore suppressed 1 REQ");
+    // ID list must not include the non-matching entries.
+    expect(stderr).toContain("REQ-500");
+    expect(stderr).not.toMatch(/suppressed .*T001/);
+    expect(stderr).not.toMatch(/suppressed .*REQ-999/);
+  });
+});
+
 function newIssuesEmpty(n: {
   drifted: unknown[];
   orphans: unknown[];
@@ -586,3 +812,216 @@ function newIssuesEmpty(n: {
     n.testFailures.length === 0
   );
 }
+
+// ---------------------------------------------------------------------------
+// spec 021 (T015/T019, issue #218) — class-method-grain lock lifecycle and
+// check --diff --gate baseline interaction.
+//
+// Fixture: `src/hub.ts` exports class `Sample` (`@impl REQ-100` above the
+// class) with two methods — `methodA` (`@impl REQ-200`, covered) and
+// `methodB` (`@impl REQ-999`, a PRE-EXISTING orphan committed at HEAD:
+// REQ-999 is never defined in specs/, mirroring `introduceNewOrphan`'s
+// literal-tag convention so artgraph's own dogfood scan of THIS repo never
+// mistakes the fixture text for a real code tag).
+// ---------------------------------------------------------------------------
+
+function makeClassMethodRepo(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(dir, ".gitignore"), ".trace.lock\nnode_modules/\n");
+  writeFileSync(
+    join(dir, ".artgraph.json"),
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.ts"],
+      lockFile: ".trace.lock",
+      mode: "symbol",
+    }),
+  );
+  mkdirSync(join(dir, "specs"), { recursive: true });
+  mkdirSync(join(dir, "src"), { recursive: true });
+
+  writeFileSync(
+    join(dir, "specs", "debt.md"),
+    "# Debt\n\n- REQ-100: class-level requirement covered by Sample\n- REQ-200: methodA requirement\n",
+  );
+  writeFileSync(
+    join(dir, "src", "hub.ts"),
+    [
+      "// @impl REQ-100",
+      "export class Sample {",
+      "  methodA(): void {",
+      "    // @impl REQ-200",
+      "  }",
+      "",
+      "  methodB(): void {",
+      "    // @" + "impl REQ-999",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  gitInit(dir);
+  gitCommitAll(dir, "init class-method fixture (pre-existing REQ-999 orphan on methodB)");
+  return dir;
+}
+
+describe("spec 021 (T015, issue #218) — old lock (no method symbols) -> new scan -> check/reconcile transition", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    while (dirs.length) {
+      const d = dirs.pop()!;
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("a lock missing the new method-symbol entries (simulating a pre-spec-021 lock) does not flag them as drift", async () => {
+    const dir = makeClassMethodRepo("artgraph-021-t015a-");
+    dirs.push(dir);
+
+    // reconcile() runs the CURRENT (spec-021-aware) parser, so its lock
+    // naturally carries the class + method entries. Simulate an "old" lock
+    // (written before spec 021 shipped) by reconciling once, then stripping
+    // the new method-symbol entries back out — the class + REQ entries stay,
+    // exactly like a pre-upgrade lock would look.
+    const rec = await runAt(dir, ["reconcile"]);
+    expect(rec.exitCode).toBe(0);
+    const lockPath = join(dir, ".trace.lock");
+    const fullLock = JSON.parse(readFileSync(lockPath, "utf-8"));
+    expect(fullLock["symbol:src/hub.ts#Sample.methodA"]).toBeDefined();
+    expect(fullLock["symbol:src/hub.ts#Sample.methodB"]).toBeDefined();
+
+    const oldLock = { ...fullLock };
+    delete oldLock["symbol:src/hub.ts#Sample.methodA"];
+    delete oldLock["symbol:src/hub.ts#Sample.methodB"];
+    writeFileSync(lockPath, JSON.stringify(oldLock, null, 2) + "\n");
+
+    // Plain `check` (no --diff): the method symbols have NO lock entry at
+    // all, so `check()`'s drift loop (which iterates `Object.entries(lock)`)
+    // never visits them — they must not be false-flagged as drifted.
+    const { stdout, exitCode } = await runAt(dir, ["check", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const json = JSON.parse(stdout);
+    expect(
+      json.drifted.some((d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample.methodA"),
+    ).toBe(false);
+    expect(
+      json.drifted.some((d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample.methodB"),
+    ).toBe(false);
+    // No drift at all — the class entry is present and unchanged, and the
+    // (deliberately absent) method entries are skipped rather than flagged.
+    // (`pass` itself stays false here for an UNRELATED reason — methodB's
+    // pre-existing REQ-999 orphan, which a plain non-`--diff` check always
+    // treats as a live issue with no baseline to suppress it against; that's
+    // the fixture's intentional pre-existing debt, exercised properly by the
+    // `--diff --gate` scenario below.)
+    expect(json.drifted).toEqual([]);
+  });
+
+  it("reconcile adds the missing method-symbol lock entries, and a second reconcile is byte-stable", async () => {
+    const dir = makeClassMethodRepo("artgraph-021-t015b-");
+    dirs.push(dir);
+    const lockPath = join(dir, ".trace.lock");
+
+    await runAt(dir, ["reconcile"]);
+    const fullLock = JSON.parse(readFileSync(lockPath, "utf-8"));
+    const oldLock = { ...fullLock };
+    delete oldLock["symbol:src/hub.ts#Sample.methodA"];
+    delete oldLock["symbol:src/hub.ts#Sample.methodB"];
+    writeFileSync(lockPath, JSON.stringify(oldLock, null, 2) + "\n");
+
+    const rec2 = await runAt(dir, ["reconcile"]);
+    expect(rec2.exitCode).toBe(0);
+    const rebuilt = JSON.parse(readFileSync(lockPath, "utf-8"));
+    expect(rebuilt["symbol:src/hub.ts#Sample.methodA"]).toBeDefined();
+    expect(rebuilt["symbol:src/hub.ts#Sample.methodB"]).toBeDefined();
+
+    // Idempotent re-reconcile with nothing changed on disk must be byte-stable
+    // (INV-L4 — buildLockFromGraph preserves `lastReconciled` when nothing
+    // structural changed).
+    const before = readFileSync(lockPath, "utf-8");
+    const rec3 = await runAt(dir, ["reconcile"]);
+    expect(rec3.exitCode).toBe(0);
+    const after = readFileSync(lockPath, "utf-8");
+    expect(after).toBe(before);
+  });
+});
+
+describe("spec 021 (T019, issue #218) — method edit double-drift + baseline union pre-existing debt (#237)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    while (dirs.length) {
+      const d = dirs.pop()!;
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("editing methodA drifts BOTH the method and class symbols as NEW; the untouched sibling's pre-existing orphan stays suppressed", async () => {
+    const dir = makeClassMethodRepo("artgraph-021-t019-");
+    dirs.push(dir);
+
+    // Reconcile so the CURRENT lock matches HEAD content — the baseline
+    // (base graph vs current lock) then shows NO drift for Sample /
+    // Sample.methodA, so the post-edit drift below is genuinely new (mirrors
+    // the "(c) spec edited after reconcile" pattern above).
+    const rec = await runAt(dir, ["reconcile"]);
+    expect(rec.exitCode).toBe(0);
+
+    // Edit ONLY methodA's body — methodB (carrying the pre-existing REQ-999
+    // orphan, committed at HEAD, untouched by this diff) is left alone.
+    const hubPath = join(dir, "src", "hub.ts");
+    const before = readFileSync(hubPath, "utf-8");
+    const after = before.replace(
+      "  methodA(): void {\n    // @impl REQ-200\n  }",
+      "  methodA(): void {\n    // @impl REQ-200\n    return;\n  }",
+    );
+    expect(after).not.toEqual(before);
+    writeFileSync(hubPath, after);
+
+    const { stdout, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+    ]);
+    const json = JSON.parse(stdout);
+
+    // Both the class AND the method symbol drift — an honest double report
+    // (the class span includes the method span it just contains — Edge
+    // Cases "メソッドシンボルと lock").
+    expect(
+      json.drifted.some((d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample"),
+    ).toBe(true);
+    expect(
+      json.drifted.some((d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample.methodA"),
+    ).toBe(true);
+    // Both are genuinely NEW — the lock was reconciled at HEAD (pre-edit),
+    // so the baseline side shows zero drift for either symbol.
+    expect(
+      json.newIssues.drifted.some(
+        (d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample",
+      ),
+    ).toBe(true);
+    expect(
+      json.newIssues.drifted.some(
+        (d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample.methodA",
+      ),
+    ).toBe(true);
+
+    // methodB's pre-existing orphan (REQ-999, unchanged since HEAD) is
+    // dragged into scope by the file-unit `--diff` granularity (the whole
+    // class — including methodB — shares hub.ts), but the #237 baseline
+    // union must still recognize it as pre-existing, not new.
+    expect(json.baselineStatus).toBe("computed");
+    expect(
+      json.orphans.some((o: string) => o.includes("Sample.methodB") && o.includes("REQ-999")),
+    ).toBe(true);
+    expect(json.newIssues.orphans.some((o: string) => o.includes("Sample.methodB"))).toBe(false);
+
+    // The gate still fails overall — because of the genuinely new drift.
+    expect(exitCode).toBe(2);
+    expect(json.pass).toBe(false);
+  });
+});

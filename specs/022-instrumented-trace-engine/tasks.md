@@ -1,6 +1,6 @@
 # Tasks: trace capture engine v2 — 静的計装による per-test 採取固定費のモジュール数独立化
 
-**Input**: Design documents from `/specs/021-instrumented-trace-engine/`
+**Input**: Design documents from `/specs/022-instrumented-trace-engine/`
 
 **Prerequisites**: plan.md, spec.md, research.md (V1〜V9), data-model.md, contracts/instrumentation-runtime.md, contracts/config-surface.md
 

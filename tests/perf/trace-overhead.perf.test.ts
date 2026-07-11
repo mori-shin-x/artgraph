@@ -1,11 +1,11 @@
-// spec 020 (Phase D, T025) / spec 021 (Phase D, T018) — SC-005 / SC-002 perf
+// spec 020 (Phase D, T025) / spec 022 (Phase D, T018) — SC-005 / SC-002 perf
 // budget: the `artgraph/vitest` runner's wall-clock overhead on a ~500-test
-// suite MUST stay <= 20% over a runner-less baseline (spec 021 spec.md
+// suite MUST stay <= 20% over a runner-less baseline (spec 022 spec.md
 // SC-002 — tightened from the original 50% budget once the v2 instrument
 // engine landed; PoC measured ~33% on a 507-test suite under the OLD CDP
 // engine — see specs/020-coverage-derived-edges/research.md).
 //
-// spec 021 T018: "withRunner" now measures the v2 (instrument) engine, not
+// spec 022 T018: "withRunner" now measures the v2 (instrument) engine, not
 // CDP — the fixture's runner config injects the built `dist/vitest/plugin.js`
 // instrumentation plugin (the same one `artgraph/vitest/config`'s
 // `withTrace()` wires up for real users) alongside `test.runner` pointing at
@@ -60,7 +60,7 @@ import { join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const RUNNER_PATH = resolve(REPO_ROOT, "dist/vitest/runner.js");
-// spec 021 T018: the v2 instrumentation plugin, imported by the fixture's
+// spec 022 T018: the v2 instrumentation plugin, imported by the fixture's
 // own runner config (below) — same built artifact `artgraph/vitest/config`'s
 // `withTrace()` injects for real users. Rendered as a `file://` URL (not a
 // bare OS path) because the fixture config is a real ESM module with a
@@ -141,7 +141,7 @@ beforeAll(() => {
     join(fixtureDir, "vitest.baseline.config.mjs"),
     `export default {\n  test: {\n    include: ["tests/**/*.test.js"],\n    pool: "forks",\n  },\n};\n`,
   );
-  // spec 021 T018: `plugins` (top-level, not `test.*`) carries the v2
+  // spec 022 T018: `plugins` (top-level, not `test.*`) carries the v2
   // instrumentation plugin so the runner's default `instrument` engine (no
   // `ARTGRAPH_TRACE_ENGINE` set — see file header) actually has a registry to
   // drain, instead of measuring a no-op instrument run that never
@@ -220,7 +220,7 @@ describe("Perf: vitest runner overhead on a ~500-test suite (SC-005 / SC-002)", 
     const shards = readdirSync(traceDir).filter((f) => f.endsWith(".jsonl"));
     expect(shards.length).toBeGreaterThan(0);
 
-    // spec 021 T018: a SECOND positive control, specific to the v2 engine —
+    // spec 022 T018: a SECOND positive control, specific to the v2 engine —
     // shard files existing is not enough (the instrument engine always
     // writes a `meta` record even when the plugin never registered a single
     // module, e.g. a config typo that drops `plugins`), so this asserts at
@@ -253,7 +253,7 @@ describe("Perf: vitest runner overhead on a ~500-test suite (SC-005 / SC-002)", 
       )} (budget <=1.2x)`,
     );
 
-    // Hard budget: SC-002's 20% ceiling (spec 021, tightened from spec 020
+    // Hard budget: SC-002's 20% ceiling (spec 022, tightened from spec 020
     // SC-005's 50%).
     expect(withRunnerMs).toBeLessThanOrEqual(baselineMs * 1.2);
   }, 80000);

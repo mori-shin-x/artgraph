@@ -11,7 +11,7 @@ import { PLUGIN_NAME } from "../src/vitest/plugin.js";
 // interrupted prior run must never leave shards that contaminate this run,
 // ⑤ 実運用の事故パターン).
 //
-// spec 021 (Phase 5, US3, T014) — `withTrace(config, options?)`'s second
+// spec 022 (Phase 5, US3, T014) — `withTrace(config, options?)`'s second
 // argument, `{ engine?: 'instrument' | 'cdp' }`
 // (contracts/config-surface.md §`withTrace(config, options?)`).
 
@@ -74,7 +74,7 @@ describe("withTrace", () => {
   });
 });
 
-// spec 021 T014 (観点 2・3・5) — `withTrace(config, options?)`'s `engine`
+// spec 022 T014 (観点 2・3・5) — `withTrace(config, options?)`'s `engine`
 // option (contracts/config-surface.md).
 describe("withTrace engine option", () => {
   // ③不正な状態遷移: bogus engine values must fail fast, not silently fall
@@ -234,7 +234,7 @@ describe("withTrace engine option", () => {
   );
 });
 
-// spec 021 T023 real bug — contracts/config-surface.md §環境変数's stated
+// spec 022 T023 real bug — contracts/config-surface.md §環境変数's stated
 // priority (process env > withTrace option > default) was inverted in the
 // implementation: `withTrace` baked `options.engine` straight into
 // `test.env.ARTGRAPH_TRACE_ENGINE`, so a shell-level

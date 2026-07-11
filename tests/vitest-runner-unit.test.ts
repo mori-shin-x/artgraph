@@ -1,4 +1,4 @@
-// spec 021 (tasks.md T008 — Red; made Green by T009's src/vitest/runner.ts
+// spec 022 (tasks.md T008 — Red; made Green by T009's src/vitest/runner.ts
 // changes) — unit tests for the instrument engine's pure helpers: engine
 // selection, registry drain semantics, and the batch-flush buffer. These
 // are exported specifically so they can be pinned WITHOUT constructing a
@@ -227,7 +227,7 @@ describe("drainBuffer (V6 batch flush, 観点1・4)", () => {
   });
 });
 
-// spec 021 (tasks.md T016, research.md V8) — cdp-path contentHash memo: the
+// spec 022 (tasks.md T016, research.md V8) — cdp-path contentHash memo: the
 // second of the two sanctioned cheap `cdp` improvements. `readFile` is
 // injected specifically so this can be pinned WITHOUT touching the real
 // filesystem (no `tests/fixtures/*` file needed) — see `memoizedHash`'s doc

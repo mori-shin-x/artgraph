@@ -1,4 +1,4 @@
-// spec 021 (tasks.md T003/T004, research.md V5) — SSOT direct pin.
+// spec 022 (tasks.md T003/T004, research.md V5) — SSOT direct pin.
 // `src/trace/schema.ts` hoists the repo's file-mode contentHash rule (BOM
 // strip → sha256 → 16 hex chars) so the vitest plugin (main process) and
 // both runner engines (worker) share one definition instead of hand-copies

@@ -1,4 +1,4 @@
-// spec 021 (Phase A, T017 — US4) — perf: an import-heavy fixture that
+// spec 022 (Phase A, T017 — US4) — perf: an import-heavy fixture that
 // isolates "loaded module count" as its own axis, independent of "test
 // count". The existing tests/perf/trace-overhead.perf.test.ts fixture only
 // varies test count against a fixed 25-module fixture, so it structurally
@@ -11,7 +11,7 @@
 // overhead under the then-current (pre-v2) CDP capture engine (tasks.md
 // T017: "この時点では現行エンジンの実測比を記録ログに残すだけ").
 //
-// spec 021 T018 (Phase D): "withRunner" now measures the v2 (instrument)
+// spec 022 T018 (Phase D): "withRunner" now measures the v2 (instrument)
 // engine instead of CDP, and the budget is tightened to 1.2 (SC-003) — see
 // the "Spawn technique" paragraph below for what changed mechanically.
 //
@@ -51,7 +51,7 @@
 // never find this repo's node_modules), `node
 // <repo>/node_modules/vitest/vitest.mjs run`, "withRunner" pointed at the
 // BUILT `dist/vitest/runner.js` PLUS the built `dist/vitest/plugin.js`
-// instrumentation plugin (spec 021 T018 — see file header), `ARTGRAPH_TRACE_DIR`
+// instrumentation plugin (spec 022 T018 — see file header), `ARTGRAPH_TRACE_DIR`
 // set for the withRunner runs only, pool "forks", one discarded warmup round
 // (JIT / OS page cache warm-up) followed by 3 measured rounds, each round
 // interleaving one baseline run immediately followed by one withRunner run
@@ -74,7 +74,7 @@ import { join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const RUNNER_PATH = resolve(REPO_ROOT, "dist/vitest/runner.js");
-// spec 021 T018: the v2 instrumentation plugin, imported by the fixture's
+// spec 022 T018: the v2 instrumentation plugin, imported by the fixture's
 // own runner config (below) — same built artifact `artgraph/vitest/config`'s
 // `withTrace()` injects for real users. Rendered as a `file://` URL (not a
 // bare OS path) because the fixture config is a real ESM module with a
@@ -191,7 +191,7 @@ beforeAll(() => {
 
   // Two plain-object configs (not `defineConfig` — see file header). Same
   // `include`/`pool`/`poolOptions` in both — `runner` (and, for the v2
-  // engine, `plugins` — spec 021 T018) is the only difference, so the two
+  // engine, `plugins` — spec 022 T018) is the only difference, so the two
   // modes are otherwise identical (fair comparison, same convention as the
   // existing fixture).
   //
@@ -206,7 +206,7 @@ beforeAll(() => {
     join(fixtureDir, "vitest.baseline.config.mjs"),
     `export default {\n  test: {\n    include: ["tests/**/*.test.js"],\n    pool: "forks",\n    poolOptions: ${poolOptionsSnippet},\n  },\n};\n`,
   );
-  // spec 021 T018: `plugins` (top-level, not `test.*`) carries the v2
+  // spec 022 T018: `plugins` (top-level, not `test.*`) carries the v2
   // instrumentation plugin so the runner's default `instrument` engine (no
   // `ARTGRAPH_TRACE_ENGINE` set — see file header) actually has a registry to
   // drain.
@@ -285,7 +285,7 @@ describe("Perf: vitest runner overhead on an import-heavy ~300-module fixture (S
     const shards = readdirSync(traceDir).filter((f) => f.endsWith(".jsonl"));
     expect(shards.length).toBeGreaterThan(0);
 
-    // spec 021 T018: a SECOND positive control, specific to the v2 engine —
+    // spec 022 T018: a SECOND positive control, specific to the v2 engine —
     // shard files existing is not enough (the instrument engine always
     // writes a `meta` record even when the plugin never registered a single
     // module), so this asserts at least one `test` record actually carries a
@@ -310,7 +310,7 @@ describe("Perf: vitest runner overhead on an import-heavy ~300-module fixture (S
     // existing perf test's convention, so the actual measured ratio is on
     // record for every perf run. This is the SC-003 recording this file
     // exists for: an import-heavy (~300-module) fixture's overhead under the
-    // v2 (instrument) engine (spec 021 T018 — re-pointed from the CDP engine
+    // v2 (instrument) engine (spec 022 T018 — re-pointed from the CDP engine
     // T017 originally recorded), which — unlike the existing 25-module
     // fixture — is what exercises the module-count-independence this engine
     // exists to deliver.
@@ -322,7 +322,7 @@ describe("Perf: vitest runner overhead on an import-heavy ~300-module fixture (S
       )} (budget <=1.2x)`,
     );
 
-    // Hard budget: SC-003's 20% ceiling (spec 021, tightened from spec 020
+    // Hard budget: SC-003's 20% ceiling (spec 022, tightened from spec 020
     // SC-005's 50% / T017's interim 1.5).
     expect(withRunnerMs).toBeLessThanOrEqual(baselineMs * 1.2);
   }, 120000);

@@ -220,9 +220,37 @@ export function registerImpactCommand(program: Command): void {
         for (const u of unresolvedSymbols) {
           const label = `${u.path}:${u.symbol}`;
           console.error(`ERROR: No matching symbol found for: ${label}`);
-          console.error(
-            `  hint: check the export name with \`grep "export.*${u.symbol}" ${u.path}\``,
-          );
+          // spec 021 (T018, US3-2, issue #218): a `ClassName.memberName`
+          // symbol is never itself preceded by `export` (only the class
+          // declaration is), so the old `grep "export.*<symbol>"` hint
+          // silently mismatched every class-member miss.
+          //
+          // PR #242 review E1 — a dot alone is NOT evidence of a class
+          // member: string-literal export names (`export { x as "a.b" }`)
+          // are dotted too, and a trailing-dot typo (`Sample.`) has an
+          // empty member name (the pre-fix hint then emitted a useless
+          // `grep -n ""`). Only use the class-member wording when the
+          // dot-prefix actually resolves to a symbol in THIS graph (the
+          // class exists, so the member name is what missed) AND the member
+          // name is non-empty; everything else falls back to the generic
+          // export-name hint.
+          const dotIdx = u.symbol?.lastIndexOf(".") ?? -1;
+          const prefix = dotIdx > 0 ? u.symbol!.slice(0, dotIdx) : undefined;
+          const memberName = dotIdx >= 0 ? u.symbol!.slice(dotIdx + 1) : "";
+          if (
+            prefix !== undefined &&
+            memberName.length > 0 &&
+            graph.nodes.has(`symbol:${u.path}#${prefix}`)
+          ) {
+            console.error(
+              `  hint: "${prefix}" has no member "${memberName}" — check the spelling, ` +
+                `or try \`grep -n "${memberName}" ${u.path}\``,
+            );
+          } else {
+            console.error(
+              `  hint: check the export name with \`grep "export.*${u.symbol}" ${u.path}\``,
+            );
+          }
           console.error(
             `        or verify that \`mode: "symbol"\` is set in \`.artgraph.json\` and re-scan.`,
           );

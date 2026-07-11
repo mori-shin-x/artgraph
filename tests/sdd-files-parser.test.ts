@@ -278,6 +278,22 @@ describe("extractFiles — Stage A path:symbol syntax (spec 016)", () => {
     ]);
   });
 
+  // spec 021 (T029, issue #218, US3-1) — a class-method-grain symbol name
+  // (`ClassName.methodName`) passes through Stage A with NO grammar change:
+  // `PATH_SYMBOL_RE`'s symbol character set (`[^\s,()]+`) already allows
+  // dots, so `Sample.methodA` is captured whole into `symbol`, resolving to
+  // `symbol:<path>#Sample.methodA` against the graph.
+  it("a dotted method name (`Sample.methodA`) is captured whole in `symbol`, no grammar change (US3-1)", () => {
+    const graph = makeGraph(
+      ["src/sample.ts"],
+      [{ path: "src/sample.ts", symbol: "Sample.methodA" }],
+    );
+    const text = "Files: src/sample.ts:Sample.methodA\n";
+    const result = extractFiles(text, { graph, repoRoot: root });
+    expect(result.entries).toEqual([{ path: "src/sample.ts", symbol: "Sample.methodA", line: 1 }]);
+    expect(result.diagnostics).toEqual([]);
+  });
+
   // Additional: extensionless tokens like `REQ-003` never match path:symbol
   it("extensionless tokens are not parsed as path:symbol", () => {
     const graph = makeGraph([]);

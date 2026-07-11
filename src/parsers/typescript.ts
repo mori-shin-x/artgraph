@@ -9,13 +9,14 @@ import { NAMESPACED_ID_TOKEN } from "../grammar/tokens.js";
 // oxc-parser based TypeScript extraction layer (issue #159).
 //
 // This module replaced its original ts-morph backend with oxc's native
-// parser. The output contract is bit-for-bit what the ts-morph backend
-// produced — node/edge ARRAY ORDER and contentHash values included — so
-// existing `.trace.lock` files stay byte-identical across the swap (INV-L4).
-// That behavior was established by differential-testing both backends over
-// this repository, the test fixtures, and edge-case probes, and is now
-// pinned by tests/typescript-oxc-regression.test.ts. Three pieces of
-// compiler behavior are re-derived here from those empirical probes:
+// parser. For everything the ORIGINAL ts-morph backend itself produced, the
+// output contract is bit-for-bit what that backend produced — node/edge
+// ARRAY ORDER and contentHash values included — so existing `.trace.lock`
+// files stay byte-identical across the swap (INV-L4). That behavior was
+// established by differential-testing both backends over this repository,
+// the test fixtures, and edge-case probes, and is now pinned by
+// tests/typescript-oxc-regression.test.ts. Three pieces of compiler behavior
+// are re-derived here from those empirical probes:
 //
 //   1. Relative import/export specifier resolution (the checker's behavior
 //      behind `getModuleSpecifierSourceFile`). The outcome depends only on
@@ -36,6 +37,23 @@ import { NAMESPACED_ID_TOKEN } from "../grammar/tokens.js";
 //      import/export shape and is used as a fallback. Known limit: symbol
 //      NODES cannot be recovered from such files (the TS compiler recovered
 //      partial declarations; oxc does not).
+//
+// spec 021 (T024, issue #218) — class-method-grain symbols are a DELIBERATE
+// divergence from that bit-for-bit contract, not a 4th re-derived behavior:
+// the original ts-morph backend's `getExportedDeclarations()` only ever
+// walked TOP-LEVEL exported declarations, so it never emitted a symbol node
+// for a class member and there is no legacy behavior to reproduce here. For
+// an inline exported `ClassDeclaration` (named or default), extractSymbols
+// additionally calls extractClassMembers to synthesize one symbol node per
+// named member (`symbol:<path>#ClassName.memberName`) plus a class -> method
+// `contains` edge (provenance "structural") per member — see
+// extractClassMembers's own doc comment for the full inclusion/exclusion
+// list (FR-001/FR-004) and specs/021-class-method-grain/spec.md for the
+// attribution and containment semantics. The class symbol's own id / span /
+// contentHash stay untouched (still bit-for-bit with the legacy backend);
+// only the ADDITIONAL member nodes/edges are new surface area. This bumped
+// parse-cache's SCHEMA_VERSION (see src/parse-cache.ts) since a pre-spec-021
+// cached fragment carries neither.
 //
 // oxc-parser is a CJS package with a native binding; loading it lazily via
 // createRequire keeps this module's import cheap — combined with the parse
@@ -82,9 +100,26 @@ function buildIdMatchers(codeId?: string): IdMatchers {
   };
 }
 
+// PR #242 review A — structured warnings the TS parser wants surfaced to the
+// build layer. Mirrors markdown.ts's `ParseWarning` → `MdFragment.warnings` →
+// builder.ts warning-conversion pattern exactly, so class-member collisions
+// (previously a bare `console.warn` inside extractSymbols) ride the same pipe
+// as every other build warning: they survive a parse-cache warm hit, show up
+// in `--format json` `warnings[]`, and are never double-printed by
+// `check --gate --diff`. See parse-cache.ts's `TsFragment.warnings` and
+// builder.ts's TS-warning conversion loop for the rest of the wiring.
+export interface TsParseWarning {
+  type: "class-member-collision";
+  // Fully-qualified id the warning is about (`symbol:<path>#<name>`).
+  symbolId: string;
+  filePath: string;
+  message: string;
+}
+
 export interface ParsedTS {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  warnings: TsParseWarning[];
   // specs/018 §3 S1 side-channel. rootDir-relative resolved targets of every
   // plain `export * from "./o"` in this file, in source order, deduped by
   // first occurrence. Populated only in symbol mode on non-test files, and
@@ -116,12 +151,14 @@ export function createTSParser(
       const ctx = createResolverContext(rootDir);
       const nodes: GraphNode[] = [];
       const edges: GraphEdge[] = [];
+      const warnings: TsParseWarning[] = [];
       for (const filePath of enumerateFiles(rootDir, patterns)) {
         const parsed = parseTSFile(filePath, rootDir, mode, matchers, ctx);
         nodes.push(...parsed.nodes);
         edges.push(...parsed.edges);
+        warnings.push(...parsed.warnings);
       }
-      return { nodes, edges };
+      return { nodes, edges, warnings };
     },
   };
 }
@@ -306,6 +343,7 @@ function parseTSFile(
 ): ParsedTS {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
+  const warnings: TsParseWarning[] = [];
 
   const relPath = relative(rootDir, filePath);
   const content = stripBom(readFileSync(filePath, "utf-8"));
@@ -331,7 +369,15 @@ function parseTSFile(
 
   let symbolRanges: SymbolRange[] = [];
   if (parsed && mode === "symbol" && !isTest) {
-    symbolRanges = extractSymbols(parsed.program, content, relPath, nodes, parsed.comments);
+    symbolRanges = extractSymbols(
+      parsed.program,
+      content,
+      relPath,
+      nodes,
+      edges,
+      warnings,
+      parsed.comments,
+    );
   }
   let starExports: string[] | undefined;
   if (parsed) {
@@ -351,7 +397,7 @@ function parseTSFile(
   }
   extractImplTags(content, relPath, isTest, edges, mode, symbolRanges, matchers, parsed?.comments);
 
-  return starExports ? { nodes, edges, starExports } : { nodes, edges };
+  return starExports ? { nodes, edges, warnings, starExports } : { nodes, edges, warnings };
 }
 
 // The TS compiler host strips a UTF-8 BOM when reading files — the file-hash
@@ -396,6 +442,31 @@ interface ExportEntry {
   group: number;
   attrStart: number;
   attrEnd: number;
+  // spec 021 (FR-001/FR-003, issue #218) — populated ONLY for an inline
+  // exported ClassDeclaration entry (named or default). Maps each target
+  // member's full symbol name (`${ClassName-or-"default"}.${memberName}`) to
+  // every occurrence span, in source order — get/set pairs, static+instance
+  // same name, and overload signatures + implementation all converge to one
+  // map entry (FR-003). `undefined` for every other entry kind.
+  classMembers?: Map<string, Array<{ start: number; end: number }>>;
+  // PR #242 review B — set when this entry LOST an id collision against a
+  // class member's synthesized name (see the collision-resolution pass
+  // below). A loser keeps its attribution RANGE (so a leading `@impl` tag
+  // above it still resolves via `resolveSymbolsAtLine`) but never gets a
+  // symbol NODE of its own — `resolveSymbolsAtLine` returns the collided
+  // NAME, and `symbol:<path>#<name>` is exactly the id the winning class
+  // member registered, so the tag re-attributes to the winner instead of
+  // dangling or degrading to file grain (the pre-fix behavior, which
+  // spliced the loser out of `entries` entirely and lost its range too).
+  collisionLoser?: boolean;
+  // PR #242 review C follow-up — set on entries whose declaration kind can
+  // LEGALLY declaration-merge with a same-name class (interface / namespace).
+  // A same-name collision involving such an entry is valid TS, so the
+  // class-member-collision warning must stay silent for it ("rename one of
+  // them" would be wrong advice). The first-registered-wins drop itself is
+  // unchanged — proper merge support (letting the class entry win so member
+  // grain survives) is a separate issue.
+  mergeableWithClass?: boolean;
 }
 
 function isFunctionDecl(node: { type: string } | null | undefined): boolean {
@@ -418,11 +489,101 @@ function declTextStart(stmtStart: number, decl: unknown): number {
 
 type OxcComment = OxcParseResult["comments"][number];
 
+// spec 021 (FR-001/FR-004, issue #218) — member occurrences of ONE inline
+// exported ClassDeclaration, keyed by full symbol name (`${classPrefix}.
+// ${memberName}`) so same-name occurrences (get/set pairs, static+instance,
+// overload signatures + implementation) converge to a single map entry, in
+// source order (FR-003). `classPrefix` is the class's own entry name
+// ("Sample" for `export class Sample`, "default" for `export default class`).
+//
+// Included (oxc's ClassBody element shapes, empirically probed): method /
+// getter / setter / constructor / static forms of any of those
+// (`MethodDefinition`, `kind` in {method,get,set,constructor}), and class
+// properties (`PropertyDefinition`) whose `value` is an ArrowFunctionExpression
+// or FunctionExpression.
+//
+// Excluded — falls through unnamed, so the member's `@impl` tag (if any)
+// keeps the pre-existing class-attribution fallback (FR-004):
+//   - computed name (`[expr]() {}`, `computed: true`) — checked first, before
+//     any type-specific branch, since a computed key can otherwise still be
+//     an `Identifier`-typed AST node (e.g. `[x]() {}`).
+//   - private member (`#m`) — `key.type === "PrivateIdentifier"`, never
+//     `"Identifier"`.
+//   - string/numeric LITERAL key (`"foo"() {}` / `123() {}`) — `key.type` is
+//     `"StringLiteral"` / `"NumericLiteral"`, never `"Identifier"`, so the
+//     same `el.key?.type !== "Identifier"` guard that excludes computed names
+//     excludes these too (PR #242 review D2 / spec 021 Edge Cases).
+//   - data property (non-function initializer) — `value.type` fails the
+//     Arrow/FunctionExpression check.
+//   - `accessor` field — a STRUCTURALLY DIFFERENT ClassElement type
+//     (`AccessorProperty` / `TSAbstractAccessorProperty`), never
+//     `"PropertyDefinition"`; falls through the else branch untouched.
+//   - abstract method — oxc types it `"TSAbstractMethodDefinition"`, a
+//     DIFFERENT string from `"MethodDefinition"` (MethodDefinitionType), so
+//     the `el.type === "MethodDefinition"` check excludes it by construction.
+//   - abstract property — same reasoning (`"TSAbstractPropertyDefinition"`).
+//   - `declare` property — SAME type string (`"PropertyDefinition"`) as a
+//     normal field, so needs the explicit `declare` flag check.
+//   - static block (`ClassElement` type `"StaticBlock"`) — falls through.
+//   - `TSIndexSignature` — falls through (not a named member at all).
+//   - EVERY member of an `export declare class` — the class node itself
+//     carries `declare: true` (same flag shape as a `declare` property, just
+//     one level up); guarded before the body is even walked (PR #242 review
+//     D1). An ambient class has no runtime method bodies, so none of its
+//     members are symbolized — all tags fall back to the class.
+function extractClassMembers(
+  classNode: unknown,
+  classPrefix: string,
+): Map<string, Array<{ start: number; end: number }>> {
+  const members = new Map<string, Array<{ start: number; end: number }>>();
+  if ((classNode as { declare?: boolean }).declare) return members;
+  const body = (classNode as { body?: { body?: Array<Record<string, unknown>> } }).body?.body;
+  if (!body) return members;
+
+  const add = (name: string, start: number, end: number) => {
+    const fullName = `${classPrefix}.${name}`;
+    const list = members.get(fullName);
+    if (list) list.push({ start, end });
+    else members.set(fullName, [{ start, end }]);
+  };
+
+  for (const raw of body) {
+    const el = raw as {
+      type: string;
+      computed?: boolean;
+      declare?: boolean;
+      key?: { type: string; name?: string };
+      value?: { type: string } | null;
+      start: number;
+      end: number;
+    };
+    // Decorators sit INSIDE the member's own start/end here (unlike the
+    // class-vs-`export`-wrapper case declTextStart widens for) — oxc-parser
+    // includes a decorated member's decorators in its own span, empirically
+    // confirmed against this repo's oxc-parser version.
+    if (el.computed) continue;
+    if (el.key?.type !== "Identifier" || !el.key.name) continue;
+
+    if (el.type === "MethodDefinition") {
+      add(el.key.name, el.start, el.end);
+    } else if (el.type === "PropertyDefinition") {
+      if (el.declare) continue;
+      if (el.value?.type !== "ArrowFunctionExpression" && el.value?.type !== "FunctionExpression") {
+        continue;
+      }
+      add(el.key.name, el.start, el.end);
+    }
+  }
+  return members;
+}
+
 function extractSymbols(
   program: OxcProgram,
   content: string,
   relPath: string,
   nodes: GraphNode[],
+  edges: GraphEdge[],
+  warnings: TsParseWarning[],
   comments: readonly OxcComment[] = [],
 ): SymbolRange[] {
   const declMap = collectTopLevelDecls(program);
@@ -445,10 +606,45 @@ function extractSymbols(
     group: number,
     attrStart = start,
     attrEnd = end,
+    classMembers?: Map<string, Array<{ start: number; end: number }>>,
+    mergeableWithClass = false,
   ) => {
-    if (seen.has(name)) return;
+    if (seen.has(name)) {
+      // PR #242 review C — this dedup ALREADY silently drops a later
+      // same-name export (pre-existing first-registered-wins behavior,
+      // unchanged here). That's usually benign: `export function f(){}` +
+      // `export { f }` re-pushes the SAME declaration span, so it's a no-op
+      // duplicate, not a real collision. But when the spans genuinely
+      // differ AND either side is a class entry (carries `classMembers` —
+      // e.g. two `export class Sample`, or a string-literal alias export
+      // colliding with a class's own name), the drop can silently discard an
+      // entire class's worth of member symbols with zero observability.
+      // Surface a warning in that case; the drop itself is unchanged.
+      // Exception: interface / namespace entries declaration-merge with a
+      // same-name class in legal TS, so a collision where either side is
+      // such an entry stays silent (`mergeableWithClass`).
+      const existing = entries.find((e) => e.name === name);
+      if (
+        existing &&
+        !existing.mergeableWithClass &&
+        !mergeableWithClass &&
+        (existing.start !== start || existing.end !== end) &&
+        (existing.classMembers !== undefined || classMembers !== undefined)
+      ) {
+        warnings.push({
+          type: "class-member-collision",
+          symbolId: `symbol:${relPath}#${name}`,
+          filePath: relPath,
+          message:
+            `export "${name}" collides with an earlier export of the same name in this file; ` +
+            "the earlier declaration wins and this one (including any class members it would " +
+            "have contributed) is dropped. Rename one of them to remove the ambiguity.",
+        });
+      }
+      return;
+    }
     seen.add(name);
-    entries.push({ name, start, end, group, attrStart, attrEnd });
+    entries.push({ name, start, end, group, attrStart, attrEnd, classMembers, mergeableWithClass });
   };
 
   // Pass 1 — top-level function statements, source order. The TS binder binds
@@ -484,16 +680,50 @@ function extractSymbols(
             );
           }
         } else if (decl.type === "ClassDeclaration") {
-          if (decl.id)
-            push(decl.id.name, declTextStart(stmt.start, decl), decl.end, groupCounter++);
-        } else if (
-          decl.type === "TSInterfaceDeclaration" ||
-          decl.type === "TSTypeAliasDeclaration" ||
-          decl.type === "TSEnumDeclaration"
-        ) {
+          if (decl.id) {
+            const className = decl.id.name;
+            push(
+              className,
+              declTextStart(stmt.start, decl),
+              decl.end,
+              groupCounter++,
+              undefined,
+              undefined,
+              // spec 021 (FR-001, issue #218): inline named export only —
+              // `export { Sample }` / alias exports resolve via `lookup()`
+              // above and never reach this branch, so they stay
+              // member-symbol-free (FR-001's "分離 export は対象外").
+              extractClassMembers(decl, className),
+            );
+          }
+        } else if (decl.type === "TSInterfaceDeclaration") {
+          // interface declaration-merges with a same-name class (legal TS) —
+          // flag it so the seen-collision warning stays silent for the pair.
+          push(
+            decl.id.name,
+            stmt.start,
+            decl.end,
+            groupCounter++,
+            undefined,
+            undefined,
+            undefined,
+            true,
+          );
+        } else if (decl.type === "TSTypeAliasDeclaration" || decl.type === "TSEnumDeclaration") {
           push(decl.id.name, stmt.start, decl.end, groupCounter++);
         } else if (decl.type === "TSModuleDeclaration" && decl.id.type === "Identifier") {
-          push(decl.id.name, stmt.start, decl.end, groupCounter++);
+          // namespace declaration-merges with a same-name class / function
+          // (legal TS) — same silence rule as interfaces above.
+          push(
+            decl.id.name,
+            stmt.start,
+            decl.end,
+            groupCounter++,
+            undefined,
+            undefined,
+            undefined,
+            true,
+          );
         }
       } else {
         // `export { a as b }` — the exported name is the alias; the
@@ -513,7 +743,15 @@ function extractSymbols(
       const decl = stmt.declaration;
       if (isFunctionDecl(decl)) continue; // pass 1
       if (decl.type === "ClassDeclaration") {
-        push("default", declTextStart(stmt.start, decl), decl.end, groupCounter++);
+        push(
+          "default",
+          declTextStart(stmt.start, decl),
+          decl.end,
+          groupCounter++,
+          undefined,
+          undefined,
+          extractClassMembers(decl, "default"),
+        );
       } else if (decl.type === "TSInterfaceDeclaration") {
         push("default", stmt.start, decl.end, groupCounter++);
       } else if (decl.type === "Identifier") {
@@ -527,6 +765,41 @@ function extractSymbols(
       }
     }
     // ExportAllDeclaration / TSExportAssignment (`export =`): no local symbols.
+  }
+
+  // spec 021 (FR-001, issue #218): a class member's full name
+  // (`ClassName.memberName`) can collide with an EXISTING export entry of the
+  // same literal name — today the only way that happens is a string-literal
+  // export alias (`export { helper as "Sample.methodA" }`, whose entry name
+  // is the literal's VALUE via moduleExportName — see the specifier branch
+  // above). The class member wins; the colliding entry is flagged as a
+  // `collisionLoser` (PR #242 review B) — NOT spliced out of `entries`
+  // anymore. Splicing used to delete the loser's attribution RANGE along
+  // with its node, so an `@impl` tag written above the losing declaration
+  // silently degraded from symbol grain to FILE grain (a regression vs.
+  // main, which had no class members to collide with in the first place).
+  // Keeping the range means `resolveSymbolsAtLine` still resolves the tag to
+  // the collided NAME, and `symbol:<path>#<name>` is exactly the id the
+  // winning class member registers below — so the tag re-attributes to the
+  // class member instead of dangling or degrading. Iterates a SNAPSHOT of
+  // `entries` so flagging entries mid-loop cannot skip a later class entry.
+  for (const classEntry of entries.slice()) {
+    if (!classEntry.classMembers) continue;
+    for (const fullName of classEntry.classMembers.keys()) {
+      const loserIdx = entries.findIndex((e) => e !== classEntry && e.name === fullName);
+      if (loserIdx === -1) continue;
+      warnings.push({
+        type: "class-member-collision",
+        symbolId: `symbol:${relPath}#${fullName}`,
+        filePath: relPath,
+        message:
+          `class member symbol "symbol:${relPath}#${fullName}" collides with an existing ` +
+          "export of the same name; the class member wins and the other export's symbol node " +
+          "is dropped (any tag on the colliding declaration re-attributes to the class member). " +
+          "Rename one of them to remove the ambiguity.",
+      });
+      entries[loserIdx] = { ...entries[loserIdx], collisionLoser: true };
+    }
   }
 
   const lineStarts = buildLineStarts(content);
@@ -547,12 +820,19 @@ function extractSymbols(
   const lineHasCode = computeLineHasCode(content, comments, lineStarts);
   const ranges: SymbolRange[] = [];
   for (const entry of entries) {
-    nodes.push({
-      id: `symbol:${relPath}#${entry.name}`,
-      kind: "symbol",
-      filePath: relPath,
-      contentHash: hash(content.slice(entry.start, entry.end)),
-    });
+    // PR #242 review B — a collision loser contributes its attribution RANGE
+    // (below) but never a symbol NODE: the winning class member already
+    // registers a node under the exact same id (`symbol:<path>#<name>`), so
+    // pushing here would either duplicate it or (depending on push order)
+    // shadow the winner. See the collision-resolution pass above.
+    if (!entry.collisionLoser) {
+      nodes.push({
+        id: `symbol:${relPath}#${entry.name}`,
+        kind: "symbol",
+        filePath: relPath,
+        contentHash: hash(content.slice(entry.start, entry.end)),
+      });
+    }
     let startLine = lineOf(lineStarts, entry.attrStart);
     while (startLine > 1 && !lineHasCode[startLine - 1]) startLine--;
     ranges.push({
@@ -561,6 +841,57 @@ function extractSymbols(
       startLine,
       endLine: lineOf(lineStarts, entry.attrEnd),
     });
+
+    if (entry.classMembers) {
+      // spec 021 (FR-002/FR-006, FR-003, issue #218). The class's own
+      // node/range were just pushed above — BEFORE any member — so a
+      // same-size attribution tie (Edge Cases: 1-line class) keeps the class
+      // (resolveSymbolsAtLine keeps the FIRST-registered range on a tie).
+      // Member leading-trivia widening is bounded below by the class
+      // declaration's own (un-widened) start line — `entry.attrStart` is
+      // exactly that for a class entry, since the ClassDeclaration push()
+      // call sites never pass a custom attrStart — so a tag directly above
+      // the class cannot be "stolen" by a member whose declaration opens on
+      // the same line as the class (FR-002's upward-widening lower-bound
+      // rule).
+      const classDeclLine = lineOf(lineStarts, entry.attrStart);
+      const classSymbolId = `symbol:${relPath}#${entry.name}`;
+      for (const [fullName, occurrences] of entry.classMembers) {
+        const memberSymbolId = `symbol:${relPath}#${fullName}`;
+        nodes.push({
+          id: memberSymbolId,
+          kind: "symbol",
+          filePath: relPath,
+          // FR-003: same-name convergence (get/set, static+instance,
+          // overload signatures + implementation) — ONE node per full name,
+          // hashing every occurrence's source text in encounter (source)
+          // order, `\0`-joined (synthReexportHash precedent below) so an
+          // edit to ANY occurrence drifts the shared hash while an edit to a
+          // sibling member elsewhere in the class never does.
+          contentHash: hash(occurrences.map((o) => content.slice(o.start, o.end)).join("\0")),
+        });
+        // FR-006: class -> method containment, provenance "structural". One
+        // edge per unique member name (not per occurrence) — the traversal
+        // direction constraint (forward-only) is spec 019's existing,
+        // unmodified guard in traverse.ts.
+        edges.push({
+          source: classSymbolId,
+          target: memberSymbolId,
+          kind: "contains",
+          provenances: ["structural"],
+        });
+        for (const occ of occurrences) {
+          let memberStart = lineOf(lineStarts, occ.start);
+          while (memberStart > classDeclLine && !lineHasCode[memberStart - 1]) memberStart--;
+          ranges.push({
+            name: fullName,
+            group: groupCounter++,
+            startLine: memberStart,
+            endLine: lineOf(lineStarts, occ.end),
+          });
+        }
+      }
+    }
   }
   return ranges;
 }
