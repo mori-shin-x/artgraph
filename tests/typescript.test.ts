@@ -1307,6 +1307,33 @@ describe("createTSParser (symbol mode — class-level seen-collision warnings, P
     // LocalDecl), so it is a no-op duplicate, not a collision. MUST NOT
     // warn.
     write("src/benign.ts", ["export function f(): void {}", "export { f };", ""].join("\n"));
+    // Legal declaration merges — class+namespace and interface+class are
+    // valid TS; the collision warning ("rename one of them") would be wrong
+    // advice, so both orders MUST stay silent (review C follow-up).
+    write(
+      "src/merge-ns.ts",
+      [
+        "export class Merged {",
+        "  m(): void {}",
+        "}",
+        "export namespace Merged {",
+        "  export const x = 1;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    write(
+      "src/merge-iface.ts",
+      [
+        "export interface MergedI {",
+        "  y: number;",
+        "}",
+        "export class MergedI {",
+        "  m(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
   });
 
   afterAll(() => {
@@ -1366,6 +1393,22 @@ describe("createTSParser (symbol mode — class-level seen-collision warnings, P
   it("benign re-push (`export function f` + `export { f }`) does NOT warn (same declaration span)", () => {
     const result = parse();
     expect(result.warnings.filter((w) => w.filePath === "src/benign.ts")).toEqual([]);
+  });
+
+  it("legal class+namespace declaration merge does NOT warn", () => {
+    const result = parse();
+    expect(result.warnings.filter((w) => w.filePath === "src/merge-ns.ts")).toEqual([]);
+    // The class registered first and keeps its member grain.
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/merge-ns.ts")
+      .map((n) => n.id)
+      .sort();
+    expect(symbolIds).toEqual(["symbol:src/merge-ns.ts#Merged", "symbol:src/merge-ns.ts#Merged.m"]);
+  });
+
+  it("legal interface+class declaration merge does NOT warn (interface first)", () => {
+    const result = parse();
+    expect(result.warnings.filter((w) => w.filePath === "src/merge-iface.ts")).toEqual([]);
   });
 });
 

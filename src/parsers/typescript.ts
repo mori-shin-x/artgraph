@@ -452,6 +452,14 @@ interface ExportEntry {
   // dangling or degrading to file grain (the pre-fix behavior, which
   // spliced the loser out of `entries` entirely and lost its range too).
   collisionLoser?: boolean;
+  // PR #242 review C follow-up — set on entries whose declaration kind can
+  // LEGALLY declaration-merge with a same-name class (interface / namespace).
+  // A same-name collision involving such an entry is valid TS, so the
+  // class-member-collision warning must stay silent for it ("rename one of
+  // them" would be wrong advice). The first-registered-wins drop itself is
+  // unchanged — proper merge support (letting the class entry win so member
+  // grain survives) is a separate issue.
+  mergeableWithClass?: boolean;
 }
 
 function isFunctionDecl(node: { type: string } | null | undefined): boolean {
@@ -592,6 +600,7 @@ function extractSymbols(
     attrStart = start,
     attrEnd = end,
     classMembers?: Map<string, Array<{ start: number; end: number }>>,
+    mergeableWithClass = false,
   ) => {
     if (seen.has(name)) {
       // PR #242 review C — this dedup ALREADY silently drops a later
@@ -604,9 +613,14 @@ function extractSymbols(
       // colliding with a class's own name), the drop can silently discard an
       // entire class's worth of member symbols with zero observability.
       // Surface a warning in that case; the drop itself is unchanged.
+      // Exception: interface / namespace entries declaration-merge with a
+      // same-name class in legal TS, so a collision where either side is
+      // such an entry stays silent (`mergeableWithClass`).
       const existing = entries.find((e) => e.name === name);
       if (
         existing &&
+        !existing.mergeableWithClass &&
+        !mergeableWithClass &&
         (existing.start !== start || existing.end !== end) &&
         (existing.classMembers !== undefined || classMembers !== undefined)
       ) {
@@ -623,7 +637,7 @@ function extractSymbols(
       return;
     }
     seen.add(name);
-    entries.push({ name, start, end, group, attrStart, attrEnd, classMembers });
+    entries.push({ name, start, end, group, attrStart, attrEnd, classMembers, mergeableWithClass });
   };
 
   // Pass 1 — top-level function statements, source order. The TS binder binds
@@ -675,14 +689,34 @@ function extractSymbols(
               extractClassMembers(decl, className),
             );
           }
-        } else if (
-          decl.type === "TSInterfaceDeclaration" ||
-          decl.type === "TSTypeAliasDeclaration" ||
-          decl.type === "TSEnumDeclaration"
-        ) {
+        } else if (decl.type === "TSInterfaceDeclaration") {
+          // interface declaration-merges with a same-name class (legal TS) —
+          // flag it so the seen-collision warning stays silent for the pair.
+          push(
+            decl.id.name,
+            stmt.start,
+            decl.end,
+            groupCounter++,
+            undefined,
+            undefined,
+            undefined,
+            true,
+          );
+        } else if (decl.type === "TSTypeAliasDeclaration" || decl.type === "TSEnumDeclaration") {
           push(decl.id.name, stmt.start, decl.end, groupCounter++);
         } else if (decl.type === "TSModuleDeclaration" && decl.id.type === "Identifier") {
-          push(decl.id.name, stmt.start, decl.end, groupCounter++);
+          // namespace declaration-merges with a same-name class / function
+          // (legal TS) — same silence rule as interfaces above.
+          push(
+            decl.id.name,
+            stmt.start,
+            decl.end,
+            groupCounter++,
+            undefined,
+            undefined,
+            undefined,
+            true,
+          );
         }
       } else {
         // `export { a as b }` — the exported name is the alias; the
