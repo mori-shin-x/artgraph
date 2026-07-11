@@ -6,7 +6,7 @@
 
 **Tests**: TDD 指定あり — 各ストーリーで **RED(テスト先行)→ GREEN(実装)** の順に並べる。テストタスクには 7 観点(下表)の割当を明記する。
 
-**Organization**: ユーザーストーリー単位。US1(v2 本体)→ US2(パリティ)→ US3(エンジン選択)→ US4(perf 計測)。plan.md の実装フェーズ対応: Phase A=T017 / B=US1+US3 / C=US2 / D=T018〜T023。
+**Organization**: ユーザーストーリー単位。US1(v2 本体)→ US2(パリティ)→ US3(エンジン選択)→ US4(perf 計測)。plan.md の実装フェーズ対応: Phase A=T017 / B=US1+US3(T024 含む) / C=US2 / D=T018〜T023。
 
 ## TDD 観点マップ(ユーザー指定 7 条件)
 
@@ -50,6 +50,7 @@
   - **除外(観点 1)**: テストファイル・node_modules・ルート外 id は無変換
   - **fail-soft(観点 4)**: parse 不能ソースは無変換素通し + 警告 1 回/モジュール、2 回目の transform で警告が重複しない
   - **境界(観点 1・6)**: 関数ゼロのモジュールは無変換・未登録
+  - **契約の書き手義務 3〜5(観点 2・7 — contracts/instrumentation-runtime.md)**: 実行印が分岐なしの 1 文 store であること(生成断片に `if`/`&&`/`?` を含まない)・生成コードに `await` / `import.meta` が現れないこと(ESM/CJS 双方で評価可能 — 義務 4)・巻き上げられた FunctionDeclaration(モジュール末尾宣言)の実行印参照が preamble 定義の変数を指すこと(hoisting 整合 — 義務 5)
 - [ ] T007 [US1] `src/vitest/plugin.ts` を新規実装して T006 を green にする: oxc-parser で関数列挙 + V4 命名、magic-string で関数本体先頭に `<hits>[k]=1` 挿入 + 自己完結 preamble(globalThis registry 登録・`modules.set(file, …)` 置換方式)、`enforce: 'pre'`、除外規則と hash は schema.ts から import、`configResolved` で root 取得。main-process 層の依存規則(oxc-parser / magic-string 可、`vitest/runners` 不可)を冒頭コメントに明記
 - [ ] T008 [US1] [RED] `tests/vitest-runner-unit.test.ts` を新規作成する(runner の drain / バッファを純関数として検証)。網羅対象:
   - **drain(観点 1・5)**: 立っているスロットのみ hits 化・読み取り後ゼロクリア・空 registry で空 hits・同 relPath 再登録(isolate 再評価)は置換され旧配列を読まない・`hashes` は registration の hash 転記(fs 非アクセス)
@@ -78,7 +79,7 @@
 
 **Independent Test**: quickstart §7(不正値 fail-fast・エンジン切替)
 
-- [ ] T014 [US3] [RED] `tests/vitest-setup.test.ts` を新規作成する(`withTrace` のユニット)。網羅対象(観点 2・3・5):
+- [ ] T014 [US3] [RED] `tests/vitest-setup.test.ts` に engine オプションのテストを**追加**する(ファイルは spec 020 実装で既存 — reporters / setupFiles / pool 保持・globalSetup 冪等追記などの既存回帰アサーションは削除せず保持したまま拡張する)。網羅対象(観点 2・3・5):
   - **分岐の直積**: engine 指定(なし / `instrument` / `cdp` / 不正値)× 既存 `plugins` の有無 × 既存 `globalSetup`(string / array / なし)× ユーザー設定済み `test.env.ARTGRAPH_TRACE_ENGINE` の有無
   - 不正 engine 値 → `withTrace` 呼び出し時に throw(fail-fast、観点 3)
   - `instrument` → plugin が `plugins` に追記され、既存 plugins が保持される・**二重 withTrace は plugin 名で冪等**(観点 5)
@@ -86,7 +87,8 @@
   - ユーザーが `test.env.ARTGRAPH_TRACE_ENGINE` を設定済み → ユーザー値優先(contracts/config-surface.md)
   - 従来義務の回帰: `test.runner` 設定・globalSetup 冪等追記・その他キーのパススルー
 - [ ] T015 [US3] `src/vitest/setup.ts` に `withTrace(config, options?)` を実装して T014 を green にする(plugin.ts を import — main-process 層)
-- [ ] T016 [US3] cdp 経路の安価改善を `src/vitest/runner.ts` に実装する(FR-013 — これ以上の最適化はしない): ワーカー内 `path → contentHash` メモ化・shard 書き込みを v2 と同じバッチ機構に載せる。`tests/e2e/vitest-runner.e2e.test.ts` を **両エンジン × forks / threads** のマトリクスに拡張し、isolate オン/オフ両方で registry 置換が正しく働くこと(観点 5)を含めて green にする(FR-014 — vitest 3.x/4.x は CI マトリクス側)
+- [ ] T016 [US3] cdp 経路の安価改善を `src/vitest/runner.ts` に実装する(FR-013 — これ以上の最適化はしない): ワーカー内 `path → contentHash` メモ化・shard 書き込みを v2 と同じバッチ機構に載せる。`tests/e2e/vitest-runner.e2e.test.ts` を **両エンジン × forks / threads** のマトリクスに拡張し、isolate オン/オフ両方で registry 置換が正しく働くこと(観点 5)を含めて green にする
+- [ ] T024 [US3] vitest バージョンマトリクス CI を追加する(FR-014 — 分析所見 C2: 3.x/4.x を実際に回すマトリクスは現状存在しない): `.github/workflows/ci.yml` に vitest 3.x ジョブ軸を追加する(`pnpm add -D vitest@^3 --no-save` 等で差し替えてから `pnpm build && pnpm test:e2e` を実行 — runner E2E が両エンジンをカバーするため e2e スイートで足りる)。実行順は T016 の後
 
 **Checkpoint**: エンジン切替が完全動作。逃げ道と比較対象が揃う
 
@@ -107,7 +109,7 @@
 - [ ] T020 [P] spec 020 の契約とリサーチを更新する(FR-010): `specs/020-coverage-derived-edges/contracts/trace-artifact.md` §test の `fn` 記述に「V8 functionName 互換の命名規則で決定した関数名(capture engine v2)」の注記(schemaVersion 据え置き)・`specs/020-coverage-derived-edges/research.md` に D9(採取方式転換と D1 棄却理由の失効)を追記
 - [ ] T021 [P] `docs/configuration.md` に `withTrace` の `engine` オプションと `ARTGRAPH_TRACE_ENGINE` の説明を追加する(contracts/config-surface.md の利用者向け要約)
 - [ ] T022 変更外ファイルへの影響を横断確認する(観点 7): `pnpm knip`(plugin.ts の到達性・magic-string の使用検出)・`pnpm typecheck`・oxlint / oxfmt・`package.json#exports` が不変であること・`templates/**` の Skills 文書(artgraph-verify / bootstrap 等)に runner 記述の齟齬が生じていないこと・`scripts/copy-vendor.mjs` / `tests/global-setup-vendor.ts` に非干渉であること・`vitest.config.ts`(自プロジェクト)の coverage 設定と plugin が干渉しないこと
-- [ ] T023 最終検証: `pnpm build && pnpm test`(unit + e2e + perf 全部)green・`pnpm exec artgraph check --diff` green(after_implement フックの事前確認)・quickstart §1〜§7 の全手順を通す
+- [ ] T023 最終検証(**SC-006**): `pnpm build && pnpm test`(unit + e2e + perf 全部)を **v2 計装既定**の下で green にし、全 green の事実を SC-006 の実測結果として PR の Testing 節に記録する・`pnpm artgraph check --diff` green(after_implement フックの事前確認)・quickstart §1〜§7 の全手順を通す
 
 ## Dependencies
 
@@ -116,7 +118,7 @@ Phase 1 (T001-T002)
   └─ Phase 2 (T003→T004, T005)          ← 全ストーリーの前提
        ├─ US1: T006→T007 → T008→T009 → T010
        │    ├─ US2: T011→T012→T013     ← US1 完了後(両エンジン比較には T009 のエンジン分岐が必要)
-       │    └─ US3: T014→T015, T016    ← T015 は T007(plugin 存在)後。T016 は T009 後
+       │    └─ US3: T014→T015, T016→T024 ← T015 は T007(plugin 存在)後。T016 は T009 後
        ├─ US4-A: T017 [P]              ← Phase 2 にも依存しない(既存エンジンの計測)。最優先で並行着手推奨
        └─ US4-D: T018→T019             ← US1〜US3 完了後
 Phase 7: T020 [P], T021 [P]            ← いつでも(文書のみ)。T022→T023 は全実装後
