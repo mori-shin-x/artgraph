@@ -8,6 +8,7 @@ import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerReconcileCommand } from "./commands/reconcile.js";
 import { registerIntegrateCommand } from "./commands/integrate.js";
 import { registerRenameCommand } from "./commands/rename.js";
+import { registerTraceCommand } from "./commands/trace.js";
 
 // Composition root (issue #162): each command is registered from its own
 // module in `src/commands/`. `buildProgram` wires them onto a fresh
@@ -26,6 +27,7 @@ export function buildProgram(): Command {
   registerReconcileCommand(program);
   registerIntegrateCommand(program);
   registerRenameCommand(program);
+  registerTraceCommand(program);
 
   return program;
 }

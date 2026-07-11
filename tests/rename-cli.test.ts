@@ -641,3 +641,182 @@ describe("CLI: rename across non-ASCII paths", () => {
     expect(spec).not.toContain("REQ-003");
   });
 });
+
+// ---------------------------------------------------------------------------
+// spec 020 T017 — trace shard REQ ID rewrite on rename/split/merge (FR-016)
+// ---------------------------------------------------------------------------
+describe("CLI: rename rewrites trace shards (spec 020 FR-016)", () => {
+  const SCHEMA_VERSION = 1;
+
+  function metaLine(runToken: string): string {
+    return JSON.stringify({
+      schemaVersion: SCHEMA_VERSION,
+      kind: "meta",
+      runToken,
+      pool: "forks",
+      vitest: "4.1.10",
+      startedAt: "2026-07-10T00:00:00.000Z",
+    });
+  }
+
+  function testLine(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      kind: "test",
+      testName: "[REQ-001] should verify [REQ-001]",
+      suitePath: ["[REQ-001] ユーザー認証"],
+      testFile: "tests/feature.test.ts",
+      passed: true,
+      hits: [{ file: "src/feature.ts", fn: "authenticate" }],
+      hashes: { "src/feature.ts": "sha256:deadbeef" },
+      ...overrides,
+    });
+  }
+
+  function writeShard(tmp: string, relPath: string, lines: string[]): string {
+    const abs = resolve(tmp, relPath);
+    mkdirSync(resolve(abs, ".."), { recursive: true });
+    writeFileSync(abs, lines.join("\n") + "\n", "utf-8");
+    return abs;
+  }
+
+  it(
+    "--from/--to rewrites [REQ-001] inside shard testName/suitePath across all matched shards",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareTempDir();
+      const shardPath = writeShard(tmp, ".artgraph/trace/w1-tok.jsonl", [
+        metaLine("tok-1"),
+        testLine(),
+      ]);
+
+      const { exitCode } = await runCli(["rename", "--from", "REQ-001", "--to", "REQ-100"], tmp);
+      expect(exitCode).toBe(0);
+
+      const shard = readFileSync(shardPath, "utf-8");
+      expect(shard).toContain('"testName":"[REQ-100] should verify [REQ-100]"');
+      expect(shard).toContain('"suitePath":["[REQ-100] ユーザー認証"]');
+      expect(shard).not.toContain("REQ-001");
+      // Untouched fields survive byte-identically.
+      expect(shard).toContain('"hits":[{"file":"src/feature.ts","fn":"authenticate"}]');
+    },
+  );
+
+  it(
+    "rename summary output lists the trace shard among rewritten artifacts",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareTempDir();
+      writeShard(tmp, ".artgraph/trace/w1-tok.jsonl", [metaLine("tok-1"), testLine()]);
+
+      const { exitCode, stdout } = await runCli(
+        ["rename", "--from", "REQ-001", "--to", "REQ-100", "--format", "json"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(stdout);
+      const shardChanges = result.changes.filter((c: { kind: string }) => c.kind === "trace-shard");
+      expect(shardChanges.length).toBeGreaterThan(0);
+      expect(shardChanges[0].filePath).toBe(".artgraph/trace/w1-tok.jsonl");
+
+      const tmp2 = await prepareTempDir();
+      writeShard(tmp2, ".artgraph/trace/w1-tok.jsonl", [metaLine("tok-1"), testLine()]);
+      const { stdout: textOut } = await runCli(
+        ["rename", "--from", "REQ-001", "--to", "REQ-100"],
+        tmp2,
+      );
+      expect(textOut).toContain(".artgraph/trace/w1-tok.jsonl");
+    },
+  );
+
+  it(
+    "--merge collapses shard testName/suitePath REQ IDs into the target ID",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareTempDir();
+      const shardPath = writeShard(tmp, ".artgraph/trace/w1-tok.jsonl", [
+        metaLine("tok-1"),
+        testLine({ testName: "[REQ-001] a", suitePath: [] }),
+        testLine({ testName: "[REQ-002] b", suitePath: [], hits: [] }),
+      ]);
+
+      const { exitCode } = await runCli(
+        ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
+
+      const shard = readFileSync(shardPath, "utf-8");
+      expect(shard).toContain('"testName":"[REQ-100] a"');
+      expect(shard).toContain('"testName":"[REQ-100] b"');
+      expect(shard).not.toContain("REQ-001");
+      expect(shard).not.toContain("REQ-002");
+    },
+  );
+
+  it(
+    "③不正遷移: an unknown-schemaVersion shard is left untouched and warned about by name",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareTempDir();
+      const staleMeta = JSON.stringify({
+        schemaVersion: SCHEMA_VERSION + 999,
+        kind: "meta",
+        runToken: "tok-stale",
+        pool: "forks",
+        vitest: "4.1.10",
+        startedAt: "2026-07-10T00:00:00.000Z",
+      });
+      const shardPath = writeShard(tmp, ".artgraph/trace/stale.jsonl", [staleMeta, testLine()]);
+      const original = readFileSync(shardPath, "utf-8");
+
+      const { exitCode, stdout, stderr } = await runCli(
+        ["rename", "--from", "REQ-001", "--to", "REQ-100"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
+
+      expect(readFileSync(shardPath, "utf-8")).toBe(original);
+      expect(stdout + stderr).toContain(".artgraph/trace/stale.jsonl");
+      expect((stdout + stderr).toLowerCase()).toMatch(/warning|schema/);
+    },
+  );
+
+  it(
+    "--split leaves shard content byte-identical (mirrors code-side [REQ] test-tag policy on split)",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareTempDir();
+      const shardPath = writeShard(tmp, ".artgraph/trace/w1-tok.jsonl", [
+        metaLine("tok-1"),
+        testLine(),
+      ]);
+      const original = readFileSync(shardPath, "utf-8");
+
+      const { exitCode } = await runCli(
+        ["rename", "--split", "REQ-001", "--into", "REQ-101", "REQ-102"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
+      expect(readFileSync(shardPath, "utf-8")).toBe(original);
+    },
+  );
+
+  it(
+    "⑦回帰: no trace shards / no trace config → rename behaves exactly as before",
+    { timeout: 30000 },
+    async () => {
+      const tmp = await prepareTempDir();
+
+      const { exitCode, stdout } = await runCli(
+        ["rename", "--from", "REQ-001", "--to", "REQ-100", "--format", "json"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(stdout);
+      expect(result.changes.every((c: { kind: string }) => c.kind !== "trace-shard")).toBe(true);
+      expect(result.warnings).toEqual([]);
+      // Unaffected: same scanned-file count as the pre-existing (trace-less) test above.
+      expect(result.filesScanned).toBe(3);
+    },
+  );
+});

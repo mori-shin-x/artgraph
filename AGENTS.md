@@ -20,6 +20,7 @@ See `<agent_skills_path>/<skill-name>/SKILL.md` for each Skill's full descriptio
 - After editing `tasks.md` / `plan.md`: run **artgraph-plan-coverage** to catch implicit REQ impacts.
 - Before review: run **artgraph-verify** (`pnpm exec artgraph check --diff`).
 - When proposing a code change: invoke **artgraph-impact** with `path:symbol`.
+- With trace shards present (`artgraph/vitest` runner): `pnpm exec artgraph impact --diff --tests` selects only the tests exercising a change; `pnpm exec artgraph trace report` cross-checks `@impl` claims against execution evidence.
 
 ### Quickstart
 

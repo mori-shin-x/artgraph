@@ -42,7 +42,19 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
       "files": ["specs/foo.md", "specs/bar.md"],
       "message": "optional human-readable detail"     // optional
     }
-  ]
+  ],
+  // ── spec 020: present ONLY when a trace was ingested; omitted entirely
+  // (not `[]`) when no trace artifact is configured (FR-010 byte-identical) ──
+  "unexercisedClaims": [                               // {reqId, node}[] — @impl claim, but that REQ's evidence never reaches it (FR-012)
+    { "reqId": "REQ-001", "node": "symbol:src/legacy.ts#oldSignIn" }
+  ],
+  "suggestedImpls": [                                  // {reqId, node}[] — no @impl claim, exactly one REQ's evidence reaches it (FR-013)
+    { "reqId": "REQ-002", "node": "symbol:src/auth.ts#resetPassword" }
+  ],
+  "staleEvidence": [                                   // {reqId, symbols}[] — traced symbols whose hash changed since capture (FR-015)
+    { "reqId": "REQ-003", "symbols": ["symbol:src/billing.ts#charge"] }
+  ],
+  "staleGate": false                                   // true only under trace.staleness:"gate" AND staleEvidence non-empty AND --gate
 }
 ```
 
@@ -96,7 +108,16 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
     "reqs": 39,
     "files": 0,
     "tasks": 52
-  }
+  },
+  // ── spec 020: present ONLY when a trace was ingested (FR-010 byte-identical
+  // when no trace is configured — these keys are omitted entirely, not `[]`) ──
+  "reqProvenance": [                                   // {reqId, provenance}[] — how each impactReqs entry was reached
+    { "reqId": "FR-001", "provenance": ["static"] },    // @impl declaration and/or a structural edge (imports/contains)
+    { "reqId": "FR-002", "provenance": ["evidence"] }   // a coverage-derived exercises edge only (a REQ's tests were observed running the code)
+  ],
+  "testsToRun": [                                       // {testFile, testName, reqId}[] — `--tests` only (FR-018)
+    { "testFile": "tests/billing.test.ts", "testName": "[REQ-003] charge bills a positive amount", "reqId": "REQ-003" }
+  ]
 }
 ```
 

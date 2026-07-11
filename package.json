@@ -8,7 +8,9 @@
   },
   "exports": {
     "./package.json": "./package.json",
-    "./cli": "./dist/cli.js"
+    "./cli": "./dist/cli.js",
+    "./vitest": "./dist/vitest/runner.js",
+    "./vitest/config": "./dist/vitest/setup.js"
   },
   "files": [
     "dist",
@@ -81,6 +83,14 @@
     "svg-term-cli": "^2.1.1",
     "typescript": "^5.8.3",
     "vitest": "^4.1.9"
+  },
+  "peerDependencies": {
+    "vitest": ">=3 <5"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
   },
   "engines": {
     "node": ">=22"

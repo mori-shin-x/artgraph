@@ -78,6 +78,11 @@ function entriesStructurallyEqual(a: LockEntry, b: LockEntry): boolean {
   if ((a.specFile ?? "") !== (b.specFile ?? "")) return false;
   if (!stringArrayEqual(a.impl, b.impl)) return false;
   if (!stringArrayEqual(a.tests, b.tests)) return false;
+  // spec 020 (data-model.md §5, T016) — `exercises` participates in
+  // idempotency exactly like `impl`/`tests`: a changed exercises set (new
+  // evidence, staleness resolved and re-included, etc.) must NOT be treated
+  // as a no-op rebuild, so `lastReconciled` correctly advances.
+  if (!stringArrayEqual(a.exercises, b.exercises)) return false;
   if (!depsEqual(a.dependsOn, b.dependsOn)) return false;
   return true;
 }
@@ -163,6 +168,17 @@ export function buildLockFromGraph(graph: ArtifactGraph, prevLock?: LockFile): L
     );
     if (testEdges.length > 0) {
       entry.tests = [...new Set(testEdges.map((e) => e.source))].sort();
+    }
+
+    // spec 020 (data-model.md §5, FR-011, T016) — `exercises` is req -> node
+    // (forward only, unlike `impl`/`tests` which are node -> req), so this
+    // filters on `e.source === id` rather than `e.target === id`. Same
+    // dedupe+sort convention as `impl`/`tests`; omitted entirely (not `[]`)
+    // when the req has no exercises edges so a trace-absent project's lock
+    // entries stay byte-identical to pre-spec-020 output.
+    const exercisesEdges = graph.edges.filter((e) => e.kind === "exercises" && e.source === id);
+    if (exercisesEdges.length > 0) {
+      entry.exercises = [...new Set(exercisesEdges.map((e) => e.target))].sort();
     }
 
     // Schema v2 (issue #35): `dependsOn` is `Array<{id, provenances}>` and

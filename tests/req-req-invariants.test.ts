@@ -281,14 +281,16 @@ describe("req-req invariants (meta-review remediation)", () => {
     }
   });
 
-  // SC-008 / INV-T4: EdgeProvenance type union and runtime Set are the same size (8).
-  it("SC-008 / INV-T4: EDGE_PROVENANCE_VALUES.size === 8 and matches the type union", async () => {
+  // SC-008 / INV-T4: EdgeProvenance type union and runtime Set are the same
+  // size. spec 020 (FR-009) added "coverage" — 8 -> 9.
+  it("SC-008 / INV-T4: EDGE_PROVENANCE_VALUES.size === 9 and matches the type union", async () => {
     const types = await import("../src/types.js");
-    expect(types.EDGE_PROVENANCE_VALUES.size).toBe(8);
+    expect(types.EDGE_PROVENANCE_VALUES.size).toBe(9);
     expect([...types.EDGE_PROVENANCE_VALUES].sort()).toEqual([
       "annotation",
       "code-tag",
       "convention",
+      "coverage",
       "frontmatter",
       "inline-link",
       "structural",

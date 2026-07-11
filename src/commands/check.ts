@@ -45,6 +45,25 @@ export function registerCheckCommand(program: Command): void {
 
       const testResults = await resolveTestResults(config, rootDir);
 
+      // spec 020 (contracts/cli-surface.md §4, FR-010〜015) — cheap glob-only
+      // existence probe first (mirrors `src/commands/trace.ts`'s Phase A
+      // precedent): a trace-absent project must reach `check()` WITHOUT the
+      // 7th argument at all, not with an empty/zero-cost `IngestedTrace`, so
+      // `CheckResult` never gains the new optional keys (FR-010 byte-identical).
+      const { hasTraceShards, ingestTrace } = await import("../trace/ingest.js");
+      let traceOptions: import("../check.js").TraceCheckOptions | undefined;
+      if (hasTraceShards(config, rootDir)) {
+        const { computeStaleNodeIds } = await import("../trace/report.js");
+        const trace = ingestTrace(config, rootDir);
+        traceOptions = {
+          trace,
+          staleNodeIds: computeStaleNodeIds(graph, trace),
+          acceptExercises: config.trace?.acceptExercises ?? false,
+          staleness: config.trace?.staleness ?? "warn",
+          sharedThreshold: config.trace?.sharedThreshold,
+        };
+      }
+
       let result: CheckResult;
       if (opts.diff) {
         const { getGitDiffFiles, getGitRenameMap, getHeadTrackedPaths } =
@@ -251,9 +270,9 @@ export function registerCheckCommand(program: Command): void {
         // regardless — it exists so `check()` can tell a `--diff` run apart
         // from a plain check when `baseline` is omitted, kept for parity
         // with the non-diff branch below.
-        result = check(graph, lock, scopedNodeIds, testResults, baseline, true);
+        result = check(graph, lock, scopedNodeIds, testResults, baseline, true, traceOptions);
       } else {
-        result = check(graph, lock, undefined, testResults, undefined, false);
+        result = check(graph, lock, undefined, testResults, undefined, false, traceOptions);
       }
 
       // issue #178 — apply `--ignore` only for `--diff` runs: plain `check`
@@ -316,6 +335,17 @@ export function registerCheckCommand(program: Command): void {
 
       // Exit code 2 (contract §2): `--gate` and a NEW issue was introduced.
       if (opts.gate && !result.pass) {
+        process.exit(2);
+      }
+
+      // spec 020 (FR-015, contracts/cli-surface.md §4) — `trace.staleness:
+      // "gate"` composes with `--gate` as an INDEPENDENT failure class from
+      // spec 017's baseline-diff gate above: stale evidence isn't part of the
+      // new-vs-pre-existing baseline model (it has no baseline concept at
+      // all), so it gets its own exit-2 check rather than folding into
+      // `pass`/`newIssues`. `warn` (default) and `exclude` never set
+      // `staleGate`, so this is a no-op for them regardless of `--gate`.
+      if (opts.gate && result.staleGate) {
         process.exit(2);
       }
     });

@@ -47,7 +47,15 @@ Report each new-issue category:
 - **drift**: nodes whose hash differs from the lock — spec changed but impl/lock not yet reconciled. Action: align impl with spec then `artgraph reconcile`.
 - **orphans**: `@impl` / `@verify` tags pointing to unknown IDs. Action: remove the stale tag or add the missing spec.
 - **uncovered**: requirement IDs with no `@impl` tag. Action: add `@impl <id>` near the implementing symbol.
-- **coverage**: per-requirement status (`verified` / `impl-only` / `untagged`). Display-only — not part of the gate. Summarize counts.
+- **coverage**: per-requirement status (`verified` / `impl-only` / `untagged`, plus `exercised` when `trace.acceptExercises` is on). Display-only — not part of the gate. Summarize counts.
+
+### 3a. Evidence findings (spec 020, trace present only)
+
+When a trace exists, `check --format json` additionally carries `unexercisedClaims` / `suggestedImpls` / `staleEvidence`. These are absent entirely when no trace artifact is configured (FR-010) — do not report on them in that case.
+
+- **UNEXERCISED CLAIM** (`unexercisedClaims: {reqId, node}[]`) — an `@impl` claim whose REQ's tagged tests never actually ran that symbol. Read the REQ's spec text and decide: (a) the `@impl` tag is simply wrong (the symbol doesn't implement that REQ) — remove or retarget it; (b) the tag is right but coverage is missing — write the missing test and tag it `[REQ-NNN]`. If the spec text is ambiguous about which symbol should satisfy the REQ, do not guess — ask the user which fix applies before changing anything.
+- **SUGGESTED IMPL** (`suggestedImpls: {reqId, node}[]`) — a symbol exclusively exercised by one REQ's tests but not `@impl`-tagged. Propose adding `// @impl REQ-NNN` above the symbol as a diff and ask for approval; never write it automatically — accepting a suggestion is a semantic judgment about correctness, and Principle V (Boundary of Determinism) forbids auto-committing semantic conclusions to code or the lock. `infrastructure` entries (shared by `sharedThreshold`+ REQs) are excluded by design — do not propose `@impl` for those.
+- **STALE EVIDENCE** (`staleEvidence: {reqId, symbols, tracedAt}[]`) — the traced symbols changed since the trace was captured. Ask the user to re-run the test suite (regenerates `.artgraph/trace/` as a fresh generation, not an accumulating diff) to refresh the evidence; if re-running isn't possible right now, note the staleness explicitly in your report rather than treating the stale entries as either confirmed or refuted. `trace.staleness` changes how much this matters: `warn` (default) only reports it; `exclude` drops stale edges from every evidence judgment; `gate` fails `check --diff --gate` (exit 2) until refreshed.
 
 `baselineStatus` values:
 - `computed` / `empty` / `skipped`: a real (possibly trivial) baseline diff was applied — `newIssues` reflects genuinely new problems. Proceed to step 4 normally.
