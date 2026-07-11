@@ -105,7 +105,12 @@ describe("check --diff --gate baseline diff (US1)", () => {
     const json = JSON.parse(stdout);
     expect(json.pass).toBe(true);
     expect(json.baselineStatus).toBe("skipped");
-    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+    expect(json.newIssues).toEqual({
+      drifted: [],
+      orphans: [],
+      uncovered: [],
+      testFailures: [],
+    });
     expect(json.suppressedCount).toBe(0);
     expect(Array.isArray(json.warnings)).toBe(true);
     expect(json.message).toContain("Changed files are not tracked in the graph.");
@@ -141,7 +146,12 @@ describe("check --diff --gate baseline diff (US1)", () => {
     expect(exitCode).toBe(0);
     expect(json.baselineStatus).toBe("computed");
     // Nothing was ever in scope → nothing new, nothing suppressed.
-    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+    expect(json.newIssues).toEqual({
+      drifted: [],
+      orphans: [],
+      uncovered: [],
+      testFailures: [],
+    });
     expect(json.suppressedCount).toBe(0);
   });
 });
@@ -251,7 +261,12 @@ describe("check --diff --gate catches newly introduced issues (US2)", () => {
     appendFileSync(join(dir, "src", "hub.ts"), "\n// harmless\n");
     const { exitCode, json } = await checkJson(dir);
     expect(exitCode).toBe(0);
-    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+    expect(json.newIssues).toEqual({
+      drifted: [],
+      orphans: [],
+      uncovered: [],
+      testFailures: [],
+    });
   });
 });
 
@@ -302,7 +317,12 @@ describe("check --diff --gate catches a deleted sole @impl/@verifies edge (issue
     expect(exitCode).toBe(0);
     expect(json.pass).toBe(true);
     expect(json.uncovered).not.toContain("REQ-501");
-    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+    expect(json.newIssues).toEqual({
+      drifted: [],
+      orphans: [],
+      uncovered: [],
+      testFailures: [],
+    });
   });
 
   it("(T229-3) git rm of the sole-@impl file → new uncovered → exit 2", async () => {
@@ -397,7 +417,12 @@ describe("check --diff --gate baselineStatus invariants (T021)", () => {
     for (const arr of [json.drifted, json.orphans, json.uncovered, json.testFailures]) {
       expect(arr).toEqual([]);
     }
-    expect(json.newIssues).toEqual({ drifted: [], orphans: [], uncovered: [], testFailures: [] });
+    expect(json.newIssues).toEqual({
+      drifted: [],
+      orphans: [],
+      uncovered: [],
+      testFailures: [],
+    });
     expect(json.suppressedCount).toBe(0);
   });
 
@@ -470,7 +495,10 @@ describe("check --diff --gate untracked-only diff skips eager baseline (issue #2
 describe("check --diff --gate rename-aware baseline normalization (C2)", () => {
   it("(T-rename-1) git mv of a pre-existing-orphan file → exit 0, orphan stays suppressed", async () => {
     const dir = track(makeRepoWithOrphan("artgraph-c2-rename-1-"));
-    execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], {
+      cwd: dir,
+      stdio: "pipe",
+    });
 
     const { exitCode, json } = await checkJson(dir);
     expect(exitCode).toBe(0);
@@ -485,7 +513,10 @@ describe("check --diff --gate rename-aware baseline normalization (C2)", () => {
 
   it("(T-rename-2) rename stays suppressed even when a genuinely new orphan is introduced elsewhere → exit 2 for the new one only", async () => {
     const dir = track(makeRepoWithOrphan("artgraph-c2-rename-2-"));
-    execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["mv", "src/old.ts", "src/new.ts"], {
+      cwd: dir,
+      stdio: "pipe",
+    });
     // A brand-new orphan on a DIFFERENT, previously-clean file — must still
     // be caught, so the rename normalization can't be a blanket amnesty.
     // (String literal split with concatenation to avoid the artgraph scanner
@@ -570,6 +601,157 @@ describe("check --diff scope purification — same-spec REQ-A/REQ-B (spec 019 US
     // Still pre-existing (REQ-100/REQ-200 content unchanged) → suppressed,
     // not new.
     expect(json.newIssues.uncovered).not.toContain("REQ-200");
+  });
+});
+
+// issue #178 — `check --diff --gate --ignore <csv>` is a one-shot escape
+// hatch so an in-progress SDD implementation (tasks.md-driven, REQs landing
+// one at a time) doesn't get gate-blocked on a REQ that legitimately isn't
+// implemented yet. Same CSV-parsing contract as `plan-coverage --ignore`
+// (trim + silent empty-entry drop); no persistence.
+describe("check --diff --gate --ignore suppresses newIssues.uncovered (issue #178)", () => {
+  it("(T178-1) --ignore REQ-500 suppresses new uncovered REQ-500 → exit 0", async () => {
+    const dir = repoSoleImpl("artgraph-178-ignore-");
+    const targetPath = join(dir, "src", "target.ts");
+    const before = readFileSync(targetPath, "utf-8");
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("@impl REQ-500"))
+      .join("\n");
+    expect(after).not.toEqual(before);
+    writeFileSync(targetPath, after);
+
+    // --ignore なし: exit 2 (既存 T229-1 挙動)
+    const noIgnore = await checkJson(dir);
+    expect(noIgnore.exitCode).toBe(2);
+    expect(noIgnore.json.newIssues.uncovered).toContain("REQ-500");
+
+    // --ignore REQ-500: exit 0
+    const withIgnore = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+      "--ignore",
+      "REQ-500",
+    ]);
+    expect(withIgnore.exitCode).toBe(0);
+    const json = JSON.parse(withIgnore.stdout);
+    expect(json.pass).toBe(true);
+    expect(json.newIssues.uncovered).not.toContain("REQ-500");
+    expect(withIgnore.stderr).toContain("--ignore suppressed 1 REQ");
+    expect(withIgnore.stderr).toContain("REQ-500");
+  });
+
+  it("(T178-2) multiple REQ-IDs via CSV are all suppressed (trim + trailing comma)", async () => {
+    const dir = repoSoleImpl("artgraph-178-ignore-multi-");
+    const targetPath = join(dir, "src", "target.ts");
+    const before = readFileSync(targetPath, "utf-8");
+    // Drop BOTH sole @impl edges so REQ-500 and REQ-501 are both newly
+    // uncovered (deleting only the [REQ-501] verifies tag, per T229-2,
+    // would NOT make REQ-501 uncovered — findUncovered ignores verifies).
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("@impl REQ-500") && !line.includes("@impl REQ-501"))
+      .join("\n");
+    expect(after).not.toEqual(before);
+    writeFileSync(targetPath, after);
+
+    const noIgnore = await checkJson(dir);
+    expect(noIgnore.exitCode).toBe(2);
+    expect(noIgnore.json.newIssues.uncovered).toEqual(
+      expect.arrayContaining(["REQ-500", "REQ-501"]),
+    );
+
+    // Trailing comma + surrounding whitespace must be tolerated, same as
+    // `plan-coverage --ignore`'s CSV contract.
+    const withIgnore = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+      "--ignore",
+      " REQ-500 ,REQ-501,",
+    ]);
+    expect(withIgnore.exitCode).toBe(0);
+    const json = JSON.parse(withIgnore.stdout);
+    expect(json.pass).toBe(true);
+    expect(json.newIssues.uncovered).not.toContain("REQ-500");
+    expect(json.newIssues.uncovered).not.toContain("REQ-501");
+    expect(withIgnore.stderr).toContain("--ignore suppressed 2 REQ");
+    expect(withIgnore.stderr).toContain("REQ-500");
+    expect(withIgnore.stderr).toContain("REQ-501");
+  });
+
+  it("(T178-3) --ignore without --diff emits a WARNING and has no effect on plain check", async () => {
+    const dir = repoSoleImpl("artgraph-178-no-diff-");
+    const { stdout, stderr, exitCode } = await runAt(dir, [
+      "check",
+      "--ignore",
+      "REQ-500",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain("WARNING: --ignore is only effective with --diff; ignoring.");
+    const json = JSON.parse(stdout);
+    // Plain check: REQ-500 has a live @impl, nothing uncovered.
+    expect(json.uncovered).not.toContain("REQ-500");
+  });
+
+  it('(T178-4) --ignore "" (empty) has no effect and no warning/info', async () => {
+    const dir = repoSoleImpl("artgraph-178-empty-ignore-");
+    const targetPath = join(dir, "src", "target.ts");
+    const before = readFileSync(targetPath, "utf-8");
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("@impl REQ-500"))
+      .join("\n");
+    writeFileSync(targetPath, after);
+
+    const { stdout, stderr, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+      "--ignore",
+      "",
+    ]);
+    expect(exitCode).toBe(2);
+    const json = JSON.parse(stdout);
+    expect(json.newIssues.uncovered).toContain("REQ-500");
+    expect(stderr).not.toContain("--ignore suppressed");
+    expect(stderr).not.toContain("WARNING: --ignore is only effective with --diff");
+  });
+
+  it("(T178-5) --ignore of a REQ not present in newIssues.uncovered is silent (no INFO)", async () => {
+    const dir = repoSoleImpl("artgraph-178-noop-ignore-");
+    const targetPath = join(dir, "src", "target.ts");
+    const before = readFileSync(targetPath, "utf-8");
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("@impl REQ-500"))
+      .join("\n");
+    writeFileSync(targetPath, after);
+
+    const { stdout, stderr, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+      "--ignore",
+      "REQ-999",
+    ]);
+    // REQ-999 doesn't match the actual new uncovered REQ-500, so it's
+    // unaffected — the gate still catches REQ-500.
+    expect(exitCode).toBe(2);
+    const json = JSON.parse(stdout);
+    expect(json.newIssues.uncovered).toContain("REQ-500");
+    expect(stderr).not.toContain("--ignore suppressed");
   });
 });
 
