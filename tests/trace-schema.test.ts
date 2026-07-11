@@ -3,9 +3,15 @@ import {
   SCHEMA_VERSION,
   parseShardLines,
   normalizeTrace,
+  isExcludedRelPath,
+  TEST_FILE_RE,
+  REGISTRY_KEY,
+  REGISTRY_VERSION,
   type ShardMetaRecord,
   type ShardTestRecord,
   type ShardSkippedRecord,
+  type ModuleRegistration,
+  type TraceRegistry,
 } from "../src/trace/schema.js";
 
 // spec 020 (contracts/trace-artifact.md) — shard JSONL schema, the SSOT that
@@ -231,5 +237,108 @@ describe("normalizeTrace", () => {
     const shuffled = [lines[0]!, lines[3]!, lines[1]!, lines[2]!];
     const afterShuffle = normalizeTrace([parseShardLines(shuffled.join("\n"))]);
     expect(forward).toEqual(afterShuffle);
+  });
+});
+
+// spec 022 (tasks.md T003, contracts/instrumentation-runtime.md §変換のスキップ) —
+// boundary tests for the exclusion-rule SSOT (観点1: 境界条件). Shared by
+// `src/vitest/plugin.ts` (skip transform) and both runner engines via
+// `src/trace/schema.ts`'s `isExcludedRelPath` / `TEST_FILE_RE`.
+describe("isExcludedRelPath", () => {
+  // ①境界: 相対化で `..` に出るパス(プロジェクトルート外)
+  it("excludes a path that relativizes outside the project root (leading `..`)", () => {
+    expect(isExcludedRelPath("../outside.ts")).toBe(true);
+    expect(isExcludedRelPath("../../outside.ts")).toBe(true);
+  });
+
+  // ①境界: 絶対パス
+  it("excludes an absolute path", () => {
+    expect(isExcludedRelPath("/abs/path.ts")).toBe(true);
+  });
+
+  // ①境界: `node_modules/` を中間に含むパス
+  it("excludes a path with `node_modules/` anywhere in the middle", () => {
+    expect(isExcludedRelPath("node_modules/pkg/index.ts")).toBe(true);
+    expect(isExcludedRelPath("src/node_modules/pkg/index.ts")).toBe(true);
+    expect(isExcludedRelPath("packages/app/node_modules/pkg/deep/file.ts")).toBe(true);
+  });
+
+  // ①境界: `.test.`/`.spec.` × 全対象拡張子(js|jsx|ts|tsx|cjs|mjs|cts|mts)の全組合せ
+  const extensions = ["js", "jsx", "ts", "tsx", "cjs", "mjs", "cts", "mts"] as const;
+  const markers = ["test", "spec"] as const;
+  for (const marker of markers) {
+    for (const ext of extensions) {
+      it(`excludes a \`.${marker}.${ext}\` test file`, () => {
+        expect(isExcludedRelPath(`src/foo.${marker}.${ext}`)).toBe(true);
+        expect(TEST_FILE_RE.test(`src/foo.${marker}.${ext}`)).toBe(true);
+      });
+    }
+  }
+
+  // ⑥エッジ: `node_modules` を**含まない**類似名は除外されないこと
+  it("does NOT exclude a directory whose name merely resembles `node_modules`", () => {
+    expect(isExcludedRelPath("my_node_modules/foo.ts")).toBe(false);
+    expect(isExcludedRelPath("src/my_node_modules/foo.ts")).toBe(false);
+    expect(isExcludedRelPath("node_modules_backup/foo.ts")).toBe(false);
+  });
+
+  // 正常系サニティ: 通常のプロジェクト内ソースは除外されない
+  it("does not exclude an ordinary project-relative source path", () => {
+    expect(isExcludedRelPath("src/index.ts")).toBe(false);
+    expect(isExcludedRelPath("src/trace/schema.ts")).toBe(false);
+  });
+});
+
+// spec 022 (tasks.md T005, contracts/instrumentation-runtime.md) — SSOT pair
+// (c) equivalence: the `globalThis[REGISTRY_KEY]` shape this module defines
+// must match the contract doc's literal description, byte-for-byte on the
+// two constants and structurally on `ModuleRegistration`.
+describe("instrumentation registry contract (contracts/instrumentation-runtime.md)", () => {
+  it("REGISTRY_KEY matches the contract's documented globalThis key", () => {
+    expect(REGISTRY_KEY).toBe("__ARTGRAPH_TRACE_REGISTRY__");
+  });
+
+  it("REGISTRY_VERSION matches the contract's documented version (1)", () => {
+    expect(REGISTRY_VERSION).toBe(1);
+  });
+
+  it("a well-formed ModuleRegistration satisfies fns.length === hits.length", () => {
+    const registration: ModuleRegistration = {
+      file: "src/example.ts",
+      hash: "0123456789abcdef",
+      fns: ["foo", "bar", "baz"],
+      hits: new Uint8Array(3),
+    };
+    expect(registration.fns.length).toBe(registration.hits.length);
+  });
+
+  it("an empty-module ModuleRegistration (zero functions) also satisfies the invariant", () => {
+    const registration: ModuleRegistration = {
+      file: "src/empty.ts",
+      hash: "0123456789abcdef",
+      fns: [],
+      hits: new Uint8Array(0),
+    };
+    expect(registration.fns.length).toBe(registration.hits.length);
+  });
+
+  it("modules.set(file, registration) replaces a prior registration for the same relPath", () => {
+    const registry: TraceRegistry = { version: REGISTRY_VERSION, modules: new Map() };
+    const stale: ModuleRegistration = {
+      file: "src/reeval.ts",
+      hash: "aaaaaaaaaaaaaaaa",
+      fns: ["old"],
+      hits: new Uint8Array([1]),
+    };
+    const fresh: ModuleRegistration = {
+      file: "src/reeval.ts",
+      hash: "bbbbbbbbbbbbbbbb",
+      fns: ["old", "new"],
+      hits: new Uint8Array([0, 0]),
+    };
+    registry.modules.set(stale.file, stale);
+    registry.modules.set(fresh.file, fresh);
+    expect(registry.modules.size).toBe(1);
+    expect(registry.modules.get("src/reeval.ts")).toBe(fresh);
   });
 });

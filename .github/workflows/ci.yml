@@ -96,6 +96,47 @@ jobs:
       - run: pnpm test:perf
         continue-on-error: true
 
+  # spec 022 (tasks.md T024, FR-014 — analysis finding C2: "3.x/4.x を実際に
+  # 回すマトリクスは現状存在しない"): the `build` job above always installs
+  # whatever `pnpm-lock.yaml` pins (currently vitest 4.x) — nothing actually
+  # exercises the OTHER end of this project's own declared peer range
+  # (`peerDependencies.vitest: ">=3 <5"`). This job swaps vitest down to 3.x
+  # for itself only (lockfile untouched — see the `--no-lockfile` step
+  # below) and reruns the runner/parity e2e suite, which covers both trace
+  # engines (`instrument`/`cdp`), against it.
+  vitest-compat:
+    name: vitest-compat (vitest@3.x e2e)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # `--no-lockfile` (not `--no-save` — this project's pinned pnpm
+      # (`packageManager` in package.json) doesn't expose a `--no-save` flag
+      # on `add`) swaps `node_modules` to vitest 3.x for this job's
+      # `package.json`/`node_modules` only, without writing back to the
+      # committed `pnpm-lock.yaml` (verified locally: `git diff
+      # pnpm-lock.yaml` is empty after this step).
+      - run: pnpm add -D vitest@^3 @vitest/coverage-v8@^3 --no-lockfile
+
+      - run: pnpm build
+
+      # Deliberately NOT `continue-on-error: true` (tasks.md T024) — a
+      # vitest-3.x incompatibility must show up as a red job, not be
+      # swallowed silently.
+      - run: >-
+          pnpm vitest run --config vitest.e2e.config.ts
+          tests/e2e/vitest-runner.e2e.test.ts
+          tests/e2e/engine-parity.e2e.test.ts
+
   # Package-manager smoke matrix (spec 015, FR-015/016/017, SC-006): prove the
   # CLI runs init -> scan -> check under every supported PM runner, including
   # ts-morph under the Bun and Deno runtimes. Deno runs the built ./dist/cli.js

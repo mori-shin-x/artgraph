@@ -121,3 +121,9 @@ export default class PerTestCoverageRunner extends VitestTestRunner {
 - **Decision**: runner モジュール(`artgraph/vitest`)のみが `vitest/runners` を import し、CLI 本体は vitest 非依存。CI で 3.x / 4.x マトリクス E2E。
 - **Rationale**: CLI 利用者に vitest を強制しない。Runner API は experimental のためバージョン結合はマトリクステストで監視する。
 - **Alternatives**: (a) hard dependency — CLI だけ使うユーザーに不要な重み。(b) バンドル同梱 — vitest はユーザープロジェクト側の実行環境なので原理的に不可。
+
+### D9. 採取方式の転換(capture engine v2、spec 022)
+
+- **Decision**: 既定の採取方式を D1 のワーカー内 inspector セッション(CDP `takePreciseCoverage`)から、build-time の関数入口静的計装(`withTrace()` が注入する Vite plugin)へ転換する(spec 022)。CDP 経路は `engine: 'cdp'` / `ARTGRAPH_TRACE_ENGINE=cdp` で明示選択可能な fallback として残置する。
+- **Rationale**: D1 が計装方式を退けた理由「build 変換の注入が必要で『config 1 行』の UX が壊れる」は、D1 自身の成果物である `withTrace()` ラッパーの存在により失効している — plugin の注入も同じ 1 行の中で完結する。加えて `takePreciseCoverage` 1 回のコストが isolate にロード済みのスクリプト総数に比例することが実測で判明し(25 モジュール 0.345ms → 1,600 モジュール 1.545ms、`docs/design/241-trace-engine-v2.md`)、テスト数 × モジュール数に比例する構造的な性能限界が D1 方式に内在することが分かった。詳細な設計判断(V1〜V9)は `specs/022-instrumented-trace-engine/` を参照。
+- **Alternatives**: D1 の Alternatives (a)〜(c) は spec 022 でも再検討したが結論は変わらない — `NODE_V8_COVERAGE`(プロセス単位で per-test 分離不能)、reporter のみ(境界フックなし)は不採用のまま。CDP 継続 + issue #241 の対策候補(バッチ化・hash キャッシュ・フィルタ前倒し)は支配項に触れず改善上限 1.3〜1.4x に留まるため、fallback エンジンの安価改善としてのみ採用した(spec 022 V8)。
