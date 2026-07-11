@@ -79,14 +79,14 @@
 
 **Independent Test**: quickstart §7(不正値 fail-fast・エンジン切替)
 
-- [ ] T014 [US3] [RED] `tests/vitest-setup.test.ts` に engine オプションのテストを**追加**する(ファイルは spec 020 実装で既存 — reporters / setupFiles / pool 保持・globalSetup 冪等追記などの既存回帰アサーションは削除せず保持したまま拡張する)。網羅対象(観点 2・3・5):
+- [x] T014 [US3] [RED] `tests/vitest-setup.test.ts` に engine オプションのテストを**追加**する(ファイルは spec 020 実装で既存 — reporters / setupFiles / pool 保持・globalSetup 冪等追記などの既存回帰アサーションは削除せず保持したまま拡張する)。網羅対象(観点 2・3・5):
   - **分岐の直積**: engine 指定(なし / `instrument` / `cdp` / 不正値)× 既存 `plugins` の有無 × 既存 `globalSetup`(string / array / なし)× ユーザー設定済み `test.env.ARTGRAPH_TRACE_ENGINE` の有無
   - 不正 engine 値 → `withTrace` 呼び出し時に throw(fail-fast、観点 3)
   - `instrument` → plugin が `plugins` に追記され、既存 plugins が保持される・**二重 withTrace は plugin 名で冪等**(観点 5)
   - `cdp` → plugin 非注入 + `test.env` マーカー設定
   - ユーザーが `test.env.ARTGRAPH_TRACE_ENGINE` を設定済み → ユーザー値優先(contracts/config-surface.md)
   - 従来義務の回帰: `test.runner` 設定・globalSetup 冪等追記・その他キーのパススルー
-- [ ] T015 [US3] `src/vitest/setup.ts` に `withTrace(config, options?)` を実装して T014 を green にする(plugin.ts を import — main-process 層)
+- [x] T015 [US3] `src/vitest/setup.ts` に `withTrace(config, options?)` を実装して T014 を green にする(plugin.ts を import — main-process 層)
 - [ ] T016 [US3] cdp 経路の安価改善を `src/vitest/runner.ts` に実装する(FR-013 — これ以上の最適化はしない): ワーカー内 `path → contentHash` メモ化・shard 書き込みを v2 と同じバッチ機構に載せる。`tests/e2e/vitest-runner.e2e.test.ts` を **両エンジン × forks / threads** のマトリクスに拡張し、isolate オン/オフ両方で registry 置換が正しく働くこと(観点 5)を含めて green にする
 - [ ] T024 [US3] vitest バージョンマトリクス CI を追加する(FR-014 — 分析所見 C2: 3.x/4.x を実際に回すマトリクスは現状存在しない): `.github/workflows/ci.yml` に vitest 3.x ジョブ軸を追加する(`pnpm add -D vitest@^3 --no-save` 等で差し替えてから `pnpm build && pnpm test:e2e` を実行 — runner E2E が両エンジンをカバーするため e2e スイートで足りる)。実行順は T016 の後
 
