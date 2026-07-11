@@ -150,6 +150,75 @@ export function makeRepoWithOrphan(prefix: string): string {
 }
 
 /**
+ * issue #229 — a committed repo carrying a **sole `@impl` / `@verifies`
+ * claim** so a test can delete just that one edge and assert the affected
+ * REQ becomes newly-uncovered under `check --diff --gate` (the union-scope
+ * fix: the CURRENT graph alone can no longer see the deleted edge, so the
+ * fix must also compute scope on the BASELINE graph, where the edge still
+ * exists, to pull the REQ into scope):
+ *
+ *  - `specs/target.md` defines `REQ-500` (implemented only by `fnTarget`,
+ *    no test coverage) and `REQ-501` (implemented by `fnVerified` AND
+ *    verified by `tests/target.test.ts`'s `[REQ-501]` tag).
+ *  - `src/target.ts` holds both `fnTarget` (`@impl REQ-500`, sole claim) and
+ *    `fnVerified` (`@impl REQ-501`).
+ *  - `tests/target.test.ts` holds the sole `[REQ-501]` `verifies` tag.
+ *
+ * Everything is scanned, locked, and committed to HEAD before returning.
+ */
+export function makeRepoWithSoleImplTag(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(dir, ".gitignore"), ".trace.lock\nnode_modules/\n");
+  writeFileSync(
+    join(dir, ".artgraph.json"),
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.ts"],
+      lockFile: ".trace.lock",
+    }),
+  );
+  mkdirSync(join(dir, "specs"), { recursive: true });
+  mkdirSync(join(dir, "src"), { recursive: true });
+  mkdirSync(join(dir, "tests"), { recursive: true });
+
+  writeFileSync(
+    join(dir, "specs", "target.md"),
+    "# Target\n\n- REQ-500: only implemented by fnTarget\n- REQ-501: implemented and verified\n",
+  );
+  writeFileSync(
+    join(dir, "src", "target.ts"),
+    [
+      "// @impl REQ-500",
+      "export function fnTarget(): number {",
+      "  return 1;",
+      "}",
+      "",
+      "// @impl REQ-501",
+      "export function fnVerified(): number {",
+      "  return 2;",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(dir, "tests", "target.test.ts"),
+    [
+      'import { describe, it } from "vitest";',
+      "",
+      'describe("fnVerified", () => {',
+      '  it("does something [REQ-501]", () => {});',
+      "});",
+      "",
+    ].join("\n"),
+  );
+
+  gitInit(dir);
+  gitCommitAll(dir, "init with sole @impl/@verifies claim (issue #229 fixture)");
+  return dir;
+}
+
+/**
  * spec 017 (T022b / T026) — an **unborn HEAD** repo: `git init` with an
  * uncommitted, untracked spec + impl carrying a scoped issue. `git rev-parse
  * HEAD` fails, so `computeBaselineIssues` returns `status:"empty"` and every

@@ -179,6 +179,9 @@ export function detectProject(rootDir: string): DetectionResult {
 export function generateConfig(detection: DetectionResult): ArtgraphConfig {
   const include = detection.hasSrc ? [...DEFAULT_CONFIG.include] : ["**/*.ts", "**/*.tsx"];
 
+  // "specs" and "docs" are always siblings, never parent/child, so this can't
+  // produce the parent+child specDirs shape loadConfig's validateSpecDirs
+  // filters (issue #234).
   const specDirs: string[] = [];
   if (detection.hasSpecs) specDirs.push("specs");
   if (detection.hasDocs) specDirs.push("docs");
