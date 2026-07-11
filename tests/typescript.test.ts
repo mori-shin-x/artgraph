@@ -1157,24 +1157,39 @@ describe("createTSParser (symbol mode — class method grain, spec 021 — T020 
         "",
       ].join("\n"),
     );
+    // PR #242 review B — same collision shape, but with an `@impl` tag on
+    // the LOSING declaration. Pre-fix, the loser entry was spliced out of
+    // `entries` together with its attribution range, so this tag silently
+    // degraded to FILE grain. Post-fix the range survives (only the node is
+    // suppressed) and the tag re-attributes to the winning class member.
+    write(
+      "src/collision-tagged.ts",
+      [
+        "// @impl REQ-2001",
+        "function helper(): void {}",
+        'export { helper as "Sample.methodA" };',
+        "",
+        "export class Sample {",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
   });
 
   afterAll(() => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("T020(a): the class member wins the ID collision and a build warning is emitted (not a silent drop)", () => {
+  const parse = () => createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+
+  it("T020(a): the class member wins the ID collision and a STRUCTURED warning is emitted (not console.warn — PR #242 review A)", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     let result;
-    let warningCalls: string[];
+    let consoleCalls: string[];
     try {
-      result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
-      // Capture (as plain strings) BEFORE mockRestore() runs — mockRestore()
-      // also clears `mock.calls` (same as mockReset()), so reading the spy's
-      // call list after restoring would always see an empty array.
-      warningCalls = warnSpy.mock.calls
-        .map((args) => String(args[0]))
-        .filter((msg) => msg.includes("symbol:src/collision.ts#Sample.methodA"));
+      result = parse();
+      consoleCalls = warnSpy.mock.calls.map((args) => String(args[0]));
     } finally {
       warnSpy.mockRestore();
     }
@@ -1182,31 +1197,175 @@ describe("createTSParser (symbol mode — class method grain, spec 021 — T020 
     // string-literal-aliased export's.
     const contested = result.nodes.filter((n) => n.id === "symbol:src/collision.ts#Sample.methodA");
     expect(contested).toHaveLength(1);
-    // A warning was emitted (not a silent first-wins/last-wins drop).
-    expect(warningCalls.length).toBeGreaterThanOrEqual(1);
-    expect(warningCalls[0]).toMatch(/collides with an/);
+    // The warning is a structured entry in the parser's return value — it
+    // travels through TsFragment → buildGraph warnings, so it survives a
+    // parse-cache warm hit and reaches `--format json` `warnings[]`.
+    const collisionWarnings = result.warnings.filter(
+      (w) =>
+        w.type === "class-member-collision" &&
+        w.symbolId === "symbol:src/collision.ts#Sample.methodA",
+    );
+    expect(collisionWarnings).toHaveLength(1);
+    expect(collisionWarnings[0].filePath).toBe("src/collision.ts");
+    expect(collisionWarnings[0].message).toMatch(/collides with an existing/);
+    // The message tells the author what happens to a tag on the loser side.
+    expect(collisionWarnings[0].message).toMatch(/re-attributes to the class member/);
+    // And the old side channel is gone: nothing about this collision goes
+    // through console.warn anymore (it double-printed under `check --gate
+    // --diff` and vanished on warm cache hits).
+    expect(consoleCalls.filter((msg) => msg.includes("Sample.methodA"))).toEqual([]);
   });
 
   it("T020(b): the collision resolution and warning are deterministic across repeated parses", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    let firstWarnings: string[];
-    let secondWarnings: string[];
-    let firstNodeIds: string[];
-    let secondNodeIds: string[];
-    try {
-      const r1 = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
-      firstWarnings = warnSpy.mock.calls.map((args) => String(args[0]));
-      firstNodeIds = r1.nodes.filter((n) => n.kind === "symbol").map((n) => n.id);
-      warnSpy.mockClear();
+    const r1 = parse();
+    const r2 = parse();
+    expect(r2.warnings).toEqual(r1.warnings);
+    expect(r2.nodes.filter((n) => n.kind === "symbol").map((n) => n.id)).toEqual(
+      r1.nodes.filter((n) => n.kind === "symbol").map((n) => n.id),
+    );
+  });
 
-      const r2 = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
-      secondWarnings = warnSpy.mock.calls.map((args) => String(args[0]));
-      secondNodeIds = r2.nodes.filter((n) => n.kind === "symbol").map((n) => n.id);
-    } finally {
-      warnSpy.mockRestore();
-    }
-    expect(secondWarnings).toEqual(firstWarnings);
-    expect(secondNodeIds).toEqual(firstNodeIds);
+  it("T020(c): a tag above the collision-LOSING declaration re-attributes to the winning class member, not to the file (PR #242 review B)", () => {
+    const result = parse();
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "REQ-2001",
+    );
+    expect(implEdges).toHaveLength(1);
+    // The loser's attribution range survives the collision, and the name it
+    // resolves ("Sample.methodA") is exactly the id the winning class member
+    // owns — so the tag lands on the member symbol. Pre-fix this was
+    // `file:src/collision-tagged.ts` (a silent symbol→file downgrade).
+    expect(implEdges[0].source).toBe("symbol:src/collision-tagged.ts#Sample.methodA");
+    // The winner's node is the ONLY node under the contested id.
+    expect(
+      result.nodes.filter((n) => n.id === "symbol:src/collision-tagged.ts#Sample.methodA"),
+    ).toHaveLength(1);
+  });
+});
+
+// PR #242 review C — the OTHER collision channel: push()'s `seen`-name dedup
+// silently discarding a whole entry. Pre-existing behavior for plain symbols
+// (first registered wins — unchanged), but once class entries carry member
+// maps, the silent drop can now swallow an entire class's member symbols, so
+// those cases emit the same structured `class-member-collision` warning.
+describe("createTSParser (symbol mode — class-level seen-collision warnings, PR #242 review C)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-seen-collision-"));
+    // C1 order 1 — the string-literal alias export registers "Sample" FIRST
+    // (both are pass-2 forms, so source order decides); the inline class of
+    // the same name is then dropped by the seen dedup, member symbols and
+    // all.
+    write(
+      "src/alias-first.ts",
+      [
+        "function helper(): void {}",
+        'export { helper as "Sample" };',
+        "export class Sample {",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    // C1 order 2 — the class registers first and WINS; the alias export of
+    // the same name is the dropped side. The winner carries classMembers, so
+    // this direction warns too.
+    write(
+      "src/class-first.ts",
+      [
+        "export class Sample {",
+        "  methodA(): void {}",
+        "}",
+        "function helper(): void {}",
+        'export { helper as "Sample" };',
+        "",
+      ].join("\n"),
+    );
+    // C2 — two same-name classes in one file (illegal TS, but oxc parses
+    // both): the second class is silently dropped by the seen dedup.
+    write(
+      "src/dup-class.ts",
+      [
+        "export class Dup {",
+        "  a(): void {}",
+        "}",
+        "export class Dup {",
+        "  b(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    // Benign — `export function f(){}` + `export { f }` re-pushes the SAME
+    // declaration span (the specifier resolves back to the function's own
+    // LocalDecl), so it is a no-op duplicate, not a collision. MUST NOT
+    // warn.
+    write("src/benign.ts", ["export function f(): void {}", "export { f };", ""].join("\n"));
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const parse = () => createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+
+  it("C1 (alias first): a class entry swallowed by the seen dedup emits a structured warning", () => {
+    const result = parse();
+    const warnings = result.warnings.filter(
+      (w) => w.type === "class-member-collision" && w.filePath === "src/alias-first.ts",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].symbolId).toBe("symbol:src/alias-first.ts#Sample");
+    // The dropped class contributed no member symbols (the drop is the
+    // pre-existing first-wins behavior — only the observability is new).
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/alias-first.ts")
+      .map((n) => n.id);
+    expect(symbolIds).toEqual(["symbol:src/alias-first.ts#Sample"]);
+  });
+
+  it("C1 (class first): a same-name alias export dropped AGAINST a class winner emits a structured warning", () => {
+    const result = parse();
+    const warnings = result.warnings.filter(
+      (w) => w.type === "class-member-collision" && w.filePath === "src/class-first.ts",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].symbolId).toBe("symbol:src/class-first.ts#Sample");
+    // The class won, so its member symbols are intact.
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/class-first.ts")
+      .map((n) => n.id)
+      .sort();
+    expect(symbolIds).toEqual([
+      "symbol:src/class-first.ts#Sample",
+      "symbol:src/class-first.ts#Sample.methodA",
+    ]);
+  });
+
+  it("C2 (duplicate classes): the silently-dropped second class emits a structured warning", () => {
+    const result = parse();
+    const warnings = result.warnings.filter(
+      (w) => w.type === "class-member-collision" && w.filePath === "src/dup-class.ts",
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].symbolId).toBe("symbol:src/dup-class.ts#Dup");
+    // First class won: only ITS member (`a`) is symbolized.
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/dup-class.ts")
+      .map((n) => n.id)
+      .sort();
+    expect(symbolIds).toEqual(["symbol:src/dup-class.ts#Dup", "symbol:src/dup-class.ts#Dup.a"]);
+  });
+
+  it("benign re-push (`export function f` + `export { f }`) does NOT warn (same declaration span)", () => {
+    const result = parse();
+    expect(result.warnings.filter((w) => w.filePath === "src/benign.ts")).toEqual([]);
   });
 });
 

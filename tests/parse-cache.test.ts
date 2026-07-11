@@ -249,28 +249,70 @@ describe("parse cache", () => {
     expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp, symbolCfg));
   });
 
-  it("rejects a cache file with a stale schemaVersion (SCHEMA_VERSION was bumped 4→5 in spec 021)", () => {
-    // spec 021 (T016, issue #218): literal bumped 3→4 to 4→5 following the
-    // parser's SCHEMA_VERSION bump for class-method-grain symbols. Populate
-    // the cache normally, then hand-edit its schemaVersion down to the
-    // pre-spec-021 value. `readParseCache` must reject it and force a cold
-    // path — otherwise a warm build could serve a fragment that predates
-    // per-method symbol nodes / class->method `contains` edges, silently
-    // diverging from a cold rebuild (INV-L4 breach).
+  it("rejects a cache file with a stale schemaVersion (SCHEMA_VERSION was bumped 5→6 in PR #242 review A)", () => {
+    // spec 021 (T016, issue #218) bumped 4→5 for class-method-grain symbols;
+    // PR #242 review A bumped 5→6 when `TsFragment` gained the `warnings`
+    // field (a v5 fragment has no `warnings` key at all, so a warm hit on it
+    // would silently swallow that file's collision warnings). Populate the
+    // cache normally, then hand-edit its schemaVersion down to the previous
+    // value. `readParseCache` must reject it and force a cold path —
+    // otherwise a warm build could serve a fragment that predates the
+    // current parser output, silently diverging from a cold rebuild
+    // (INV-L4 breach).
     buildGraph(tmp, config); // populate cache
     const rawPath = join(tmp, CACHE_REL);
     const cache = JSON.parse(readFileSync(rawPath, "utf-8"));
-    expect(cache.schemaVersion).toBe(5);
-    cache.schemaVersion = 4;
+    expect(cache.schemaVersion).toBe(6);
+    cache.schemaVersion = 5;
     writeFileSync(rawPath, JSON.stringify(cache));
 
     // The next build sees a schema-mismatched cache and must fall back to
     // a cold parse. Behaviorally identical to a cache-disabled build.
     const { graph } = buildGraph(tmp, config);
     expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp));
-    // The rewritten cache carries the current schemaVersion (=5).
+    // The rewritten cache carries the current schemaVersion (=6).
     const rewritten = JSON.parse(readFileSync(rawPath, "utf-8"));
-    expect(rewritten.schemaVersion).toBe(5);
+    expect(rewritten.schemaVersion).toBe(6);
+  });
+
+  // PR #242 review A — the headline fix: the class-member collision warning
+  // must be observable on EVERY build, not just the first. Pre-fix it was a
+  // `console.warn` inside extractSymbols, so a warm cache hit (fragment
+  // reused, parser never runs) silently swallowed it — `scan` warned once
+  // after an edit and then went quiet forever. Now the warning is part of
+  // the TsFragment and is converted to a BuildWarning per build.
+  it("PR #242 review A: the collision warning survives a warm cache hit (cold AND warm builds both emit it)", () => {
+    const symbolCfg: ArtgraphConfig = { ...config, mode: "symbol" };
+    writeFileSync(
+      join(tmp, "src", "collision.ts"),
+      [
+        "function helper(): void {}",
+        'export { helper as "Sample.methodA" };',
+        "",
+        "export class Sample {",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    // Build 1 — cold (cache file does not exist yet).
+    const first = buildGraph(tmp, symbolCfg);
+    expect(existsSync(join(tmp, CACHE_REL))).toBe(true);
+    // Build 2 — warm (fragment served from the cache; the parser never runs
+    // for the unchanged collision.ts).
+    const second = buildGraph(tmp, symbolCfg);
+
+    const collisions = (ws: typeof first.warnings) =>
+      ws.filter((w) => w.type === "class-member-collision");
+    expect(collisions(first.warnings)).toHaveLength(1);
+    expect(collisions(first.warnings)[0].id).toBe("symbol:src/collision.ts#Sample.methodA");
+    expect(collisions(first.warnings)[0].files).toEqual(["src/collision.ts"]);
+    // The warm build reports EXACTLY the same warning — this was the hole.
+    expect(collisions(second.warnings)).toEqual(collisions(first.warnings));
+    // And warm/cold graph parity still holds with the warnings field on the
+    // fragment (INV-L4).
+    expect(snapshotGraph(second.graph)).toBe(buildWithoutCache(tmp, symbolCfg));
   });
 
   // spec 021 (T016, issue #218) — warm/cold parity for the NEW parser output:
@@ -278,7 +320,7 @@ describe("parse cache", () => {
   // `contains` edges for an inline-exported ClassDeclaration. Mirrors the
   // T12 `export *` warm/cold pin above, but exercises the class-method-grain
   // path specifically (symbol mode; the base fixture is file-mode).
-  it("spec 021: warm build of a class with methods yields the same lock bytes as cold (SCHEMA_VERSION 5)", () => {
+  it("spec 021: warm build of a class with methods yields the same lock bytes as cold", () => {
     const symbolCfg: ArtgraphConfig = { ...config, mode: "symbol" };
     writeFileSync(
       join(tmp, "src", "sample.ts"),

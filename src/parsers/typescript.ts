@@ -100,9 +100,26 @@ function buildIdMatchers(codeId?: string): IdMatchers {
   };
 }
 
+// PR #242 review A — structured warnings the TS parser wants surfaced to the
+// build layer. Mirrors markdown.ts's `ParseWarning` → `MdFragment.warnings` →
+// builder.ts warning-conversion pattern exactly, so class-member collisions
+// (previously a bare `console.warn` inside extractSymbols) ride the same pipe
+// as every other build warning: they survive a parse-cache warm hit, show up
+// in `--format json` `warnings[]`, and are never double-printed by
+// `check --gate --diff`. See parse-cache.ts's `TsFragment.warnings` and
+// builder.ts's TS-warning conversion loop for the rest of the wiring.
+export interface TsParseWarning {
+  type: "class-member-collision";
+  // Fully-qualified id the warning is about (`symbol:<path>#<name>`).
+  symbolId: string;
+  filePath: string;
+  message: string;
+}
+
 export interface ParsedTS {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  warnings: TsParseWarning[];
   // specs/018 §3 S1 side-channel. rootDir-relative resolved targets of every
   // plain `export * from "./o"` in this file, in source order, deduped by
   // first occurrence. Populated only in symbol mode on non-test files, and
@@ -134,12 +151,14 @@ export function createTSParser(
       const ctx = createResolverContext(rootDir);
       const nodes: GraphNode[] = [];
       const edges: GraphEdge[] = [];
+      const warnings: TsParseWarning[] = [];
       for (const filePath of enumerateFiles(rootDir, patterns)) {
         const parsed = parseTSFile(filePath, rootDir, mode, matchers, ctx);
         nodes.push(...parsed.nodes);
         edges.push(...parsed.edges);
+        warnings.push(...parsed.warnings);
       }
-      return { nodes, edges };
+      return { nodes, edges, warnings };
     },
   };
 }
@@ -324,6 +343,7 @@ function parseTSFile(
 ): ParsedTS {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
+  const warnings: TsParseWarning[] = [];
 
   const relPath = relative(rootDir, filePath);
   const content = stripBom(readFileSync(filePath, "utf-8"));
@@ -349,7 +369,15 @@ function parseTSFile(
 
   let symbolRanges: SymbolRange[] = [];
   if (parsed && mode === "symbol" && !isTest) {
-    symbolRanges = extractSymbols(parsed.program, content, relPath, nodes, edges, parsed.comments);
+    symbolRanges = extractSymbols(
+      parsed.program,
+      content,
+      relPath,
+      nodes,
+      edges,
+      warnings,
+      parsed.comments,
+    );
   }
   let starExports: string[] | undefined;
   if (parsed) {
@@ -369,7 +397,7 @@ function parseTSFile(
   }
   extractImplTags(content, relPath, isTest, edges, mode, symbolRanges, matchers, parsed?.comments);
 
-  return starExports ? { nodes, edges, starExports } : { nodes, edges };
+  return starExports ? { nodes, edges, warnings, starExports } : { nodes, edges, warnings };
 }
 
 // The TS compiler host strips a UTF-8 BOM when reading files — the file-hash
@@ -414,6 +442,16 @@ interface ExportEntry {
   // same name, and overload signatures + implementation all converge to one
   // map entry (FR-003). `undefined` for every other entry kind.
   classMembers?: Map<string, Array<{ start: number; end: number }>>;
+  // PR #242 review B — set when this entry LOST an id collision against a
+  // class member's synthesized name (see the collision-resolution pass
+  // below). A loser keeps its attribution RANGE (so a leading `@impl` tag
+  // above it still resolves via `resolveSymbolsAtLine`) but never gets a
+  // symbol NODE of its own — `resolveSymbolsAtLine` returns the collided
+  // NAME, and `symbol:<path>#<name>` is exactly the id the winning class
+  // member registered, so the tag re-attributes to the winner instead of
+  // dangling or degrading to file grain (the pre-fix behavior, which
+  // spliced the loser out of `entries` entirely and lost its range too).
+  collisionLoser?: boolean;
 }
 
 function isFunctionDecl(node: { type: string } | null | undefined): boolean {
@@ -520,6 +558,7 @@ function extractSymbols(
   relPath: string,
   nodes: GraphNode[],
   edges: GraphEdge[],
+  warnings: TsParseWarning[],
   comments: readonly OxcComment[] = [],
 ): SymbolRange[] {
   const declMap = collectTopLevelDecls(program);
@@ -544,7 +583,35 @@ function extractSymbols(
     attrEnd = end,
     classMembers?: Map<string, Array<{ start: number; end: number }>>,
   ) => {
-    if (seen.has(name)) return;
+    if (seen.has(name)) {
+      // PR #242 review C — this dedup ALREADY silently drops a later
+      // same-name export (pre-existing first-registered-wins behavior,
+      // unchanged here). That's usually benign: `export function f(){}` +
+      // `export { f }` re-pushes the SAME declaration span, so it's a no-op
+      // duplicate, not a real collision. But when the spans genuinely
+      // differ AND either side is a class entry (carries `classMembers` —
+      // e.g. two `export class Sample`, or a string-literal alias export
+      // colliding with a class's own name), the drop can silently discard an
+      // entire class's worth of member symbols with zero observability.
+      // Surface a warning in that case; the drop itself is unchanged.
+      const existing = entries.find((e) => e.name === name);
+      if (
+        existing &&
+        (existing.start !== start || existing.end !== end) &&
+        (existing.classMembers !== undefined || classMembers !== undefined)
+      ) {
+        warnings.push({
+          type: "class-member-collision",
+          symbolId: `symbol:${relPath}#${name}`,
+          filePath: relPath,
+          message:
+            `export "${name}" collides with an earlier export of the same name in this file; ` +
+            "the earlier declaration wins and this one (including any class members it would " +
+            "have contributed) is dropped. Rename one of them to remove the ambiguity.",
+        });
+      }
+      return;
+    }
     seen.add(name);
     entries.push({ name, start, end, group, attrStart, attrEnd, classMembers });
   };
@@ -654,22 +721,33 @@ function extractSymbols(
   // same literal name — today the only way that happens is a string-literal
   // export alias (`export { helper as "Sample.methodA" }`, whose entry name
   // is the literal's VALUE via moduleExportName — see the specifier branch
-  // above). The class member wins; the colliding entry is dropped with a
-  // build warning rather than a silent push()-order first-wins/last-wins
-  // (which push()'s own `seen` dedup would otherwise apply). Iterates a
-  // SNAPSHOT of `entries` so splicing the loser out of the live array
-  // mid-loop cannot skip a later class entry.
+  // above). The class member wins; the colliding entry is flagged as a
+  // `collisionLoser` (PR #242 review B) — NOT spliced out of `entries`
+  // anymore. Splicing used to delete the loser's attribution RANGE along
+  // with its node, so an `@impl` tag written above the losing declaration
+  // silently degraded from symbol grain to FILE grain (a regression vs.
+  // main, which had no class members to collide with in the first place).
+  // Keeping the range means `resolveSymbolsAtLine` still resolves the tag to
+  // the collided NAME, and `symbol:<path>#<name>` is exactly the id the
+  // winning class member registers below — so the tag re-attributes to the
+  // class member instead of dangling or degrading. Iterates a SNAPSHOT of
+  // `entries` so flagging entries mid-loop cannot skip a later class entry.
   for (const classEntry of entries.slice()) {
     if (!classEntry.classMembers) continue;
     for (const fullName of classEntry.classMembers.keys()) {
       const loserIdx = entries.findIndex((e) => e !== classEntry && e.name === fullName);
       if (loserIdx === -1) continue;
-      console.warn(
-        `WARNING: class member symbol "symbol:${relPath}#${fullName}" collides with an ` +
-          "existing export of the same name; the class member wins and the other export's " +
-          "symbol node is dropped. Rename one of them to remove the ambiguity.",
-      );
-      entries.splice(loserIdx, 1);
+      warnings.push({
+        type: "class-member-collision",
+        symbolId: `symbol:${relPath}#${fullName}`,
+        filePath: relPath,
+        message:
+          `class member symbol "symbol:${relPath}#${fullName}" collides with an existing ` +
+          "export of the same name; the class member wins and the other export's symbol node " +
+          "is dropped (any tag on the colliding declaration re-attributes to the class member). " +
+          "Rename one of them to remove the ambiguity.",
+      });
+      entries[loserIdx] = { ...entries[loserIdx], collisionLoser: true };
     }
   }
 
@@ -691,12 +769,19 @@ function extractSymbols(
   const lineHasCode = computeLineHasCode(content, comments, lineStarts);
   const ranges: SymbolRange[] = [];
   for (const entry of entries) {
-    nodes.push({
-      id: `symbol:${relPath}#${entry.name}`,
-      kind: "symbol",
-      filePath: relPath,
-      contentHash: hash(content.slice(entry.start, entry.end)),
-    });
+    // PR #242 review B — a collision loser contributes its attribution RANGE
+    // (below) but never a symbol NODE: the winning class member already
+    // registers a node under the exact same id (`symbol:<path>#<name>`), so
+    // pushing here would either duplicate it or (depending on push order)
+    // shadow the winner. See the collision-resolution pass above.
+    if (!entry.collisionLoser) {
+      nodes.push({
+        id: `symbol:${relPath}#${entry.name}`,
+        kind: "symbol",
+        filePath: relPath,
+        contentHash: hash(content.slice(entry.start, entry.end)),
+      });
+    }
     let startLine = lineOf(lineStarts, entry.attrStart);
     while (startLine > 1 && !lineHasCode[startLine - 1]) startLine--;
     ranges.push({

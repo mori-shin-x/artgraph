@@ -59,6 +59,16 @@ export function printWarnings(warnings: BuildWarning[]) {
           `WARNING: self-reference-annotation "${w.id}"${w.files.length > 0 ? ` in ${w.files.join(", ")}` : ""}${w.message ? ` — ${w.message}` : ""}`,
         );
         break;
+      // PR #242 review A/C — symbol-mode class-member id collision. Shown by
+      // default (NOT in SILENT_WARNING_TYPES): a collision silently rewires
+      // which symbol a tag attributes to, which the author should see. The
+      // parser-built message carries the full context (colliding id, winner,
+      // re-attribution note), so print it verbatim with the id as fallback.
+      case "class-member-collision":
+        console.error(
+          `WARNING: ${w.message ?? `class-member-collision "${w.id}" in ${w.files.join(", ")}`}`,
+        );
+        break;
       // Filtered above via `isSilentWarning`, but the switch still needs
       // cases so the exhaustiveness check below stays happy.
       case "phantom-import-repaired":

@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { atomicWriteFile } from "./integrate/atomic-write.js";
 import type { ArtgraphConfig, GraphEdge, GraphNode } from "./types.js";
 import type { InlineLinkRef, ParseWarning } from "./parsers/markdown.js";
+import type { TsParseWarning } from "./parsers/typescript.js";
 
 // Incremental parse cache: memoizes per-file parser output (markdown fragments
 // and TypeScript fragments) keyed by content hash, so `scan`/`check`/`impact`
@@ -53,6 +54,13 @@ export interface TsFragment {
   // the fragment; recomputing from edges alone would lose the plain-star vs.
   // `export * as ns` distinction (both are `file:B → file:O` edges).
   starExports?: string[];
+  // PR #242 review A — parser-level structured warnings (currently just
+  // class-member id collisions), mirroring `MdFragment.warnings` above. MUST
+  // travel with the fragment: before this field existed, the collision
+  // warning was a bare `console.warn` call inside the parser itself, so a
+  // warm cache hit reused the fragment's nodes/edges but never re-ran the
+  // parser — the warning silently vanished on every build after the first.
+  warnings: TsParseWarning[];
 }
 
 export interface ParseCacheData {
@@ -89,7 +97,15 @@ export interface ParseCacheData {
 // neither — reusing it would silently omit every member node/edge and the
 // class's own leading-trivia attribution range would stay unbounded (member
 // widening did not exist yet), diverging from a cold rebuild (INV-L4).
-const SCHEMA_VERSION = 5;
+// v6 (PR #242 review A, spec 021 follow-up): `TsFragment` gained a
+// `warnings` field carrying the parser's structured class-member-collision
+// warnings (previously a bare `console.warn` call in extractSymbols, which
+// vanished on a warm cache hit and never appeared in `--format json`). A
+// pre-v6 cached fragment has no `warnings` key at all — reusing it would
+// silently drop any collision warning for that file forever (until its
+// content changes again), which is exactly the bug this bump fixes. No
+// migration cost: v5 was never released.
+const SCHEMA_VERSION = 6;
 const CACHE_RELDIR = join("node_modules", ".cache", "artgraph");
 const CACHE_FILENAME = "parse-cache.json";
 

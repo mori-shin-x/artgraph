@@ -10,7 +10,7 @@ import {
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { buildGraph } from "../src/graph/builder.js";
+import { buildGraph, type BuildWarning } from "../src/graph/builder.js";
 import { buildLockFromGraph } from "../src/lock.js";
 import type { ArtgraphConfig } from "../src/types.js";
 
@@ -1415,12 +1415,17 @@ describe("buildGraph: SC-004 edge-set baseline invariance (all fixtures)", () =>
 // must resolve identically and warn identically across independent cold
 // builds — through the FULL buildGraph pipeline, not just the parser layer
 // (see tests/typescript.test.ts's own T020(a)/(b) for the parser-only
-// checks). Two separate tmp roots with byte-identical fixture content rule
-// out any incremental-parse-cache reuse muddying the comparison; disabling
-// the cache via ARTGRAPH_CACHE=0 (same knob tests/parse-cache.test.ts uses)
-// additionally guarantees both builds actually re-parse from scratch.
+// checks). PR #242 review A migrated the warning from a parser-level
+// `console.warn` to the structured `BuildWarning` return channel
+// (`class-member-collision`), so this test asserts on `buildGraph`'s
+// `warnings` instead of a console spy — and additionally pins that NOTHING
+// about the collision goes through console.warn anymore. Two separate tmp
+// roots with byte-identical fixture content rule out any incremental
+// parse-cache reuse muddying the comparison; disabling the cache via
+// ARTGRAPH_CACHE=0 (same knob tests/parse-cache.test.ts uses) additionally
+// guarantees both builds actually re-parse from scratch.
 describe("buildGraph: class-member symbol collision determinism (spec 021 / T020(b))", () => {
-  it("emits the same collision warning and the same graph across two independent cold builds", () => {
+  it("emits the same structured collision warning and the same graph across two independent cold builds", () => {
     const collisionSource = [
       "function helper(): void {}",
       'export { helper as "Sample.methodA" };',
@@ -1444,28 +1449,27 @@ describe("buildGraph: class-member symbol collision determinism (spec 021 / T020
 
     const snapshot = (nodes: Map<string, unknown>, edges: unknown[]) =>
       JSON.stringify({ nodes: [...nodes.entries()], edges });
+    const collisions = (ws: BuildWarning[]) =>
+      ws.filter((w) => w.type === "class-member-collision");
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     process.env.ARTGRAPH_CACHE = "0";
-    let warningsA: string[];
-    let warningsB: string[];
+    let warningsA: BuildWarning[];
+    let warningsB: BuildWarning[];
+    let consoleCalls: string[];
     let snapshotA: string;
     let snapshotB: string;
     let symbolIdsA: string[];
     try {
-      const { graph: graphA } = buildGraph(rootA, symbolConfig);
-      warningsA = warnSpy.mock.calls
-        .map((args) => String(args[0]))
-        .filter((msg) => msg.includes("Sample.methodA"));
-      snapshotA = snapshot(graphA.nodes, graphA.edges);
-      symbolIdsA = [...graphA.nodes.keys()].filter((id) => id.startsWith("symbol:"));
-      warnSpy.mockClear();
+      const resultA = buildGraph(rootA, symbolConfig);
+      warningsA = collisions(resultA.warnings);
+      snapshotA = snapshot(resultA.graph.nodes, resultA.graph.edges);
+      symbolIdsA = [...resultA.graph.nodes.keys()].filter((id) => id.startsWith("symbol:"));
 
-      const { graph: graphB } = buildGraph(rootB, symbolConfig);
-      warningsB = warnSpy.mock.calls
-        .map((args) => String(args[0]))
-        .filter((msg) => msg.includes("Sample.methodA"));
-      snapshotB = snapshot(graphB.nodes, graphB.edges);
+      const resultB = buildGraph(rootB, symbolConfig);
+      warningsB = collisions(resultB.warnings);
+      snapshotB = snapshot(resultB.graph.nodes, resultB.graph.edges);
+      consoleCalls = warnSpy.mock.calls.map((args) => String(args[0]));
     } finally {
       warnSpy.mockRestore();
       delete process.env.ARTGRAPH_CACHE;
@@ -1473,9 +1477,17 @@ describe("buildGraph: class-member symbol collision determinism (spec 021 / T020
       rmSync(rootB, { recursive: true, force: true });
     }
 
-    // Both cold builds warn about the collision, identically.
-    expect(warningsA.length).toBeGreaterThanOrEqual(1);
+    // Both cold builds warn about the collision through the STRUCTURED
+    // channel, identically (`files` are relative paths, so full deep
+    // equality holds across the two roots).
+    expect(warningsA).toHaveLength(1);
+    expect(warningsA[0].id).toBe("symbol:src/collision.ts#Sample.methodA");
+    expect(warningsA[0].files).toEqual(["src/collision.ts"]);
+    expect(warningsA[0].message).toMatch(/collides with an existing/);
     expect(warningsB).toEqual(warningsA);
+
+    // PR #242 review A — the parser-level console.warn side channel is gone.
+    expect(consoleCalls.filter((msg) => msg.includes("Sample.methodA"))).toEqual([]);
 
     // Both cold builds agree on the resulting graph (paths are identical
     // across the two roots' relative `src/collision.ts`, so full equality —
