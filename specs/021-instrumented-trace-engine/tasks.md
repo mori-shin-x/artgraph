@@ -99,8 +99,8 @@
 **Independent Test**: quickstart §4・§5
 
 - [x] T017 [US4] [P] `tests/perf/trace-overhead-import-heavy.perf.test.ts` を新規作成する(plan Phase A — 他ストーリーに依存しない): 既存 perf テストの spawn 技法(node_modules symlink・plain-object config・interleaved rounds・median 比較)を踏襲し、モジュール数をパラメタ化した import 重 fixture(目安 300 モジュール・import チェーン・300 テスト — data-model.md §6)を生成。**この時点では現行エンジンの実測比を記録ログに残すだけ**(assert は現行バジェット 1.5 — 悪化体質の再現を先に固定する)
-- [ ] T018 [US4] 両 perf テスト(`tests/perf/trace-overhead.perf.test.ts` / `trace-overhead-import-heavy.perf.test.ts`)のバジェットを 1.5 → **1.2** に引き下げ、withRunner 側を v2 既定(instrument)で計測するよう更新する(SC-002 / SC-003)。ログ出力(実測比の毎回記録)は維持
-- [ ] T019 [US4] dogfooding 計測を実施し記録する(SC-001): quickstart §5 の手順で自スイートの baseline / instrument / cdp を各 3 回計測し中央値比較。instrument ≤ **1.15** を確認し、結果を PR の Testing 節に記録する(CI assert にはしない — research.md V9)
+- [x] T018 [US4] 両 perf テスト(`tests/perf/trace-overhead.perf.test.ts` / `trace-overhead-import-heavy.perf.test.ts`)のバジェットを 1.5 → **1.2** に引き下げ、withRunner 側を v2 既定(instrument)で計測するよう更新する(SC-002 / SC-003)。ログ出力(実測比の毎回記録)は維持
+- [x] T019 [US4] dogfooding 計測を実施し記録する(SC-001): quickstart §5 の手順で自スイートの baseline / instrument / cdp を各 3 回計測し中央値比較。instrument ≤ **1.15** を確認し、結果を PR の Testing 節に記録する(CI assert にはしない — research.md V9)
 
 **Checkpoint**: 全 SC の数値目標が実測で裏付けられ、回帰ガードが CI に載る
 
@@ -108,7 +108,7 @@
 
 - [x] T020 [P] spec 020 の契約とリサーチを更新する(FR-010): `specs/020-coverage-derived-edges/contracts/trace-artifact.md` §test の `fn` 記述に「V8 functionName 互換の命名規則で決定した関数名(capture engine v2)」の注記(schemaVersion 据え置き)・`specs/020-coverage-derived-edges/research.md` に D9(採取方式転換と D1 棄却理由の失効)を追記
 - [x] T021 [P] `docs/configuration.md` に `withTrace` の `engine` オプションと `ARTGRAPH_TRACE_ENGINE` の説明を追加する(contracts/config-surface.md の利用者向け要約)
-- [ ] T022 変更外ファイルへの影響を横断確認する(観点 7): `pnpm knip`(plugin.ts の到達性・magic-string の使用検出)・`pnpm typecheck`・oxlint / oxfmt・`package.json#exports` が不変であること・`templates/**` の Skills 文書(artgraph-verify / bootstrap 等)に runner 記述の齟齬が生じていないこと・`scripts/copy-vendor.mjs` / `tests/global-setup-vendor.ts` に非干渉であること・`vitest.config.ts`(自プロジェクト)の coverage 設定と plugin が干渉しないこと
+- [x] T022 変更外ファイルへの影響を横断確認する(観点 7): `pnpm knip`(plugin.ts の到達性・magic-string の使用検出)・`pnpm typecheck`・oxlint / oxfmt・`package.json#exports` が不変であること・`templates/**` の Skills 文書(artgraph-verify / bootstrap 等)に runner 記述の齟齬が生じていないこと・`scripts/copy-vendor.mjs` / `tests/global-setup-vendor.ts` に非干渉であること・`vitest.config.ts`(自プロジェクト)の coverage 設定と plugin が干渉しないこと
 - [ ] T023 最終検証(**SC-006**): `pnpm build && pnpm test`(unit + e2e + perf 全部)を **v2 計装既定**の下で green にし、全 green の事実を SC-006 の実測結果として PR の Testing 節に記録する・`pnpm artgraph check --diff` green(after_implement フックの事前確認)・quickstart §1〜§7 の全手順を通す
 
 ## Dependencies

@@ -6,13 +6,14 @@
 // proportional to the isolate's *loaded script count*
 // (docs/design/241-trace-engine-v2.md; research.md V9's probe: 25 modules
 // -> 0.345ms/takePreciseCoverage call, 1,600 modules -> 1.545ms/call, x2
-// calls/test). Per SC-003 and research.md V9, this file exists to *record*
-// — not yet gate on — that module-count-driven overhead under the current
-// (pre-v2) CDP capture engine. Phase D (T018) will re-point "withRunner" at
-// the v2 (instrument) engine and lower the budget to 1.2; until then this
-// stays on the existing 1.5 budget and only logs the ratio for the record —
-// the goal here is reproducing the worsening trend, not gating on it
-// (tasks.md T017: "この時点では現行エンジンの実測比を記録ログに残すだけ").
+// calls/test). Per SC-003 and research.md V9, T017 (this file's original
+// form) existed to *record* — not yet gate on — that module-count-driven
+// overhead under the then-current (pre-v2) CDP capture engine (tasks.md
+// T017: "この時点では現行エンジンの実測比を記録ログに残すだけ").
+//
+// spec 021 T018 (Phase D): "withRunner" now measures the v2 (instrument)
+// engine instead of CDP, and the budget is tightened to 1.2 (SC-003) — see
+// the "Spawn technique" paragraph below for what changed mechanically.
 //
 // Fixture shape (data-model.md §6 ImportHeavyFixture): a 3-stage import
 // chain — root -> 10 branch modules -> 290 leaf modules (10 x 29 = 290
@@ -49,22 +50,37 @@
 // resolving that specifier from a tmpdir config file's own location would
 // never find this repo's node_modules), `node
 // <repo>/node_modules/vitest/vitest.mjs run`, "withRunner" pointed at the
-// BUILT `dist/vitest/runner.js` (the CURRENT CDP engine — T017 predates the
-// v2 engine landing, per tasks.md's Dependencies graph T017 has no
-// dependency on Phase 2/US1), `ARTGRAPH_TRACE_DIR` set for the withRunner
-// runs only, pool "forks", one discarded warmup round (JIT / OS page cache
-// warm-up) followed by 3 measured rounds, each round interleaving one
-// baseline run immediately followed by one withRunner run so ambient load
-// spikes on this shared box hit both modes of the same round roughly
-// equally, and the assertion compares medians across rounds.
+// BUILT `dist/vitest/runner.js` PLUS the built `dist/vitest/plugin.js`
+// instrumentation plugin (spec 021 T018 — see file header), `ARTGRAPH_TRACE_DIR`
+// set for the withRunner runs only, pool "forks", one discarded warmup round
+// (JIT / OS page cache warm-up) followed by 3 measured rounds, each round
+// interleaving one baseline run immediately followed by one withRunner run
+// so ambient load spikes on this shared box hit both modes of the same
+// round roughly equally, and the assertion compares medians across rounds.
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, symlinkSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  readdirSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
+import { pathToFileURL } from "node:url";
 import { join, resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const RUNNER_PATH = resolve(REPO_ROOT, "dist/vitest/runner.js");
+// spec 021 T018: the v2 instrumentation plugin, imported by the fixture's
+// own runner config (below) — same built artifact `artgraph/vitest/config`'s
+// `withTrace()` injects for real users. Rendered as a `file://` URL (not a
+// bare OS path) because the fixture config is a real ESM module with a
+// static `import` statement, and Node's ESM resolver only accepts relative/
+// bare/URL specifiers — a plain absolute POSIX path isn't one of those.
+const PLUGIN_URL = pathToFileURL(resolve(REPO_ROOT, "dist/vitest/plugin.js")).href;
 const VITEST_BIN = resolve(REPO_ROOT, "node_modules/vitest/vitest.mjs");
 
 // data-model.md §6 ImportHeavyFixture parameters.
@@ -84,9 +100,11 @@ beforeAll(() => {
   symlinkSync(resolve(REPO_ROOT, "node_modules"), join(fixtureDir, "node_modules"));
   writeFileSync(
     join(fixtureDir, "package.json"),
-    JSON.stringify(
-      { name: "artgraph-perf-trace-overhead-import-heavy-fixture", private: true, type: "module" },
-    ),
+    JSON.stringify({
+      name: "artgraph-perf-trace-overhead-import-heavy-fixture",
+      private: true,
+      type: "module",
+    }),
   );
   mkdirSync(join(fixtureDir, "src"), { recursive: true });
   mkdirSync(join(fixtureDir, "tests"), { recursive: true });
@@ -117,9 +135,14 @@ beforeAll(() => {
     const sumExpr = leaves.map((idx) => `leafFn${idx}(x)`).join(" + ");
     writeFileSync(
       join(fixtureDir, `src/branch${b}.js`),
-      [...importLines, "", `export function branchFn${b}(x) {`, `  return ${sumExpr};`, "}", ""].join(
-        "\n",
-      ),
+      [
+        ...importLines,
+        "",
+        `export function branchFn${b}(x) {`,
+        `  return ${sumExpr};`,
+        "}",
+        "",
+      ].join("\n"),
     );
   }
 
@@ -135,7 +158,9 @@ beforeAll(() => {
     const sumExpr = Array.from({ length: BRANCH_COUNT }, (_, b) => `branchFn${b}(x)`).join(" + ");
     writeFileSync(
       join(fixtureDir, "src/root.js"),
-      [...importLines, "", "export function rootFn(x) {", `  return ${sumExpr};`, "}", ""].join("\n"),
+      [...importLines, "", "export function rootFn(x) {", `  return ${sumExpr};`, "}", ""].join(
+        "\n",
+      ),
     );
   }
 
@@ -165,9 +190,10 @@ beforeAll(() => {
   }
 
   // Two plain-object configs (not `defineConfig` — see file header). Same
-  // `include`/`pool`/`poolOptions` in both — `runner` is the only
-  // difference, so the two modes are otherwise identical (fair comparison,
-  // same convention as the existing fixture).
+  // `include`/`pool`/`poolOptions` in both — `runner` (and, for the v2
+  // engine, `plugins` — spec 021 T018) is the only difference, so the two
+  // modes are otherwise identical (fair comparison, same convention as the
+  // existing fixture).
   //
   // `poolOptions.forks.singleFork: true` on both: see file header
   // "stability note" — without it, the 15 test files get scattered across
@@ -180,11 +206,16 @@ beforeAll(() => {
     join(fixtureDir, "vitest.baseline.config.mjs"),
     `export default {\n  test: {\n    include: ["tests/**/*.test.js"],\n    pool: "forks",\n    poolOptions: ${poolOptionsSnippet},\n  },\n};\n`,
   );
+  // spec 021 T018: `plugins` (top-level, not `test.*`) carries the v2
+  // instrumentation plugin so the runner's default `instrument` engine (no
+  // `ARTGRAPH_TRACE_ENGINE` set — see file header) actually has a registry to
+  // drain.
   writeFileSync(
     join(fixtureDir, "vitest.runner.config.mjs"),
-    `export default {\n  test: {\n    include: ["tests/**/*.test.js"],\n    pool: "forks",\n    poolOptions: ${poolOptionsSnippet},\n    runner: ${JSON.stringify(
-      RUNNER_PATH,
-    )},\n  },\n};\n`,
+    `import artgraphTracePlugin from ${JSON.stringify(PLUGIN_URL)};\n` +
+      `export default {\n  test: {\n    include: ["tests/**/*.test.js"],\n    pool: "forks",\n    poolOptions: ${poolOptionsSnippet},\n    runner: ${JSON.stringify(
+        RUNNER_PATH,
+      )},\n  },\n  plugins: [artgraphTracePlugin()],\n};\n`,
   );
 }, 30000);
 
@@ -228,7 +259,7 @@ function median(values: number[]): number {
 }
 
 describe("Perf: vitest runner overhead on an import-heavy ~300-module fixture (SC-003)", () => {
-  it("withRunner wall-clock median <= baseline wall-clock median * 1.5 (current CDP engine)", () => {
+  it("withRunner (v2 instrument engine) wall-clock median <= baseline wall-clock median * 1.2", () => {
     const traceDir = join(fixtureDir, ".artgraph-trace-perf");
     mkdirSync(traceDir, { recursive: true });
 
@@ -254,6 +285,23 @@ describe("Perf: vitest runner overhead on an import-heavy ~300-module fixture (S
     const shards = readdirSync(traceDir).filter((f) => f.endsWith(".jsonl"));
     expect(shards.length).toBeGreaterThan(0);
 
+    // spec 021 T018: a SECOND positive control, specific to the v2 engine —
+    // shard files existing is not enough (the instrument engine always
+    // writes a `meta` record even when the plugin never registered a single
+    // module), so this asserts at least one `test` record actually carries a
+    // non-empty `hits` array, guarding against silently measuring a no-op
+    // instrument run.
+    const anyHit = shards.some((f) =>
+      readFileSync(join(traceDir, f), "utf-8")
+        .split("\n")
+        .filter(Boolean)
+        .some((line) => {
+          const rec = JSON.parse(line) as { kind?: string; hits?: unknown[] };
+          return rec.kind === "test" && Array.isArray(rec.hits) && rec.hits.length > 0;
+        }),
+    );
+    expect(anyHit).toBe(true);
+
     const baselineMs = median(baselineRuns);
     const withRunnerMs = median(withRunnerRuns);
     const ratio = withRunnerMs / baselineMs;
@@ -261,24 +309,21 @@ describe("Perf: vitest runner overhead on an import-heavy ~300-module fixture (S
     // Logged unconditionally (not just on budget slip), matching the
     // existing perf test's convention, so the actual measured ratio is on
     // record for every perf run. This is the SC-003 recording this file
-    // exists for: an import-heavy (~300-module) fixture's overhead under
-    // the CURRENT (pre-v2) CDP engine, which — unlike the existing
-    // 25-module fixture — is expected to show the module-count-proportional
-    // cost issue #241 describes. T018 (Phase D) will re-point "withRunner"
-    // at the v2 (instrument) engine and tighten the budget to 1.2; until
-    // then the budget below stays at the pre-existing 1.5 on purpose (this
-    // task's job is recording the current degraded ratio, not gating on
-    // it).
+    // exists for: an import-heavy (~300-module) fixture's overhead under the
+    // v2 (instrument) engine (spec 021 T018 — re-pointed from the CDP engine
+    // T017 originally recorded), which — unlike the existing 25-module
+    // fixture — is what exercises the module-count-independence this engine
+    // exists to deliver.
     console.log(
-      `SC-003 perf (import-heavy fixture, current CDP engine): baseline median=${baselineMs.toFixed(
+      `SC-003 perf (import-heavy fixture, v2 instrument engine): baseline median=${baselineMs.toFixed(
         0,
       )}ms, withRunner median=${withRunnerMs.toFixed(0)}ms, ratio=${ratio.toFixed(
         3,
-      )} (budget <=1.5x, unchanged pending T018's v2 switch-over)`,
+      )} (budget <=1.2x)`,
     );
 
-    // Hard budget: unchanged from the existing fixture's SC-005 ceiling
-    // (tasks.md T017 — do not tighten yet, this stage only records).
-    expect(withRunnerMs).toBeLessThanOrEqual(baselineMs * 1.5);
+    // Hard budget: SC-003's 20% ceiling (spec 021, tightened from spec 020
+    // SC-005's 50% / T017's interim 1.5).
+    expect(withRunnerMs).toBeLessThanOrEqual(baselineMs * 1.2);
   }, 120000);
 });
