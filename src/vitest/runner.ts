@@ -14,12 +14,16 @@
 import { VitestTestRunner } from "vitest/runners";
 import inspector from "node:inspector";
 import { threadId } from "node:worker_threads";
-import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { appendFileSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { SCHEMA_VERSION, type CoverageHit } from "../trace/schema.js";
+import {
+  SCHEMA_VERSION,
+  hashContent,
+  isExcludedRelPath,
+  type CoverageHit,
+} from "../trace/schema.js";
 
 // The Task type isn't re-exported by `vitest/runners`'s public `.d.ts` (only
 // the two runner classes + `VitestRunner` are). Deriving it from the
@@ -48,41 +52,18 @@ interface ScriptCoverage {
   functions: FunctionCoverage[];
 }
 
-// The repo's own file-mode `contentHash` (src/parsers/typescript.ts): BOM
-// stripped, sha256 hex, truncated to 16 chars. Duplicated (not imported) —
-// this module's only allowed `src/` import is `src/trace/schema.ts`
-// (importing the parser would drag oxc-parser and the rest of the CLI into
-// every vitest worker). MUST stay byte-for-byte identical to the original:
-// Phase C staleness compares this shard-recorded hash directly against the
-// graph's `contentHash` for the same file.
-function stripBom(content: string): string {
-  return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
-}
-
-// Exported (spec 020 T012) purely for `tests/hash-equivalence.test.ts`'s SSOT
-// equivalence pin against `src/parsers/typescript.ts`'s `hash(stripBom(...))`
-// — no runtime caller outside this file needs the content-only form.
-export function hashContent(content: string): string {
-  return createHash("sha256").update(stripBom(content)).digest("hex").slice(0, 16);
-}
+// spec 021 (tasks.md T004, research.md V5): `stripBom` / `hashContent` and
+// the exclusion rule (`isExcludedRelPath` / `TEST_FILE_RE`) used to be
+// hand-duplicated here against `src/parsers/typescript.ts`'s file-mode
+// contentHash. Both are now hoisted to `src/trace/schema.ts` (this module's
+// one allowed `src/` import) so the plugin (`src/vitest/plugin.ts`, main
+// process) and this runner (worker, both engines) share a single
+// definition instead of drifting copies. `hashContent` is re-exported below
+// for compatibility with existing importers of this module.
+export { hashContent } from "../trace/schema.js";
 
 function hashFileContent(absPath: string): string {
   return hashContent(readFileSync(absPath, "utf-8"));
-}
-
-// contract §hits: "テストファイル自身・node_modules が hits に現れない" — the
-// finer-grained `include`/`exclude` boundary is ingest's job (contract
-// §hits: "それ以外の絞り込みは ingest 側の責務"), so this is deliberately
-// coarse: strip only the two categories the contract names.
-const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
-
-function isExcludedRelPath(relPath: string): boolean {
-  return (
-    relPath.startsWith("..") ||
-    isAbsolute(relPath) ||
-    relPath.includes("node_modules/") ||
-    TEST_FILE_RE.test(relPath)
-  );
 }
 
 // V8 script URLs come back as `file://` (possibly with a vite/vitest

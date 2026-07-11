@@ -3,14 +3,117 @@
 // `src/trace/ingest.ts`. Both import ONLY this module for the wire shape
 // (plan.md Cat2-(b)) so the schema never drifts between writer and reader.
 //
-// Deliberately dependency-free: no `vitest` import (CLI must stay
-// vitest-agnostic — plan.md Structure Decision) and no other project
-// imports, so this module can be pulled in from either side of that
-// boundary without dragging anything else along.
+// spec 021 (tasks.md T004, research.md V3/V5) also hoists here the
+// hash / exclusion-rule / instrumentation-registry-contract primitives
+// shared by `src/vitest/plugin.ts` (main process) and `src/vitest/runner.ts`
+// (worker, both engines) — this module is their SSOT so the two never drift
+// into hand-duplicated copies again (closes the Cat2 pair spec 020 T006 left
+// open between `src/vitest/runner.ts` and `src/parsers/typescript.ts`).
+//
+// Deliberately dependency-free of other `src/` modules and of `vitest`
+// itself (CLI must stay vitest-agnostic — plan.md Structure Decision); node
+// builtins (`node:crypto`, `node:path`) are fine — this module must stay
+// importable from both the main process (plugin) and every worker (runner)
+// without dragging in oxc-parser or the rest of the CLI.
+
+import { createHash } from "node:crypto";
+import { isAbsolute } from "node:path";
 
 /** Current shard schema generation. Bump on any wire-shape change and teach
  * `parseShardLines` to keep reading the prior generation (contract §互換性ポリシー). */
 export const SCHEMA_VERSION = 1;
+
+// ---------------------------------------------------------------------------
+// spec 021 (T004, research.md V5) — contentHash SSOT.
+//
+// The repo's own file-mode `contentHash` (originally `src/parsers/typescript.ts`,
+// pinned byte-for-byte against it by `tests/hash-equivalence.test.ts`): BOM
+// stripped, sha256 hex, truncated to 16 chars. MUST stay byte-for-byte
+// identical to the parser's algorithm — Phase C staleness (spec 020 D7)
+// compares a shard-recorded hash directly against the graph's `contentHash`
+// for the same file.
+// ---------------------------------------------------------------------------
+
+export function stripBom(content: string): string {
+  return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+}
+
+export function hashContent(content: string): string {
+  return createHash("sha256").update(stripBom(content)).digest("hex").slice(0, 16);
+}
+
+// ---------------------------------------------------------------------------
+// spec 021 (T004, research.md V3) — exclusion-rule SSOT, shared by the
+// plugin (skip transform) and both runner engines (cdp: hits filtering;
+// instrument: plugin already excluded at transform time, but the runner
+// still consults this for any path arithmetic it does itself).
+//
+// contract §除外規則: "テストファイル自身・node_modules が hits に現れない" — the
+// finer-grained `include`/`exclude` boundary is ingest's job (contract
+// §hits: "それ以外の絞り込みは ingest 側の責務"), so this is deliberately
+// coarse: strip only the two categories the contract names.
+//
+// The `node_modules` check is a path-SEGMENT match (`split("/")`), not a
+// substring match: a naive `relPath.includes("node_modules/")` would also
+// match a directory that merely starts with that name (e.g.
+// `my_node_modules/foo.ts` literally contains the substring
+// `"node_modules/"` starting right after `my_`) — spec 021 tasks.md T003
+// pins this exact boundary (観点1).
+// ---------------------------------------------------------------------------
+
+export const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/;
+
+export function isExcludedRelPath(relPath: string): boolean {
+  return (
+    relPath.startsWith("..") ||
+    isAbsolute(relPath) ||
+    relPath.split("/").includes("node_modules") ||
+    TEST_FILE_RE.test(relPath)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// spec 021 (T004, research.md V3) — instrumentation registry contract SSOT.
+// See contracts/instrumentation-runtime.md: the plugin (`src/vitest/plugin.ts`,
+// main process) and the runner's instrument engine (`src/vitest/runner.ts`,
+// worker) share nothing but the `globalThis` shape defined here — this
+// module and the contract doc are the two SSOT halves, kept honest by
+// `tests/trace-schema.test.ts`'s shape-equivalence pin.
+// ---------------------------------------------------------------------------
+
+/** `globalThis[REGISTRY_KEY]`'s key name — a deliberately singular, unlikely
+ * to collide with user code (contract §globalThis キー). */
+export const REGISTRY_KEY = "__ARTGRAPH_TRACE_REGISTRY__";
+
+/** Current registry wire-shape generation. A runner encountering a
+ * `TraceRegistry.version` it doesn't recognize abandons collection for that
+ * worker and warns once to stderr (contract: "runner は採取を放棄し…") rather
+ * than silently misreading the shape. */
+export const REGISTRY_VERSION = 1;
+
+/** One instrumented module's registration (contract §ModuleRegistration の形状).
+ * `fns.length === hits.length` always — `fns[k]` names the function whose
+ * entry-hit slot is `hits[k]`. Re-registering the same `file` (vitest
+ * isolate re-evaluating a module) REPLACES the prior entry in
+ * `TraceRegistry.modules`, so a stale `hits` array is never read. */
+export interface ModuleRegistration {
+  /** Project-root relative, `/`-separated (same spelling as shard `hits[].file` / `hashes`). */
+  file: string;
+  /** `hashContent` of the module's on-disk original source (contract §hash). */
+  hash: string;
+  /** Slot-ordered function name table. */
+  fns: string[];
+  /** One entry-hit slot per `fns` entry; a nonzero byte means that function's
+   * body was entered at least once since the last drain. */
+  hits: Uint8Array;
+}
+
+/** The `globalThis[REGISTRY_KEY]` value (contract §globalThis キー). Lazily
+ * created by whichever side (plugin preamble or runner) accesses it first. */
+export interface TraceRegistry {
+  version: number;
+  modules: Map<string, ModuleRegistration>;
+}
 
 /** A single V8-coverage hit recorded for one test. `file` is repo-root
  * relative (runner-normalized); `fn` is the raw V8 `functionName`, synthetic

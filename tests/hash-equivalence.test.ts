@@ -1,26 +1,28 @@
-// spec 020 (tasks.md T012, plan.md Cat2-(b)) — regression pin closing the
-// Cat2 SSOT pair T006 deliberately created: `src/vitest/runner.ts` cannot
-// import `src/parsers/typescript.ts` (plan.md Structure Decision — the CLI
-// bundle must stay vitest-agnostic, `pnpm knip` enforces no import from a
-// CLI entry point into `src/vitest/`), so the runner's file-hash function is
-// a hand-duplicated copy of the parser's file-mode contentHash algorithm.
-// This test is the only thing keeping the two definitions honest: it pins
-// them to produce byte-identical output for the same content, including the
-// BOM-stripping edge case both sides special-case.
+// spec 021 (tasks.md T003/T004, research.md V5) — SSOT direct pin.
+// `src/trace/schema.ts` hoists the repo's file-mode contentHash rule (BOM
+// strip → sha256 → 16 hex chars) so the vitest plugin (main process) and
+// both runner engines (worker) share one definition instead of hand-copies
+// (spec 020's Cat2 pair, previously pinned only against `src/vitest/runner.ts`'s
+// duplicate, is now closed — schema.ts IS the definition, not a third copy).
+// This test hits schema.ts directly and compares it against
+// `src/parsers/typescript.ts`'s independently-defined file-mode contentHash
+// (`hash(stripBom(content))`) — the graph's own hash, which staleness
+// detection (spec 020 D7) compares shard-recorded hashes against. Byte
+// identity here is what keeps the two sides honest.
 import { describe, it, expect } from "vitest";
-import { hash, stripBom } from "../src/parsers/typescript.js";
-import { hashContent } from "../src/vitest/runner.js";
+import { hash, stripBom as parserStripBom } from "../src/parsers/typescript.js";
+import { hashContent, stripBom } from "../src/trace/schema.js";
 
 // The parser's own file-mode contentHash computation (src/parsers/typescript.ts
 // `parseTSFile`: `hash(stripBom(content))`), reconstructed here from its two
 // exported primitives rather than re-implemented — this test compares
-// runner.ts's `hashContent` against the REAL parser algorithm, not a third
+// schema.ts's `hashContent` against the REAL parser algorithm, not a third
 // copy of it.
 function parserFileHash(content: string): string {
-  return hash(stripBom(content));
+  return hash(parserStripBom(content));
 }
 
-describe("SSOT: src/vitest/runner.ts hashContent === src/parsers/typescript.ts file-mode contentHash", () => {
+describe("SSOT: src/trace/schema.ts hashContent === src/parsers/typescript.ts file-mode contentHash", () => {
   it("matches for plain ASCII content", () => {
     const content = "export function foo() {\n  return 1;\n}\n";
     expect(hashContent(content)).toBe(parserFileHash(content));
@@ -47,5 +49,19 @@ describe("SSOT: src/vitest/runner.ts hashContent === src/parsers/typescript.ts f
 
   it("produces different hashes for different content (sanity — not a constant-hash bug)", () => {
     expect(hashContent("a")).not.toBe(hashContent("b"));
+  });
+});
+
+describe("SSOT: src/trace/schema.ts stripBom === src/parsers/typescript.ts stripBom", () => {
+  it("strips a leading BOM identically on both sides", () => {
+    const withBom = "﻿const x = 1;\n";
+    expect(stripBom(withBom)).toBe(parserStripBom(withBom));
+    expect(stripBom(withBom)).toBe(withBom.slice(1));
+  });
+
+  it("leaves BOM-less content untouched on both sides", () => {
+    const content = "const x = 1;\n";
+    expect(stripBom(content)).toBe(parserStripBom(content));
+    expect(stripBom(content)).toBe(content);
   });
 });
