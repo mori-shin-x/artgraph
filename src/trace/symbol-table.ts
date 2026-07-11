@@ -14,13 +14,18 @@
 //      duplicate implementations).
 //   2. Class member names. V8 reports a class method's OWN name as the
 //      `functionName` (e.g. `add` on `class Cart { add() {} }`), never the
-//      declaring class's name, so a hit on a class method never matches
-//      source (1) directly. `extractSymbols` only emits nodes for top-level
-//      exports (no per-member nodes), so this is a second, narrowly-scoped
-//      walk — class body member names only, mapped to the OWNING class's own
-//      exported symbol id — rather than a re-implementation of export
-//      enumeration (issue #218's "class symbol convergence" applied to
-//      execution evidence).
+//      dotted `Class.member` form `extractClassMembers` (spec 021) registers
+//      that member's OWN symbol node under, so a hit on a class method never
+//      matches source (1) directly under its bare name. This is a second,
+//      narrowly-scoped walk — class body member names only — that resolves a
+//      bare member name to that member's OWN symbol id
+//      (`symbol:<path>#Class.member`) when `extractClassMembers` actually
+//      symbolized it, else falls back to the OWNING class's own exported
+//      symbol id (issue #255 — a class-grain fallback stays correct for
+//      members `extractClassMembers` never gives a node of their own, e.g. a
+//      non-function property). Never re-implements export enumeration
+//      (issue #218's "class symbol convergence" applied to execution
+//      evidence).
 //
 // A name that resolves to more than one candidate symbol id within the same
 // file (e.g. a top-level `export function add()` alongside an unrelated
@@ -122,16 +127,42 @@ export function buildSymbolNameTable(rootDir: string, includePatterns: string[])
   };
 
   // Source 1: exported top-level symbols (extractSymbols, via the parser's
-  // public "symbol" mode — same file set, same name-resolution rules).
+  // public "symbol" mode — same file set, same name-resolution rules). This
+  // ALSO includes one node per spec-021 class member (`extractClassMembers`'s
+  // `symbol:<path>#Class.member` ids, registered here under their FULL dotted
+  // name) — `symbolIds` below reuses this exact set as the "does this member
+  // actually get its own symbol node" existence check for Source 2, instead
+  // of re-deriving `extractClassMembers`'s inclusion rules a second time.
+  const symbolIds = new Set<string>();
   const { nodes } = createTSParser(rootDir, includePatterns, "symbol").parse();
   for (const node of nodes) {
     if (node.kind !== "symbol") continue;
     const hashIdx = node.id.indexOf("#");
     if (hashIdx === -1) continue;
+    symbolIds.add(node.id);
     addCandidate(node.filePath, node.id.slice(hashIdx + 1), node.id);
   }
 
-  // Source 2: class member names -> owning class's own symbol id.
+  // Source 2: class member names -> the MEMBER's own symbol id when one was
+  // actually synthesized for it (issue #255), else the owning class's id.
+  //
+  // V8 reports a class method's OWN name as the `functionName` (e.g. `add` on
+  // `class Cart { add() {} }`), never the dotted `Class.member` form
+  // `extractClassMembers` (spec 021) registers its symbol node under — so a
+  // hit on a class method never matches Source 1's candidate table directly.
+  // This walk re-derives the bare member name -> owning class mapping so such
+  // a hit resolves at all, then upgrades the target to the MEMBER's own
+  // symbol id (`symbol:<path>#Class.member`) whenever `extractClassMembers`
+  // actually symbolized that member — checked via `symbolIds.has(...)` above,
+  // not by re-deriving its inclusion rules here. That existence guard matters
+  // because THIS walk's own member filter (MethodDefinition | PropertyDefinition,
+  // non-computed, non-constructor) is intentionally broader than
+  // `extractClassMembers`'s (e.g. a non-function `PropertyDefinition` like
+  // `foo = 3`, a `declare` member, or an abstract member is never symbolized
+  // by `extractClassMembers` — see its own doc comment for the full
+  // exclusion list): for those, the guard falls back to the class's own id,
+  // exactly as before this fix, rather than pointing at a symbol node that
+  // was never created.
   for (const filePath of files) {
     const relPath = relative(rootDir, filePath);
     let content: string;
@@ -158,9 +189,19 @@ export function buildSymbolNameTable(rootDir: string, includePatterns: string[])
       for (const member of decl.body?.body ?? []) {
         if (member.type !== "MethodDefinition" && member.type !== "PropertyDefinition") continue;
         if (member.computed) continue;
+        // issue #267: a constructor CALL is reported by V8 under the
+        // CLASS's own name (never "constructor"), so registering
+        // "constructor" as a candidate name here would never match a real
+        // hit — it's simply not the name V8 ever reports. That is a
+        // different gap from this fix (member-id resolution) and isn't
+        // rescued by the `contains` roll-up added in report.ts either,
+        // since a constructor hit already resolves straight to the class
+        // via its own name, never via a member name lookup at all.
         if (member.kind === "constructor") continue;
         if (member.key?.type !== "Identifier" || !member.key.name) continue;
-        addCandidate(relPath, member.key.name, classSymbolId);
+        const memberSymbolId = `symbol:${relPath}#${exportedName}.${member.key.name}`;
+        const resolvedId = symbolIds.has(memberSymbolId) ? memberSymbolId : classSymbolId;
+        addCandidate(relPath, member.key.name, resolvedId);
       }
     }
   }

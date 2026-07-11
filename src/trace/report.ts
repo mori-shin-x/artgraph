@@ -53,11 +53,51 @@ function pairCompare(a: ClaimEvidencePair, b: ClaimEvidencePair): number {
  * file-grain fallback still counts as exercised at that same grain (FR-007
  * fail-safe symmetry: the claim and the evidence must be compared at
  * whatever grain the evidence actually landed at).
+ *
+ * spec 020 x spec 021 (issue #255) — `contains` ROLL-UP, claim-corroboration
+ * ONLY. When `node` itself isn't directly exercised, this also checks every
+ * node reachable from it via a `contains` edge (e.g. spec 021's class ->
+ * method edge, FR-006) and counts `node` as exercised if ANY of them is
+ * exercised for the SAME `reqId`. Rationale: a class-level `@impl` claim and
+ * a method-level trace hit are both real signal for the same requirement —
+ * `symbol-table.ts`'s Source 2 now resolves a method hit to the METHOD's own
+ * symbol id when one exists, so without this roll-up a class-level claim
+ * would go "unexercised" purely because the evidence lands one containment
+ * level below the claimed node, not because the requirement is actually
+ * unproven. Recursive with a cycle guard (`seen`) — today's only `contains`
+ * producer is one level deep (class -> method), but nothing here assumes
+ * that stays true. Forward-only, mirroring `graph/traverse.ts`'s `contains`
+ * BFS (spec 019 FR-001〜003) — a node never rolls UP into its container,
+ * only DOWN into what it contains.
+ *
+ * SCOPE: used ONLY inside `classifyEvidence`'s `implements`-edge loop below
+ * (claim corroboration: `corroborated` / `unexercisedClaims`). Do NOT reuse
+ * this for `suggestedImpls`, `infrastructure`, or `isExclusiveNode` — those
+ * intentionally read `trace.reqsByNode` / `perReq` directly, unrolled.
+ * Rolling evidence up through `contains` for THOSE would double-count a
+ * method's exercised evidence at its class and reintroduce the false
+ * suggestedImpls-on-class-node this fix closes (verified experimentally
+ * while designing this fix — a naive "resolve members to the class"
+ * approach broke corroboration; the inverse "roll up everywhere" approach
+ * broke exclusivity).
  */
-function reqExercises(trace: IngestedTrace, reqId: string, node: string): boolean {
+function reqExercises(
+  graph: ArtifactGraph,
+  trace: IngestedTrace,
+  reqId: string,
+  node: string,
+  seen: Set<string> = new Set(),
+): boolean {
   const coverage = trace.perReq.get(reqId);
   if (!coverage) return false;
-  return coverage.symbols.includes(node) || coverage.files.includes(node);
+  if (coverage.symbols.includes(node) || coverage.files.includes(node)) return true;
+  if (seen.has(node)) return false;
+  seen.add(node);
+  for (const edge of graph.edges) {
+    if (edge.kind !== "contains" || edge.source !== node) continue;
+    if (reqExercises(graph, trace, reqId, edge.target, seen)) return true;
+  }
+  return false;
 }
 
 /**
@@ -104,7 +144,7 @@ export function classifyEvidence(
     const node = edge.source;
     const reqId = edge.target;
     claimedNodes.add(node);
-    if (reqExercises(trace, reqId, node)) {
+    if (reqExercises(graph, trace, reqId, node)) {
       corroborated.push({ reqId, node });
     } else {
       unexercisedClaims.push({ reqId, node });
