@@ -100,9 +100,12 @@ npm install -D artgraph && npx artgraph init --agents=claude       # pick your a
 
 `artgraph init` runs the full setup: `.artgraph.json` config + initial scan + cross-agent Skills distribution + auto-integrate detected SDD tools + Stop hook + `AGENTS.md` snippet. Pass `--minimal` for bare config only, or any of `--no-skills` / `--no-agent-context` / `--no-integrate` / `--no-hooks` to skip specific stages. See [docs/commands.md#artgraph-init](./docs/commands.md#artgraph-init) for the full flag list.
 
-**If you use Claude Code:** skip the manual install entirely — type
-`/artgraph-setup` and the Skill detects your package manager, installs
-artgraph, and runs `init` for you in one turn.
+**Joining a repo where the distributed Skills are already committed?** Skip
+the manual install — type `/artgraph-setup` and the Skill detects your
+package manager, installs artgraph, and runs `init` for you in one turn.
+The first person on a team installs manually as above and commits the
+distributed Skills — see [Committing distributed
+Skills](./docs/getting-started.md#committing-distributed-skills).
 
 ### Tier 1 cross-agent distribution
 
