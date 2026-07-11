@@ -10,10 +10,12 @@ import {
   isFileBoundary,
   serializeRecord,
   drainBuffer,
+  memoizedHash,
 } from "../src/vitest/runner.js";
 import {
   REGISTRY_VERSION,
   parseShardLines,
+  hashContent,
   type ModuleRegistration,
   type TraceRegistry,
 } from "../src/trace/schema.js";
@@ -222,5 +224,62 @@ describe("drainBuffer (V6 batch flush, 観点1・4)", () => {
     const second = drainBuffer(buffer);
     expect(second).toContain('"n":2');
     expect(second).not.toContain('"n":1'); // the first flush's record isn't re-emitted
+  });
+});
+
+// spec 021 (tasks.md T016, research.md V8) — cdp-path contentHash memo: the
+// second of the two sanctioned cheap `cdp` improvements. `readFile` is
+// injected specifically so this can be pinned WITHOUT touching the real
+// filesystem (no `tests/fixtures/*` file needed) — see `memoizedHash`'s doc
+// comment in `src/vitest/runner.ts`.
+describe("memoizedHash (V8, cdp-path contentHash memo)", () => {
+  it("reads the file at most once per key — a second call for the same key returns the memoized hash without re-reading", () => {
+    const memo = new Map<string, string>();
+    let reads = 0;
+    const readFile = () => {
+      reads++;
+      return "export function f() {}\n";
+    };
+
+    const first = memoizedHash(memo, "src/a.ts", readFile);
+    const second = memoizedHash(memo, "src/a.ts", readFile);
+
+    expect(reads).toBe(1); // fs read happened exactly once for this file
+    expect(second).toBe(first);
+    expect(first).toBe(hashContent("export function f() {}\n"));
+    expect(first).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it("a different key triggers its own independent read (memoization is per-key, not global)", () => {
+    const memo = new Map<string, string>();
+    let readsA = 0;
+    let readsB = 0;
+
+    memoizedHash(memo, "src/a.ts", () => {
+      readsA++;
+      return "content-a";
+    });
+    memoizedHash(memo, "src/b.ts", () => {
+      readsB++;
+      return "content-b";
+    });
+    // Re-read "src/a.ts" again — still memoized, "src/b.ts"'s read didn't
+    // evict or otherwise disturb it.
+    memoizedHash(memo, "src/a.ts", () => {
+      readsA++;
+      return "content-a";
+    });
+
+    expect(readsA).toBe(1);
+    expect(readsB).toBe(1);
+    expect(memo.get("src/a.ts")).toBe(hashContent("content-a"));
+    expect(memo.get("src/b.ts")).toBe(hashContent("content-b"));
+  });
+
+  it("populates the memo map as a side effect, keyed by the given key", () => {
+    const memo = new Map<string, string>();
+    expect(memo.has("src/a.ts")).toBe(false);
+    const hash = memoizedHash(memo, "src/a.ts", () => "x");
+    expect(memo.get("src/a.ts")).toBe(hash);
   });
 });

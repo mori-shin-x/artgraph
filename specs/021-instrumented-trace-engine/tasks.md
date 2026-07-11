@@ -87,8 +87,8 @@
   - ユーザーが `test.env.ARTGRAPH_TRACE_ENGINE` を設定済み → ユーザー値優先(contracts/config-surface.md)
   - 従来義務の回帰: `test.runner` 設定・globalSetup 冪等追記・その他キーのパススルー
 - [x] T015 [US3] `src/vitest/setup.ts` に `withTrace(config, options?)` を実装して T014 を green にする(plugin.ts を import — main-process 層)
-- [ ] T016 [US3] cdp 経路の安価改善を `src/vitest/runner.ts` に実装する(FR-013 — これ以上の最適化はしない): ワーカー内 `path → contentHash` メモ化・shard 書き込みを v2 と同じバッチ機構に載せる。`tests/e2e/vitest-runner.e2e.test.ts` を **両エンジン × forks / threads** のマトリクスに拡張し、isolate オン/オフ両方で registry 置換が正しく働くこと(観点 5)を含めて green にする
-- [ ] T024 [US3] vitest バージョンマトリクス CI を追加する(FR-014 — 分析所見 C2: 3.x/4.x を実際に回すマトリクスは現状存在しない): `.github/workflows/ci.yml` に vitest 3.x ジョブ軸を追加する(`pnpm add -D vitest@^3 --no-save` 等で差し替えてから `pnpm build && pnpm test:e2e` を実行 — runner E2E が両エンジンをカバーするため e2e スイートで足りる)。実行順は T016 の後
+- [x] T016 [US3] cdp 経路の安価改善を `src/vitest/runner.ts` に実装する(FR-013 — これ以上の最適化はしない): ワーカー内 `path → contentHash` メモ化・shard 書き込みを v2 と同じバッチ機構に載せる。`tests/e2e/vitest-runner.e2e.test.ts` を **両エンジン × forks / threads** のマトリクスに拡張し、isolate オン/オフ両方で registry 置換が正しく働くこと(観点 5)を含めて green にする
+- [x] T024 [US3] vitest バージョンマトリクス CI を追加する(FR-014 — 分析所見 C2: 3.x/4.x を実際に回すマトリクスは現状存在しない): `.github/workflows/ci.yml` に vitest 3.x ジョブ軸を追加する(`pnpm add -D vitest@^3 --no-save` 等で差し替えてから `pnpm build && pnpm test:e2e` を実行 — runner E2E が両エンジンをカバーするため e2e スイートで足りる)。実行順は T016 の後
 
 **Checkpoint**: エンジン切替が完全動作。逃げ道と比較対象が揃う
 

@@ -65,10 +65,6 @@ interface ScriptCoverage {
 // for compatibility with existing importers of this module.
 export { hashContent } from "../trace/schema.js";
 
-function hashFileContent(absPath: string): string {
-  return hashContent(readFileSync(absPath, "utf-8"));
-}
-
 // V8 script URLs come back as `file://` (possibly with a vite/vitest
 // transform query string, e.g. `?v=…`); anything else (`node:`, synthetic
 // eval sources, data URLs) isn't one of the project's own source files.
@@ -242,6 +238,32 @@ export function drainBuffer(buffer: string[]): string | undefined {
 }
 
 /**
+ * research.md V8, tasks.md T016 — cdp-path-only: worker-local `path →
+ * contentHash` memo, one of the two sanctioned cheap improvements (FR-013
+ * caps investment there). A run's source files are assumed immutable for
+ * its duration — the same per-run-immutability assumption the `instrument`
+ * engine's transform-time hash already makes (V5) — so hashing a file once
+ * on its first hit and reusing the result for every later test that also
+ * hits it turns the recompute cost from "per test that hits this file"
+ * into "once per file per worker". `readFile` is injected (rather than
+ * this function calling `readFileSync` itself) so it can be pinned in
+ * `tests/vitest-runner-unit.test.ts` without touching the real filesystem,
+ * while the runtime instance passes a real disk read through the same
+ * implementation.
+ */
+export function memoizedHash(
+  memo: Map<string, string>,
+  key: string,
+  readFile: () => string,
+): string {
+  const cached = memo.get(key);
+  if (cached !== undefined) return cached;
+  const hash = hashContent(readFile());
+  memo.set(key, hash);
+  return hash;
+}
+
+/**
  * `package.json#exports["./vitest"]` (`test.runner` target). Extends the
  * built-in `VitestTestRunner` (research.md D1) to bracket every test with a
  * `Profiler.takePreciseCoverage` drain (`onBeforeRunTask`) / read
@@ -263,9 +285,19 @@ export default class ArtgraphTraceRunner extends VitestTestRunner {
   // every test, so this turns per-test path work into a single Map lookup
   // (and is where the symlink double-relativize cost is amortized away).
   private readonly relPathMemo = new Map<string, string | undefined>();
+  // spec 021 (tasks.md T016, research.md V8) — cdp-path-only relPath →
+  // contentHash memo (see `memoizedHash`'s doc comment for the rationale).
+  private readonly hashMemo = new Map<string, string>();
 
-  // spec 021 (T009) — instrument-engine (v2) state. Unused on the `cdp`
-  // path (that path's behavior is byte-for-byte the pre-021 code above).
+  // spec 021 (T009) — instrument-engine (v2) state. `sawAnyRegistration` /
+  // `warnedVersionMismatch` / `warnedNoRegistration` and `drain()` stay
+  // unused on the `cdp` path (registry/no-plugin diagnostics don't apply to
+  // an inspector-driven run); `buffer` / `bufferedTestFile` are now SHARED
+  // with the `cdp` path too (T016, research.md V8/V6 — batch flush is one
+  // of `cdp`'s two sanctioned cheap improvements), so the `cdp` path is no
+  // longer byte-for-byte the pre-021 code: record CONTENT and the shard
+  // contract are unchanged, only write TIMING (per-test → per-file-
+  // boundary/final flush) changed.
   private readonly engine: Engine;
   private readonly buffer: string[] = [];
   private bufferedTestFile: string | undefined;
@@ -377,12 +409,17 @@ export default class ArtgraphTraceRunner extends VitestTestRunner {
     const { result } = await this.session!.post("Profiler.takePreciseCoverage");
 
     const testFile = test.file?.filepath ? relToRoots(this.roots, test.file.filepath) : "";
+    // T016: the cdp path now shares the instrument path's batch-flush
+    // buffer (V6) instead of an `appendFileSync` per test — same file-
+    // boundary flush semantics, same shard contract (record content/
+    // ordering unchanged, only the write TIMING changes).
+    this.maybeFlushOnBoundary(testFile);
 
     // FR-003 / D5: concurrent tests can't be isolated (their coverage
     // windows overlap with sibling concurrent tests) — record the
     // attribution loss explicitly rather than write a misleading record.
     if ((test as { concurrent?: boolean }).concurrent) {
-      this.append({
+      this.bufferRecord({
         kind: "skipped",
         testName: test.name,
         testFile,
@@ -422,16 +459,22 @@ export default class ArtgraphTraceRunner extends VitestTestRunner {
     for (const hit of hits) {
       if (hashes[hit.file] !== undefined) continue;
       try {
-        hashes[hit.file] = hashFileContent(resolve(this.root, hit.file));
+        // T016 / V8: memoized across the whole worker lifetime, not just
+        // within this test — see `memoizedHash`'s doc comment.
+        hashes[hit.file] = memoizedHash(this.hashMemo, hit.file, () =>
+          readFileSync(resolve(this.root, hit.file), "utf-8"),
+        );
       } catch {
         // File vanished between execution and hashing (shouldn't happen at
         // capture time — this test just ran code from it). Leave it
         // unhashed rather than crash the worker; a hit with no matching
         // `hashes` entry is ingest's problem (dangling), not this module's.
+        // (Deliberately NOT memoized — a transient read failure shouldn't
+        // pin a missing hash for the rest of the worker's lifetime.)
       }
     }
 
-    this.append({
+    this.bufferRecord({
       kind: "test",
       testName: test.name,
       suitePath: suitePathOf(test),
@@ -527,8 +570,10 @@ export default class ArtgraphTraceRunner extends VitestTestRunner {
 
   override onAfterRunFiles(): void {
     super.onAfterRunFiles();
+    // T016: final flush is shared by both engines now — whatever's left
+    // after the last test file in this worker's batch (V6).
+    this.flush();
     if (this.engine !== "instrument") return;
-    this.flush(); // V6: final flush — whatever's left after the last test file in this worker's batch
     if (!this.sawAnyRegistration && !this.warnedNoRegistration) {
       this.warnedNoRegistration = true;
       // FR-008: a plugin-less `instrument` run (e.g. `test.runner` set

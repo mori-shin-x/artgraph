@@ -257,6 +257,85 @@ beforeAll(() => {
       "",
     ].join("\n"),
   );
+
+  // spec 021 (tasks.md T016, research.md V3, 観点5) — dedicated fixture for
+  // the registry-REPLACEMENT scenario: two test files that both import the
+  // SAME shared source module (`src/auth.js`), isolated under its own
+  // `registry-tests/` directory/`include` glob so it never mixes with the
+  // other fixtures. Used under both `isolate: true` (default — vitest
+  // re-evaluates the module per test file, so the plugin preamble's
+  // `modules.set(file, …)` REPLACES the previous file's
+  // `ModuleRegistration`) and `isolate: false` + `singleFork` (the module
+  // stays loaded across files in one worker — no replacement, the SAME
+  // registration is drained repeatedly). Both must still attribute each
+  // file's test correctly and yield a well-formed shard.
+  mkdirSync(join(fixtureDir, "registry-tests"), { recursive: true });
+  writeFileSync(
+    join(fixtureDir, "registry-tests/x.test.js"),
+    [
+      'import { describe, it, expect } from "vitest";',
+      'import { signIn } from "../src/auth.js";',
+      'describe("registry x", () => {',
+      '  it("[REQ-010] x calls signIn", () => {',
+      '    expect(signIn("user@example.com", "hunter2")).toBe(true);',
+      "  });",
+      "});",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(fixtureDir, "registry-tests/y.test.js"),
+    [
+      'import { describe, it, expect } from "vitest";',
+      'import { signIn } from "../src/auth.js";',
+      'describe("registry y", () => {',
+      '  it("[REQ-011] y calls signIn", () => {',
+      '    expect(signIn("user@example.com", "hunter2")).toBe(true);',
+      "  });",
+      "});",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(fixtureDir, "vitest.config.registry-isolate-on.mjs"),
+    [
+      `import tracePlugin from ${JSON.stringify(PLUGIN_PATH)};`,
+      "export default {",
+      "  plugins: [tracePlugin()],",
+      "  test: {",
+      '    include: ["registry-tests/**/*.test.js"],',
+      `    runner: ${JSON.stringify(RUNNER_PATH)},`,
+      `    globalSetup: [${JSON.stringify(SETUP_PATH)}],`,
+      // Explicit even though it's vitest's own default — this config exists
+      // specifically to exercise the isolate:true side of the T016 matrix.
+      "    isolate: true,",
+      "  },",
+      "};",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(fixtureDir, "vitest.config.registry-isolate-off.mjs"),
+    [
+      `import tracePlugin from ${JSON.stringify(PLUGIN_PATH)};`,
+      "export default {",
+      "  plugins: [tracePlugin()],",
+      "  test: {",
+      '    include: ["registry-tests/**/*.test.js"],',
+      `    runner: ${JSON.stringify(RUNNER_PATH)},`,
+      `    globalSetup: [${JSON.stringify(SETUP_PATH)}],`,
+      // Force both files into ONE worker, sequentially, WITHOUT
+      // per-file re-isolation — the shared module's registration is
+      // never replaced (same object drained repeatedly across files).
+      "    fileParallelism: false,",
+      "    isolate: false,",
+      '    pool: "forks",',
+      "    forks: { singleFork: true },",
+      "  },",
+      "};",
+      "",
+    ].join("\n"),
+  );
 }, 30000);
 
 afterAll(() => {
@@ -678,6 +757,54 @@ describe("vitest runner e2e — instrument engine, worker kill mid-run (partial 
     expect(trace.tests.some((t) => t.testName === "b2 slow")).toBe(false);
   }, 30000);
 });
+
+// spec 021 (tasks.md T016, research.md V3, 観点5) — module re-evaluation →
+// registry REPLACEMENT, exercised via a REAL vitest run (not just the pure
+// `drainTraceRegistry` "同 relPath 再登録" unit pin in
+// tests/vitest-runner-unit.test.ts) under BOTH isolate settings:
+// `isolate: true` (default — each test file gets a fresh load of the
+// shared `src/auth.js`, so the plugin preamble's `modules.set(file, …)`
+// REPLACES the previous file's `ModuleRegistration` with a brand-new
+// Uint8Array) and `isolate: false` + `singleFork` (the module stays loaded
+// across files in one worker — the SAME registration is drained
+// repeatedly, never replaced). Both must still attribute each file's own
+// test correctly, with no leaked/stale hits and no corrupted shard.
+describe.each([
+  {
+    label: "isolate:true (module re-evaluated per file — registry entry replaced)",
+    configFile: "vitest.config.registry-isolate-on.mjs",
+  },
+  {
+    label: "isolate:false + singleFork (module persists across files — registry entry reused)",
+    configFile: "vitest.config.registry-isolate-off.mjs",
+  },
+])(
+  "vitest runner e2e — instrument engine, shared-module registry across test files, $label",
+  ({ configFile }) => {
+    it("both files' tests get correctly attributed signIn hits, well-formed shard", () => {
+      const traceDir = join(fixtureDir, `.trace-registry-${configFile}`);
+      const run = runVitest("forks", traceDir, fixtureDir, {
+        configPath: join(fixtureDir, configFile),
+        extraEnv: { ARTGRAPH_TRACE_ENGINE: "instrument" },
+      });
+      expect(run.status === 0 || run.status === 1).toBe(true);
+
+      const shards = readShards(traceDir);
+      expect(shards.length).toBeGreaterThan(0);
+      for (const shard of shards) expect(shard.corruptedLines).toBe(0);
+
+      const trace = normalizeTrace(shards);
+      const recX = trace.tests.find((t) => t.testName.includes("[REQ-010]"));
+      const recY = trace.tests.find((t) => t.testName.includes("[REQ-011]"));
+      expect(recX).toBeDefined();
+      expect(recY).toBeDefined();
+      expect(recX!.passed).toBe(true);
+      expect(recY!.passed).toBe(true);
+      expect(recX!.hits.some((h) => h.fn === "signIn")).toBe(true);
+      expect(recY!.hits.some((h) => h.fn === "signIn")).toBe(true);
+    }, 30000);
+  },
+);
 
 function waitForShardContaining(
   traceDir: string,
