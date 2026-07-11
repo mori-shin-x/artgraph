@@ -112,7 +112,7 @@ traversal セマンティクスの SSOT が変わるため、(a) `src/graph/trav
 - **同一 REQ ID が複数 doc に含まれる場合**: 帰属アトリビューションは該当するすべての親 doc を `affectedDocs` に列挙する。
 - **`maxDepth` 指定時**: 親 doc の帰属アトリビューションは BFS の到達集合に対する後処理であり、depth を消費しない。`maxDepth` の意味は「グラフ辺のトラバース段数」のまま変わらない(従来コメントの「contains の広がりすぎを maxDepth で抑える」という回避策は不要になり、記述を削除する)。
 - **`contains` は doc→task 辺にも存在する** (tasks.md 由来): 方向制約は req と task に等しく適用する。task 起点/経由の traversal が tasks.md の兄弟 task を巻き込む同型の問題も同時に解消され、親 doc (tasks.md) は帰属として `affectedDocs` に残る。
-- **`autoContains: false` 構成**: contains 辺が存在しないため帰属アトリビューションは空集合。従来との差分なし。
+- **`autoContains: false` 構成**: contains 辺が存在しないため帰属アトリビューションは空集合。従来との差分なし。(spec 021 追記) この記述は doc 系 contains (doc→req|task) に限る — spec 021 のクラスメソッド粒度が導入する class→method contains は `docGraph.autoContains` 設定に従わず常時生成される (spec 021 FR-006 参照)。
 - **lock に親 doc が存在しない場合**: 既存の drift 判定と同じく skip(`lock[id]` が無ければ判定しない)。
 - **起点自体が doc / spec パスの場合** (`artgraph impact specs/auth.md`): `resolveStartIds` の filePath fallback が doc ノードと全 req ノードを直接 seed するため、方向制約後も spec→code 方向の全展開が維持される。加えて doc ノードからの順方向 contains 展開も従来どおり機能する。
 - **seed された doc からの doc↔doc 辺経由の到達**: 起点 / diff に spec ファイルが入った場合、その doc から `depends_on` / `derives_from` (inline link / frontmatter / convention) で繋がる別 doc とその配下 REQ には従来どおり到達する (旧実装と同一挙動 — doc↔doc 辺セマンティクスは FR-014(d) でスコープ外)。US3 / FR-011 の「当該 spec の全 REQ がスコープに入る」は、この既存の doc 間到達を制限する意図ではない (PR #232 レビューで確認した列挙ギャップの補記)。

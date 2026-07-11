@@ -48,7 +48,7 @@ you> src/auth 配下のトレーサビリティをブートストラップして
 artgraph は、そのコードの*上*にもう一段レイヤーを重ねます:
 
 - **要件・ドキュメント・コード・テストをまたぐ型付きグラフ** — すべてのエッジは決定的で、AST から取れるタグ (`@impl`、`[REQ-ID]`、`req:`)、Markdown リンク、YAML フロントマター、SDD ツールの規約、TypeScript の import から生成されます。グラフの生成に LLM は介在しません。埋め込みも RAG もなしです。
-- **変更単位のコンテキストルーティング** — `artgraph impact --diff` は、その変更が触れる仕様書・ドキュメント・テストだけを返します。コンテキストファイルを丸ごと渡すのではなく、*この差分に関わる範囲だけ*をエージェントに渡せます。
+- **変更単位のコンテキストルーティング** — `artgraph impact --diff` は、その変更が触れる仕様書・ドキュメント・テストだけを返します。コンテキストファイルを丸ごと渡すのではなく、*この差分に関わる範囲だけ*をエージェントに渡せます。これは 1 つの `spec.md` に複数の要件を書く構成 (Spec Kit / Kiro の標準) でも成り立ちます — 同じファイルに書かれているだけでコード依存のない兄弟要件は巻き込まれません。クラス内部でも同様です (1 クラス・複数メソッド・各メソッドが別要件を実装する OOP 標準形): symbol mode ではインライン export されたクラスの各メソッドが独立したグラフノードになるため、1 メソッドの編集が兄弟メソッドの要件を引き連れることはありません。
 - **CI ゲートとしてのドリフト検出** — `artgraph check --gate` は、仕様が変わったのにコード / テストが追従していないときにビルドを落とします。実行するたびにバイト単位で同一の出力になります。
 - **要件 ID がプライマリキー** — 仕様書にリストされ、エージェントが `@impl` に書き、テストが角括弧で囲む — この同じ `REQ-001` という文字列こそが単一のキーとなり、4 層のグラフを結合可能にしています。
 
@@ -185,7 +185,7 @@ artgraph には、CLI をエージェントのワークフローに接続する 
 | `artgraph-verify`        | n/a           | 実装完了。コードレビュー前に `artgraph check --diff` で自己検証                                                     |
 | `artgraph-rename`        | n/a           | ユーザーが REQ ID をリネーム/分割/マージしたいとき                                                                  |
 
-`file + symbol` の Skills は、`src/auth.ts` (ファイル単位) と `src/auth.ts:validateToken` (シンボル単位) のどちらでも受け付けます。シンボル単位の入力を使う場合は、`.artgraph.json` の `"mode"` を `"symbol"` に設定したうえでグラフを再スキャンする必要があります — トレードオフや `impactReqs` / `originReqs` の二軸ドリフトガイドについては [docs/skills-guide.md#file-mode-vs-symbol-mode](./docs/skills-guide.md#file-mode-vs-symbol-mode) を参照。
+`file + symbol` の Skills は、`src/auth.ts` (ファイル単位)、`src/auth.ts:validateToken` (シンボル単位)、`src/auth.ts:Sample.methodA` (クラスメソッド単位 — インライン export されたクラスのメソッドは独立したシンボルになるため、そのメソッドの REQ だけが返り兄弟メソッドの REQ は含まれません) を受け付けます。メソッド単位はファイル内精度のクエリで、クラスを import する依存元ファイルは含みません — 依存元まで含む爆風が必要な場合はクラス単位 (`src/auth.ts:Sample`)、ファイル単位、または `--diff` を使ってください。シンボル単位の入力を使う場合は、`.artgraph.json` の `"mode"` を `"symbol"` に設定したうえでグラフを再スキャンする必要があります — トレードオフや `impactReqs` / `originReqs` の二軸ドリフトガイドについては [docs/skills-guide.md#file-mode-vs-symbol-mode](./docs/skills-guide.md#file-mode-vs-symbol-mode) を参照。
 
 ## SDD ツール統合
 

@@ -9,13 +9,14 @@ import { NAMESPACED_ID_TOKEN } from "../grammar/tokens.js";
 // oxc-parser based TypeScript extraction layer (issue #159).
 //
 // This module replaced its original ts-morph backend with oxc's native
-// parser. The output contract is bit-for-bit what the ts-morph backend
-// produced — node/edge ARRAY ORDER and contentHash values included — so
-// existing `.trace.lock` files stay byte-identical across the swap (INV-L4).
-// That behavior was established by differential-testing both backends over
-// this repository, the test fixtures, and edge-case probes, and is now
-// pinned by tests/typescript-oxc-regression.test.ts. Three pieces of
-// compiler behavior are re-derived here from those empirical probes:
+// parser. For everything the ORIGINAL ts-morph backend itself produced, the
+// output contract is bit-for-bit what that backend produced — node/edge
+// ARRAY ORDER and contentHash values included — so existing `.trace.lock`
+// files stay byte-identical across the swap (INV-L4). That behavior was
+// established by differential-testing both backends over this repository,
+// the test fixtures, and edge-case probes, and is now pinned by
+// tests/typescript-oxc-regression.test.ts. Three pieces of compiler behavior
+// are re-derived here from those empirical probes:
 //
 //   1. Relative import/export specifier resolution (the checker's behavior
 //      behind `getModuleSpecifierSourceFile`). The outcome depends only on
@@ -36,6 +37,23 @@ import { NAMESPACED_ID_TOKEN } from "../grammar/tokens.js";
 //      import/export shape and is used as a fallback. Known limit: symbol
 //      NODES cannot be recovered from such files (the TS compiler recovered
 //      partial declarations; oxc does not).
+//
+// spec 021 (T024, issue #218) — class-method-grain symbols are a DELIBERATE
+// divergence from that bit-for-bit contract, not a 4th re-derived behavior:
+// the original ts-morph backend's `getExportedDeclarations()` only ever
+// walked TOP-LEVEL exported declarations, so it never emitted a symbol node
+// for a class member and there is no legacy behavior to reproduce here. For
+// an inline exported `ClassDeclaration` (named or default), extractSymbols
+// additionally calls extractClassMembers to synthesize one symbol node per
+// named member (`symbol:<path>#ClassName.memberName`) plus a class -> method
+// `contains` edge (provenance "structural") per member — see
+// extractClassMembers's own doc comment for the full inclusion/exclusion
+// list (FR-001/FR-004) and specs/021-class-method-grain/spec.md for the
+// attribution and containment semantics. The class symbol's own id / span /
+// contentHash stay untouched (still bit-for-bit with the legacy backend);
+// only the ADDITIONAL member nodes/edges are new surface area. This bumped
+// parse-cache's SCHEMA_VERSION (see src/parse-cache.ts) since a pre-spec-021
+// cached fragment carries neither.
 //
 // oxc-parser is a CJS package with a native binding; loading it lazily via
 // createRequire keeps this module's import cheap — combined with the parse

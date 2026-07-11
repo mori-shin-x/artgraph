@@ -44,40 +44,40 @@
 
 ## Phase 3: 7観点テストマトリクス (T009 完了後、すべて [P] — テストファイル単位で分担可)
 
-- [ ] T010 [P] 境界条件 1 (`tests/typescript.test.ts`): (a) 1 行クラス `export class S { m() {} }` でクラス直上タグがクラスに帰属 (tie でクラス勝ち)、(b) `export class S { m() {` の同一行開始でクラス直上タグをメソッドが横取りしない (遡上下限)、(c) クラス宣言とメンバーの間 (開き括弧直後) のタグの帰属が決定的
-- [ ] T011 [P] 境界条件 2 (`tests/typescript.test.ts`): (a) 空クラス (メンバー 0) — メソッドシンボル 0・contains 0・クラスシンボルのみ、(b) 最終メンバー後〜閉じ括弧のタグ→クラス帰属、(c) メンバー 1 個だけのクラス
-- [ ] T012 [P] 境界条件 3 (`tests/traverse.test.ts` or `tests/impact-cli.test.ts`): `maxDepth` 指定時に class→method→REQ が 2 hop になることの固定 (maxDepth=1 でメソッド REQ に届かない、=2 で届く)
-- [ ] T013 [P] 分岐組み合わせ 1 (`tests/typescript.test.ts`): export 形態 × メンバー種別のマトリクス — {inline named, inline default, 分離 export (対象外), alias export (対象外), 非 export (対象外)} × {method, getter, setter, static method, arrow-fn property, data property (対象外), computed (対象外), private #m (対象外), `accessor` フィールド (対象外), abstract/declare (対象外), static block (対象外)} の代表格子。二重 export (inline default + 分離 named) で 1 セットのみ生成
-- [ ] T014 [P] 分岐組み合わせ 2 (`tests/typescript.test.ts`): 同名収束 — (a) get+set ペア (両出現へのタグがともに同一シンボル帰属、setter 編集で hash 変化 = `\0` 連結の検証)、(b) static+instance 同名、(c) オーバーロード宣言 2 + 実装 1 (実装本体の編集で hash 変化)、(d) get+set の間に別メンバーが挟まる場合 (間のメンバー編集で hash 不変)
-- [ ] T015 [P] 不正状態遷移 1 (`tests/check-baseline-diff.test.ts` or `tests/lock.test.ts`): 旧 lock (メソッドシンボルエントリなし) の状態で新パーサ scan → `check` — 新規シンボルは lock 不在で drift にならない (lock[id] 不在は skip)、`reconcile` 後に lock へ追加され byte-stable
-- [ ] T016 [P] 不正状態遷移 2 (`tests/parse-cache.test.ts`): SCHEMA_VERSION bump により旧 fragment が invalidate され、warm/cold の scan 結果が byte-identical
-- [ ] T017 [P] 例外系 1 (`tests/typescript.test.ts`): 構文エラーを含むファイルの fatal-syntax fallback 経路でクラスメンバー抽出がクラッシュせず、従来の fallback 挙動 (file 粒度) に落ちる
-- [ ] T018 [P] 例外系 2 (`tests/impact-cli.test.ts`): (a) `impact src/a.ts:Sample.doesNotExist` → unresolvedSymbol exit 1 + メソッド対応の hint 文言 (US3-2)、(b) file mode graph への `:Sample.methodA` 入力 → 既存ガイダンス exit 1 (US3-3)、(c) barrel 経由 `src/barrel.ts:Sample.methodA` → unresolvedSymbol (Edge Case)
-- [ ] T019 [P] 実運用事故 1 (`tests/check-baseline-diff.test.ts`): メソッド編集でメソッド+クラス両シンボルが drift する二重報告の固定と、`check --diff` の baseline (#237 の graph union 込み) で「編集していない側の pre-existing 負債」が新規扱いされないこと
-- [ ] T020 [P] 実運用事故 2 (`tests/typescript.test.ts` + `tests/builder.test.ts`): (a) `export { helper as "Sample.methodA" }` と `class Sample { methodA }` の同居 → メンバー優先 + warning (無言破棄しない)、(b) 衝突警告の決定性 (scan 2 回で同一出力)
-- [ ] T021 [P] 実運用事故 3 (`tests/rename-cli.test.ts` or `tests/typescript.test.ts`): クラス名 rename 後、旧 `Sample.methodA` 宛て `Files:` エントリが unresolvedSymbol 診断に乗る (無言で file 粒度に落ちない)
-- [ ] T022 [P] エッジケース 1 (`tests/typescript.test.ts`): (a) デコレータ付きメソッドの attribution がデコレータ上のコメントに届く、(b) メンバー間の浮きタグは**次メンバー**帰属 (FR-002b の実機構固定)、(c) 連続コメント + 空行の遡上
-- [ ] T023 [P] エッジケース 2 (`tests/typescript.test.ts`): computed name / private `#m` / データプロパティ / `accessor` フィールド直上のタグがクラスへフォールバック (FR-004)、constructor は `ClassName.constructor` でシンボル化
-- [ ] T024 [P] 考慮漏れ 1: `tests/typescript-oxc-regression.test.ts` の期待値反転 (「クラスはメンバーシンボルを持たない」前提の全ケース列挙 → 新セマンティクスへ) + `typescript.ts` 冒頭 ts-morph contract コメントの書き換え (SC-003)
-- [ ] T025 [P] 考慮漏れ 2: renderer (`tests/graph-render.test.ts`)・doctor・graph diff がメソッドシンボル/symbol→symbol contains でクラッシュ・誤動作しないことの確認 (必要ならテスト追加、問題なければ既存 green の確認記録)
-- [ ] T026 [P] 考慮漏れ 3: spec 016 二軸 / spec 018 re-export / spec 019 containment / tag-zero brownfield の各既存テストが**無変更で** green (SC-002 の確認記録)
+- [X] T010 [P] 境界条件 1 (`tests/typescript.test.ts`): (a) 1 行クラス `export class S { m() {} }` でクラス直上タグがクラスに帰属 (tie でクラス勝ち)、(b) `export class S { m() {` の同一行開始でクラス直上タグをメソッドが横取りしない (遡上下限)、(c) クラス宣言とメンバーの間 (開き括弧直後) のタグの帰属が決定的
+- [X] T011 [P] 境界条件 2 (`tests/typescript.test.ts`): (a) 空クラス (メンバー 0) — メソッドシンボル 0・contains 0・クラスシンボルのみ、(b) 最終メンバー後〜閉じ括弧のタグ→クラス帰属、(c) メンバー 1 個だけのクラス
+- [X] T012 [P] 境界条件 3 (`tests/traverse.test.ts` or `tests/impact-cli.test.ts`): `maxDepth` 指定時に class→method→REQ が 2 hop になることの固定 (maxDepth=1 でメソッド REQ に届かない、=2 で届く)
+- [X] T013 [P] 分岐組み合わせ 1 (`tests/typescript.test.ts`): export 形態 × メンバー種別のマトリクス — {inline named, inline default, 分離 export (対象外), alias export (対象外), 非 export (対象外)} × {method, getter, setter, static method, arrow-fn property, data property (対象外), computed (対象外), private #m (対象外), `accessor` フィールド (対象外), abstract/declare (対象外), static block (対象外)} の代表格子。二重 export (inline default + 分離 named) で 1 セットのみ生成
+- [X] T014 [P] 分岐組み合わせ 2 (`tests/typescript.test.ts`): 同名収束 — (a) get+set ペア (両出現へのタグがともに同一シンボル帰属、setter 編集で hash 変化 = `\0` 連結の検証)、(b) static+instance 同名、(c) オーバーロード宣言 2 + 実装 1 (実装本体の編集で hash 変化)、(d) get+set の間に別メンバーが挟まる場合 (間のメンバー編集で hash 不変)
+- [X] T015 [P] 不正状態遷移 1 (`tests/check-baseline-diff.test.ts` or `tests/lock.test.ts`): 旧 lock (メソッドシンボルエントリなし) の状態で新パーサ scan → `check` — 新規シンボルは lock 不在で drift にならない (lock[id] 不在は skip)、`reconcile` 後に lock へ追加され byte-stable
+- [X] T016 [P] 不正状態遷移 2 (`tests/parse-cache.test.ts`): SCHEMA_VERSION bump により旧 fragment が invalidate され、warm/cold の scan 結果が byte-identical
+- [X] T017 [P] 例外系 1 (`tests/typescript.test.ts`): 構文エラーを含むファイルの fatal-syntax fallback 経路でクラスメンバー抽出がクラッシュせず、従来の fallback 挙動 (file 粒度) に落ちる
+- [X] T018 [P] 例外系 2 (`tests/impact-cli.test.ts`): (a) `impact src/a.ts:Sample.doesNotExist` → unresolvedSymbol exit 1 + メソッド対応の hint 文言 (US3-2)、(b) file mode graph への `:Sample.methodA` 入力 → 既存ガイダンス exit 1 (US3-3)、(c) barrel 経由 `src/barrel.ts:Sample.methodA` → unresolvedSymbol (Edge Case)
+- [X] T019 [P] 実運用事故 1 (`tests/check-baseline-diff.test.ts`): メソッド編集でメソッド+クラス両シンボルが drift する二重報告の固定と、`check --diff` の baseline (#237 の graph union 込み) で「編集していない側の pre-existing 負債」が新規扱いされないこと
+- [X] T020 [P] 実運用事故 2 (`tests/typescript.test.ts` + `tests/builder.test.ts`): (a) `export { helper as "Sample.methodA" }` と `class Sample { methodA }` の同居 → メンバー優先 + warning (無言破棄しない)、(b) 衝突警告の決定性 (scan 2 回で同一出力)
+- [X] T021 [P] 実運用事故 3 (`tests/rename-cli.test.ts` or `tests/typescript.test.ts`): クラス名 rename 後、旧 `Sample.methodA` 宛て `Files:` エントリが unresolvedSymbol 診断に乗る (無言で file 粒度に落ちない)
+- [X] T022 [P] エッジケース 1 (`tests/typescript.test.ts`): (a) デコレータ付きメソッドの attribution がデコレータ上のコメントに届く、(b) メンバー間の浮きタグは**次メンバー**帰属 (FR-002b の実機構固定)、(c) 連続コメント + 空行の遡上
+- [X] T023 [P] エッジケース 2 (`tests/typescript.test.ts`): computed name / private `#m` / データプロパティ / `accessor` フィールド直上のタグがクラスへフォールバック (FR-004)、constructor は `ClassName.constructor` でシンボル化
+- [X] T024 [P] 考慮漏れ 1: `tests/typescript-oxc-regression.test.ts` の期待値反転 (「クラスはメンバーシンボルを持たない」前提の全ケース列挙 → 新セマンティクスへ) + `typescript.ts` 冒頭 ts-morph contract コメントの書き換え (SC-003)
+- [X] T025 [P] 考慮漏れ 2: renderer (`tests/graph-render.test.ts`)・doctor・graph diff がメソッドシンボル/symbol→symbol contains でクラッシュ・誤動作しないことの確認 (必要ならテスト追加、問題なければ既存 green の確認記録)
+- [X] T026 [P] 考慮漏れ 3: spec 016 二軸 / spec 018 re-export / spec 019 containment / tag-zero brownfield の各既存テストが**無変更で** green (SC-002 の確認記録)
 
 ## Phase 4: 波及の固定 — E2E (Phase 3 と並行可、実 CLI 経由)
 
-- [ ] T027 [US2] `tests/plan-coverage.test.ts`: `Files: src/auth.ts:Sample.methodA` の per-entry 二軸 (impactReqs = originReqs = メソッド claim のみ、US2-6)。クラス unit エントリの originReqs にメソッド claim 非継承 (Edge Case)
-- [ ] T028 [US1][US2] `tests/impact-cli.test.ts`: issue #218 再現手順の E2E (SC-001) — 実コード fixture を scan し、**2 つの CLI 呼び出し**で assert: (a) `impact <file>:Sample.methodA --format json` で US2-1 (自 claim のみ)・US2-7 (consumer 非包含)・US2-4 (`this.methodB()` 呼び出しが fixture にあっても REQ-903 非到達 — call-graph 非解決の固定)、(b) `impact <file>:Sample --format json` (クラス unit) で US2-2 (全メンバー REQ 包含)
-- [ ] T029 [US3] `tests/sdd-files-parser.test.ts` or 既存 suite: `Files: src/a.ts:Sample.methodA` の Stage A 抽出が文法変更なしで通る固定 (US3-1)
+- [X] T027 [US2] `tests/plan-coverage.test.ts`: `Files: src/auth.ts:Sample.methodA` の per-entry 二軸 (impactReqs = originReqs = メソッド claim のみ、US2-6)。クラス unit エントリの originReqs にメソッド claim 非継承 (Edge Case)
+- [X] T028 [US1][US2] `tests/impact-cli.test.ts`: issue #218 再現手順の E2E (SC-001) — 実コード fixture を scan し、**2 つの CLI 呼び出し**で assert: (a) `impact <file>:Sample.methodA --format json` で US2-1 (自 claim のみ)・US2-7 (consumer 非包含)・US2-4 (`this.methodB()` 呼び出しが fixture にあっても REQ-903 非到達 — call-graph 非解決の固定)、(b) `impact <file>:Sample --format json` (クラス unit) で US2-2 (全メンバー REQ 包含)
+- [X] T029 [US3] `tests/sdd-files-parser.test.ts` or 既存 suite: `Files: src/a.ts:Sample.methodA` の Stage A 抽出が文法変更なしで通る固定 (US3-1)
 
 ## Phase 5: ドキュメント / Skill (Phase 2 完了後いつでも並行可 — コードと独立)
 
-- [ ] T030 [P] [US4] README / docs/skills-guide.md: メソッド粒度の記法・使いどころ、「standalone function に分割」旧回避策の削除、メソッド起点 = ファイル内精度 (consumer 非包含) の裁定、maxDepth 注記 (FR-013)。更新後、旧制約記述 (「メソッド粒度を持たない」「standalone function に分割」等) の全文検索で残存ゼロを確認 (US4-1)
-- [ ] T031 [P] [US4] `templates/skills/artgraph-impact`・`artgraph-plan-coverage`・`artgraph-bootstrap` SKILL.md + `_shared/output-schema.md` (該当あれば): メソッド記法・bootstrap のクラスメンバータグ提案。5 agent path byte-identical 同期 (FR-013)
-- [ ] T032 [P] [US4] `specs/019-impact-doc-containment/spec.md` の Edge Case「autoContains: false なら contains 辺が存在しない」へ doc 系限定の追記 (FR-013c)
+- [X] T030 [P] [US4] README / docs/skills-guide.md: メソッド粒度の記法・使いどころ、「standalone function に分割」旧回避策の削除、メソッド起点 = ファイル内精度 (consumer 非包含) の裁定、maxDepth 注記 (FR-013)。更新後、旧制約記述 (「メソッド粒度を持たない」「standalone function に分割」等) の全文検索で残存ゼロを確認 (US4-1)
+- [X] T031 [P] [US4] `templates/skills/artgraph-impact`・`artgraph-plan-coverage`・`artgraph-bootstrap` SKILL.md + `_shared/output-schema.md` (該当あれば): メソッド記法・bootstrap のクラスメンバータグ提案。5 agent path byte-identical 同期 (FR-013)
+- [X] T032 [P] [US4] `specs/019-impact-doc-containment/spec.md` の Edge Case「autoContains: false なら contains 辺が存在しない」へ doc 系限定の追記 (FR-013c)
 
 ## Phase 6: Polish — 最終確認
 
-- [ ] T033 全 suite green: `pnpm typecheck && pnpm test:unit && pnpm test:e2e && pnpm knip` (SC-003/SC-005)。scan 2 回 byte-identical・reconcile 後 lock byte-stable の確認
-- [ ] T034 dogfooding 確認 (SC-004): `~/artgraph-dogfooding` に TodoStore クラス (メソッドごとに別 REQ) を**一時 fixture として scratchpad に**試作し、ビルド済み CLI で `impact` がメソッド単位の REQ を返すことを確認 (dogfooding リポは read-only、コミットしない)。結果を PR 本文に記載
+- [X] T033 全 suite green: `pnpm typecheck && pnpm test:unit && pnpm test:e2e && pnpm knip` (SC-003/SC-005)。scan 2 回 byte-identical・reconcile 後 lock byte-stable の確認
+- [X] T034 dogfooding 確認 (SC-004): `~/artgraph-dogfooding` に TodoStore クラス (メソッドごとに別 REQ) を**一時 fixture として scratchpad に**試作し、ビルド済み CLI で `impact` がメソッド単位の REQ を返すことを確認 (dogfooding リポは read-only、コミットしない)。結果を PR 本文に記載
 
 ## Dependencies (完了順) と並行委譲レーン
 

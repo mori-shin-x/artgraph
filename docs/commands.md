@@ -89,6 +89,7 @@ Forward impact analysis: files/symbols → REQs / docs / tests.
 ```bash
 artgraph impact src/auth.ts                # explicit file
 artgraph impact src/auth.ts:validateToken  # symbol (requires "mode": "symbol")
+artgraph impact src/auth.ts:Sample.methodA # class-method unit (in-file precision; consumers not included)
 artgraph impact --diff                     # everything in git diff
 artgraph impact --diff --format json
 ```
