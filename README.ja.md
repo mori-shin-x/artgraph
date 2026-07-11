@@ -22,9 +22,9 @@ artgraph は、仕様書の要件 ID と、それを実装するコード（`@im
 </p>
 
 ```bash
-pnpm dlx artgraph init             # brownfield 対応・仕様書不要
+pnpm dlx artgraph init --agents=claude   # brownfield 対応・仕様書不要
 # ... ファイルを編集 ...
-pnpm dlx artgraph impact --diff    # → TS の import グラフから影響ファイルを出力
+pnpm dlx artgraph impact --diff          # → TS の import グラフから影響ファイルを出力
 ```
 
 `impact --diff` は決定的な TypeScript の import グラフをたどるため、どんな TS リポジトリでも導入したその日から動きます。仕様書・`@impl` タグ・ドリフト検出はオプトインで、プロジェクトのトレーサビリティ要求が高まるにつれて段階的に追加していけます。

@@ -29,9 +29,9 @@ specs, no `@impl` tags, no config required**:
 </p>
 
 ```bash
-pnpm dlx artgraph init             # brownfield-safe; no specs required
+pnpm dlx artgraph init --agents=claude   # brownfield-safe; no specs required
 # ... edit a file ...
-pnpm dlx artgraph impact --diff    # → files affected via your TS import graph
+pnpm dlx artgraph impact --diff          # → files affected via your TS import graph
 ```
 
 `impact --diff` walks the deterministic TypeScript import graph, so it works
