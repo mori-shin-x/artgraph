@@ -72,6 +72,20 @@ function keyName(key: AnyNode | undefined): string | undefined {
   return undefined;
 }
 
+// research.md V4 (T012 revision — see this task's final-report note): V8's
+// actual `functionName` for a getter/setter is `"get <key>"`/`"set <key>"`
+// (confirmed by a `node:inspector` Profiler.takePreciseCoverage probe — a
+// class OR object-literal `get value(){}`/`set value(v){}` both report with
+// the prefix; NOT the bare key name the naming table originally assumed).
+// Applies to both `MethodDefinition` (class) and `Property` (object
+// literal) accessor kinds — same V8 behavior either way.
+function accessorName(kind: string, key: string | undefined): string | undefined {
+  if (key === undefined) return undefined;
+  if (kind === "get") return `get ${key}`;
+  if (kind === "set") return `set ${key}`;
+  return key;
+}
+
 // Generic child enumeration driven by oxc's own generated `visitorKeys`
 // table (`Record<nodeType, propertyKey[]>`) — this is what lets `visit`
 // below reach a named/nested function no matter how deeply it's buried
@@ -171,16 +185,16 @@ function instrumentModule(
       if (member.type === "MethodDefinition") {
         const computed = member.computed === true;
         const kind = member.kind as string;
-        // V8-compatible naming (research.md V4): `constructor` reports the
-        // CLASS's name, not the literal string "constructor"; every other
-        // kind (method/get/set) reports its key name — accessors get no
-        // `get `/`set ` prefix (see this task's final-report note on this
-        // judgment call).
+        // V8-compatible naming (research.md V4, revised by T012): `constructor`
+        // reports the CLASS's name, not the literal string "constructor";
+        // `get`/`set` accessors report `"get <key>"`/`"set <key>"` (V8's actual
+        // `functionName`, confirmed by probe — see accessorName's doc);
+        // `method` reports the bare key name.
         const name = computed
           ? undefined
           : kind === "constructor"
             ? className
-            : keyName(member.key as AnyNode);
+            : accessorName(kind, keyName(member.key as AnyNode));
         visit(member.value as AnyNode, name);
       } else if (member.type === "PropertyDefinition" || member.type === "AccessorProperty") {
         const computed = member.computed === true;
@@ -226,9 +240,13 @@ function instrumentModule(
         // Object-literal property/method (`{ foo(){} }`, `{ foo: () => {} }`,
         // `{ get foo(){} }`, …) — one code path for all of them, matching
         // research.md V4's "オブジェクトリテラルのメソッド・プロパティ関数 →
-        // キー名" / "getter・setter → アクセサ名" (same rule, no prefix).
+        // キー名" / "getter・setter → アクセサ名". `kind` ("init"/"get"/"set")
+        // distinguishes a plain method/property from an accessor (T012 —
+        // accessors get the same `"get <key>"`/`"set <key>"` V8-actual prefix
+        // as a class accessor, via the same `accessorName` helper).
         const computed = node.computed === true;
-        const name = computed ? undefined : keyName(node.key as AnyNode);
+        const kind = node.kind as string;
+        const name = computed ? undefined : accessorName(kind, keyName(node.key as AnyNode));
         visit(node.value as AnyNode, name);
         return;
       }

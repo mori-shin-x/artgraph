@@ -163,12 +163,12 @@ describe("naming table (research.md V4) + registration, end-to-end via real exec
     "computedKeyName",
     "Widget", // constructor -> class name (V8-compatible)
     "method", // Widget.method
-    "value", // getter
-    "value", // setter — independent slot, same name
+    "get value", // getter — V8 functionName is "get <key>" (T012 probe)
+    "set value", // setter — V8 functionName is "set <key>", independent slot
     "fieldFn", // class field arrow (PropertyDefinition)
     "method", // obj.method — independent slot, same name as Widget.method
     "prop", // obj.prop: function(){}
-    "accessor", // obj get accessor
+    "get accessor", // obj get accessor — same "get <key>" V8 behavior
     "outer",
     "inner", // nested named function
     "callsAnonymous",
