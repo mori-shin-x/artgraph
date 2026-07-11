@@ -304,7 +304,7 @@ describe("(d) name-join edge cases fall back to file grain without losing REQ re
     expect(cov.files).toEqual(["file:src/a.ts"]);
   });
 
-  it("a class member name maps to the OWNING CLASS's symbol id (V8 reports method-level names)", () => {
+  it("a class member name maps to the MEMBER's OWN symbol id when extractClassMembers symbolized it (issue #255, V8 reports method-level names)", () => {
     const tmp = makeRepo({ "src/cart.ts": "export class Cart {\n  add() {}\n}\n" });
     writeShard(tmp, "w1.jsonl", [
       metaLine(),
@@ -316,6 +316,26 @@ describe("(d) name-join edge cases fall back to file grain without losing REQ re
     ]);
     const result = ingest(tmp);
     const cov = result.perReq.get("REQ-004")!;
+    expect(cov.symbols).toEqual(["symbol:src/cart.ts#Cart.add"]);
+    expect(cov.files).toEqual([]);
+  });
+
+  it("a class member name falls back to the OWNING CLASS's symbol id when extractClassMembers never symbolized that member (issue #255, non-function property)", () => {
+    // `count = 3` is a non-function PropertyDefinition — extractClassMembers
+    // (src/parsers/typescript.ts) never gives it a symbol node of its own, so
+    // Source 2's existence guard must fall back to the class, exactly as the
+    // pre-issue-255 behavior did for every member.
+    const tmp = makeRepo({ "src/cart.ts": "export class Cart {\n  count = 3;\n}\n" });
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[" + "REQ-014] non-function property",
+        hits: [{ file: "src/cart.ts", fn: "count" }],
+        hashes: { "src/cart.ts": "h1" },
+      }),
+    ]);
+    const result = ingest(tmp);
+    const cov = result.perReq.get("REQ-014")!;
     expect(cov.symbols).toEqual(["symbol:src/cart.ts#Cart"]);
     expect(cov.files).toEqual([]);
   });
