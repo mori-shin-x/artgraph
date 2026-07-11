@@ -36,6 +36,16 @@
 - **Rationale**: ingest の symbol 解決(`symbol-table.ts`)が扱うのは export 名とクラスメンバ名のみで、上記規則はその全種別を被覆する。名前ありだが非 export の関数も現行どおり hits に載せ(ingest 側で file-fallback)、file 粒度エッジの成立条件を変えない。無名関数は現行でも symbol 解決不能で、v2 で記録されなくなっても symbol 粒度の結果は不変 — 差が出うるのは「無名関数**のみ**が hit したファイルの file 粒度エッジ」という縁のケースで、differential fixture に含めて挙動を固定する(V7)。
 - **Alternatives**: (a) source-map 復元によるオフセット対応 — spec 020 D3 で棄却済みの複雑性をそのまま持ち込む。(b) ネスト関数を囲む export シンボルに帰属 — 精度向上だが現行との差分が生じるため将来 spec(Follow-up)。
 
+### T012 追記: `tests/e2e/engine-parity.e2e.test.ts`(T011)実行で確認した V8 実挙動と、命名規則の修正
+
+spec 021 実装レビューの事前警告どおり、`node:inspector` の `Profiler.startPreciseCoverage` → 対象コードを実行 → `takePreciseCoverage` で `functionName` を直接観測する probe(getter/setter・static method・generator・async・computed key・配列内無名関数・`export default` 無名/有名を実行)を作成し、Node v22.22.2 で実測した。結果は 3 カテゴリに分かれる。
+
+1. **getter/setter(命名表の誤り — 修正済み)**: V8 の実際の `functionName` は `"get <key>"` / `"set <key>"` (プレフィクスあり)。当初の実装(プレフィクスなし、`keyName` そのまま)は誤りだった。`src/vitest/plugin.ts` に `accessorName(kind, key)` を追加し、class `MethodDefinition` の `get`/`set` kind と object-literal `Property` の `get`/`set` kind の両方に適用(`kind` フィールドは oxc の両ノード型に存在— `@oxc-project/types` で確認済み)。`constructor` → クラス名、`method`/`init` → キー名(プレフィクスなし)は probe で元の実装どおりと確認できたため変更なし。static method もプレフィクスなし(`"staticMethod"`)を確認、変更なし。`tests/vitest-plugin.test.ts` の期待値(`"value"`/`"accessor"` → `"get value"`/`"set value"`/`"get accessor"`)をこの実挙動に追随させた。
+2. **generator / async / async generator(命名表どおりで一致 — 修正不要)**: probe は `genMethod`・`asyncMethod`・`asyncGenMethod`(クラス)、`genFn`・`asyncFn`・`asyncGenFn`(トップレベル)いずれも自名がそのまま `functionName` になることを確認した(`function*`/`async function`/`async function*` に特別な prefix/suffix は付かない)。**entered タイミング**についても、generator は `.next()` を一度も呼ばなくても「呼び出して iterator を得た時点」で本体の実行が始まらないため厳密には「entered していない」はずだが、計装方式は関数の実行印が本体先頭 `{}` の直後に置かれるため、この点は generator/async 関数ともに実行意味論上ズレない(V8 の per-range coverage も同様に、関数本体の実行が実際に始まった時点でカウントする)。`tests/e2e/engine-parity.e2e.test.ts` の REQ-113(async)/REQ-114(generator)で両エンジンの symbol 解決一致を e2e で固定済み。
+3. **命名表の対象外だった 2 つの縁のケース(「v2 が記録しない」側に倒さず、両エンジンの挙動を個別に固定 — research.md V7 参照)**:
+   - **無名 default export**(`export default function () {}` / `export default (x) => x + 1`): probe 上の直接 `import()` では V8 は `"default"` を報告する(`(anon).name === "default"` も確認)。しかし実際の vitest 実行(vite-node 経由)では、vite-node 自身の SSR 変換が無名 default エクスポートを `__vite_ssr_export_default__` という合成識別子に**変換してから** V8 に渡すため、`cdp` エンジンは `"__vite_ssr_export_default__"` を観測する(実機 e2e 再現で確認: 同一ソースを `cdp` で実行した shard に `"fn":"__vite_ssr_export_default__"` が記録される一方、有名 default export `namedDefault` は変換の必要がないため `"fn":"namedDefault"` のまま)。この rename は vite-node の内部実装詳細であり、`instrument` エンジンの plugin は `enforce: 'pre'`(vite-node の変換より前)で元の AST を見るため影響を受けない — 両者は原理的に異なる入力を見ている。`plugin.ts` の命名をこの合成識別子に追従させるのは vite-node のバージョン/変換経路に強く結合する脆い対応になるため見送り、`tests/e2e/engine-parity.e2e.test.ts` で両エンジンの実際の解決結果(`instrument` → `symbol:…#default`、`cdp` → `file:…`)を個別に固定した。
+   - **無名関数のみが hit するモジュール**(V4 が想定した縁のケースそのもの、`const handlers = [(x) => x+1, (x) => x+2]`): 当初の想定(「現行 = cdp でも symbol 解決不能」)は誤りだった。V8 は `Function.prototype.name`(spec の NamedEvaluation、配列要素には適用されない — probe で `.name === ""` を確認済み)とは別に、`FuncNameInferrer` という内部ヒューリスティックでスタックトレース/プロファイラ向けの推測名を持ち、配列やオブジェクトのコンテナ越しに囲む変数名を辿って命名する(probe で確認: `const x = { list: [() => 1] }` の要素は `"x.list"`、`const handlers = [...]` の要素は `"handlers"`)。このため `cdp` エンジンは `handlers`(このモジュールがエクスポートする symbol 名と一致)を観測し symbol 粒度で解決するが、`instrument` エンジンは(V4 の命名表が意図的に NamedEvaluation 相当のみを対象とし、コンテナ越しの推測命名までは再実装しない方針のため)このケースを計装せず、エッジを一切記録しない。V8 の `FuncNameInferrer` はパーサ内部のヒューリスティック(`MemberExpression` 連鎖・ネストした配列/オブジェクトも辿る)であり、これを AST 解析で完全再現するのは本 feature の価値に見合わないコストと判断し、V4 の対象外として明記する(fail-safe: `instrument` が記録しないことは REQ 到達性を失わせない、握り潰しではなく「一切生成しない」という保守的な選択)。`tests/e2e/engine-parity.e2e.test.ts` で両エンジンの実際の解決結果(`instrument` → 何も解決しない、`cdp` → `symbol:…#handlers`)を個別に固定した。
+
 ## V5. contentHash = 変換時にディスク上の原ソースから計算し preamble に埋め込む
 
 - **Decision**: plugin は transform フックの `code` 引数ではなく、モジュール id から**ディスクの原ソースを読み直して** hash を計算し(BOM 除去 → sha256 → 16 桁)、preamble に埋め込む。hash 規則は `src/trace/schema.ts` へ hoist して SSOT 化し、`parsers/typescript.ts` と `runner.ts` の既存複製を解消する(等価性ピン `tests/hash-equivalence.test.ts` は SSOT 直撃に更新)。
@@ -53,6 +63,12 @@
 - **Decision**: 命名種別網羅 fixture(export 関数 / arrow 代入 / クラスメソッド / getter / named・無名 default export / 非 export 関数 / ネスト named 関数 / 無名コールバック)を両エンジンで実行し、shard → ingest 通過後の**正規化エッジ集合**の一致を E2E で assert する(SC-004)。生 shard のバイト比較はしない(runToken / 実行順で異なって当然)。
 - **Rationale**: 契約が「解釈は ingest 側」と定める以上、パリティの正しい観測点は ingest の出力。V4 の縁のケース(無名のみ hit)もここで挙動を固定する。旧エンジンを fallback として残す(V8)ことで、パリティの比較対象が常に CI に存在する。
 - **Alternatives**: 生 shard の正規化比較 — meta / 実行順 / worker 割当の差を吸収する専用正規化器が必要になり、ingest の正規化と二重化(Cat2 違反)。
+
+### T012 追記: 実装した differential E2E(`tests/e2e/engine-parity.e2e.test.ts`)の結果
+
+命名種別網羅 fixture(export 関数 / 非 export 関数 / arrow 代入 / クラス constructor・method・getter・setter / named・無名 default export / ネスト named 関数 / **無名関数のみが hit するモジュール** / throw する関数 / async 関数 / generator 関数)を `instrument` / `cdp` 両エンジンで実運用の vitest spawn(`node_modules` シンボリックリンク方式、`tests/e2e/vitest-runner.e2e.test.ts` と同じ技法)で実行し、`src/trace/ingest.ts` の `ingestTrace` を直接呼んで得た正規化構造(`perReq` / `hashesAtTrace` / `reqsByNode` / `diagnostics`、Map は sorted-key で JSON 化)を比較した。
+
+結果: V4 追記に書いた 2 つの縁のケース(REQ-109 無名 default export、REQ-111 無名関数のみが hit するモジュール)を除く**全カテゴリで完全一致**(getter/setter の T012 修正後)。この 2 件は前述のとおり原理的な相違(vite-node の SSR 変換 / V8 `FuncNameInferrer`)であり、blanket equality assertion からは除外した上で、各エンジンの実際の挙動をそれぞれ個別の `it()` で固定した(`sanitizeForCrossEngineComparison` — 対象は `perReq` の `REQ-109`/`REQ-111` バケットと、対応する `hashesAtTrace`/`reqsByNode` の 3 ノードのみ)。同一エンジン(`instrument`)を独立した shard ディレクトリで 2 回実行した正規化トレースは(この 2 件を除外せずとも)byte-identical(決定性、`shardCount` も含めて一致)。
 
 ## V8. 旧エンジン(CDP)= fallback 残置 + 安価な 2 改善のみ
 

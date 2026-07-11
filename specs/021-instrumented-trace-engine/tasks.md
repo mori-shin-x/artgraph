@@ -67,9 +67,9 @@
 
 **Independent Test**: quickstart §2・§6(differential E2E + 下流不変性)
 
-- [ ] T011 [US2] [RED] `tests/e2e/engine-parity.e2e.test.ts` を新規作成する(FR-011 / SC-004)。命名種別網羅 fixture(export 関数 / arrow 代入 / クラスメソッド + constructor / getter / named・無名 default / 非 export 関数 / ネスト named / **無名関数のみが hit するモジュール** / throw する関数 / async 関数 / generator — 観点 4・6)を `instrument` / `cdp` 両エンジンで実行し、shard → ingest 通過後の正規化エッジ集合が一致することを assert。同一エンジン 2 回実行の byte-identical(決定性)も assert
-- [ ] T012 [US2] T011 で観測された乖離を修正する(想定: 命名表の細部 — generator の entered タイミング・推論名のずれ等)。修正先は `src/vitest/plugin.ts` の命名規則を優先し、縁のケースで「v2 が記録しない」側に倒す場合は research.md V4/V7 に観測結果を追記して挙動を固定する
-- [ ] T013 [US2] 下流不変性 + staleness の E2E を `tests/e2e/engine-parity.e2e.test.ts`(または既存 `tag-zero.e2e.test.ts` 拡張)に追加する: v2 shard に対し `artgraph trace report` / `scan --format json`(2 回実行 byte-identical)/ `check` が無変更で動作・**trace 記録後にソース編集 → staleness 警告が v2 hash でも機能**(観点 5)・trace 不在時の出力が導入前と一致(spec 020 SC-007 系の既存回帰を v2 既定下で再実行 — 観点 7)
+- [x] T011 [US2] [RED] `tests/e2e/engine-parity.e2e.test.ts` を新規作成する(FR-011 / SC-004)。命名種別網羅 fixture(export 関数 / arrow 代入 / クラスメソッド + constructor / getter / named・無名 default / 非 export 関数 / ネスト named / **無名関数のみが hit するモジュール** / throw する関数 / async 関数 / generator — 観点 4・6)を `instrument` / `cdp` 両エンジンで実行し、shard → ingest 通過後の正規化エッジ集合が一致することを assert。同一エンジン 2 回実行の byte-identical(決定性)も assert
+- [x] T012 [US2] T011 で観測された乖離を修正する(想定: 命名表の細部 — generator の entered タイミング・推論名のずれ等)。修正先は `src/vitest/plugin.ts` の命名規則を優先し、縁のケースで「v2 が記録しない」側に倒す場合は research.md V4/V7 に観測結果を追記して挙動を固定する
+- [x] T013 [US2] 下流不変性 + staleness の E2E を `tests/e2e/engine-parity.e2e.test.ts`(または既存 `tag-zero.e2e.test.ts` 拡張)に追加する: v2 shard に対し `artgraph trace report` / `scan --format json`(2 回実行 byte-identical)/ `check` が無変更で動作・**trace 記録後にソース編集 → staleness 警告が v2 hash でも機能**(観点 5)・trace 不在時の出力が導入前と一致(spec 020 SC-007 系の既存回帰を v2 既定下で再実行 — 観点 7)
 
 **Checkpoint**: 両エンジンのパリティが CI で強制される。既存ユーザーへの無破壊性が実証済み
 

@@ -157,7 +157,7 @@ spec 020 のトレーサビリティ(exercises エッジ・UNEXERCISED CLAIM 監
 - **SC-001**: artgraph 自身の unit スイート(1,800 テスト級・import 重)で、採取有効時の実行時間増加が **1.15 倍以下**(issue #241 の受け入れ基準 1.3 倍を上回る達成水準。現状は約 1.7 倍)。
 - **SC-002**: 公式 perf テスト(純関数 500 テスト fixture)がバジェット **1.2 倍**(現行 1.5 倍)で green。
 - **SC-003**: import 重 fixture でも同バジェット(1.2 倍)で green — per-test 固定費がロード済みモジュール数から独立していることの回帰ガード。
-- **SC-004**: 両エンジンの differential テストで、正規化エッジ集合の一致率 100%(対象 fixture は ingest が symbol 解決できる全名前種別を網羅)。
+- **SC-004**: 両エンジンの differential テストで、正規化エッジ集合の一致率 100%(対象 fixture は ingest が symbol 解決できる全名前種別を網羅)。ただし採取環境そのものに固有の 2 ケース — vite-node SSR 変換による無名 default export の合成名 rename、V8 パーサ内部 `FuncNameInferrer` によるコンテナ越し推測名 — は両エンジンの挙動を differential テストで個別に固定する(実測根拠: research.md V4 の T012 追記)。
 - **SC-005**: v2 エンジンで生成した shard に対する下流(ingest / scan / check / impact / trace report)の出力が、同一実行内容の旧エンジン shard に対する出力と一致する。trace 不在時の全コマンド出力は本 spec 導入前と byte-identical(オプトイン性の回帰ガード維持)。
 - **SC-006**: artgraph 自身の全テストスイートが v2 計装有効の下で全 green(計装がテストの可観測挙動を変えないことの実地検証)。
 
