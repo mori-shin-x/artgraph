@@ -190,9 +190,22 @@ export function registerImpactCommand(program: Command): void {
         for (const u of unresolvedSymbols) {
           const label = `${u.path}:${u.symbol}`;
           console.error(`ERROR: No matching symbol found for: ${label}`);
-          console.error(
-            `  hint: check the export name with \`grep "export.*${u.symbol}" ${u.path}\``,
-          );
+          // spec 021 (T018, US3-2, issue #218): a `ClassName.memberName`
+          // symbol is never itself preceded by `export` (only the class
+          // declaration is), so the old `grep "export.*<symbol>"` hint
+          // silently mismatched every class-member miss. Route dotted names
+          // to a hint phrased for a class member instead.
+          if (u.symbol?.includes(".")) {
+            const memberName = u.symbol.slice(u.symbol.lastIndexOf(".") + 1);
+            console.error(
+              `  hint: check the class/member spelling — class members aren't individually ` +
+                `exported, so try \`grep -n "${memberName}" ${u.path}\``,
+            );
+          } else {
+            console.error(
+              `  hint: check the export name with \`grep "export.*${u.symbol}" ${u.path}\``,
+            );
+          }
           console.error(
             `        or verify that \`mode: "symbol"\` is set in \`.artgraph.json\` and re-scan.`,
           );
