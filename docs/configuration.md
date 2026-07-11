@@ -202,10 +202,73 @@ Built-in presets activate automatically on upgrade. Existing projects whose
 `task → verifies → ...` edges for Kiro `_Requirements:` lists — on the next
 `artgraph scan`. Run `artgraph reconcile` to refresh the lock baseline.
 
+## `trace` — coverage-derived traceability (spec 020) <a id="trace--coverage-derived-traceability"></a>
+
+Opt-in: `req → code` `exercises` edges derived from **test-execution
+evidence** (per-test coverage) instead of, or in addition to, `@impl`
+claims. Requires the Vitest runner (`artgraph/vitest` /
+`artgraph/vitest/config`; see the top-level
+[README](../README.md#coverage-derived-traceability)) to populate
+`.artgraph/trace/` — every field below is inert on a project with no trace
+shards (FR-010: output stays byte-identical to before the feature existed).
+
+```jsonc
+// .artgraph.json
+{
+  "trace": {
+    "artifacts": [".artgraph/trace/*.jsonl"], // glob(s); default shown
+    "acceptExercises": false, // opt-in `exercised` coverage status
+    "staleness": "warn", // "warn" | "exclude" | "gate"
+    "sharedThreshold": 3 // symbols exercised by >= N REQs are "infrastructure"
+  }
+}
+```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `artifacts` | `[".artgraph/trace/*.jsonl"]` | Glob(s) matched against trace shard files (same shape as `testResultPaths`, spec 006). |
+| `acceptExercises` | `false` | When `true`, an untagged REQ backed by exclusive exercises evidence gets coverage status `exercised` instead of `uncovered`. Declared REQs (`impl-only` / `verified`) are never affected — evidence audits claims, it never substitutes for one. |
+| `staleness` | `"warn"` | How `check` treats exercises evidence whose recorded content hash no longer matches the current graph. `"warn"` reports `staleEvidence` only (exit code unchanged); `"exclude"` drops stale evidence from every judgment (UNEXERCISED CLAIM / SUGGESTED IMPL / `exercised`) while the underlying `exercises` edge stays in the graph for `impact`; `"gate"` makes `check --gate` exit `2` when any stale evidence is present, independent of the spec 017 baseline-diff gate. |
+| `sharedThreshold` | `3` | A symbol exercised by this many or more distinct REQs' tests is classified as shared infrastructure, not a candidate `@impl`. |
+
+### Exclusivity / silent / infrastructure
+
+`suggestedImpls` (and the `exercised` coverage status) only fire for symbols
+exercised **exclusively** by one REQ's tests. Between exclusive and
+`sharedThreshold`, there is a third, deliberately quiet bucket:
+
+| Distinct REQs exercising the symbol | Classification | Surfaced where |
+| --- | --- | --- |
+| exactly 1 | exclusive | `suggestedImpls` (or `exercised` coverage if `acceptExercises`) |
+| 2 .. `sharedThreshold` − 1 | **silent** | nowhere in `check` / `trace report` — the `exercises` edge still exists and is still walked by `impact` |
+| ≥ `sharedThreshold` | infrastructure | `trace report`'s `infrastructure` bucket only |
+
+The silent middle band exists so a symbol touched by a handful of REQs is
+flagged as neither a missing `@impl` nor noise-worthy shared code — it stays
+usable for `impact` reachability without polluting `check` / `trace report`
+output.
+
+### `.gitignore` recommendation
+
+Raw trace shards are a regenerable, per-run input artifact (analogous to a
+coverage report), not something the graph or `.trace.lock` depend on being
+present — only the derived `exercises` edges get persisted (into the lock's
+`exercises` field on `reconcile`). `artgraph init` proposes (does not force)
+adding `.artgraph/trace/` to `.gitignore`; whether you commit shards or treat
+them as a CI artifact is a per-project call. See
+[data-model.md](../specs/020-coverage-derived-edges/data-model.md) for the
+full shard/lock lifecycle.
+
+See [docs/commands.md#artgraph-trace](./commands.md#artgraph-trace) and
+[docs/commands.md#artgraph-check](./commands.md#artgraph-check) for the CLI
+reference (`trace status` / `trace report` / `check`'s new findings) and
+[docs/commands.md](./commands.md#impact---diff---tests--test-selection-from-evidence-spec-020)
+for `impact --diff --tests`.
+
 ## Edge provenance
 
 Every edge in the graph carries a `provenances: EdgeProvenance[]` array
-explaining where it came from. The eight values cover all generation sites:
+explaining where it came from. The nine values cover all generation sites:
 
 | Value         | Source                                              |
 | ------------- | --------------------------------------------------- |
@@ -217,6 +280,7 @@ explaining where it came from. The eight values cover all generation sites:
 | `inline-link` | markdown inline `[text](path)` links between docs   |
 | `ts-import`   | `import` statements                                 |
 | `structural`  | doc → req / task auto-`contains` within the same file |
+| `coverage`    | normalized test-execution trace shards (`.artgraph/trace/`, spec 020) — `exercises` edges, or appended to `implements` when a claim and evidence corroborate the same `(req, symbol)` |
 
 When the same `(source, target, kind)` is produced by multiple paths, the
 arrays are union-merged and sorted (e.g. `["convention", "frontmatter"]`). The
