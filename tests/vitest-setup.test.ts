@@ -147,7 +147,10 @@ describe("withTrace engine option", () => {
   });
 
   it("does not overwrite a user-provided test.env.ARTGRAPH_TRACE_ENGINE (cdp)", () => {
-    const merged = withTrace({ test: { env: { ARTGRAPH_TRACE_ENGINE: "user-set-value" } } }, { engine: "cdp" });
+    const merged = withTrace(
+      { test: { env: { ARTGRAPH_TRACE_ENGINE: "user-set-value" } } },
+      { engine: "cdp" },
+    );
     expect(merged.test?.env?.ARTGRAPH_TRACE_ENGINE).toBe("user-set-value");
   });
 
@@ -212,10 +215,12 @@ describe("withTrace engine option", () => {
       // Regression: globalSetup is always appended (once), never replaced.
       const globalSetup = merged.test?.globalSetup as string[];
       expect(Array.isArray(globalSetup)).toBe(true);
-      const expectedLength = globalSetupShape === "string" ? 2 : globalSetupShape === "array" ? 3 : 1;
+      const expectedLength =
+        globalSetupShape === "string" ? 2 : globalSetupShape === "array" ? 3 : 1;
       expect(globalSetup).toHaveLength(expectedLength);
       if (globalSetupShape === "string") expect(globalSetup[0]).toBe("./my-setup.ts");
-      if (globalSetupShape === "array") expect(globalSetup.slice(0, 2)).toEqual(["./a.ts", "./b.ts"]);
+      if (globalSetupShape === "array")
+        expect(globalSetup.slice(0, 2)).toEqual(["./a.ts", "./b.ts"]);
 
       // Plugin injection matches engine, existing plugins always preserved.
       const plugins = (merged.plugins ?? []) as Array<{ name?: string }>;
@@ -227,6 +232,109 @@ describe("withTrace engine option", () => {
       expect(merged.test?.env?.ARTGRAPH_TRACE_ENGINE).toBe(userEnvSet ? "user-set-value" : engine);
     },
   );
+});
+
+// spec 021 T023 real bug — contracts/config-surface.md §環境変数's stated
+// priority (process env > withTrace option > default) was inverted in the
+// implementation: `withTrace` baked `options.engine` straight into
+// `test.env.ARTGRAPH_TRACE_ENGINE`, so a shell-level
+// `ARTGRAPH_TRACE_ENGINE=cdp pnpm vitest run` never reached the worker (it
+// read `process.env` in the WORKER, which only ever saw what `test.env`
+// handed it — `withTrace`'s own baked-in value, not the real shell env).
+// This block reads `process.env.ARTGRAPH_TRACE_ENGINE` at withTrace-call
+// time (main process, where the shell var IS visible) and restores it in
+// `finally` so no test leaks its override into a sibling test.
+describe("withTrace: process.env.ARTGRAPH_TRACE_ENGINE precedence (contracts/config-surface.md §環境変数)", () => {
+  const prevEnv = () => process.env.ARTGRAPH_TRACE_ENGINE;
+
+  it("(a) process.env='cdp' + options.engine unset -> resolves cdp (no plugin, test.env='cdp')", () => {
+    const prev = prevEnv();
+    try {
+      process.env.ARTGRAPH_TRACE_ENGINE = "cdp";
+      const merged = withTrace({});
+      const plugins = (merged.plugins ?? []) as Array<{ name?: string }>;
+      expect(plugins.some((p) => p?.name === PLUGIN_NAME)).toBe(false);
+      expect(merged.test?.env?.ARTGRAPH_TRACE_ENGINE).toBe("cdp");
+    } finally {
+      if (prev === undefined) delete process.env.ARTGRAPH_TRACE_ENGINE;
+      else process.env.ARTGRAPH_TRACE_ENGINE = prev;
+    }
+  });
+
+  it("(b) process.env='cdp' + options.engine='instrument' -> env wins, resolves cdp", () => {
+    const prev = prevEnv();
+    try {
+      process.env.ARTGRAPH_TRACE_ENGINE = "cdp";
+      const merged = withTrace({}, { engine: "instrument" });
+      const plugins = (merged.plugins ?? []) as Array<{ name?: string }>;
+      expect(plugins.some((p) => p?.name === PLUGIN_NAME)).toBe(false);
+      expect(merged.test?.env?.ARTGRAPH_TRACE_ENGINE).toBe("cdp");
+    } finally {
+      if (prev === undefined) delete process.env.ARTGRAPH_TRACE_ENGINE;
+      else process.env.ARTGRAPH_TRACE_ENGINE = prev;
+    }
+  });
+
+  it("(c) process.env='instrument' + options.engine='cdp' -> env wins, resolves instrument (plugin injected)", () => {
+    const prev = prevEnv();
+    try {
+      process.env.ARTGRAPH_TRACE_ENGINE = "instrument";
+      const merged = withTrace({}, { engine: "cdp" });
+      const plugins = (merged.plugins ?? []) as Array<{ name?: string }>;
+      expect(plugins.filter((p) => p?.name === PLUGIN_NAME)).toHaveLength(1);
+      expect(merged.test?.env?.ARTGRAPH_TRACE_ENGINE).toBe("instrument");
+    } finally {
+      if (prev === undefined) delete process.env.ARTGRAPH_TRACE_ENGINE;
+      else process.env.ARTGRAPH_TRACE_ENGINE = prev;
+    }
+  });
+
+  it("(d) process.env='bogus' -> withTrace throws synchronously (fail-fast moved to config-eval time, quickstart §7)", () => {
+    const prev = prevEnv();
+    try {
+      process.env.ARTGRAPH_TRACE_ENGINE = "bogus";
+      expect(() => withTrace({})).toThrowError(/instrument/);
+      expect(() => withTrace({})).toThrowError(/cdp/);
+    } finally {
+      if (prev === undefined) delete process.env.ARTGRAPH_TRACE_ENGINE;
+      else process.env.ARTGRAPH_TRACE_ENGINE = prev;
+    }
+  });
+
+  it("(e) process.env unset -> unchanged from prior behavior (options.engine / default decide)", () => {
+    const prev = prevEnv();
+    try {
+      delete process.env.ARTGRAPH_TRACE_ENGINE;
+
+      const withOption = withTrace({}, { engine: "cdp" });
+      expect(withOption.test?.env?.ARTGRAPH_TRACE_ENGINE).toBe("cdp");
+      const optionPlugins = (withOption.plugins ?? []) as Array<{ name?: string }>;
+      expect(optionPlugins.some((p) => p?.name === PLUGIN_NAME)).toBe(false);
+
+      const withDefault = withTrace({});
+      expect(withDefault.test?.env?.ARTGRAPH_TRACE_ENGINE).toBe("instrument");
+      const defaultPlugins = (withDefault.plugins ?? []) as Array<{ name?: string }>;
+      expect(defaultPlugins.filter((p) => p?.name === PLUGIN_NAME)).toHaveLength(1);
+    } finally {
+      if (prev === undefined) delete process.env.ARTGRAPH_TRACE_ENGINE;
+      else process.env.ARTGRAPH_TRACE_ENGINE = prev;
+    }
+  });
+
+  it("a user-explicit test.env.ARTGRAPH_TRACE_ENGINE still wins over process.env (existing carve-out, unchanged)", () => {
+    const prev = prevEnv();
+    try {
+      process.env.ARTGRAPH_TRACE_ENGINE = "cdp";
+      const merged = withTrace(
+        { test: { env: { ARTGRAPH_TRACE_ENGINE: "user-set-value" } } },
+        { engine: "instrument" },
+      );
+      expect(merged.test?.env?.ARTGRAPH_TRACE_ENGINE).toBe("user-set-value");
+    } finally {
+      if (prev === undefined) delete process.env.ARTGRAPH_TRACE_ENGINE;
+      else process.env.ARTGRAPH_TRACE_ENGINE = prev;
+    }
+  });
 });
 
 describe("globalSetup (stale-shard cleanup)", () => {

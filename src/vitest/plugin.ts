@@ -387,7 +387,31 @@ export default function artgraphTracePlugin(): ArtgraphTracePlugin {
       if (fns.length === 0) return undefined;
 
       const hash = hashContent(diskContent);
-      ms.appendLeft(0, buildPreamble(relPath, hash, fns));
+      const preamble = buildPreamble(relPath, hash, fns);
+      // A shebang (`#!/usr/bin/env node`, e.g. `src/cli.ts`) MUST remain
+      // byte 0 — inserting the preamble ahead of it (as a plain
+      // `appendLeft(0, …)` would) breaks the shebang for every downstream
+      // consumer (observed dogfooding: Vite's TS transform dies with
+      // `[PARSE_ERROR] Invalid Character '!'` once something precedes
+      // `#!`). The preamble is instead inserted immediately AFTER the
+      // shebang line's own newline (i.e. at the very start of line 2) —
+      // NOT merely before that newline. Node's own shebang stripping
+      // (`internal/modules/helpers.js` `stripShebang`, both CJS and ESM
+      // loaders) matches `/^#!.*/` — `.` never matches `\n` — so anything
+      // appended on the SAME physical line as the shebang (before its
+      // newline) is silently eaten by that regex the moment the emitted
+      // module is actually loaded, even though it still looks correct as a
+      // plain string. Landing just past the newline keeps the preamble on
+      // its own line (line 2) while adding zero net lines overall (no new
+      // `\n` is introduced — contract obligation 2 "行数不変": total line
+      // count is unchanged, only line 2's leading content changes).
+      if (code.startsWith("#!")) {
+        const newlineIdx = code.indexOf("\n");
+        const insertPos = newlineIdx === -1 ? code.length : newlineIdx + 1;
+        ms.appendLeft(insertPos, preamble);
+      } else {
+        ms.appendLeft(0, preamble);
+      }
 
       return {
         code: ms.toString(),

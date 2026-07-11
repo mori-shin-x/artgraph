@@ -409,6 +409,69 @@ describe("boundary (観点1・6): a module with zero statically-nameable functio
   });
 });
 
+describe("shebang preservation (T023 real bug — dogfooding: instrumenting src/cli.ts broke Vite's downstream TS transform)", () => {
+  it("keeps the shebang as the file's first bytes and still instruments the function", () => {
+    const plugin = makePlugin();
+    const src = ["#!/usr/bin/env node", "export function main() { return 1; }", ""].join("\n");
+    const abs = writeFixture("src/shebang-cli.js", src);
+    const result = plugin.transform(src, abs)!;
+    expect(result).toBeDefined();
+
+    // (a) first line is EXACTLY the shebang line, untouched — byte 0 is
+    // `#`, byte 1 is `!`, and nothing was prepended ahead of it or appended
+    // onto it (appending onto the same physical line would make Node's own
+    // shebang-stripping regex, `/^#!.*/`, eat the appended text too — see
+    // the plugin.ts comment at the insertion site).
+    const lines = result.code.split("\n");
+    const firstLine = lines[0]!;
+    expect(result.code.startsWith("#!")).toBe(true);
+    expect(firstLine).toBe("#!/usr/bin/env node");
+
+    // (b) the preamble landed on line 2 or earlier (here: at the very start
+    // of line 2, right after the shebang's own newline) and is functional
+    // (the registration + hits array actually land in globalThis).
+    const secondLine = lines[1]!;
+    expect(secondLine).toContain(`const ${HITS_VAR}=`);
+    expect(secondLine).toContain(REGISTRY_KEY);
+
+    // (c) line count is unchanged (contract obligation 2 — 行数不変).
+    expect(result.code.split("\n").length).toBe(src.split("\n").length);
+
+    // (d) function instrumentation happened normally.
+    expect(extractFns(result.code)).toEqual(["main"]);
+  });
+
+  it("shebang preamble is real, executable code: registration + hit tracking both work", async () => {
+    const plugin = makePlugin();
+    const relPath = "src/shebang-exec.js";
+    const src = ["#!/usr/bin/env node", "export function run() { return 42; }", ""].join("\n");
+    const abs = writeFixture(relPath, src);
+    const result = plugin.transform(src, abs)!;
+
+    const mod = await importTransformed(result.code);
+    expect((mod.run as () => number)()).toBe(42);
+
+    const reg = registryOf()?.modules.get(relPath);
+    expect(reg).toBeDefined();
+    expect(reg!.fns).toEqual(["run"]);
+    expect(reg!.hits[0]).toBeGreaterThan(0);
+  });
+
+  it("does not misfire on ordinary code that merely contains '#!' later in the file (only byte-0 shebang is special-cased)", () => {
+    const plugin = makePlugin();
+    const src = [
+      'const notAShebang = "#!not-really-a-shebang";',
+      "export function f() { return notAShebang; }",
+      "",
+    ].join("\n");
+    const abs = writeFixture("src/not-shebang.js", src);
+    const result = plugin.transform(src, abs)!;
+    // Ordinary (non-shebang) path: preamble still goes at byte 0.
+    expect(result.code.startsWith(`const ${HITS_VAR}=`)).toBe(true);
+    expect(result.code.split("\n").length).toBe(src.split("\n").length);
+  });
+});
+
 describe("contracts/instrumentation-runtime.md §preamble の義務 3-5", () => {
   it("obligation 3: the entry stamp is a single branchless store, `<HITS_VAR>[k]=1;`, landing immediately after the opening brace", () => {
     const plugin = makePlugin();

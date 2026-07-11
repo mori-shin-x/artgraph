@@ -91,9 +91,16 @@ const ENV_ENGINE_KEY = "ARTGRAPH_TRACE_ENGINE";
  * (idempotent — appending twice is a no-op).
  *
  * `options.engine` (spec 021 T015, default `'instrument'`) picks the capture
- * engine:
- * - invalid values throw synchronously here (fail-fast, no silent
- *   fallback);
+ * engine — subject to contracts/config-surface.md §環境変数's priority
+ * order (high → low): the process environment variable
+ * `ARTGRAPH_TRACE_ENGINE` (read HERE, at config-evaluation time in the main
+ * process, where a shell-level override is visible — `ARTGRAPH_TRACE_ENGINE=cdp
+ * pnpm vitest run`) wins over `options.engine`, which wins over the
+ * `'instrument'` default:
+ * - invalid values (from either source) throw synchronously here (fail-fast,
+ *   no silent fallback — this is also why the check moved ahead of a worker
+ *   ever spawning: quickstart.md §7's `ARTGRAPH_TRACE_ENGINE=bogus` case must
+ *   fail at config evaluation, not inside a worker);
  * - `'instrument'` appends the v2 instrumentation plugin (`plugin.ts`) to
  *   top-level `plugins`, preserving any existing entries — detected by
  *   `PLUGIN_NAME` so applying `withTrace` twice never double-injects it
@@ -101,15 +108,27 @@ const ENV_ENGINE_KEY = "ARTGRAPH_TRACE_ENGINE";
  * - `'cdp'` injects no plugin;
  * - either way, `test.env.ARTGRAPH_TRACE_ENGINE` is set to the resolved
  *   engine so the worker (runner.ts) can read it back — unless the caller
- *   already set that key themselves, in which case their value wins (mirrors
- *   the process-env-over-`withTrace`-option precedence in
- *   contracts/config-surface.md §環境変数).
+ *   already set that key themselves, in which case their value wins (the
+ *   §環境変数 "ユーザー値優先" carve-out, orthogonal to the process-env vs.
+ *   `options.engine` precedence above).
  */
-export function withTrace<T extends WithTraceConfig>(userConfig: T = {} as T, options?: WithTraceOptions): T {
-  const engine = options?.engine ?? "instrument";
+export function withTrace<T extends WithTraceConfig>(
+  userConfig: T = {} as T,
+  options?: WithTraceOptions,
+): T {
+  // contracts/config-surface.md §環境変数: process env > withTrace option >
+  // default. Read here (main process, config-evaluation time) rather than
+  // baking `options.engine` into `test.env` for a worker to resolve later —
+  // a worker never sees a shell-level env var that vitest's own config
+  // loading already established the process env for, but reading it THERE
+  // (runner.ts, historically) is too late: it can only see what `test.env`
+  // handed it, so a real shell override was silently lost.
+  const envEngine = process.env[ENV_ENGINE_KEY];
+  const engine = (envEngine as TraceEngine | undefined) ?? options?.engine ?? "instrument";
   if (!VALID_ENGINES.includes(engine)) {
     throw new Error(
-      `artgraph: withTrace({ engine }) received invalid value ${JSON.stringify(engine)} — ` +
+      `artgraph: withTrace({ engine }) received invalid value ${JSON.stringify(engine)}` +
+        `${envEngine !== undefined ? ` (from process.env.${ENV_ENGINE_KEY})` : ""} — ` +
         `must be one of: ${VALID_ENGINES.join(", ")}.`,
     );
   }
@@ -123,7 +142,9 @@ export function withTrace<T extends WithTraceConfig>(userConfig: T = {} as T, op
     (p) => p !== null && typeof p === "object" && (p as { name?: unknown }).name === PLUGIN_NAME,
   );
   const plugins =
-    engine === "instrument" && !alreadyInjected ? [...existingPlugins, artgraphTracePlugin()] : existingPlugins;
+    engine === "instrument" && !alreadyInjected
+      ? [...existingPlugins, artgraphTracePlugin()]
+      : existingPlugins;
   // Only surface a `plugins` key when there is something to say: the caller
   // already had one, or `instrument` just injected into it. This keeps `cdp`
   // with no pre-existing `plugins` from growing an empty array out of
