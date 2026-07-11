@@ -62,7 +62,7 @@
 - [X] T021 [US3] **Red**: `tests/impact-evidence.test.ts` — (a) US3-1/2/3(--tests 列挙・静的/証拠の由来区別・trace なし exit 1)、(b) ⑥エッジ: stale エッジは `staleness: exclude` で不走査(FR-017)、(c) ⑦回帰: spec 019 の contains 方向制約テストが exercises 辺追加後も green(干渉なし — plan.md Cat7)、既存 `impact` の JSON スキーマが trace 不在時に不変
 - [X] T022 [US3] `src/graph/traverse.ts` + `src/commands/impact.ts`(`--tests`)を実装して T021 を **Green** に
 - [X] T023 [P] [US6] Skills 更新(FR-019/020): `templates/**` の bootstrap(テスト側タグ提案への転換+テスト不在領域の `@impl` フォールバック)/ verify / impact(所見 3 種の扱い分岐)。⑦: 5 agent path byte-identical 同期テスト(dogfood)green を維持。US6-1/2 は Skill 文書の記述レビューで確認(LLM 実行はテスト対象外 — 原則 V)
-- [ ] T024 [P] ドキュメント追随: README(エッジ導出元の列挙に trace 追記 — 憲法 v1.2.0 と同期)/ docs/architecture.md §3(エッジ型に `exercises`)/ docs/commands.md(`trace` / `--tests`)/ docs/configuration.md(`trace.*`)/ docs/skills-guide.md
+- [X] T024 [P] ドキュメント追随: README(エッジ導出元の列挙に trace 追記 — 憲法 v1.2.0 と同期)/ docs/architecture.md §3(エッジ型に `exercises`)/ docs/commands.md(`trace` / `--tests`)/ docs/configuration.md(`trace.*`)/ docs/skills-guide.md
 
 ## Phase D: Polish — 性能・ドッグフーディング・最終ゲート
 
