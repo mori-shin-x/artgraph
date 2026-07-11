@@ -49,7 +49,16 @@ export interface BuildWarning {
     // the TS parser's `TsParseWarning[]` (see parse-cache.ts's
     // `TsFragment.warnings`) below. NOT silent — shown by default, unlike
     // the two `phantom-import-repaired` / `dangling-import` types above.
-    | "class-member-collision";
+    | "class-member-collision"
+    // issue #247 — a file whose bracket nesting exceeds
+    // MAX_BRACKET_NESTING_DEPTH was skipped for AST-based extraction (no
+    // symbols or imports) to avoid a native oxc-parser crash. extractImplTags
+    // is a plain-text regex scan independent of the AST, so `@impl` comments
+    // and `[REQ-…]` test titles in the same file are still extracted — only
+    // symbol/import edges are lost. Rare and still worth surfacing when it
+    // fires, so NOT silent — shown by default like `class-member-collision`
+    // above.
+    | "pathological-bracket-nesting";
   id: string;
   files: string[];
   message?: string;

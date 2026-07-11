@@ -108,9 +108,14 @@ function buildIdMatchers(codeId?: string): IdMatchers {
 // in `--format json` `warnings[]`, and are never double-printed by
 // `check --gate --diff`. See parse-cache.ts's `TsFragment.warnings` and
 // builder.ts's TS-warning conversion loop for the rest of the wiring.
+// issue #247 added the second variant: a file-level (not symbol-level)
+// warning for the pathological-bracket-nesting parse-skip guard below —
+// `symbolId` holds the FILE id (`file:<path>`) for that variant since there
+// is no symbol to attribute to (parsing never ran).
 export interface TsParseWarning {
-  type: "class-member-collision";
-  // Fully-qualified id the warning is about (`symbol:<path>#<name>`).
+  type: "class-member-collision" | "pathological-bracket-nesting";
+  // Fully-qualified id the warning is about (`symbol:<path>#<name>`, or
+  // `file:<path>` for a file-level warning).
   symbolId: string;
   filePath: string;
   message: string;
@@ -334,6 +339,112 @@ function orderByDirectoryDepth(files: string[]): string[] {
   return out;
 }
 
+// issue #247 — oxc-parser's native (Rust) binding SIGSEGVs the whole process
+// — not a catchable JS exception — when `parseSync` is given an expression
+// whose bracket nesting (`(`, `[`, `{`) is deep enough. Empirically probed
+// on this machine (Node 24, WSL2, oxc-parser 0.137.0 AND 0.139.0): 3,000
+// nested brackets parses fine, 3,500 crashes the process. Statement-level
+// nesting (for/if/block/arrow chains) stayed safe at the same 3,000-deep
+// probe — bracket nesting inside an expression is the DOMINANT, shallowest
+// crashing shape, which is why the guard below counts bracket characters
+// only, not statement/block depth.
+//
+// Known blind spot (issue #262): TS generic nesting (`Array<Array<...>>`)
+// and JSX element nesting also crash the native parser — at depth ~5,000 and
+// ~20,000 respectively in the same probe, both with bracket-nesting depth
+// staying at 0 throughout — so this guard does not see them at all and lets
+// them reach `parseSync` unguarded. They are not folded into the same
+// character count because `<` / `>` are not reliably nesting delimiters in
+// TS source: a comparison expression (`i < n`) or an arrow-function `=>`
+// contains a bare `<` or `>` with no nesting meaning, so counting them the
+// same way `maxBracketNestingDepth` counts `([{` would drift the depth
+// counter arbitrarily on ordinary code, unlike brackets which have no such
+// ambiguity in this over-approximation.
+//
+// 1000 gives a ~3.5x margin below the observed 3,500 crash threshold.
+// Real-world code nests well under 100 brackets deep; anything past 1000 is
+// pathological (generated, adversarial, or corrupted input), not something
+// a human wrote by hand. The exact crash depth is a native call-stack
+// property (thread stack size, oxc/rust per-frame size) so it can vary by
+// environment/Node version/platform/thread — this is set conservatively
+// rather than tuned to the exact observed number, since the threshold can
+// only shift DOWN in an unfavorable environment. Concretely: this margin
+// assumes Node's default ~8MB main-thread stack (where the crash boundary is
+// ~3,500); probing smaller stacks showed a roughly linear relationship
+// (~3,500 at 8MB, ~2,000 at 4MB, ~500 at 1MB, ~900 at 2048KB) — an
+// environment configured with an unusually small thread stack can crash
+// below this guard's 1000 threshold, and this guard cannot protect against
+// that case.
+export const MAX_BRACKET_NESTING_DEPTH = 1000;
+
+// O(n) single pass over the raw source text counting `( [ {` as depth++ and
+// `) ] }` as depth-- (clamped at 0 so an unbalanced closer never goes
+// negative), returning the maximum depth reached.
+//
+// This is a deliberate OVER-approximation, not a tokenizer: it counts every
+// bracket CHARACTER, including ones inside string/template literals,
+// regex literals, and comments, which a real parser would not treat as
+// nesting at all. A tokenizer-accurate count would need the parser itself —
+// whose native crash on pathological input is exactly what this guard
+// exists to avoid running. The tradeoff is one-sided in the safe direction:
+// - False positives (skip-with-warning a file whose REAL code nesting is
+//   shallow, e.g. a string literal containing many bracket characters) are
+//   possible and are accepted — a spuriously skipped, warned-about file is
+//   far better than a SIGSEGV that leaves no diagnostic at all.
+// - False negatives are NOT possible WITHIN THIS FUNCTION'S OWN MODEL —
+//   bracket-CHARACTER undercounting cannot happen: counting every bracket
+//   character can only ever equal or exceed the true syntactic bracket
+//   nesting depth, never fall short of it. This does NOT mean every
+//   native-crashing recursive shape is covered: TS generics (`Array<Array<
+//   ...>>`) and JSX element nesting are a DIFFERENT recursive shape this
+//   function has no model of at all (see MAX_BRACKET_NESTING_DEPTH's doc
+//   comment / issue #262) — a file that crashes via deep generic or JSX
+//   nesting alone, with bracket-character depth staying near 0, is a real
+//   false negative of the GUARD (not of this counting function), and is
+//   out of scope for this guard as currently designed.
+export function maxBracketNestingDepth(content: string): number {
+  let depth = 0;
+  let max = 0;
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i];
+    if (c === "(" || c === "[" || c === "{") {
+      depth++;
+      if (depth > max) max = depth;
+    } else if (c === ")" || c === "]" || c === "}") {
+      if (depth > 0) depth--;
+    }
+  }
+  return max;
+}
+
+interface SafeParseResult {
+  parsed: OxcParseResult | undefined;
+  // Set when parsing was skipped because maxBracketNestingDepth exceeded
+  // MAX_BRACKET_NESTING_DEPTH — `parsed` is always undefined in that case.
+  // Absent (not just falsy) when parsing was attempted, so a caller can
+  // distinguish "skipped" from "attempted and oxc itself returned nothing
+  // useful" if that ever matters.
+  depthExceeded?: { depth: number; limit: number };
+}
+
+// Single choke point for both parseSync call sites (issue #247): checks the
+// nesting-depth guard BEFORE calling into the native parser, then falls back
+// to the pre-existing try/catch for the (unrelated, always-been-there) case
+// where parseSync itself throws a catchable JS exception. See
+// MAX_BRACKET_NESTING_DEPTH's doc comment for why the depth guard exists and
+// maxBracketNestingDepth's for why it over-approximates.
+function safeParseSync(filePath: string, content: string): SafeParseResult {
+  const depth = maxBracketNestingDepth(content);
+  if (depth > MAX_BRACKET_NESTING_DEPTH) {
+    return { parsed: undefined, depthExceeded: { depth, limit: MAX_BRACKET_NESTING_DEPTH } };
+  }
+  try {
+    return { parsed: loadOxc().parseSync(filePath, content) };
+  } catch {
+    return { parsed: undefined };
+  }
+}
+
 function parseTSFile(
   filePath: string,
   rootDir: string,
@@ -358,17 +469,45 @@ function parseTSFile(
     contentHash: fileHash,
   });
 
-  // parseSync never throws on syntax errors (it reports res.errors and may
-  // return an empty program); the guard covers pathological inputs only.
-  let parsed: OxcParseResult | undefined;
-  try {
-    parsed = loadOxc().parseSync(filePath, content);
-  } catch {
-    parsed = undefined;
+  // parseSync never THROWS on syntax errors (it reports them in
+  // res.errors and may return an empty program) — the try/catch in
+  // safeParseSync only covers OTHER catchable JS exceptions. Bracket
+  // nesting past MAX_BRACKET_NESTING_DEPTH is a SEPARATE, non-catchable
+  // failure mode (issue #247): the native binding SIGSEGVs the whole
+  // process, which no JS try/catch can intercept, so it is guarded against
+  // BEFORE ever calling into the parser (see safeParseSync).
+  const safeParsed = safeParseSync(filePath, content);
+  const parsed = safeParsed.parsed;
+  if (safeParsed.depthExceeded) {
+    const { depth, limit } = safeParsed.depthExceeded;
+    warnings.push({
+      type: "pathological-bracket-nesting",
+      symbolId: `file:${relPath}`,
+      filePath: relPath,
+      message:
+        `pathological bracket nesting depth ${depth} exceeds ${limit}; skipped parsing ` +
+        `"${relPath}" to avoid a native oxc-parser crash (issue #247). No symbols or imports ` +
+        "were extracted from this file; text-scanned tags (`@impl` comments, `[REQ-…]` test " +
+        "titles) are still honored.",
+    });
   }
 
   let symbolRanges: SymbolRange[] = [];
-  if (parsed && mode === "symbol" && !isTest) {
+  // issue #246 — a file with ANY parse error gets an empty program.body from
+  // the current oxc-parser (no partial/recovered AST), so extractSymbols
+  // would see zero declarations regardless. But if a FUTURE oxc version
+  // starts returning a partial/recovered AST for erroring files, this guard
+  // stops symbol / class-member-grain extraction from silently synthesizing
+  // symbol nodes and `contains` edges off a half-parsed, broken class — see
+  // tests/parser-oxc-canary.test.ts's "issue #246" canary, which pins
+  // today's empty-program behavior and is meant to go red (prompting a
+  // re-look at this guard) the day oxc changes it. Deliberately NOT applied
+  // to extractImports / extractImplTags below: oxc's module record is
+  // error-tolerant by design (tracks import/export shape even for files
+  // oxc's own AST synthesis gave up on), and dropping a file from the
+  // import graph over one syntax error would be a disproportionate
+  // fail-closed regression for those two extractors.
+  if (parsed && parsed.errors.length === 0 && mode === "symbol" && !isTest) {
     symbolRanges = extractSymbols(
       parsed.program,
       content,
@@ -1755,15 +1894,36 @@ function isModuleFile(filePath: string, ctx: ResolverContext): boolean {
   let result = false;
   try {
     const content = stripBom(readFileSync(filePath, "utf-8"));
-    const parsed = loadOxc().parseSync(filePath, content);
-    result =
-      parsed.module.hasModuleSyntax ||
-      parsed.program.body.some(
-        (stmt) =>
-          stmt.type === "TSExportAssignment" ||
-          (stmt.type === "TSImportEqualsDeclaration" &&
-            stmt.moduleReference.type === "TSExternalModuleReference"),
-      );
+    // issue #247 — same depth guard as the main parse path. No warnings
+    // channel here (this helper is a pure boolean probe called deep inside
+    // import resolution), so it never lets the pathological input reach the
+    // native parser and crash the process. But unlike a genuine parseSync
+    // throw, a depthExceeded skip must NOT fall through to `result = false`:
+    // on main (pre-guard), files in the empirically-safe-but-still-deep
+    // range (depth ~1001-3499) parsed FINE and were correctly treated as
+    // modules, so an importer's import edge to them was created. If this
+    // guard answered `false` here, that edge would silently disappear (a
+    // regression vs. main, not just a new pathological-input behavior) AND
+    // a warm cache fragment (written pre-guard, when the file parsed
+    // successfully) would disagree with a cold rebuild post-guard for the
+    // exact same content — violating the warm ≡ cold invariant (INV-L4).
+    // Assuming "is a module" when depth-exceeded keeps the edge alive; if
+    // the target is actually out of scan scope, the pre-existing
+    // dangling-import warning path (unrelated to this guard) still fires.
+    const { parsed, depthExceeded } = safeParseSync(filePath, content);
+    if (depthExceeded) {
+      result = true;
+    } else {
+      result =
+        parsed !== undefined &&
+        (parsed.module.hasModuleSyntax ||
+          parsed.program.body.some(
+            (stmt) =>
+              stmt.type === "TSExportAssignment" ||
+              (stmt.type === "TSImportEqualsDeclaration" &&
+                stmt.moduleReference.type === "TSExternalModuleReference"),
+          ));
+    }
   } catch {
     result = false;
   }

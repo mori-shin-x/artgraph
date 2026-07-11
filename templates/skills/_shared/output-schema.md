@@ -84,7 +84,7 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
 ```
 (other fields such as `drifted` / `orphans` / `coverage` are still populated with the full scoped listing — omitted above for brevity. `baselineError` is absent/undefined for every `baselineStatus` other than `"unavailable"`.)
 
-`warnings[].type` is one of: `"duplicate-id" | "ambiguous-id" | "orphan-doc" | "orphan-edge" | "invalid-relation" | "reserved-prefix" | "unresolved-link" | "out-of-scope-link" | "invalid-annotation-id" | "empty-annotation" | "self-reference-annotation" | "phantom-import-repaired" | "dangling-import"`.
+`warnings[].type` is one of: `"duplicate-id" | "ambiguous-id" | "orphan-doc" | "orphan-edge" | "invalid-relation" | "reserved-prefix" | "unresolved-link" | "out-of-scope-link" | "invalid-annotation-id" | "empty-annotation" | "self-reference-annotation" | "phantom-import-repaired" | "dangling-import" | "class-member-collision" | "pathological-bracket-nesting"`. This list may grow in future releases — a consumer should ignore any `type` value it does not recognize rather than treat it as an error.
 
 ## artgraph impact
 

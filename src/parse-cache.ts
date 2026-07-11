@@ -105,7 +105,18 @@ export interface ParseCacheData {
 // silently drop any collision warning for that file forever (until its
 // content changes again), which is exactly the bug this bump fixes. No
 // migration cost: v5 was never released.
-const SCHEMA_VERSION = 6;
+// v7 (PR #261): the parser gained a pathological-bracket-nesting depth guard
+// (safeParseSync / MAX_BRACKET_NESTING_DEPTH) that skips parsing a file whose
+// bracket nesting is deep enough to SIGSEGV oxc-parser natively. A fragment
+// written by the OLD (pre-guard) code for such a file was produced by a
+// successful parse — it has real edges/symbols and no warning. Reusing that
+// fragment on a warm hit would silently reproduce the old (edges, no
+// warning) result forever, diverging from a COLD rebuild on the new code
+// (which takes the guard's skip-with-warning path for the very same file
+// content) — exactly the warm ≡ cold invariant (INV-L4) this version bump
+// exists to protect. Bumping forces one cold reparse per pathological
+// fragment so warm and cold agree again.
+const SCHEMA_VERSION = 7;
 const CACHE_RELDIR = join("node_modules", ".cache", "artgraph");
 const CACHE_FILENAME = "parse-cache.json";
 
