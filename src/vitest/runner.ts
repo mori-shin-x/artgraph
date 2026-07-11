@@ -16,7 +16,7 @@ import inspector from "node:inspector";
 import { threadId } from "node:worker_threads";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { SCHEMA_VERSION, type CoverageHit } from "../trace/schema.js";
@@ -88,7 +88,17 @@ function isExcludedRelPath(relPath: string): boolean {
 // V8 script URLs come back as `file://` (possibly with a vite/vitest
 // transform query string, e.g. `?v=…`); anything else (`node:`, synthetic
 // eval sources, data URLs) isn't one of the project's own source files.
-function toRelPath(root: string, url: string): string | undefined {
+//
+// `roots` carries BOTH the configured project root and its realpath: V8
+// reports symlink-RESOLVED paths, so when the project root itself sits
+// behind a symlink (macOS `os.tmpdir()` → `/private/var/…` is the canonical
+// case) `relative(configuredRoot, abs)` walks out via `..` and every hit
+// would be dropped as "outside the project". Trying the realpath'd root
+// second keeps both spellings working without an fs call per script.
+export function toRelPath(
+  roots: readonly [root: string, realRoot: string],
+  url: string,
+): string | undefined {
   if (!url.startsWith("file://")) return undefined;
   let abs: string;
   try {
@@ -96,7 +106,22 @@ function toRelPath(root: string, url: string): string | undefined {
   } catch {
     return undefined;
   }
-  const rel = relative(root, abs).split(sep).join("/");
+  return absToRelPath(roots, abs);
+}
+
+export function relToRoots(roots: readonly [root: string, realRoot: string], abs: string): string {
+  let rel = relative(roots[0], abs).split(sep).join("/");
+  if ((rel.startsWith("..") || isAbsolute(rel)) && roots[0] !== roots[1]) {
+    rel = relative(roots[1], abs).split(sep).join("/");
+  }
+  return rel;
+}
+
+export function absToRelPath(
+  roots: readonly [root: string, realRoot: string],
+  abs: string,
+): string | undefined {
+  const rel = relToRoots(roots, abs);
   return isExcludedRelPath(rel) ? undefined : rel;
 }
 
@@ -141,16 +166,29 @@ function suitePathOf(test: RunnerTask): string[] {
  */
 export default class ArtgraphTraceRunner extends VitestTestRunner {
   private readonly root: string;
+  private readonly roots: readonly [string, string];
   private readonly traceDir: string;
   private readonly runToken: string;
   private readonly shardPath: string;
   private session: CdpSession | undefined;
   private ready: Promise<void> | undefined;
   private metaWritten = false;
+  // URL → relPath memo. Coverage snapshots repeat the same script URLs on
+  // every test, so this turns per-test path work into a single Map lookup
+  // (and is where the symlink double-relativize cost is amortized away).
+  private readonly relPathMemo = new Map<string, string | undefined>();
 
   constructor(...args: ConstructorParameters<typeof VitestTestRunner>) {
     super(...args);
     this.root = this.config.root;
+    let realRoot = this.root;
+    try {
+      realRoot = realpathSync(this.root);
+    } catch {
+      // Root not resolvable (should not happen for a running vitest) —
+      // fall back to the configured spelling only.
+    }
+    this.roots = [this.root, realRoot];
     this.traceDir = resolveTraceDir(this.root);
     this.runToken = randomToken();
     const workerId = `${process.pid}-t${threadId}`;
@@ -221,9 +259,7 @@ export default class ArtgraphTraceRunner extends VitestTestRunner {
     await this.ensureReady();
     const { result } = await this.session!.post("Profiler.takePreciseCoverage");
 
-    const testFile = test.file?.filepath
-      ? relative(this.root, test.file.filepath).split(sep).join("/")
-      : "";
+    const testFile = test.file?.filepath ? relToRoots(this.roots, test.file.filepath) : "";
 
     // FR-003 / D5: concurrent tests can't be isolated (their coverage
     // windows overlap with sibling concurrent tests) — record the
@@ -246,7 +282,13 @@ export default class ArtgraphTraceRunner extends VitestTestRunner {
 
     const hits: CoverageHit[] = [];
     for (const script of result) {
-      const file = toRelPath(this.root, script.url);
+      let file: string | undefined;
+      if (this.relPathMemo.has(script.url)) {
+        file = this.relPathMemo.get(script.url);
+      } else {
+        file = toRelPath(this.roots, script.url);
+        this.relPathMemo.set(script.url, file);
+      }
       if (file === undefined) continue;
       for (const fn of script.functions) {
         // module-init exclusion (FR-007 前段, contract §test): V8 reports a

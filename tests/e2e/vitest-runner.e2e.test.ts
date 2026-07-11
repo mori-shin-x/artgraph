@@ -152,7 +152,7 @@ interface RunResult {
   stderr: string;
 }
 
-function runVitest(pool: "forks" | "threads", traceDir: string): RunResult {
+function runVitest(pool: "forks" | "threads", traceDir: string, root = fixtureDir): RunResult {
   mkdirSync(traceDir, { recursive: true });
   const env = {
     ...process.env,
@@ -169,13 +169,13 @@ function runVitest(pool: "forks" | "threads", traceDir: string): RunResult {
       VITEST_BIN,
       "run",
       "--root",
-      fixtureDir,
+      root,
       "--config",
-      join(fixtureDir, "vitest.config.mjs"),
+      join(root, "vitest.config.mjs"),
       "--pool",
       pool,
     ],
-    { cwd: fixtureDir, encoding: "utf-8", env, timeout: 30000 },
+    { cwd: root, encoding: "utf-8", env, timeout: 30000 },
   );
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -309,5 +309,34 @@ describe.each(["forks", "threads"] as const)("vitest runner e2e — pool=%s", (p
     for (const hit of rec!.hits) {
       expect(rec!.hashes[hit.file]).toMatch(/^[0-9a-f]{16}$/);
     }
+  });
+});
+
+// macOS CI regression (PR #240) — `os.tmpdir()` on macOS is itself a symlink
+// (`/var/folders/…` → `/private/var/folders/…`), so vitest's configured
+// `root` and the symlink-RESOLVED paths V8 reports in coverage URLs spell
+// the same directory two different ways. Pre-fix, `toRelPath` relativized
+// against the configured spelling only, every hit walked out via `..`, and
+// the runner silently recorded zero hits. Reproduced portably by running the
+// same fixture through an explicit symlinked root.
+describe("vitest runner e2e — symlinked project root (macOS tmpdir regression)", () => {
+  let linkRoot: string;
+
+  afterAll(() => {
+    if (linkRoot) rmSync(linkRoot, { recursive: false, force: true });
+  });
+
+  it("still records hits when --root is a symlink to the real fixture", () => {
+    linkRoot = `${fixtureDir}-link`;
+    symlinkSync(fixtureDir, linkRoot);
+    const traceDir = join(fixtureDir, ".trace-symlink-root");
+    const run = runVitest("forks", traceDir, linkRoot);
+    expect(run.status === 0 || run.status === 1).toBe(true);
+
+    const trace = normalizeTrace(readShards(traceDir));
+    const rec = trace.tests.find((t) => t.testName.includes("[REQ-001]"));
+    expect(rec).toBeDefined();
+    expect(rec!.hits.length).toBeGreaterThan(0);
+    expect(rec!.hits.some((h) => h.fn === "signIn")).toBe(true);
   });
 });
