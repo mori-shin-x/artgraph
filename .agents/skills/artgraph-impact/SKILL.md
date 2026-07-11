@@ -31,6 +31,8 @@ Pick one based on what the user supplied:
 | (b) Explicit file or symbol source | User named file paths or `path:symbol` pairs | `<PM-exec> impact <file_or_symbol...>` |
 | (c) Ask | Neither — no diff, no file paths | Ask: "Which file(s) or `path:symbol` pair should I analyze?" then re-enter with mode (b) |
 
+Add `--tests` to mode (a) (`<PM-exec> impact --diff --tests --format json`, spec 020 FR-018) when the user wants to know **which tests to re-run** after the change, instead of just which REQs are touched — it lists the tagged tests of REQs that exclusively exercise a changed symbol (`testsToRun`), so you can run only those instead of the whole suite. It requires a trace: with zero trace shards it exits 1 with install/runner guidance (same wording as `trace report`'s zero-shard error) — treat that as "no coverage-derived evidence yet", not a real failure, and fall back to a full test run.
+
 ## Steps
 
 ### 1. Prerequisite check
@@ -67,6 +69,9 @@ git status --porcelain
 
   # Class-method grain — methods of inline-exported classes are symbols too
   <PM-exec> impact src/auth.ts:Sample.methodA --format json
+
+  # Test-selection: only the tests worth re-running for this diff
+  <PM-exec> impact --diff --tests --format json
   ```
 
   For tasks.md / plan.md driven analysis, hand off to `artgraph-plan-coverage`.
@@ -84,8 +89,12 @@ The result carries the **dual-axis impact view** plus drift:
 | `affectedFiles` / `affectedTasks` | other node kinds reached by the same BFS |
 | `affectedDocs` | parent spec doc(s) of every reached REQ/task, attached as **context**, not BFS reach (see below) |
 | `drifted` | lockfile drift on any of the above (`affectedDocs` entries included) |
+| `reqProvenance` | (trace present only) per-REQ `{reqId, provenance}` where `provenance` is `["static"]`, `["evidence"]`, or both — see below |
+| `testsToRun` | (`--tests` only) `{testFile, testName, reqId}[]` — the tagged tests worth re-running |
 
 See [output schema](../_shared/output-schema.md) for the full field shapes.
+
+**Static vs evidence provenance (spec 020 FR-017).** `impactReqs` now includes REQs reached two ways: **static** (an `@impl` declaration or a structural edge like `imports`/`contains` — a claim or a mechanical fact) and **evidence** (a coverage-derived `exercises` edge — a REQ's tagged tests were observed actually running the changed code). `reqProvenance` tells you which; a REQ can carry both if a declared `@impl` is also corroborated by evidence. Both fields — and `testsToRun` — are omitted entirely when no trace artifact is configured (FR-010, byte-identical pre-spec-020 output); do not expect them on a trace-less project. A stale `exercises` edge (source changed since the trace was captured) is excluded from `reqProvenance` under `trace.staleness: "exclude"`, so evidence-only REQs can silently drop out after an edit — re-run tests to refresh if that looks wrong.
 
 **Same-spec siblings are not blast radius.** `impactReqs` only contains REQs the edit actually reaches — through code (`@impl`, `imports`) or explicit spec relations (`depends_on` / `derives_from`). A REQ that merely lives in the same `spec.md` as a reached REQ, with no code or dependency link of its own, does **not** appear in `impactReqs` / `affectedFiles` / `drifted`, even under the common Spec Kit / Kiro layout of "one spec.md, many REQs". Its parent spec doc still shows up in `affectedDocs` so you can open that file for full feature context, but don't treat every REQ inside it as touched by this edit — cite only the REQs actually listed in `impactReqs`.
 

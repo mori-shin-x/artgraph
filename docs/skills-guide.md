@@ -73,6 +73,7 @@ deno run -A npm:artgraph/cli init
 
 - トリガー: 「artgraph をブートストラップして」「既存リポに REQ を撒いて」「タグゼロから始めたい」等
 - 前提: `artgraph` インストール済み (未インストールなら `artgraph-setup` を先に案内)
+- **evidence-aware (spec 020)**: 対象領域にすでにテストがある場合、Skill はコードへの `@impl` 挿入ではなく既存テストタイトルへの `[REQ-NNN]` タグ付けのみを提案する — Vitest runner を導入してテストを実行すれば、コード側の `req → code` エッジは実行証拠(`exercises`)から機械的に導出されるため。テストが存在しない領域では従来どおり `@impl` 提案にフォールバックする。提案の当否は「タグ付けしたテストの実行経路が spec 記述と乖離していないか」を `artgraph trace report` の corroborated / unexercisedClaims で機械的に確認できる
 - 参照: `templates/skills/artgraph-bootstrap/SKILL.md`
 
 ### artgraph-impact (旧 artgraph-plan)
@@ -87,6 +88,7 @@ deno run -A npm:artgraph/cli init
   - `artgraph impact --diff` (git diff から抽出)
   - tasks.md / plan.md 分析は `artgraph plan-coverage` へ
 - リネーム理由: 旧名「plan」は "変更前の設計" を連想させたが `--diff` は変更後を見るため矛盾していた。3 モード化で diff の有無を問わず利用可能になり、spec 014 で file-only に絞ったことで CLI の mental model が「file → 波及」一方向に揃った
+- **evidence-aware (spec 020)**: trace 成果物 (`.artgraph/trace/`) が存在するプロジェクトでは、`--diff` 起点で `artgraph impact --diff --tests` を使うと変更コードを実行しているタグ付きテストだけを選定できる。JSON 出力の `reqProvenance` で到達 REQ ごとに static (`@impl`/`imports`) か evidence (`exercises`) かを判別可能。エージェントは全テストではなく該当テストだけを回して検証を軽量化できる
 - 使用例:
 
 ```bash
@@ -95,6 +97,9 @@ artgraph impact src/auth.ts src/session.ts
 
 # git diff 起点 (既存)
 artgraph impact --diff
+
+# 変更を実行するタグ付きテストだけを選定 (trace 成果物が必要、spec 020)
+artgraph impact --diff --tests
 
 # tasks.md / plan.md 起点の分析は plan-coverage へ
 artgraph plan-coverage
@@ -145,6 +150,7 @@ artgraph plan-coverage --gate --ignore REQ-003,REQ-007
 
 - トリガー: 実装完了報告 / コードレビュー直前
 - 動作: `artgraph check --diff` を実行し drift / orphan / uncovered / coverage 不足をセルフチェック。Stop hook (`artgraph check --gate`) でブロックされる前の手戻り削減を目的とする
+- **evidence-aware (spec 020)**: trace 成果物が存在するプロジェクトでは `check` の所見に `UNEXERCISED CLAIM` (`@impl` はあるが対応 REQ のテストが実行していない)・`SUGGESTED IMPL` (テストは排他的に実行しているが `@impl` が無い)・`STALE EVIDENCE` (証拠取得後にコードが変更され鮮度切れ) が追加される。Skill はこれらを drift / orphan / uncovered と同列に扱い、`@impl` の追加・削除やテストの再実行が必要かをユーザーに確認する
 - 参照: `templates/skills/artgraph-verify/SKILL.md`
 
 ### artgraph-rename

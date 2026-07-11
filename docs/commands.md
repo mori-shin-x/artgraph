@@ -40,6 +40,14 @@ counts; `--format json` emits the full req/doc/code/test graph for machine
 consumption. `--serve` and `--output` render that graph as an interactive
 HTML page (see below).
 
+When trace shards exist under `trace.artifacts` (see
+[Configuration](./configuration.md)), `scan` also ingests them and merges
+coverage-derived `exercises` edges into the graph — evidence-only pairs
+become `exercises` edges, and pairs matching an existing `@impl` claim gain
+the `coverage` provenance on the `implements` edge. With no shards present,
+output is byte-identical to a trace-less project. See
+[`artgraph trace`](#artgraph-trace) for the audit report over the same data.
+
 ```bash
 artgraph scan                              # text count summary
 artgraph scan --format json                # full graph as JSON
@@ -82,6 +90,36 @@ artgraph check --diff                      # only report items changed since the
 artgraph check --format json               # per-requirement rows + counts
 ```
 
+### Evidence-aware findings (spec 020)
+
+When trace shards exist under `.artgraph/trace/`, `check` gains three
+additional findings — the same "declared vs. exercised" cross-check as
+[`artgraph trace report`](#artgraph-trace), plus a freshness check. On a
+trace-absent project none of this appears; output is byte-identical to
+before the feature shipped.
+
+| Finding | Text heading | `--format json` field | Meaning |
+| --- | --- | --- | --- |
+| Unexercised claim | `UNEXERCISED CLAIM:` | `unexercisedClaims` | `@impl REQ-001` exists but REQ-001's tagged green tests never execute that symbol |
+| Suggested impl | `SUGGESTED IMPL:` | `suggestedImpls` | No `@impl`, but the symbol is exercised exclusively by one REQ's tests |
+| Stale evidence | `STALE EVIDENCE:` | `staleEvidence` | The symbol's content hash changed since its trace evidence was captured (`{ reqId, symbols[], tracedAt }`) |
+
+`trace.staleness` (`.artgraph.json`, default `"warn"`) controls how stale
+evidence is treated: `"warn"` reports it only; `"exclude"` drops stale
+`exercises` edges from every judgment above (they still exist in the graph
+for `impact`); `"gate"` makes `check --gate` exit `2` when any stale evidence
+is present — independent of the spec 017 baseline-diff gate. See
+[docs/configuration.md#trace--coverage-derived-traceability-spec-020](./configuration.md#trace--coverage-derived-traceability-spec-020)
+for the full `trace.*` config reference.
+
+### `exercised` coverage status
+
+`--format json`'s `coverage` rows normally report `untagged` / `impl-only` /
+`verified`. When `.artgraph.json` sets `trace.acceptExercises: true`, an
+untagged REQ backed by exclusive exercises evidence reports `exercised`
+instead of `uncovered`. Declared REQs (`impl-only` / `verified`) are never
+affected — evidence audits claims, it never substitutes for a declared one.
+
 ## `artgraph impact`
 
 Forward impact analysis: files/symbols → REQs / docs / tests.
@@ -98,6 +136,94 @@ artgraph impact --diff --format json
 with no `@impl` tags or `.trace.lock`, so it works from day one. Requirement
 IDs are rejected as inputs — see the [rename note](#rename-does-not-reassign-impl-tags)
 if you need to trace the other direction.
+
+### `impact --diff --tests` — test selection from evidence (spec 020) <a id="impact---diff---tests--test-selection-from-evidence-spec-020"></a>
+
+`--tests` (only valid alongside `--diff`) lists exactly the `[REQ-NNN]`-tagged
+tests whose test-execution evidence reaches the changed nodes, instead of the
+full suite — test-impact-analysis as a byproduct of the `exercises` edges
+described in [`artgraph trace`](#artgraph-trace) below.
+
+```bash
+artgraph impact --diff --tests --format json
+```
+
+```json
+{ "testsToRun": [{ "testFile": "tests/billing.test.ts", "testName": "[REQ-003] charge bills a positive amount", "reqId": "REQ-003" }] }
+```
+
+When the graph has any `exercises` edges at all, `impact`'s regular JSON
+output gains a `reqProvenance` array — `{ reqId, provenance: ("static" |
+"evidence")[] }` per reached REQ — so a consumer can tell whether a REQ was
+reached via a static path (`@impl` / `imports`) or via `exercises` evidence
+(or both).
+
+**Exit codes**: normal impact exit codes apply, plus — trace-absent and
+`--tests` is passed → exit `1` with the same runner-setup guidance as
+`artgraph trace report` (below).
+
+## `artgraph trace` <a id="artgraph-trace"></a>
+
+Coverage-derived traceability (spec 020): cross-checks `@impl` claims
+against test-execution evidence captured by the
+[Vitest runner](../README.md#coverage-derived-traceability) into
+`.artgraph/trace/`. Both subcommands are **read-only** — neither touches the
+graph or `.trace.lock`.
+
+```bash
+artgraph trace status                      # shard counts, diagnostics, staleness rate
+artgraph trace status --format json
+artgraph trace report                      # @impl-vs-evidence cross-check
+artgraph trace report --format json
+```
+
+### `artgraph trace status`
+
+Reports how much evidence is on disk and how fresh it is.
+
+```json
+{
+  "shardCount": 4,
+  "testCount": 12,
+  "skippedCount": 1,
+  "diagnostics": { "dangling": 0, "corrupted": 0, "unknownSchema": 0, "skipped": 1, "stale": 2 },
+  "staleRate": 0.15
+}
+```
+
+### `artgraph trace report`
+
+The "declared vs. exercised" audit. Classifies every `(req, symbol)` pair
+touched by either an `@impl` claim or exercises evidence into four buckets:
+
+```json
+{
+  "corroborated":      [{ "reqId": "REQ-001", "node": "symbol:src/auth.ts#signIn" }],
+  "unexercisedClaims": [{ "reqId": "REQ-001", "node": "symbol:src/legacy.ts#oldSignIn" }],
+  "suggestedImpls":    [{ "reqId": "REQ-002", "node": "symbol:src/auth.ts#resetPassword" }],
+  "infrastructure":    [{ "node": "symbol:src/util.ts#validateEmail", "reqCount": 3 }],
+  "diagnostics":       { "dangling": 0, "corrupted": 0, "unknownSchema": 0, "skipped": 1, "stale": 0 }
+}
+```
+
+- `corroborated` — an `@impl` claim backed by exercises evidence for the
+  same `(req, symbol)` pair.
+- `unexercisedClaims` — `@impl REQ-001` exists, but REQ-001's tagged green
+  tests never execute that symbol. The anti-fabrication signal: a claim with
+  no evidence behind it.
+- `suggestedImpls` — a symbol with no `@impl` that is exercised exclusively
+  by exactly one REQ's tests (a candidate `@impl` you might be missing).
+- `infrastructure` — a symbol exercised by `trace.sharedThreshold` (default
+  `3`) or more distinct REQs; demoted out of `suggestedImpls` as shared code,
+  and not surfaced anywhere else (see the exclusivity/silent/infrastructure
+  table in
+  [docs/configuration.md](./configuration.md#trace--coverage-derived-traceability-spec-020)).
+
+**Exit codes**: `0` on a normal report. **`1`** when zero trace shards are
+found — the report's entire premise is evidence to cross-check against, so
+a trace-absent project gets an error with runner-setup guidance instead of
+four silently-empty arrays. Same guidance text as `impact --diff --tests`
+above.
 
 ## `artgraph plan-coverage`
 

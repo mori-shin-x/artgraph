@@ -66,8 +66,9 @@ artgraph adds the layer *above* the code:
 
 - **One typed graph over requirements, docs, code, and tests** — every edge
   is deterministic and sourced from AST-visible tags (`@impl`, `[REQ-ID]`,
-  `req:`), markdown links, YAML frontmatter, SDD-tool conventions, or
-  TypeScript imports. No LLM in the graph, no embedding retrieval, no RAG.
+  `req:`), markdown links, YAML frontmatter, SDD-tool conventions,
+  TypeScript imports, or normalized test-execution trace artifacts. No LLM
+  in the graph, no embedding retrieval, no RAG.
 - **Per-change context routing** — `artgraph impact --diff` returns only the
   specs, docs, and tests a given change touches. Feed *that* to the agent
   instead of the whole context file. This holds even when one `spec.md`
@@ -216,6 +217,50 @@ With a `.trace.lock` present, drift / orphan / uncovered nodes are colored;
 without one, the raw graph structure is rendered. See
 [docs/commands.md](./docs/commands.md#artgraph-scan) for the full reference.
 
+## Coverage-derived traceability <a id="coverage-derived-traceability"></a>
+
+Don't want to hand-tag every implementation symbol with `@impl`? artgraph can
+derive `req → code` edges from **test-execution evidence** instead. Add the
+runner to your Vitest config:
+
+```ts
+// vitest.config.ts
+import { withTrace } from "artgraph/vitest/config";
+export default defineConfig(withTrace({ test: { /* ...your config... */ } }));
+```
+
+Setting `test.runner: "artgraph/vitest"` directly also works, but prefer
+`withTrace()`: it additionally wires a `globalSetup` that wipes the previous
+run's shards, so evidence is replaced per run instead of accumulating —
+with the bare runner, shards from earlier (including interrupted) runs
+linger and keep feeding outdated evidence into the graph.
+
+Run your suite as usual (`vitest run`), and artgraph writes normalized
+per-test evidence to `.artgraph/trace/`. The next `artgraph scan` fills in
+`exercises` edges for every `[REQ-NNN]`-tagged test's REQ → the symbols it
+actually ran — **with zero `@impl` tags in the code**, tag-zero
+traceability.
+
+`artgraph trace report` is the anti-fabrication story: it cross-checks
+`@impl` claims against that evidence. A declared `@impl REQ-001` whose
+REQ-001 tests never execute that symbol surfaces as an **UNEXERCISED
+CLAIM** — declared vs. exercised, caught automatically. Code exclusively
+exercised by one REQ's tests but never claimed surfaces as a **SUGGESTED
+IMPL**.
+
+```bash
+pnpm exec artgraph trace status               # shard counts, staleness rate
+pnpm exec artgraph trace report --format json # declared-vs-exercised audit
+```
+
+`artgraph impact --diff --tests` extends impact analysis with test
+selection: instead of the full suite, it lists exactly the tagged tests
+whose REQs exercise the changed code. See
+[docs/commands.md#artgraph-trace](./docs/commands.md#artgraph-trace) and
+[docs/configuration.md](./docs/configuration.md#trace--coverage-derived-traceability-spec-020)
+for the full reference, including the opt-in `exercised` coverage status and
+staleness handling.
+
 ## A turn with Spec Kit + artgraph
 
 Here is what a `/speckit-tasks` turn looks like once installed, with the
@@ -319,7 +364,8 @@ Custom grammars are configurable via `reqPatterns` in `.artgraph.json` — see
 | `artgraph init`          | Full agent-native setup: config + scan + Skills + SDD integrate + Stop hook + agent context   |
 | `artgraph scan`          | Build the graph and report counts (`--serve` / `--output` render as interactive HTML)         |
 | `artgraph check`         | Report drift / orphans / uncovered (`--gate` to fail a hook)                                  |
-| `artgraph impact`        | File-only forward impact (file paths / `--diff`)                                              |
+| `artgraph impact`        | File-only forward impact (file paths / `--diff`; `--tests` selects tagged tests to re-run)    |
+| `artgraph trace`         | Coverage-derived traceability: `status` (shard health) / `report` (`@impl`-vs-evidence audit) |
 | `artgraph plan-coverage` | Detect implicit REQ impacts from `tasks.md` `Files:`                                          |
 | `artgraph reconcile`     | Rebuild `.trace.lock` from the current graph                                                  |
 | `artgraph rename`        | Rename / split / merge requirement IDs                                                        |

@@ -36,6 +36,30 @@ export function extractReqTags(text: string): string[] {
 }
 
 /**
+ * Resolve the REQ tags for one test record using spec 006's describe-ancestor
+ * inheritance rule: tags found directly on the test title win; only when the
+ * title carries none do the ancestor titles (describe blocks) contribute,
+ * deduplicated. `title` is a test's own name; `ancestors` is its enclosing
+ * describe-block chain (JSON reporter `ancestorTitles`, TraceShard
+ * `suitePath`, …).
+ *
+ * Shared by `parseVitestJson` below and `src/trace/ingest.ts` (spec 020
+ * T008/T009) so the inheritance rule has exactly one implementation — trace
+ * ingest joins REQ tags on `[REQ-NNN]`-tagged tests the same way the
+ * JSON-reporter path always has, rather than re-deriving the rule.
+ */
+export function resolveReqTags(title: string, ancestors: string[]): string[] {
+  const direct = extractReqTags(title);
+  if (direct.length > 0) return direct;
+
+  const inherited: string[] = [];
+  for (const ancestor of ancestors) {
+    inherited.push(...extractReqTags(ancestor));
+  }
+  return [...new Set(inherited)];
+}
+
+/**
  * Parse Vitest JSON reporter output into TestResultRecords.
  */
 export function parseVitestJson(content: string): TestResultRecord[] {
@@ -61,18 +85,9 @@ export function parseVitestJson(content: string): TestResultRecord[] {
   for (const testResult of data.testResults ?? []) {
     for (const assertion of testResult.assertionResults ?? []) {
       const title = assertion.title ?? "";
-      let reqTags = extractReqTags(title);
-
-      if (reqTags.length === 0) {
-        // `ancestorTitles` is optional in some reporters — guard against a
-        // missing array so a single malformed entry can't crash the parse.
-        for (const ancestor of assertion.ancestorTitles ?? []) {
-          const ancestorTags = extractReqTags(ancestor);
-          reqTags.push(...ancestorTags);
-        }
-        // Deduplicate after collecting from ancestors
-        reqTags = [...new Set(reqTags)];
-      }
+      // `ancestorTitles` is optional in some reporters — guard against a
+      // missing array so a single malformed entry can't crash the parse.
+      const reqTags = resolveReqTags(title, assertion.ancestorTitles ?? []);
 
       const passed = assertion.status === "passed";
 

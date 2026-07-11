@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { resolve } from "node:path";
 import { mkdirSync, rmSync, symlinkSync, existsSync, readFileSync } from "node:fs";
 import { writeLock, readLock, buildLockFromGraph } from "../src/lock.js";
-import type { ArtifactGraph, GraphNode, GraphEdge } from "../src/types.js";
+import type { ArtifactGraph, GraphNode, GraphEdge, LockFile } from "../src/types.js";
 
 const TMP = resolve(import.meta.dirname, "fixtures/lock-test");
 
@@ -259,6 +259,200 @@ describe("buildLockFromGraph — schema v2 dependsOn", () => {
     } finally {
       global.Date = real;
     }
+  });
+});
+
+// spec 020 (tasks.md T016, data-model.md §5, FR-011) — `LockEntry.exercises`:
+// target nodeIds of a req's `exercises` edges, same dedupe+sort convention as
+// `impl`/`tests` (`[...new Set()].sort()`), omitted from the entry when
+// empty.
+describe("buildLockFromGraph — exercises (spec 020 T016)", () => {
+  function node(id: string, kind: GraphNode["kind"]): GraphNode {
+    return { id, kind, filePath: `${id}.md`, contentHash: "abc" };
+  }
+  function graph(nodes: GraphNode[], edges: GraphEdge[]): ArtifactGraph {
+    const map = new Map<string, GraphNode>();
+    for (const n of nodes) map.set(n.id, n);
+    return { nodes: map, edges };
+  }
+
+  it("①境界: populates `exercises` with deduped, sorted target nodeIds", () => {
+    const g = graph(
+      [
+        node("REQ-1", "req"),
+        node("symbol:src/a.ts#fn2", "symbol"),
+        node("symbol:src/a.ts#fn1", "symbol"),
+      ],
+      [
+        {
+          source: "REQ-1",
+          target: "symbol:src/a.ts#fn2",
+          kind: "exercises",
+          provenances: ["coverage"],
+        },
+        {
+          source: "REQ-1",
+          target: "symbol:src/a.ts#fn1",
+          kind: "exercises",
+          provenances: ["coverage"],
+        },
+        // Duplicate target (defensive — dedupEdges should already have
+        // collapsed this upstream, but buildLockFromGraph must not assume
+        // its input is always post-dedup).
+        {
+          source: "REQ-1",
+          target: "symbol:src/a.ts#fn1",
+          kind: "exercises",
+          provenances: ["coverage"],
+        },
+      ],
+    );
+    const lock = buildLockFromGraph(g);
+    expect(lock["REQ-1"].exercises).toEqual(["symbol:src/a.ts#fn1", "symbol:src/a.ts#fn2"]);
+  });
+
+  it("①境界: `exercises` is omitted (not an empty array) when the req has no exercises edges", () => {
+    const g = graph([node("REQ-2", "req")], []);
+    const lock = buildLockFromGraph(g);
+    expect(lock["REQ-2"].exercises).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(lock["REQ-2"], "exercises")).toBe(false);
+  });
+
+  it("only edges SOURCED from this req are counted (exercises is req -> node, forward only)", () => {
+    const g = graph(
+      [node("REQ-3", "req"), node("REQ-4", "req")],
+      [
+        {
+          source: "REQ-3",
+          target: "symbol:src/a.ts#fn",
+          kind: "exercises",
+          provenances: ["coverage"],
+        },
+        {
+          source: "REQ-4",
+          target: "symbol:src/b.ts#fn",
+          kind: "exercises",
+          provenances: ["coverage"],
+        },
+      ],
+    );
+    const lock = buildLockFromGraph(g);
+    expect(lock["REQ-3"].exercises).toEqual(["symbol:src/a.ts#fn"]);
+    expect(lock["REQ-4"].exercises).toEqual(["symbol:src/b.ts#fn"]);
+  });
+
+  it("idempotency: rebuilding with an unchanged `exercises` set preserves prevLock's lastReconciled", () => {
+    const g = graph(
+      [node("REQ-5", "req")],
+      [
+        {
+          source: "REQ-5",
+          target: "symbol:src/a.ts#fn",
+          kind: "exercises",
+          provenances: ["coverage"],
+        },
+      ],
+    );
+    const lock1 = buildLockFromGraph(g);
+    const firstStamp = lock1["REQ-5"].lastReconciled;
+
+    // Rebuild from the SAME graph (structurally unchanged, including
+    // `exercises`) with `lock1` as prevLock — the second reconcile must be
+    // byte-identical and preserve lastReconciled (no vacuous timestamp
+    // churn on a no-op scan).
+    const lock2 = buildLockFromGraph(g, lock1);
+    expect(lock2["REQ-5"].lastReconciled).toBe(firstStamp);
+    expect(JSON.stringify(lock2)).toBe(JSON.stringify(lock1));
+  });
+
+  it("a CHANGED `exercises` set (staleness resolved / evidence gained) is NOT treated as unchanged — lastReconciled advances", () => {
+    const before = graph(
+      [node("REQ-6", "req")],
+      [
+        {
+          source: "REQ-6",
+          target: "symbol:src/a.ts#fn1",
+          kind: "exercises",
+          provenances: ["coverage"],
+        },
+      ],
+    );
+    const after = graph(
+      [node("REQ-6", "req")],
+      [
+        {
+          source: "REQ-6",
+          target: "symbol:src/a.ts#fn1",
+          kind: "exercises",
+          provenances: ["coverage"],
+        },
+        {
+          source: "REQ-6",
+          target: "symbol:src/a.ts#fn2",
+          kind: "exercises",
+          provenances: ["coverage"],
+        },
+      ],
+    );
+    const lock1 = buildLockFromGraph(before);
+
+    // Freeze time so the second build's fresh stamp is observably different
+    // from the first (a real clock could tick the same millisecond).
+    const now = "2026-07-10T01:00:00.000Z";
+    const real = global.Date;
+    // @ts-expect-error - test stub
+    global.Date = class extends real {
+      constructor(...args: ConstructorParameters<typeof real>) {
+        super(...(args.length === 0 ? [now] : args));
+      }
+      static now() {
+        return real.parse(now);
+      }
+    };
+    let lock2: LockFile;
+    try {
+      lock2 = buildLockFromGraph(after, lock1);
+    } finally {
+      global.Date = real;
+    }
+    expect(lock2["REQ-6"].exercises).toEqual(["symbol:src/a.ts#fn1", "symbol:src/a.ts#fn2"]);
+    expect(lock2["REQ-6"].lastReconciled).toBe(now);
+    expect(lock2["REQ-6"].lastReconciled).not.toBe(lock1["REQ-6"].lastReconciled);
+  });
+
+  it("⑦回帰: a req WITHOUT exercises edges round-trips byte-identical to pre-spec-020 lock output", () => {
+    const g = graph(
+      [node("REQ-7", "req"), node("file:src/a.ts", "file")],
+      [{ source: "file:src/a.ts", target: "REQ-7", kind: "implements", provenances: ["code-tag"] }],
+    );
+    const now = "2026-06-26T00:00:00.000Z";
+    const real = global.Date;
+    // @ts-expect-error - test stub
+    global.Date = class extends real {
+      constructor(...args: ConstructorParameters<typeof real>) {
+        super(...(args.length === 0 ? [now] : args));
+      }
+      static now() {
+        return real.parse(now);
+      }
+    };
+    let stamped: LockFile;
+    try {
+      stamped = buildLockFromGraph(g);
+    } finally {
+      global.Date = real;
+    }
+    // Exact pre-spec-020 shape: no `exercises` key at all in the serialized
+    // JSON — field set/order matches the pre-existing entry-building order
+    // (contentHash, lastReconciled, specFile, impl).
+    expect(JSON.stringify(stamped["REQ-7"])).toBe(
+      JSON.stringify({
+        contentHash: "abc",
+        lastReconciled: now,
+        specFile: "REQ-7.md",
+        impl: ["file:src/a.ts"],
+      }),
+    );
   });
 });
 

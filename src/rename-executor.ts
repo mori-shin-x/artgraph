@@ -21,6 +21,7 @@ import { scan, reconcile } from "./scan.js";
 import { loadConfig } from "./config.js";
 import { globCodeFiles } from "./parsers/typescript.js";
 import { assertValidTargetId } from "./rename-validate-id.js";
+import { rewriteTraceShards } from "./rename-trace.js";
 import type { ArtgraphConfig, LockFile } from "./types.js";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -31,12 +32,20 @@ export interface RenameOptions {
   rootDir: string;
 }
 
-export interface RenameWarning {
-  type: "manual-assignment-needed";
-  filePath: string;
-  oldId: string;
-  newIds: string[];
-}
+export type RenameWarning =
+  | {
+      type: "manual-assignment-needed";
+      filePath: string;
+      oldId: string;
+      newIds: string[];
+    }
+  // spec 020 T017 (FR-016, Edge Cases "旧スキーマ世代") — a trace shard
+  // matched by `trace.artifacts` whose `meta.schemaVersion` this build
+  // doesn't understand: left byte-untouched rather than silently skipped.
+  | {
+      type: "unknown-trace-schema";
+      filePath: string;
+    };
 
 export interface RenameResult {
   operation: "rename" | "split" | "merge";
@@ -206,6 +215,19 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
   // Project lock changes (also the source of truth for dry-run reporting).
   const lockChanges = projectLockChanges(rootDir, config, (lock) => renameLockKey(lock, from, to));
 
+  // spec 020 T017 (FR-016) — trace shard REQ ID rewrite, separate from the
+  // spec/code/test scan above: shards are not enumerated by
+  // enumerateRewriteFiles (they aren't specDirs/include/testPatterns
+  // material) and must never affect `filesScanned` (F-style contract with
+  // existing rename JSON consumers).
+  const traceRewrite = rewriteTraceShards(rootDir, config, [[from, to]]);
+  for (const [absPath, content] of traceRewrite.filesToWrite) filesToWrite.set(absPath, content);
+  allChanges.push(...traceRewrite.changes);
+  const warnings: RenameWarning[] = traceRewrite.unknownSchemaShards.map((filePath) => ({
+    type: "unknown-trace-schema" as const,
+    filePath,
+  }));
+
   applyWrites(rootDir, config, filesToWrite, dryRun);
 
   return {
@@ -215,7 +237,7 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
     filesScanned: scannedFiles.length,
     changes: allChanges,
     lockChanges,
-    warnings: [],
+    warnings,
     applied: !dryRun,
   };
 }
@@ -425,6 +447,23 @@ export function executeMerge(
     mergeLockKeys(lock, mergeIds, intoId),
   );
 
+  // spec 020 T017 (FR-016) — collapse the same idsToRewrite -> intoId pairs
+  // into trace shard testName/suitePath strings, mirroring the code-side
+  // rewriteTestTags chain above exactly (issue-free even for the degenerate
+  // `--merge X --into X` case: idsToRewrite is empty there, and
+  // rewriteTraceShards short-circuits on an empty pair list).
+  const traceRewrite = rewriteTraceShards(
+    rootDir,
+    config,
+    idsToRewrite.map((id): [string, string] => [id, intoId]),
+  );
+  for (const [absPath, content] of traceRewrite.filesToWrite) filesToWrite.set(absPath, content);
+  allChanges.push(...traceRewrite.changes);
+  const warnings: RenameWarning[] = traceRewrite.unknownSchemaShards.map((filePath) => ({
+    type: "unknown-trace-schema" as const,
+    filePath,
+  }));
+
   applyWrites(rootDir, config, filesToWrite, dryRun);
 
   return {
@@ -435,7 +474,7 @@ export function executeMerge(
     filesScanned: scannedFiles.length,
     changes: allChanges,
     lockChanges,
-    warnings: [],
+    warnings,
     applied: !dryRun,
   };
 }

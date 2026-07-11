@@ -39,12 +39,34 @@ import type { LockFile } from "../types.js";
 // reason a file startId still drags in same-file symbols; for symbol startIds
 // `resolveStartIds` deliberately omits the parent file node so a symbol-unit
 // input doesn't sweep up its siblings (spec 016 R-006 mitigation).
+// spec 020 (FR-017, contracts/cli-surface.md §5) — `impact()`'s optional 5th
+// argument. Kept as a trailing options object (rather than widening the
+// existing `maxDepth?: number` 4th param) so every pre-020 call site
+// (`impact(graph, startIds, lock)`, `impact(graph, startIds, lock, 1)`)
+// keeps compiling unchanged.
+export interface ImpactTraversalOptions {
+  /**
+   * `trace.staleness === "exclude"` node-id set (`computeStaleNodeIds`'s
+   * output, or the subset of it the caller cares about). Every `exercises`
+   * edge touching one of these nodes is skipped ENTIRELY during BFS — not
+   * just one direction — since an `exercises` edge only ever connects a req
+   * to the symbol/file it exercises (`edge.target`, data-model.md §4: "req
+   * -> symbol|file, forward only"); skipping it once at that check covers
+   * both the req->node forward walk and the node->req reverse walk in the
+   * same loop iteration. Every other edge kind, and every non-stale
+   * `exercises` edge, traverses exactly as before (US3 baseline unaffected).
+   */
+  excludeStaleExercises?: ReadonlySet<string>;
+}
+
 export function impact(
   graph: ArtifactGraph,
   startIds: string[],
   lock: LockFile,
   maxDepth?: number,
+  options?: ImpactTraversalOptions,
 ): ImpactResult {
+  const staleExercisesNodes = options?.excludeStaleExercises;
   const visited = new Set<string>();
   const queue: Array<{ id: string; depth: number }> = startIds.map((id) => ({ id, depth: 0 }));
 
@@ -69,6 +91,15 @@ export function impact(
     }
 
     for (const edge of graph.edges) {
+      // spec 020 (FR-017, US5-2/US3 ⑥) — a stale `exercises` edge is
+      // excluded from traversal altogether when `staleness: "exclude"`.
+      if (
+        edge.kind === "exercises" &&
+        staleExercisesNodes &&
+        staleExercisesNodes.has(edge.target)
+      ) {
+        continue;
+      }
       if (edge.source === id && !visited.has(edge.target)) {
         queue.push({ id: edge.target, depth: depth + 1 });
       }
@@ -154,6 +185,49 @@ export function impact(
     }
   }
 
+  // spec 020 (FR-017, contracts/cli-surface.md §5) — post-BFS provenance
+  // attribution, same one-hop non-recursive shape as the `contains`
+  // attribution pass above: for every visited req, look at edges directly
+  // incident to it (either direction) whose OTHER endpoint is ALSO visited,
+  // and classify by edge kind. An `exercises` edge contributes "evidence"; any
+  // other kind contributes "static" — a req can carry both when it's reached
+  // through, say, a static import chain AND directly by a test's exercises
+  // edge. Gated behind "does the graph have ANY exercises edge at all" so a
+  // trace-absent scan (zero exercises edges) never adds this key to
+  // `ImpactResult` — FR-010 byte-identical requirement (T021(e)).
+  const graphHasExercisesEdges = graph.edges.some((e) => e.kind === "exercises");
+  let reqProvenance: ImpactResult["reqProvenance"];
+  if (graphHasExercisesEdges) {
+    const provenanceByReq = new Map<string, Set<"static" | "evidence">>();
+    for (const edge of graph.edges) {
+      // `contains` (doc -> req|task) is an ATTRIBUTION relation, not a
+      // code-reachability path — the post-BFS attribution pass above unions
+      // a req's parent doc into `visited` regardless of how the req itself
+      // was reached, so counting a `contains` edge here would mislabel an
+      // evidence-only req as also "static" merely because it and some
+      // sibling req share a parent doc. Only genuine reachability edge kinds
+      // (`implements` / `verifies` / `depends_on` / `derives_from` /
+      // `imports`, i.e. everything except `contains`/`exercises`) count as
+      // "static".
+      if (edge.kind === "contains") continue;
+      const sourceIsReq = graph.nodes.get(edge.source)?.kind === "req";
+      const targetIsReq = graph.nodes.get(edge.target)?.kind === "req";
+      const reqSide = sourceIsReq ? edge.source : targetIsReq ? edge.target : undefined;
+      if (reqSide === undefined || !visited.has(reqSide)) continue;
+      const other = reqSide === edge.source ? edge.target : edge.source;
+      if (!visited.has(other)) continue;
+      let set = provenanceByReq.get(reqSide);
+      if (!set) {
+        set = new Set();
+        provenanceByReq.set(reqSide, set);
+      }
+      set.add(edge.kind === "exercises" ? "evidence" : "static");
+    }
+    reqProvenance = [...provenanceByReq.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([reqId, set]) => ({ reqId, provenance: [...set].sort() }));
+  }
+
   const affectedFiles = [...affectedFileSet];
   return {
     affectedFiles,
@@ -165,6 +239,7 @@ export function impact(
     // via `resolveOriginReqs` after impact() returns. impact() itself stays
     // strictly forward-BFS so the two axes remain independent (R-006).
     originReqs: [],
+    ...(reqProvenance ? { reqProvenance } : {}),
     summary: {
       docs: affectedDocs.length,
       reqs: impactReqs.length,
