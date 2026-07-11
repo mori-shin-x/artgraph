@@ -40,6 +40,14 @@ counts; `--format json` emits the full req/doc/code/test graph for machine
 consumption. `--serve` and `--output` render that graph as an interactive
 HTML page (see below).
 
+When trace shards exist under `trace.artifacts` (see
+[Configuration](./configuration.md)), `scan` also ingests them and merges
+coverage-derived `exercises` edges into the graph — evidence-only pairs
+become `exercises` edges, and pairs matching an existing `@impl` claim gain
+the `coverage` provenance on the `implements` edge. With no shards present,
+output is byte-identical to a trace-less project. See
+[`artgraph trace`](#artgraph-trace) for the audit report over the same data.
+
 ```bash
 artgraph scan                              # text count summary
 artgraph scan --format json                # full graph as JSON
