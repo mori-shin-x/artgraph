@@ -109,7 +109,7 @@
 - [x] T020 [P] spec 020 の契約とリサーチを更新する(FR-010): `specs/020-coverage-derived-edges/contracts/trace-artifact.md` §test の `fn` 記述に「V8 functionName 互換の命名規則で決定した関数名(capture engine v2)」の注記(schemaVersion 据え置き)・`specs/020-coverage-derived-edges/research.md` に D9(採取方式転換と D1 棄却理由の失効)を追記
 - [x] T021 [P] `docs/configuration.md` に `withTrace` の `engine` オプションと `ARTGRAPH_TRACE_ENGINE` の説明を追加する(contracts/config-surface.md の利用者向け要約)
 - [x] T022 変更外ファイルへの影響を横断確認する(観点 7): `pnpm knip`(plugin.ts の到達性・magic-string の使用検出)・`pnpm typecheck`・oxlint / oxfmt・`package.json#exports` が不変であること・`templates/**` の Skills 文書(artgraph-verify / bootstrap 等)に runner 記述の齟齬が生じていないこと・`scripts/copy-vendor.mjs` / `tests/global-setup-vendor.ts` に非干渉であること・`vitest.config.ts`(自プロジェクト)の coverage 設定と plugin が干渉しないこと
-- [ ] T023 最終検証(**SC-006**): `pnpm build && pnpm test`(unit + e2e + perf 全部)を **v2 計装既定**の下で green にし、全 green の事実を SC-006 の実測結果として PR の Testing 節に記録する・`pnpm artgraph check --diff` green(after_implement フックの事前確認)・quickstart §1〜§7 の全手順を通す
+- [x] T023 最終検証(**SC-006**): `pnpm build && pnpm test`(unit + e2e + perf 全部)を **v2 計装既定**の下で green にし、全 green の事実を SC-006 の実測結果として PR の Testing 節に記録する・`pnpm artgraph check --diff` green(after_implement フックの事前確認)・quickstart §1〜§7 の全手順を通す
 
 ## Dependencies
 
