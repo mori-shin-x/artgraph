@@ -29,18 +29,18 @@
 
 ## Phase 1: Red — コア失敗テスト
 
-- [ ] T001 [US1] issue #218 再現 fixture の単体テストを `tests/typescript.test.ts` に追加: `standaloneFn` (`@impl REQ-901`) + `class Sample { methodA (@impl REQ-902) / methodB (@impl REQ-903) }` を symbol mode でパースし、(a) `symbol:...#Sample.methodA` / `#Sample.methodB` ノードが存在、(b) implements 辺が各メソッドシンボル起点、(c) クラスシンボル `#Sample` も併存 (クラス全体スパン)、(d) class→method の contains 辺 (provenance structural) — 現行実装で **Red** を確認
-- [ ] T002 [P] [US1] 帰属の Red テスト (`tests/typescript.test.ts`): (a) クラス直上タグ→クラス (AS1-2)、(b) メソッド本文内タグ→メソッド (AS1-3)、(c) JSDoc 越しの leading-trivia (AS1-4)、(d) 非 export クラス→ファイル帰属のまま (AS1-6)
-- [ ] T003 [P] [US2] traverse fixture の Red テスト (`tests/traverse.test.ts`): 手組みグラフ (class symbol + method symbols + contains + implements) で (a) メソッド起点 `impactReqs` = 自 claim のみ (US2-1)、(b) クラス起点 = 全メンバー REQ (US2-2)、(c) consumer file→imports→class 起点で全メンバー REQ 到達 (US2-3)、(d) メソッド起点の `affectedFiles` に consumer 非包含 (US2-7)、(e) メソッドの親クラスが `affectedDocs` に混入しない (FR-008)、(f) `resolveStartIds` がメソッド entry (`{path, symbol: "Sample.methodA"}`) で親クラス・親 file ノードを `startIds` に seed しない (FR-010 — spec 016 R-006 テストの延長) — ※ (a)-(f) は spec 019/016 実装済みセマンティクスの検証なので手組みグラフでは Green になるはず。パーサ統合後の E2E (T028) で実コードから Red→Green を確認する
+- [X] T001 [US1] issue #218 再現 fixture の単体テストを `tests/typescript.test.ts` に追加: `standaloneFn` (`@impl REQ-901`) + `class Sample { methodA (@impl REQ-902) / methodB (@impl REQ-903) }` を symbol mode でパースし、(a) `symbol:...#Sample.methodA` / `#Sample.methodB` ノードが存在、(b) implements 辺が各メソッドシンボル起点、(c) クラスシンボル `#Sample` も併存 (クラス全体スパン)、(d) class→method の contains 辺 (provenance structural) — 現行実装で **Red** を確認
+- [X] T002 [P] [US1] 帰属の Red テスト (`tests/typescript.test.ts`): (a) クラス直上タグ→クラス (AS1-2)、(b) メソッド本文内タグ→メソッド (AS1-3)、(c) JSDoc 越しの leading-trivia (AS1-4)、(d) 非 export クラス→ファイル帰属のまま (AS1-6)
+- [X] T003 [P] [US2] traverse fixture の Red テスト (`tests/traverse.test.ts`): 手組みグラフ (class symbol + method symbols + contains + implements) で (a) メソッド起点 `impactReqs` = 自 claim のみ (US2-1)、(b) クラス起点 = 全メンバー REQ (US2-2)、(c) consumer file→imports→class 起点で全メンバー REQ 到達 (US2-3)、(d) メソッド起点の `affectedFiles` に consumer 非包含 (US2-7)、(e) メソッドの親クラスが `affectedDocs` に混入しない (FR-008)、(f) `resolveStartIds` がメソッド entry (`{path, symbol: "Sample.methodA"}`) で親クラス・親 file ノードを `startIds` に seed しない (FR-010 — spec 016 R-006 テストの延長) — ※ (a)-(f) は spec 019/016 実装済みセマンティクスの検証なので手組みグラフでは Green になるはず。パーサ統合後の E2E (T028) で実コードから Red→Green を確認する
 
 ## Phase 2: Green — パーサ実装 (直列、typescript.ts の同一領域を触るため 1 レーン)
 
-- [ ] T004 [US1] `src/parsers/typescript.ts`: インライン export クラス (named / default) のメンバー走査を実装。対象メンバー判定 (FR-001/FR-004 の包含・除外リスト)、`ClassName.memberName` 命名 (default は `default.`)、メンバースパン (デコレータ含む) の contentHash — T001 の (a)〜(c) を Green に
-- [ ] T005 [US1] 同名メンバー収束 (FR-003): 名前ごとに出現を集約し、1 シンボル + 全出現テキストの `\0` 連結 hash + 各出現への attribution range。tie/順序: SymbolRange はクラス → メンバーの順に登録 (FR-002)
-- [ ] T006 [US1] attribution range の遡上制約 (FR-002): メンバーの leading-trivia 遡上に下限 (クラス宣言開始行を越えない) を実装 — T002 を Green に
-- [ ] T007 [US1] class→method `contains` 辺の emit (FR-006) — T001(d) を Green に。既存シンボル名との ID 衝突はメンバー優先 + build warning (FR-001)
-- [ ] T008 `src/parse-cache.ts`: `SCHEMA_VERSION` bump (理由コメント付き、既存慣行どおり)
-- [ ] T009 `pnpm typecheck && pnpm test:unit` を実行し、Phase 1 の Red がすべて Green、既存テストの fail を列挙 (この時点では修正しない — T024/T026 の入力にする)
+- [X] T004 [US1] `src/parsers/typescript.ts`: インライン export クラス (named / default) のメンバー走査を実装。対象メンバー判定 (FR-001/FR-004 の包含・除外リスト)、`ClassName.memberName` 命名 (default は `default.`)、メンバースパン (デコレータ含む) の contentHash — T001 の (a)〜(c) を Green に
+- [X] T005 [US1] 同名メンバー収束 (FR-003): 名前ごとに出現を集約し、1 シンボル + 全出現テキストの `\0` 連結 hash + 各出現への attribution range。tie/順序: SymbolRange はクラス → メンバーの順に登録 (FR-002)
+- [X] T006 [US1] attribution range の遡上制約 (FR-002): メンバーの leading-trivia 遡上に下限 (クラス宣言開始行を越えない) を実装 — T002 を Green に
+- [X] T007 [US1] class→method `contains` 辺の emit (FR-006) — T001(d) を Green に。既存シンボル名との ID 衝突はメンバー優先 + build warning (FR-001)
+- [X] T008 `src/parse-cache.ts`: `SCHEMA_VERSION` bump (理由コメント付き、既存慣行どおり)
+- [X] T009 `pnpm typecheck && pnpm test:unit` を実行し、Phase 1 の Red がすべて Green、既存テストの fail を列挙 (この時点では修正しない — T024/T026 の入力にする)
 
 ## Phase 3: 7観点テストマトリクス (T009 完了後、すべて [P] — テストファイル単位で分担可)
 

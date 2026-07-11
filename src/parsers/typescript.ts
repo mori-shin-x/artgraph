@@ -331,7 +331,7 @@ function parseTSFile(
 
   let symbolRanges: SymbolRange[] = [];
   if (parsed && mode === "symbol" && !isTest) {
-    symbolRanges = extractSymbols(parsed.program, content, relPath, nodes, parsed.comments);
+    symbolRanges = extractSymbols(parsed.program, content, relPath, nodes, edges, parsed.comments);
   }
   let starExports: string[] | undefined;
   if (parsed) {
@@ -389,6 +389,13 @@ interface ExportEntry {
   group: number;
   attrStart: number;
   attrEnd: number;
+  // spec 021 (FR-001/FR-003, issue #218) — populated ONLY for an inline
+  // exported ClassDeclaration entry (named or default). Maps each target
+  // member's full symbol name (`${ClassName-or-"default"}.${memberName}`) to
+  // every occurrence span, in source order — get/set pairs, static+instance
+  // same name, and overload signatures + implementation all converge to one
+  // map entry (FR-003). `undefined` for every other entry kind.
+  classMembers?: Map<string, Array<{ start: number; end: number }>>;
 }
 
 function isFunctionDecl(node: { type: string } | null | undefined): boolean {
@@ -411,11 +418,90 @@ function declTextStart(stmtStart: number, decl: unknown): number {
 
 type OxcComment = OxcParseResult["comments"][number];
 
+// spec 021 (FR-001/FR-004, issue #218) — member occurrences of ONE inline
+// exported ClassDeclaration, keyed by full symbol name (`${classPrefix}.
+// ${memberName}`) so same-name occurrences (get/set pairs, static+instance,
+// overload signatures + implementation) converge to a single map entry, in
+// source order (FR-003). `classPrefix` is the class's own entry name
+// ("Sample" for `export class Sample`, "default" for `export default class`).
+//
+// Included (oxc's ClassBody element shapes, empirically probed): method /
+// getter / setter / constructor / static forms of any of those
+// (`MethodDefinition`, `kind` in {method,get,set,constructor}), and class
+// properties (`PropertyDefinition`) whose `value` is an ArrowFunctionExpression
+// or FunctionExpression.
+//
+// Excluded — falls through unnamed, so the member's `@impl` tag (if any)
+// keeps the pre-existing class-attribution fallback (FR-004):
+//   - computed name (`[expr]() {}`, `computed: true`) — checked first, before
+//     any type-specific branch, since a computed key can otherwise still be
+//     an `Identifier`-typed AST node (e.g. `[x]() {}`).
+//   - private member (`#m`) — `key.type === "PrivateIdentifier"`, never
+//     `"Identifier"`.
+//   - data property (non-function initializer) — `value.type` fails the
+//     Arrow/FunctionExpression check.
+//   - `accessor` field — a STRUCTURALLY DIFFERENT ClassElement type
+//     (`AccessorProperty` / `TSAbstractAccessorProperty`), never
+//     `"PropertyDefinition"`; falls through the else branch untouched.
+//   - abstract method — oxc types it `"TSAbstractMethodDefinition"`, a
+//     DIFFERENT string from `"MethodDefinition"` (MethodDefinitionType), so
+//     the `el.type === "MethodDefinition"` check excludes it by construction.
+//   - abstract property — same reasoning (`"TSAbstractPropertyDefinition"`).
+//   - `declare` property — SAME type string (`"PropertyDefinition"`) as a
+//     normal field, so needs the explicit `declare` flag check.
+//   - static block (`ClassElement` type `"StaticBlock"`) — falls through.
+//   - `TSIndexSignature` — falls through (not a named member at all).
+function extractClassMembers(
+  classNode: unknown,
+  classPrefix: string,
+): Map<string, Array<{ start: number; end: number }>> {
+  const members = new Map<string, Array<{ start: number; end: number }>>();
+  const body = (classNode as { body?: { body?: Array<Record<string, unknown>> } }).body?.body;
+  if (!body) return members;
+
+  const add = (name: string, start: number, end: number) => {
+    const fullName = `${classPrefix}.${name}`;
+    const list = members.get(fullName);
+    if (list) list.push({ start, end });
+    else members.set(fullName, [{ start, end }]);
+  };
+
+  for (const raw of body) {
+    const el = raw as {
+      type: string;
+      computed?: boolean;
+      declare?: boolean;
+      key?: { type: string; name?: string };
+      value?: { type: string } | null;
+      start: number;
+      end: number;
+    };
+    // Decorators sit INSIDE the member's own start/end here (unlike the
+    // class-vs-`export`-wrapper case declTextStart widens for) — oxc-parser
+    // includes a decorated member's decorators in its own span, empirically
+    // confirmed against this repo's oxc-parser version.
+    if (el.computed) continue;
+    if (el.key?.type !== "Identifier" || !el.key.name) continue;
+
+    if (el.type === "MethodDefinition") {
+      add(el.key.name, el.start, el.end);
+    } else if (el.type === "PropertyDefinition") {
+      if (el.declare) continue;
+      if (el.value?.type !== "ArrowFunctionExpression" && el.value?.type !== "FunctionExpression") {
+        continue;
+      }
+      add(el.key.name, el.start, el.end);
+    }
+  }
+  return members;
+}
+
 function extractSymbols(
   program: OxcProgram,
   content: string,
   relPath: string,
   nodes: GraphNode[],
+  edges: GraphEdge[],
   comments: readonly OxcComment[] = [],
 ): SymbolRange[] {
   const declMap = collectTopLevelDecls(program);
@@ -438,10 +524,11 @@ function extractSymbols(
     group: number,
     attrStart = start,
     attrEnd = end,
+    classMembers?: Map<string, Array<{ start: number; end: number }>>,
   ) => {
     if (seen.has(name)) return;
     seen.add(name);
-    entries.push({ name, start, end, group, attrStart, attrEnd });
+    entries.push({ name, start, end, group, attrStart, attrEnd, classMembers });
   };
 
   // Pass 1 — top-level function statements, source order. The TS binder binds
@@ -477,8 +564,22 @@ function extractSymbols(
             );
           }
         } else if (decl.type === "ClassDeclaration") {
-          if (decl.id)
-            push(decl.id.name, declTextStart(stmt.start, decl), decl.end, groupCounter++);
+          if (decl.id) {
+            const className = decl.id.name;
+            push(
+              className,
+              declTextStart(stmt.start, decl),
+              decl.end,
+              groupCounter++,
+              undefined,
+              undefined,
+              // spec 021 (FR-001, issue #218): inline named export only —
+              // `export { Sample }` / alias exports resolve via `lookup()`
+              // above and never reach this branch, so they stay
+              // member-symbol-free (FR-001's "分離 export は対象外").
+              extractClassMembers(decl, className),
+            );
+          }
         } else if (
           decl.type === "TSInterfaceDeclaration" ||
           decl.type === "TSTypeAliasDeclaration" ||
@@ -506,7 +607,15 @@ function extractSymbols(
       const decl = stmt.declaration;
       if (isFunctionDecl(decl)) continue; // pass 1
       if (decl.type === "ClassDeclaration") {
-        push("default", declTextStart(stmt.start, decl), decl.end, groupCounter++);
+        push(
+          "default",
+          declTextStart(stmt.start, decl),
+          decl.end,
+          groupCounter++,
+          undefined,
+          undefined,
+          extractClassMembers(decl, "default"),
+        );
       } else if (decl.type === "TSInterfaceDeclaration") {
         push("default", stmt.start, decl.end, groupCounter++);
       } else if (decl.type === "Identifier") {
@@ -520,6 +629,30 @@ function extractSymbols(
       }
     }
     // ExportAllDeclaration / TSExportAssignment (`export =`): no local symbols.
+  }
+
+  // spec 021 (FR-001, issue #218): a class member's full name
+  // (`ClassName.memberName`) can collide with an EXISTING export entry of the
+  // same literal name — today the only way that happens is a string-literal
+  // export alias (`export { helper as "Sample.methodA" }`, whose entry name
+  // is the literal's VALUE via moduleExportName — see the specifier branch
+  // above). The class member wins; the colliding entry is dropped with a
+  // build warning rather than a silent push()-order first-wins/last-wins
+  // (which push()'s own `seen` dedup would otherwise apply). Iterates a
+  // SNAPSHOT of `entries` so splicing the loser out of the live array
+  // mid-loop cannot skip a later class entry.
+  for (const classEntry of entries.slice()) {
+    if (!classEntry.classMembers) continue;
+    for (const fullName of classEntry.classMembers.keys()) {
+      const loserIdx = entries.findIndex((e) => e !== classEntry && e.name === fullName);
+      if (loserIdx === -1) continue;
+      console.warn(
+        `WARNING: class member symbol "symbol:${relPath}#${fullName}" collides with an ` +
+          "existing export of the same name; the class member wins and the other export's " +
+          "symbol node is dropped. Rename one of them to remove the ambiguity.",
+      );
+      entries.splice(loserIdx, 1);
+    }
   }
 
   const lineStarts = buildLineStarts(content);
@@ -554,6 +687,57 @@ function extractSymbols(
       startLine,
       endLine: lineOf(lineStarts, entry.attrEnd),
     });
+
+    if (entry.classMembers) {
+      // spec 021 (FR-002/FR-006, FR-003, issue #218). The class's own
+      // node/range were just pushed above — BEFORE any member — so a
+      // same-size attribution tie (Edge Cases: 1-line class) keeps the class
+      // (resolveSymbolsAtLine keeps the FIRST-registered range on a tie).
+      // Member leading-trivia widening is bounded below by the class
+      // declaration's own (un-widened) start line — `entry.attrStart` is
+      // exactly that for a class entry, since the ClassDeclaration push()
+      // call sites never pass a custom attrStart — so a tag directly above
+      // the class cannot be "stolen" by a member whose declaration opens on
+      // the same line as the class (FR-002's upward-widening lower-bound
+      // rule).
+      const classDeclLine = lineOf(lineStarts, entry.attrStart);
+      const classSymbolId = `symbol:${relPath}#${entry.name}`;
+      for (const [fullName, occurrences] of entry.classMembers) {
+        const memberSymbolId = `symbol:${relPath}#${fullName}`;
+        nodes.push({
+          id: memberSymbolId,
+          kind: "symbol",
+          filePath: relPath,
+          // FR-003: same-name convergence (get/set, static+instance,
+          // overload signatures + implementation) — ONE node per full name,
+          // hashing every occurrence's source text in encounter (source)
+          // order, `\0`-joined (synthReexportHash precedent below) so an
+          // edit to ANY occurrence drifts the shared hash while an edit to a
+          // sibling member elsewhere in the class never does.
+          contentHash: hash(occurrences.map((o) => content.slice(o.start, o.end)).join("\0")),
+        });
+        // FR-006: class -> method containment, provenance "structural". One
+        // edge per unique member name (not per occurrence) — the traversal
+        // direction constraint (forward-only) is spec 019's existing,
+        // unmodified guard in traverse.ts.
+        edges.push({
+          source: classSymbolId,
+          target: memberSymbolId,
+          kind: "contains",
+          provenances: ["structural"],
+        });
+        for (const occ of occurrences) {
+          let memberStart = lineOf(lineStarts, occ.start);
+          while (memberStart > classDeclLine && !lineHasCode[memberStart - 1]) memberStart--;
+          ranges.push({
+            name: fullName,
+            group: groupCounter++,
+            startLine: memberStart,
+            endLine: lineOf(lineStarts, occ.end),
+          });
+        }
+      }
+    }
   }
   return ranges;
 }

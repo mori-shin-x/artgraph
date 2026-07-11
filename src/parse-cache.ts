@@ -82,7 +82,14 @@ export interface ParseCacheData {
 // build would silently skip star expansion in the builder and diverge
 // from a cold rebuild (INV-L4); (b) parser node/edge output itself
 // changed for S2/S3 files.
-const SCHEMA_VERSION = 4;
+// v5 (issue #218, spec 021 — class method grain): symbol-mode parser now
+// emits per-member symbol nodes (`symbol:<path>#ClassName.memberName`) for
+// inline exported ClassDeclarations, plus class -> method `contains` edges
+// (provenance "structural"). A warm fragment from a pre-fix build has
+// neither — reusing it would silently omit every member node/edge and the
+// class's own leading-trivia attribution range would stay unbounded (member
+// widening did not exist yet), diverging from a cold rebuild (INV-L4).
+const SCHEMA_VERSION = 5;
 const CACHE_RELDIR = join("node_modules", ".cache", "artgraph");
 const CACHE_FILENAME = "parse-cache.json";
 
