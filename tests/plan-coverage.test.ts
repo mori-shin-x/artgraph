@@ -1486,3 +1486,198 @@ describe("runPlanCoverage — same-spec REQ siblings excluded from impactReqs (s
     expect(drift).toEqual(["REQ-007"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// spec 021 (T021/T027, issue #218) — class-method-grain plan-coverage
+// fixture. Sample has a class-level claim (REQ-901) plus two methods
+// (methodA -> REQ-902, methodB -> REQ-903). autoContains stays OFF (like
+// `setupSymbolFixture` above) so the class -> method `contains` edge is the
+// ONLY reason a class-unit entry's impactReqs sees every member's REQ.
+// ---------------------------------------------------------------------------
+
+interface ClassFixture {
+  root: string;
+  specDir: string;
+  tasksPath: string;
+  planPath: string;
+}
+
+function setupClassFixture(opts?: { tasksBody?: string }): ClassFixture {
+  const root = mkdtempSync(join(tmpdir(), "artgraph-pc-class-"));
+  const specDir = join(root, "specs/001-class-demo");
+  mkdirSync(specDir, { recursive: true });
+
+  writeFileSync(
+    join(specDir, "spec.md"),
+    ["# Class Demo Spec", "", "Intentionally REQ-ID-free body.", ""].join("\n"),
+  );
+
+  const externalSpecDir = join(root, "specs/sample-design");
+  mkdirSync(externalSpecDir, { recursive: true });
+  writeFileSync(
+    join(externalSpecDir, "requirements.md"),
+    [
+      "# Sample Requirements",
+      "",
+      "## Requirements",
+      "",
+      "- REQ-901: class-level requirement.",
+      "- REQ-902: methodA requirement.",
+      "- REQ-903: methodB requirement.",
+      "",
+    ].join("\n"),
+  );
+
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(
+    join(root, "src/sample.ts"),
+    [
+      "// @impl REQ-901",
+      "export class Sample {",
+      "  methodA(): void {",
+      "    // @impl REQ-902",
+      "  }",
+      "",
+      "  methodB(): void {",
+      "    // @impl REQ-903",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  writeFileSync(
+    join(root, ".artgraph.json"),
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.test.ts"],
+      lockFile: ".trace.lock",
+      mode: "symbol",
+      docGraph: { autoContains: false },
+    }),
+  );
+
+  const tasksBody =
+    opts?.tasksBody ??
+    ["# Tasks", "", "### T001", "", "Files: src/sample.ts:Sample.methodA", ""].join("\n");
+  const tasksPath = join(specDir, "tasks.md");
+  writeFileSync(tasksPath, tasksBody);
+
+  const planPath = join(specDir, "plan.md");
+  writeFileSync(planPath, "# Plan\n\nNo REQ references.\n");
+  return { root, specDir, tasksPath, planPath };
+}
+
+describe("runPlanCoverage — class-method-grain per-entry two-axis (T027, spec 021 / issue #218)", () => {
+  let fx: ClassFixture;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("method-unit entry `Sample.methodA`: impactReqs = originReqs = the method's own claim only (US2-6)", () => {
+    fx = setupClassFixture();
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    expect(g.sourceFile).toBe("src/sample.ts");
+    expect(g.sourceSymbol).toBe("Sample.methodA");
+    expect(g.impactReqs.map((r: { reqId: string }) => r.reqId)).toEqual(["REQ-902"]);
+    expect(g.originReqs.map((r: { reqId: string }) => r.reqId)).toEqual(["REQ-902"]);
+    // No drift: impact == origin — siblings REQ-901/REQ-903 never leak in.
+    const impactIds = g.impactReqs.map((r: { reqId: string }) => r.reqId);
+    const originIds = g.originReqs.map((r: { reqId: string }) => r.reqId);
+    expect(impactIds.filter((id: string) => !originIds.includes(id))).toEqual([]);
+  });
+
+  it("class-unit entry `Sample`: impactReqs includes every member's REQ, but originReqs does NOT inherit method claims (Edge Case)", () => {
+    fx = setupClassFixture({
+      tasksBody: ["# Tasks", "", "### T001", "", "Files: src/sample.ts:Sample", ""].join("\n"),
+    });
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.json.implicitImpacts).toHaveLength(1);
+    const g = result.json.implicitImpacts[0];
+    expect(g.sourceSymbol).toBe("Sample");
+    // Class -> method forward containment: impactReqs sees every member REQ.
+    expect(g.impactReqs.map((r: { reqId: string }) => r.reqId).sort()).toEqual([
+      "REQ-901",
+      "REQ-902",
+      "REQ-903",
+    ]);
+    // originReqs is the class's OWN direct claim only — method claims are
+    // NOT inherited (spec 016 data-model §3.2 principle, extended to
+    // class-unit entries — spec 021 Edge Cases "Files: src/a.ts:Sample の
+    // originReqs").
+    expect(g.originReqs.map((r: { reqId: string }) => r.reqId)).toEqual(["REQ-901"]);
+  });
+});
+
+describe("runPlanCoverage — class rename orphans a Files: method reference (T021, spec 021 / issue #218)", () => {
+  let fx: ClassFixture;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("`Files: src/sample.ts:Sample.methodA` after the class was renamed to `Renamed` -> unresolvedSymbol, not a silent fallback", () => {
+    fx = setupClassFixture();
+    // Simulate a class rename the task's `Files:` entry was never updated
+    // for — the member symbol id is keyed on the CURRENT class name
+    // (`Renamed.methodA`), so the stale `Sample.methodA` reference must be
+    // reported as unresolved, never silently swallowed or downgraded to
+    // file-grain.
+    writeFileSync(
+      join(fx.root, "src/sample.ts"),
+      [
+        "// @impl REQ-901",
+        "export class Renamed {",
+        "  methodA(): void {",
+        "    // @impl REQ-902",
+        "  }",
+        "",
+        "  methodB(): void {",
+        "    // @impl REQ-903",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+    expect(result.json.implicitImpacts).toEqual([]);
+    const unresolved = result.json.diagnostics.filter((d) => d.kind === "unresolvedSymbol");
+    expect(unresolved).toHaveLength(1);
+    expect(unresolved[0]).toEqual({
+      kind: "unresolvedSymbol",
+      sourceFile: "src/sample.ts",
+      symbol: "Sample.methodA",
+      line: 5,
+    });
+  });
+});

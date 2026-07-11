@@ -1,1 +1,3 @@
-{"feature_directory":"specs/020-coverage-derived-edges"}
+{
+  "feature_directory": "specs/021-class-method-grain"
+}

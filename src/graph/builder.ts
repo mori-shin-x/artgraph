@@ -41,7 +41,15 @@ export interface BuildWarning {
     // trips gates or fails the build. Suppressed from the default stderr
     // presenter — surfaced in `scan --format json` `warnings[]` for tooling.
     | "phantom-import-repaired"
-    | "dangling-import";
+    | "dangling-import"
+    // PR #242 review A/C, spec 021 follow-up — symbol-mode class-member id
+    // collisions (a class member's synthesized name colliding with an
+    // existing export of the same literal name, or a class/class-member
+    // silently losing the parser's own `seen`-name dedup). Converted from
+    // the TS parser's `TsParseWarning[]` (see parse-cache.ts's
+    // `TsFragment.warnings`) below. NOT silent — shown by default, unlike
+    // the two `phantom-import-repaired` / `dangling-import` types above.
+    | "class-member-collision";
   id: string;
   files: string[];
   message?: string;
@@ -394,6 +402,11 @@ export function buildGraph(
         contentHash: missHashes.get(abs)!,
         nodes: frag.nodes,
         edges: frag.edges,
+        // PR #242 review A — parser warnings travel WITH the fragment (the
+        // MdFragment.warnings precedent) so a warm cache hit replays them:
+        // the conversion to BuildWarnings below runs per build over ALL
+        // fragments, warm and cold alike.
+        warnings: frag.warnings,
       };
       if (frag.starExports && frag.starExports.length > 0) {
         next.starExports = frag.starExports;
@@ -407,6 +420,17 @@ export function buildGraph(
     tsResult.nodes.push(...frag.nodes);
     tsResult.edges.push(...frag.edges);
     nextTs[relCodeFiles[i]] = frag;
+    // PR #242 review A — convert TS parser warnings to BuildWarnings, the TS
+    // counterpart of the markdown "T036" conversion loop below. Runs on the
+    // fragment (not inside the parser) so warm cache hits emit the same
+    // warnings a cold parse does — the pre-fix `console.warn` inside
+    // extractSymbols disappeared on every warm build and never reached
+    // `--format json` `warnings[]`. The `?? []` guards a hand-written or
+    // cross-version fragment that predates the field (SCHEMA_VERSION 6
+    // normally cold-invalidates those, but conversion must never crash).
+    for (const tw of frag.warnings ?? []) {
+      warnings.push({ type: tw.type, id: tw.symbolId, files: [tw.filePath], message: tw.message });
+    }
   }
 
   for (const node of tsResult.nodes) {

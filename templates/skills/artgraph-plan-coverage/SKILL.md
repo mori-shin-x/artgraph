@@ -27,7 +27,7 @@ See [install-check](../_shared/install-check.md) for the standard pre-flight che
 
 > `<PM-exec>` is the project's package runner: `npx` (npm), `pnpm exec`, `bunx`, or `deno run -A npm:artgraph/cli`. Substitute the one detected by `_shared/package-manager.md` (or written in `.artgraph.json#packageManager`).
 
-**Symbol-level entries** (`Files: src/auth.ts:validateToken`) require `.artgraph.json` to be set to `"mode": "symbol"` and the graph re-scanned. See [Skills Guide — file vs symbol mode](../../../docs/skills-guide.md#file-mode-vs-symbol-mode) for trade-offs.
+**Symbol-level entries** (`Files: src/auth.ts:validateToken`, or class-method grain `Files: src/auth.ts:Sample.methodA`) require `.artgraph.json` to be set to `"mode": "symbol"` and the graph re-scanned. See [Skills Guide — file vs symbol mode](../../../docs/skills-guide.md#file-mode-vs-symbol-mode) for trade-offs.
 
 ### 2. Pick a mode and run
 
@@ -68,9 +68,11 @@ Compare per-entry `impactReqs` against `originReqs`:
 
 **Same-spec siblings are not implicit impacts.** `impactReqs` only lists REQs the `Files:` entry actually reaches — via code (`@impl`, `imports`) or explicit spec relations (`depends_on` / `derives_from`). A REQ that merely lives in the same `spec.md` as a reached REQ does **not** appear here just because they're co-located, even under the common "one spec.md, many REQs" layout. If you need the full feature context (not just this entry's blast radius), run `artgraph impact` on the same file/symbol and read its `affectedDocs` — that points at the spec file(s) worth opening directly.
 
+**Method-grain entries are in-file precision.** A `Files: src/auth.ts:Sample.methodA` entry resolves to the method's own symbol (methods of inline-exported classes; `default.methodName` for a default-export class). Its per-entry `impactReqs` / `originReqs` cover only what that method claims and reaches — sibling methods' REQs and a REQ claimed directly above the `class` declaration (the class-contract claim) do **not** appear, and consumer files importing the class are not part of a method entry's reach. When a task genuinely touches the whole class or its consumers, write the class unit (`Files: src/auth.ts:Sample`) or the file unit instead — the class unit expands forward through class→method containment to every method's REQs (its `originReqs`, though, stays the class-level claim only, mirroring how a file unit doesn't inherit its symbols' claims). Method symbols exist only on their origin file: `Files: barrel.ts:Sample.methodA` raises `unresolvedSymbol` — point the entry at the origin file.
+
 #### Diagnostics
 
-- `unresolvedSymbol` (`{ sourceFile, symbol, line }`): the file exists but no exported symbol of that name was found in the symbol-mode graph. The entry is excluded from `implicitImpacts`. Ask the user whether to (a) fix the typo, (b) drop the `:symbol` suffix to fall back to file unit, or (c) re-run `<PM-exec> scan` if the symbol was just added.
+- `unresolvedSymbol` (`{ sourceFile, symbol, line }`): the file exists but no symbol of that name — an exported declaration, or a `ClassName.methodName` member of an inline-exported class — was found in the symbol-mode graph. The entry is excluded from `implicitImpacts`. Ask the user whether to (a) fix the typo, (b) drop the `:symbol` suffix to fall back to file unit, or (c) re-run `<PM-exec> scan` if the symbol was just added. For method grain, also check the entry isn't pointing at a barrel file — method symbols exist only on the origin file.
 - `emptyExtraction`: nothing was extracted — warn "add a `Files:` section."
 - `missingFilesSection` (opt-in via `planCoverage.requireFilesSection` in `.artgraph.json`): some task blocks lack a `Files:` section.
 

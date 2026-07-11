@@ -74,7 +74,11 @@ artgraph adds the layer *above* the code:
   instead of the whole context file. This holds even when one `spec.md`
   defines several requirements (the Spec Kit / Kiro default): a sibling
   requirement with no code dependency of its own doesn't ride along just
-  because it's declared in the same file.
+  because it's declared in the same file. It also holds inside a class (the
+  OOP default of one class, many methods, each implementing its own
+  requirement): in symbol mode each method of an inline-exported class is a
+  graph node of its own, so editing one method doesn't drag in its siblings'
+  requirements.
 - **Drift as a CI gate** — `artgraph check --gate` fails the build when a
   spec changed but the code/tests didn't. Byte-identical output on every run.
 - **Requirement IDs are the primary key** — the same `REQ-001` string is what
@@ -293,8 +297,14 @@ distributed to every agent selected via `--agents=<list>`.
 | `artgraph-verify`        | n/a           | Implementation complete; run `artgraph check --diff` to self-verify before code review                            |
 | `artgraph-rename`        | n/a           | User wants to rename / split / merge requirement IDs                                                              |
 
-Skills marked `file + symbol` accept either `src/auth.ts` (file unit) or
-`src/auth.ts:validateToken` (symbol unit). Symbol-level input additionally
+Skills marked `file + symbol` accept `src/auth.ts` (file unit),
+`src/auth.ts:validateToken` (symbol unit), or `src/auth.ts:Sample.methodA`
+(class-method unit — methods of inline-exported classes are symbols of their
+own, so `artgraph impact src/auth.ts:Sample.methodA` returns only that
+method's REQs, not its siblings'). A method unit is an in-file precision
+query: it does not include consumer files that import the class — reach for
+the class unit (`src/auth.ts:Sample`), the file unit, or `--diff` when you
+need the consumer-side blast radius. Symbol-level input additionally
 requires `.artgraph.json` to be set to `"mode": "symbol"` and the graph
 re-scanned — see
 [docs/skills-guide.md#file-mode-vs-symbol-mode](./docs/skills-guide.md#file-mode-vs-symbol-mode)
@@ -365,6 +375,12 @@ Custom grammars are configurable via `reqPatterns` in `.artgraph.json` — see
 See [docs/commands.md](./docs/commands.md) for the detailed reference on every
 flag, including `scan --serve`, `doctor` finding taxonomy, and the `rename`
 split/merge caveats.
+
+Note that `reconcile` rebuilds `.trace.lock` entirely from the current graph:
+after upgrading to a version that changes symbol-extraction granularity, the
+next `reconcile` may rewrite the lock's symbol entries and `@impl`
+attributions accordingly. The 0.x series ships no migration tooling for
+this — review the `.trace.lock` diff before committing it.
 
 ## Documentation
 
