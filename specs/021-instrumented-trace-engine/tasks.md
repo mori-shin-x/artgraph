@@ -43,7 +43,7 @@
 
 **Independent Test**: fixture プロジェクトで instrument エンジンの `vitest run` → schemaVersion 1 の shard が正しく生成される(quickstart §1・§3 の instrument 側)
 
-- [ ] T006 [US1] [RED] `tests/vitest-plugin.test.ts` を新規作成する(plugin の transform を直接呼ぶユニット)。網羅対象:
+- [x] T006 [US1] [RED] `tests/vitest-plugin.test.ts` を新規作成する(plugin の transform を直接呼ぶユニット)。網羅対象:
   - **命名表(観点 2・6)**: FunctionDeclaration / `export default function named` / 無名 default(関数・arrow)→ `"default"` / const・let への関数式・arrow 代入 → 変数名 / クラス `MethodDefinition` → メソッド名・`constructor` → クラス名(V8 互換)/ getter・setter → アクセサ名 / `PropertyDefinition` の関数値 → プロパティ名 / オブジェクトリテラルメソッド → キー名 / ネスト named 関数 → 自名 / 無名コールバック・computed key → **計装しない**
   - **挿入の構造(観点 1)**: 変換前後で行数一致・各行の既存内容保持・sourcemap が返る・preamble に `import`/`require` が含まれない(正規表現 assert — contracts 書き手義務 1)
   - **hash(観点 1)**: BOM 付き・CRLF・空ファイル。`code` 引数ではなくディスク内容から計算されること(pre plugin が改変した `code` を渡しても hash は原ソース)
@@ -51,13 +51,13 @@
   - **fail-soft(観点 4)**: parse 不能ソースは無変換素通し + 警告 1 回/モジュール、2 回目の transform で警告が重複しない
   - **境界(観点 1・6)**: 関数ゼロのモジュールは無変換・未登録
   - **契約の書き手義務 3〜5(観点 2・7 — contracts/instrumentation-runtime.md)**: 実行印が分岐なしの 1 文 store であること(生成断片に `if`/`&&`/`?` を含まない)・生成コードに `await` / `import.meta` が現れないこと(ESM/CJS 双方で評価可能 — 義務 4)・巻き上げられた FunctionDeclaration(モジュール末尾宣言)の実行印参照が preamble 定義の変数を指すこと(hoisting 整合 — 義務 5)
-- [ ] T007 [US1] `src/vitest/plugin.ts` を新規実装して T006 を green にする: oxc-parser で関数列挙 + V4 命名、magic-string で関数本体先頭に `<hits>[k]=1` 挿入 + 自己完結 preamble(globalThis registry 登録・`modules.set(file, …)` 置換方式)、`enforce: 'pre'`、除外規則と hash は schema.ts から import、`configResolved` で root 取得。main-process 層の依存規則(oxc-parser / magic-string 可、`vitest/runners` 不可)を冒頭コメントに明記
-- [ ] T008 [US1] [RED] `tests/vitest-runner-unit.test.ts` を新規作成する(runner の drain / バッファを純関数として検証)。網羅対象:
+- [x] T007 [US1] `src/vitest/plugin.ts` を新規実装して T006 を green にする: oxc-parser で関数列挙 + V4 命名、magic-string で関数本体先頭に `<hits>[k]=1` 挿入 + 自己完結 preamble(globalThis registry 登録・`modules.set(file, …)` 置換方式)、`enforce: 'pre'`、除外規則と hash は schema.ts から import、`configResolved` で root 取得。main-process 層の依存規則(oxc-parser / magic-string 可、`vitest/runners` 不可)を冒頭コメントに明記
+- [x] T008 [US1] [RED] `tests/vitest-runner-unit.test.ts` を新規作成する(runner の drain / バッファを純関数として検証)。網羅対象:
   - **drain(観点 1・5)**: 立っているスロットのみ hits 化・読み取り後ゼロクリア・空 registry で空 hits・同 relPath 再登録(isolate 再評価)は置換され旧配列を読まない・`hashes` は registration の hash 転記(fs 非アクセス)
   - **不正遷移(観点 3)**: `REGISTRY_VERSION` 不一致 → 採取放棄 + stderr 警告 1 回のみ(テスト進行は正常)・registry 不在 → hits 空で正常進行
   - **バッファ(観点 1・4)**: テストファイル境界検知で flush・`onAfterRunFiles` 相当で最終 flush・0 レコード時は flush しない・flush 出力が常に完全な JSONL 行の列
-- [ ] T009 [US1] `src/vitest/runner.ts` に v2 経路を実装して T008 を green にする: エンジン分岐(`process.env.ARTGRAPH_TRACE_ENGINE` 読み取り・不正値 throw)、instrument 経路(inspector 非使用・onBeforeRunTask は no-op・onAfterRunTask で drain → バッファ・concurrent は従来どおり skipped 記録 + drain だけ実施)、バッチ flush(書込エラーはテストを殺さず警告 — 観点 4)、ワーカー終了までに登録ゼロなら警告 1 回 + `withTrace` / `ARTGRAPH_TRACE_ENGINE=cdp` への誘導文言(FR-008)
-- [ ] T010 [US1] `tests/e2e/vitest-runner.e2e.test.ts` に instrument エンジンの E2E シナリオを追加する: 実 vitest spawn で shard 正当性(meta 先頭・test レコード形状・hits/hashes 整合)・**ワーカー途中 kill → 部分 shard が完全な JSONL 行列**(観点 5 — v2 のバッチ flush 下で既存の耐性シナリオを更新)・世代管理(globalSetup の旧 shard 削除)が green
+- [x] T009 [US1] `src/vitest/runner.ts` に v2 経路を実装して T008 を green にする: エンジン分岐(`process.env.ARTGRAPH_TRACE_ENGINE` 読み取り・不正値 throw)、instrument 経路(inspector 非使用・onBeforeRunTask は no-op・onAfterRunTask で drain → バッファ・concurrent は従来どおり skipped 記録 + drain だけ実施)、バッチ flush(書込エラーはテストを殺さず警告 — 観点 4)、ワーカー終了までに登録ゼロなら警告 1 回 + `withTrace` / `ARTGRAPH_TRACE_ENGINE=cdp` への誘導文言(FR-008)
+- [x] T010 [US1] `tests/e2e/vitest-runner.e2e.test.ts` に instrument エンジンの E2E シナリオを追加する: 実 vitest spawn で shard 正当性(meta 先頭・test レコード形状・hits/hashes 整合)・**ワーカー途中 kill → 部分 shard が完全な JSONL 行列**(観点 5 — v2 のバッチ flush 下で既存の耐性シナリオを更新)・世代管理(globalSetup の旧 shard 削除)が green
 
 **Checkpoint**: instrument エンジン単体で end-to-end 動作。US1 のみで MVP デリバリ可能
 
