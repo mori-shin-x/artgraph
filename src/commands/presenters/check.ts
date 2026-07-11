@@ -102,6 +102,23 @@ function printScopedIssues(result: CheckResult): void {
       console.log(`  ${c.reqId}: ${c.status}`);
     }
   }
+  // spec 020 (contracts/cli-surface.md §4) — new finding headings, same
+  // `UPPER-CASE:` style as `DRIFT:`/`ORPHANS:`/etc above and as
+  // `printTraceReportText`'s Phase A precedent. Fields are `undefined`
+  // (never present) on a trace-absent project (FR-010), so these sections
+  // are silently skipped there exactly like every other empty section here.
+  if (result.unexercisedClaims && result.unexercisedClaims.length > 0) {
+    console.log("UNEXERCISED CLAIM:");
+    for (const p of result.unexercisedClaims) console.log(`  ${p.reqId} -> ${p.node}`);
+  }
+  if (result.suggestedImpls && result.suggestedImpls.length > 0) {
+    console.log("SUGGESTED IMPL:");
+    for (const p of result.suggestedImpls) console.log(`  ${p.reqId} -> ${p.node}`);
+  }
+  if (result.staleEvidence && result.staleEvidence.length > 0) {
+    console.log("STALE EVIDENCE:");
+    for (const s of result.staleEvidence) console.log(`  ${s.reqId}: ${s.symbols.join(", ")}`);
+  }
   if (result.pass) {
     console.log("All checks passed.");
   }

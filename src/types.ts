@@ -6,7 +6,11 @@ export type EdgeKind =
   | "implements"
   | "verifies"
   | "imports"
-  | "contains";
+  | "contains"
+  // spec 020 (data-model.md §4, FR-006/007/008) — req -> symbol|file, forward
+  // only. Execution evidence: "this REQ's tagged green tests ran this code",
+  // as opposed to `implements`'s declared intent. Never generated in reverse.
+  | "exercises";
 
 // Tuple type alias enforcing "at least one element" statically.
 // See specs/011-edge-provenance/contracts/edge-provenance-type.md.
@@ -23,7 +27,13 @@ export type EdgeProvenance =
   | "task-tag"
   | "inline-link"
   | "ts-import"
-  | "structural";
+  | "structural"
+  // spec 020 (data-model.md §4, FR-009) — execution evidence (per-test
+  // coverage join, `src/trace/ingest.ts`). Sole provenance on `exercises`
+  // edges; appended to an existing `implements` edge's provenances when a
+  // declared claim and evidence agree on the same (req, symbol|file) pair
+  // (FR-008).
+  | "coverage";
 
 // Run-time value set for the EdgeProvenance literal union. Kept in sync with
 // the type union above so format.ts / lock.ts can validate a provenance
@@ -38,6 +48,7 @@ export const EDGE_PROVENANCE_VALUES: ReadonlySet<EdgeProvenance> = new Set([
   "inline-link",
   "ts-import",
   "structural",
+  "coverage",
 ]);
 
 export interface GraphNode {
@@ -85,6 +96,11 @@ export interface LockEntry {
   contentHash: string;
   impl?: string[];
   tests?: string[];
+  // spec 020 (data-model.md §5, FR-011) — target nodeIds of this req's
+  // `exercises` edges (`[...new Set()].sort()`, same dedupe+sort convention
+  // as `impl`/`tests`). Omitted when empty so a project with no trace
+  // artifacts round-trips byte-identical to pre-spec-020 lock output.
+  exercises?: string[];
   // Schema v2: structured to carry provenance per reference.
   // See specs/011-edge-provenance/contracts/lock-schema-v2.md.
   dependsOn?: Array<{ id: string; provenances: EdgeProvenance[] }>;
@@ -93,7 +109,13 @@ export interface LockEntry {
 
 export type LockFile = Record<string, LockEntry>;
 
-export type CoverageStatus = "untagged" | "impl-only" | "verified";
+// spec 020 (data-model.md §6, FR-014) — `exercised` is the 4th coverage
+// status, appearing ONLY when `.artgraph.json`'s `trace.acceptExercises` is
+// true: an untagged REQ (no `implements` edge) with >=1 non-stale, exclusive
+// `exercises` edge. It is a rescue for untagged REQs only — `impl-only` /
+// `verified` REQs never become `exercised` (the declared-REQ evaluation axis
+// is unchanged, data-model.md §6).
+export type CoverageStatus = "untagged" | "exercised" | "impl-only" | "verified";
 
 export interface ImpactResult {
   affectedFiles: string[];
@@ -116,6 +138,24 @@ export interface ImpactResult {
    */
   originReqs: string[];
   summary?: ImpactSummary;
+  /**
+   * spec 020 (FR-017, contracts/cli-surface.md §5) — per-`impactReqs`-entry
+   * provenance: was this REQ reached (at least in part) through a direct
+   * `exercises` edge ("evidence"), through any other edge kind directly
+   * incident to it ("static"), or both? Present ONLY when the graph contains
+   * at least one `exercises` edge at all (trace-absent scans have zero, so
+   * this key is omitted rather than emitted as an all-`["static"]` array —
+   * FR-010 byte-identical requirement, T021(e)). Sorted by `reqId`.
+   */
+  reqProvenance?: Array<{ reqId: string; provenance: Array<"static" | "evidence"> }>;
+  /**
+   * spec 020 (FR-018, contracts/cli-surface.md §5) — `impact --tests`'
+   * output: the tagged tests of every REQ whose (non-stale, per
+   * `trace.staleness`) exercises evidence directly reaches one of the
+   * resolved start nodes. Present only when `--tests` was passed (undefined
+   * otherwise, so the flag is a pure opt-in addition to the JSON schema).
+   */
+  testsToRun?: Array<{ testFile: string; testName: string; reqId: string }>;
 }
 
 export interface ImpactSummary {
@@ -130,6 +170,25 @@ export interface DriftEntry {
   kind: NodeKind;
   lockedHash: string;
   currentHash: string;
+}
+
+// spec 020 (data-model.md §7, FR-012/013) — one `(reqId, node)` pair, shared
+// shape for both `check`'s `unexercisedClaims`/`suggestedImpls` findings and
+// `src/trace/report.ts`'s Phase A `ClaimEvidencePair` (kept as a structurally
+// identical, independently-defined type here rather than importing from
+// `trace/report.ts` — that module already imports THIS file for
+// `ArtifactGraph`, so importing back would be circular).
+export interface CoverageClaimEvidencePair {
+  reqId: string;
+  node: string;
+}
+
+// spec 020 (data-model.md §7, FR-015) — one REQ's stale evidence: the subset
+// of its `exercises`-evidence nodeIds whose trace-capture-time hash no
+// longer matches the current graph (`computeStaleNodeIds`), sorted.
+export interface StaleEvidenceEntry {
+  reqId: string;
+  symbols: string[];
 }
 
 export interface CheckResult {
@@ -178,6 +237,28 @@ export interface CheckResult {
   // generic "unavailable" string. Always a non-empty string when present;
   // unset (undefined) for every other `baselineStatus` value.
   baselineError?: string;
+
+  // ── spec 020 Phase C additions (contracts/cli-surface.md §4, data-model.md
+  // §7) — present ONLY when a trace was ingested (shard files exist, FR-010:
+  // trace-absent output must stay byte-identical, so these keys are omitted
+  // entirely rather than set to `[]`/`false` when there is no trace). ──
+  /** `@impl` claims whose claiming REQ's non-stale exercises evidence never
+   * reaches the claimed node (FR-012, SC-003). */
+  unexercisedClaims?: CoverageClaimEvidencePair[];
+  /** No `@impl` claim anywhere, exactly one REQ's evidence reaches the node
+   * (FR-013 exclusivity; `sharedThreshold`-or-more is `infrastructure` and
+   * intentionally has no `check` finding — only `trace report` surfaces it). */
+  suggestedImpls?: CoverageClaimEvidencePair[];
+  /** Per-REQ stale exercises evidence (FR-015), computed from the trace
+   * regardless of `trace.staleness` mode — the mode only changes whether
+   * stale evidence still COUNTS for the findings/status above and whether
+   * `staleGate` trips, not whether it is reported here. */
+  staleEvidence?: StaleEvidenceEntry[];
+  /** `trace.staleness === "gate"` AND `staleEvidence.length > 0` — the
+   * signal `src/commands/check.ts` uses to exit 2 under `--gate`, kept
+   * separate from `pass` (spec 017's baseline-diff gate) since staleness
+   * gating is not part of the new-vs-pre-existing baseline model (FR-015). */
+  staleGate?: boolean;
 }
 
 // spec 017 (data-model §1.1) — the subset of scoped issues that are NEW
@@ -461,6 +542,39 @@ export interface DocGraphConfig {
   };
 }
 
+/**
+ * spec 020 (contracts/cli-surface.md §7, data-model.md §8) — `.artgraph.json`
+ * `trace` section: shard artifact discovery + `exercises`-edge policy for
+ * coverage-derived traceability. The section itself and every field are
+ * optional (mirrors `DocGraphConfig`) — an absent field means "use the
+ * documented default", applied by each downstream consumer (`src/trace/`,
+ * `src/coverage.ts`, `src/commands/trace.ts`) rather than eagerly baked in
+ * here, consistent with `docGraph`'s convention elsewhere in this file.
+ */
+export interface TraceConfig {
+  /** Glob(s) for TraceShard JSONL files. Default: [".artgraph/trace/*.jsonl"]. */
+  artifacts?: string[];
+  /**
+   * Opt-in to the `exercised` coverage status (data-model.md §6): a REQ with
+   * no `implements` edge but an exclusive `exercises` edge counts as covered.
+   * Default: false.
+   */
+  acceptExercises?: boolean;
+  /**
+   * How stale evidence (hashesAtTrace mismatched against the current graph)
+   * is treated: "warn" surfaces a diagnostic only, "exclude" drops stale
+   * `exercises` edges from traversal, "gate" additionally fails `--gate`
+   * (FR-015). Default: "warn".
+   */
+  staleness?: "warn" | "exclude" | "gate";
+  /**
+   * A symbol/file exercised by this many distinct REQs' tests or more is
+   * classified `infrastructure` rather than a `suggestedImpls` candidate
+   * (FR-013). Must be a positive integer (>= 1). Default: 3.
+   */
+  sharedThreshold?: number;
+}
+
 export interface PlanCoverageConfig {
   /**
    * When true, `artgraph plan-coverage` adds a `missingFilesSection`
@@ -525,6 +639,12 @@ export interface ArtgraphConfig {
    * Empty array is an explicit opt-out (--minimal / --no-skills).
    */
   agents?: import("./agents/descriptors.js").AgentId[];
+  /**
+   * spec 020 (contracts/cli-surface.md §7) — coverage-derived traceability
+   * configuration. `undefined` when `.artgraph.json` omits the `trace` key
+   * (every field falls back to its documented default downstream).
+   */
+  trace?: TraceConfig;
 }
 
 export const DEFAULT_CONFIG: ArtgraphConfig = {

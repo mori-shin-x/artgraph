@@ -18,6 +18,7 @@ import {
 } from "../parse-cache.js";
 import { dedupEdges, sortNodesById } from "./canonical.js";
 import { expandStarReexports } from "./star-expansion.js";
+import { ingestTrace, hasTraceShards, type IngestedTrace } from "../trace/ingest.js";
 import type { ArtifactGraph, GraphNode, GraphEdge, ArtgraphConfig } from "../types.js";
 
 export interface BuildWarning {
@@ -747,6 +748,20 @@ export function buildGraph(
     }
   }
 
+  // spec 020 (T015, data-model.md §4, FR-006〜011) — coverage-derived
+  // `exercises` edges. Fully opt-in: `hasTraceShards` is a glob-only
+  // existence probe, so a trace-absent project never pays for
+  // `ingestTrace`'s `buildSymbolNameTable` re-parse and the graph this
+  // function returns is byte-identical to pre-spec-020 output (FR-010,
+  // US1-3). Runs AFTER every other edge-producing pass (so the
+  // claim/evidence cross-check below sees the FINAL set of declared
+  // `implements` edges) and BEFORE dedup/sort (so the merge output goes
+  // through the same canonicalization as everything else — INV-T2/T3).
+  if (hasTraceShards(config, rootDir)) {
+    const ingested = ingestTrace(config, rootDir);
+    mergeTraceEdges(nodes, edges, ingested);
+  }
+
   // Edge dedup + deterministic edge/node ordering (INV-T2/T3, INV-L4,
   // INV-O1) are owned by canonical.ts — see dedupEdges / sortNodesById there
   // for the full rationale (T037 / Issue #35, PR#94 review B3).
@@ -810,6 +825,86 @@ function inferConventionEdges(nodes: Map<string, GraphNode>): GraphEdge[] {
     }
   }
   return edges;
+}
+
+// spec 020 (data-model.md §3, FR-007) — `ingestTrace`'s SymbolNameTable
+// always resolves hits at "symbol" grain internally, independent of THIS
+// graph's own `config.mode`. In a file-mode graph no `symbol:` nodes exist
+// at all, so a resolved `symbol:<rel>#<name>` id would otherwise dangle.
+// Degrade to the owning file's `file:<rel>` node when it exists — the same
+// fail-safe fallback FR-007 already applies to name-ambiguity, just at a
+// different failure point (mode mismatch, not name resolution). Returns
+// `undefined` only when neither the symbol nor its owning file is a real
+// node in THIS graph (out of `include` for this build, or a stale/mismatched
+// symbol table) — mergeTraceEdges drops the pair rather than emit a
+// dangling-target edge.
+function resolveTraceGraphNodeId(
+  nodeId: string,
+  nodes: Map<string, GraphNode>,
+): string | undefined {
+  if (nodes.has(nodeId)) return nodeId;
+  if (nodeId.startsWith("symbol:")) {
+    const body = nodeId.slice("symbol:".length);
+    const hashIdx = body.indexOf("#");
+    const relPath = hashIdx === -1 ? body : body.slice(0, hashIdx);
+    const fileId = `file:${relPath}`;
+    if (nodes.has(fileId)) return fileId;
+  }
+  return undefined;
+}
+
+// spec 020 (T015, data-model.md §4, FR-008) — fold `IngestedTrace`'s
+// per-REQ coverage into the graph's edge list. For every (reqId, node) pair
+// the ingest layer's evidence reaches:
+//
+//   - a declared `implements` edge already exists for that EXACT pair
+//     (source: node, target: reqId) -> push a duplicate-key `implements`
+//     edge carrying only `["coverage"]`. `dedupEdges` (canonical.ts) unions
+//     provenances by (source, target, kind), so this is merged into the
+//     existing edge — no separate `exercises` edge for a corroborated pair
+//     (FR-008 "証拠のみの対は独立した exercises エッジとして生成し、
+//     implements として扱わないこと" — the inverse: a CLAIMED pair with
+//     evidence stays `implements`, evidence alone never becomes one).
+//   - otherwise -> push a new forward-only `exercises` edge (req -> node,
+//     data-model.md §4), provenance `["coverage"]`.
+//
+// Mutates `edges` in place (append-only) — the caller runs this BEFORE
+// `dedupEdges`/`sortNodesById` so the merge output is canonicalized exactly
+// like every other edge source in this file.
+function mergeTraceEdges(
+  nodes: Map<string, GraphNode>,
+  edges: GraphEdge[],
+  trace: IngestedTrace,
+): void {
+  const implementsPairs = new Set<string>();
+  for (const edge of edges) {
+    if (edge.kind === "implements") implementsPairs.add(`${edge.source}|${edge.target}`);
+  }
+
+  for (const reqId of [...trace.perReq.keys()].sort()) {
+    const coverage = trace.perReq.get(reqId)!;
+    // US1-4 (N:M union): `coverage.symbols`/`coverage.files` are already the
+    // ingest layer's per-REQ union across every green tagged test — no
+    // further union needed here. Combine both grains into one sorted,
+    // deduped target set so a name that resolved to BOTH a symbol id (one
+    // test) and its file-grain fallback (another, ambiguous, test) doesn't
+    // silently pick one.
+    const targetIds = new Set<string>([...coverage.symbols, ...coverage.files]);
+    for (const rawNodeId of [...targetIds].sort()) {
+      const nodeId = resolveTraceGraphNodeId(rawNodeId, nodes);
+      if (nodeId === undefined) continue; // fail-safe: never emit a dangling-target edge
+      if (implementsPairs.has(`${nodeId}|${reqId}`)) {
+        edges.push({
+          source: nodeId,
+          target: reqId,
+          kind: "implements",
+          provenances: ["coverage"],
+        });
+      } else {
+        edges.push({ source: reqId, target: nodeId, kind: "exercises", provenances: ["coverage"] });
+      }
+    }
+  }
 }
 
 function extractSpecDir(relFilePath: string, specDirs: string[]): string {

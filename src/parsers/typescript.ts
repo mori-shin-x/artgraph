@@ -356,7 +356,14 @@ function parseTSFile(
 
 // The TS compiler host strips a UTF-8 BOM when reading files — the file-hash
 // input and all node spans are relative to the stripped text.
-function stripBom(content: string): string {
+//
+// Exported (spec 020 T012) so `tests/hash-equivalence.test.ts` can pin this
+// module's file-mode contentHash algorithm (`hash(stripBom(content))`)
+// byte-for-byte against `src/vitest/runner.ts`'s independently-duplicated
+// `hashContent` — the Cat2 SSOT pair plan.md flags for T006's runner-side
+// duplication (that module deliberately does NOT import this one; the test
+// is the only thing keeping the two definitions honest).
+export function stripBom(content: string): string {
   return content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
 }
 

@@ -43,6 +43,12 @@ still get the Skills via `git pull`. If you prefer to keep them out of git
 `.gitignore`; teammates then need to run `artgraph init --agents=<list>`
 locally.
 
+Trace shards under `.artgraph/trace/` (produced by the `artgraph/vitest`
+runner, spec 020) are the opposite: they're per-run execution artifacts, so
+add `.artgraph/trace/` to `.gitignore` and regenerate them locally or in CI
+by running the test suite. See
+[Configuration](./configuration.md) for the `trace.*` options.
+
 ## Disabling the Stop hook (troubleshooting)
 
 If `artgraph check` blocks Claude Code unexpectedly (e.g. after an artgraph

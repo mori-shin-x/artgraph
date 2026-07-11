@@ -24,9 +24,15 @@ export function printRenameText(result: RenameResult) {
   }
 
   for (const w of result.warnings) {
-    console.log(
-      `WARNING: ${w.filePath} contains @impl ${w.oldId} — manual assignment to ${w.newIds.join(", ")} needed`,
-    );
+    if (w.type === "unknown-trace-schema") {
+      console.log(
+        `WARNING: ${w.filePath} — unrecognized trace schema generation; left unrewritten (re-run the test suite to regenerate this trace)`,
+      );
+    } else {
+      console.log(
+        `WARNING: ${w.filePath} contains @impl ${w.oldId} — manual assignment to ${w.newIds.join(", ")} needed`,
+      );
+    }
   }
 
   if (!result.applied) {
