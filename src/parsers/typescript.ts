@@ -507,11 +507,17 @@ type OxcComment = OxcParseResult["comments"][number];
 //     normal field, so needs the explicit `declare` flag check.
 //   - static block (`ClassElement` type `"StaticBlock"`) — falls through.
 //   - `TSIndexSignature` — falls through (not a named member at all).
+//   - EVERY member of an `export declare class` — the class node itself
+//     carries `declare: true` (same flag shape as a `declare` property, just
+//     one level up); guarded before the body is even walked (PR #242 review
+//     D1). An ambient class has no runtime method bodies, so none of its
+//     members are symbolized — all tags fall back to the class.
 function extractClassMembers(
   classNode: unknown,
   classPrefix: string,
 ): Map<string, Array<{ start: number; end: number }>> {
   const members = new Map<string, Array<{ start: number; end: number }>>();
+  if ((classNode as { declare?: boolean }).declare) return members;
   const body = (classNode as { body?: { body?: Array<Record<string, unknown>> } }).body?.body;
   if (!body) return members;
 

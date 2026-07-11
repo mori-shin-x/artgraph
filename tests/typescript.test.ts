@@ -1540,3 +1540,69 @@ describe("createTSParser (symbol mode — class method grain, spec 021 — T023 
     expect(implEdges[0].source).toBe("symbol:src/ctor.ts#CtorSample.constructor");
   });
 });
+
+// PR #242 review D1 — `export declare class` is an AMBIENT declaration: its
+// "members" are type-level signatures with no runtime bodies, so none of
+// them get a method symbol (the `declare` flag sits on the ClassDeclaration
+// node itself and extractClassMembers guards on it before walking the body).
+// Tags on/above ambient members keep the pre-021 class attribution.
+describe("createTSParser (symbol mode — declare class member suppression, PR #242 review D1)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-declare-class-"));
+    write(
+      "src/ambient.ts",
+      [
+        "export declare class AmbientSample {",
+        "  // @impl REQ-1070",
+        "  methodA(): void;",
+        "  static sm(): void;",
+        "}",
+        "",
+        // Regression control in the SAME file: a normal exported class keeps
+        // full member-grain symbolization (the declare guard must be scoped
+        // to the ambient class only, zero side effects on concrete classes).
+        "export class ConcreteSample {",
+        "  // @impl REQ-1071",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("`export declare class` members are not symbolized; a tag above an ambient member attributes to the class", () => {
+    const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/ambient.ts")
+      .map((n) => n.id)
+      .sort();
+    // The ambient class has NO member symbols and NO contains edges; the
+    // concrete sibling class still has both.
+    expect(symbolIds).toEqual([
+      "symbol:src/ambient.ts#AmbientSample",
+      "symbol:src/ambient.ts#ConcreteSample",
+      "symbol:src/ambient.ts#ConcreteSample.methodA",
+    ]);
+    expect(
+      result.edges.filter(
+        (e) => e.kind === "contains" && e.source === "symbol:src/ambient.ts#AmbientSample",
+      ),
+    ).toEqual([]);
+    const bySource = (target: string) =>
+      result.edges.find((e) => e.kind === "implements" && e.target === target)?.source;
+    expect(bySource("REQ-1070")).toBe("symbol:src/ambient.ts#AmbientSample");
+    expect(bySource("REQ-1071")).toBe("symbol:src/ambient.ts#ConcreteSample.methodA");
+  });
+});
