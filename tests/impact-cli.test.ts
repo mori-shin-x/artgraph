@@ -469,7 +469,34 @@ describe("CLI: impact — method-grain symbol diagnostics (T018, spec 021 / issu
     // member — methods are never individually exported, unlike top-level
     // symbols — it should instead point at the member name itself.
     expect(stderr).not.toContain('grep "export.*Sample.doesNotExist"');
-    expect(stderr).toContain("doesNotExist");
+    // PR #242 review E1 — the class-member wording only fires because the
+    // prefix "Sample" actually resolves as a class symbol in the graph.
+    expect(stderr).toContain('"Sample" has no member "doesNotExist"');
+    expect(stderr).toContain('grep -n "doesNotExist" src/sample.ts');
+  });
+
+  it('(a2) trailing-dot typo (`Sample.`) -> generic hint, never a `grep -n ""` (PR #242 review E1 pin)', async () => {
+    const { exitCode, stderr } = await runAt(root, ["impact", "src/sample.ts:Sample."]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("No matching symbol found");
+    // Pre-fix, ANY dot routed to the member hint; a trailing dot produced a
+    // useless `grep -n ""`. The empty member name must now fall back to the
+    // generic export-name hint.
+    expect(stderr).not.toContain('grep -n ""');
+    expect(stderr).not.toContain("has no member");
+    expect(stderr).toContain('grep "export.*Sample."');
+  });
+
+  it("(a3) dotted name whose prefix is NOT a class in the graph -> generic hint, no class-member wording (PR #242 review E1 pin)", async () => {
+    // A typo'd string-literal export name (`"NoClass.method"`) is dotted but
+    // has no class behind it — the prefix lookup misses, so the hint must
+    // NOT claim anything about class members.
+    const { exitCode, stderr } = await runAt(root, ["impact", "src/sample.ts:NoClass.method"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("No matching symbol found");
+    expect(stderr).not.toContain("has no member");
+    expect(stderr).not.toContain("class member");
+    expect(stderr).toContain('grep "export.*NoClass.method"');
   });
 
   it("(b) `:Sample.methodA` against a FILE-mode graph -> existing scan-mode-mismatch guidance, exit 1 (US3-3)", async () => {
