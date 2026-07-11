@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { createTSParser } from "../src/parsers/typescript.js";
+import { createTSParser, hash } from "../src/parsers/typescript.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
 
@@ -376,5 +376,197 @@ describe("createTSParser (@impl comma-separated IDs — issue #214)", () => {
     } finally {
       rmSync(customRoot, { recursive: true, force: true });
     }
+  });
+});
+
+// spec 021 (issue #218) — class method grain. T001: the issue's own
+// reproduction (standalone function + a class whose two methods each carry
+// their own `@impl`) must produce per-method symbol nodes, per-method
+// `implements` edges, an unchanged whole-class symbol, and a class -> method
+// `contains` edge (provenance "structural") per method.
+describe("createTSParser (symbol mode — class method grain, spec 021 / issue #218)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-method-grain-"));
+    // T001 — issue #218 reproduction.
+    write(
+      "src/sample.ts",
+      [
+        "// @impl REQ-901",
+        "export function standaloneFn(): void {}",
+        "",
+        "export class Sample {",
+        "  // @impl REQ-902",
+        "  methodA(): void {}",
+        "",
+        "  // @impl REQ-903",
+        "  methodB(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    // T002(a) — a tag directly above the class attributes to the CLASS, not
+    // to the first member (US1 AS1-2, unchanged pre-existing behavior).
+    write(
+      "src/attr-class-tag.ts",
+      ["// @impl REQ-801", "export class ClassTagSample {", "  methodA(): void {}", "}", ""].join(
+        "\n",
+      ),
+    );
+    // T002(b) — a tag written INSIDE a method body attributes to that
+    // method, not the class (US1 AS1-3 — behavior CHANGE from pre-spec-021,
+    // where the whole class was the innermost symbol).
+    write(
+      "src/attr-method-body-tag.ts",
+      [
+        "export class BodyTagSample {",
+        "  methodA(): void {",
+        "    // @impl REQ-802",
+        "    doSomething();",
+        "  }",
+        "}",
+        "function doSomething(): void {}",
+        "",
+      ].join("\n"),
+    );
+    // T002(c) — leading-trivia attribution reaches THROUGH a JSDoc block
+    // above the method, exactly like the existing top-level-function rule
+    // (US1 AS1-4, issue #177 idiom).
+    write(
+      "src/attr-jsdoc-tag.ts",
+      [
+        "export class JsdocSample {",
+        "  // @impl REQ-803",
+        "  /**",
+        "   * JSDoc between the tag and the method.",
+        "   */",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    // T002(d) — a non-exported class gets NO symbol nodes at all (class or
+    // member); its `@impl` tags fall back to file attribution, unchanged
+    // (US1 AS1-6).
+    write(
+      "src/attr-non-exported.ts",
+      ["class NotExported {", "  // @impl REQ-804", "  methodA(): void {}", "}", ""].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const parse = () => createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+
+  it("T001(a): produces symbol:...#Sample.methodA / #Sample.methodB nodes", () => {
+    const result = parse();
+    const symbolIds = result.nodes.filter((n) => n.kind === "symbol").map((n) => n.id);
+    expect(symbolIds).toContain("symbol:src/sample.ts#Sample.methodA");
+    expect(symbolIds).toContain("symbol:src/sample.ts#Sample.methodB");
+  });
+
+  it("T001(b): implements edges are sourced from each method symbol", () => {
+    const result = parse();
+    const implEdges = result.edges.filter((e) => e.kind === "implements");
+    expect(implEdges).toContainEqual({
+      source: "symbol:src/sample.ts#Sample.methodA",
+      target: "REQ-902",
+      kind: "implements",
+      provenances: ["code-tag"],
+    });
+    expect(implEdges).toContainEqual({
+      source: "symbol:src/sample.ts#Sample.methodB",
+      target: "REQ-903",
+      kind: "implements",
+      provenances: ["code-tag"],
+    });
+    // The standalone function keeps its pre-existing symbol-mode resolution.
+    expect(implEdges).toContainEqual({
+      source: "symbol:src/sample.ts#standaloneFn",
+      target: "REQ-901",
+      kind: "implements",
+      provenances: ["code-tag"],
+    });
+  });
+
+  it("T001(c): the class symbol still exists with its whole-class span hash unchanged", () => {
+    const result = parse();
+    const classNode = result.nodes.find((n) => n.id === "symbol:src/sample.ts#Sample");
+    expect(classNode).toBeDefined();
+    const source = [
+      "// @impl REQ-901",
+      "export function standaloneFn(): void {}",
+      "",
+      "export class Sample {",
+      "  // @impl REQ-902",
+      "  methodA(): void {}",
+      "",
+      "  // @impl REQ-903",
+      "  methodB(): void {}",
+      "}",
+      "",
+    ].join("\n");
+    const classText = source.slice(
+      source.indexOf("export class Sample"),
+      source.lastIndexOf("}") + 1,
+    );
+    expect(classNode?.contentHash).toBe(hash(classText));
+  });
+
+  it("T001(d): a contains edge (provenance structural) links class -> each method", () => {
+    const result = parse();
+    const containsEdges = result.edges.filter((e) => e.kind === "contains");
+    expect(containsEdges).toContainEqual({
+      source: "symbol:src/sample.ts#Sample",
+      target: "symbol:src/sample.ts#Sample.methodA",
+      kind: "contains",
+      provenances: ["structural"],
+    });
+    expect(containsEdges).toContainEqual({
+      source: "symbol:src/sample.ts#Sample",
+      target: "symbol:src/sample.ts#Sample.methodB",
+      kind: "contains",
+      provenances: ["structural"],
+    });
+  });
+
+  it("T002(a): a tag directly above the class attributes to the class (AS1-2)", () => {
+    const result = parse();
+    const implEdges = result.edges.filter((e) => e.kind === "implements" && e.target === "REQ-801");
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/attr-class-tag.ts#ClassTagSample");
+  });
+
+  it("T002(b): a tag inside a method BODY attributes to that method (AS1-3)", () => {
+    const result = parse();
+    const implEdges = result.edges.filter((e) => e.kind === "implements" && e.target === "REQ-802");
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/attr-method-body-tag.ts#BodyTagSample.methodA");
+  });
+
+  it("T002(c): leading-trivia attribution reaches through a JSDoc block above the method (AS1-4)", () => {
+    const result = parse();
+    const implEdges = result.edges.filter((e) => e.kind === "implements" && e.target === "REQ-803");
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/attr-jsdoc-tag.ts#JsdocSample.methodA");
+  });
+
+  it("T002(d): a non-exported class gets no symbol nodes; its tag stays file-attributed (AS1-6)", () => {
+    const result = parse();
+    const symbolIds = result.nodes.filter((n) => n.kind === "symbol").map((n) => n.id);
+    expect(symbolIds.some((id) => id.includes("NotExported"))).toBe(false);
+
+    const implEdges = result.edges.filter((e) => e.kind === "implements" && e.target === "REQ-804");
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("file:src/attr-non-exported.ts");
   });
 });

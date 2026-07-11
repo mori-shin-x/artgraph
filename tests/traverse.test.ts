@@ -872,3 +872,156 @@ describe("impact: spec 019 review follow-up — attribution guard & intentional 
     expect(result.affectedDocs).toContain("doc:tasks");
   });
 });
+
+// spec 021 (T003, issue #218) — class -> method `contains` is symbol -> symbol
+// containment reusing spec 019's forward-only semantics (FR-007) and spec
+// 016's method-does-not-seed-parent-symbol rule (FR-010). This hand-rolled
+// fixture never touches typescript.ts / traverse.ts; it exists to PIN that
+// the existing, UNMODIFIED impact()/resolveStartIds() machinery already
+// produces the correct US2 behavior for symbol->symbol `contains` edges —
+// scenarios (a)-(f) below are expected GREEN from spec 019/016 code as-is.
+// The parser-integration E2E (T028) exercises the same scenarios against
+// REAL scanned code once the parser emits these nodes/edges itself.
+function makeClassMethodFixture(): ArtifactGraph {
+  const nodes = new Map<string, GraphNode>();
+  nodes.set("doc:d1", { id: "doc:d1", kind: "doc", filePath: "specs/f.md", contentHash: "d1" });
+  nodes.set("REQ-901", { id: "REQ-901", kind: "req", filePath: "specs/f.md", contentHash: "r1" });
+  nodes.set("REQ-902", { id: "REQ-902", kind: "req", filePath: "specs/f.md", contentHash: "r2" });
+  nodes.set("REQ-903", { id: "REQ-903", kind: "req", filePath: "specs/f.md", contentHash: "r3" });
+  nodes.set("file:src/sample.ts", {
+    id: "file:src/sample.ts",
+    kind: "file",
+    filePath: "src/sample.ts",
+    contentHash: "fs",
+  });
+  nodes.set("symbol:src/sample.ts#Sample", {
+    id: "symbol:src/sample.ts#Sample",
+    kind: "symbol",
+    filePath: "src/sample.ts",
+    contentHash: "cls",
+  });
+  nodes.set("symbol:src/sample.ts#Sample.methodA", {
+    id: "symbol:src/sample.ts#Sample.methodA",
+    kind: "symbol",
+    filePath: "src/sample.ts",
+    contentHash: "ma",
+  });
+  nodes.set("symbol:src/sample.ts#Sample.methodB", {
+    id: "symbol:src/sample.ts#Sample.methodB",
+    kind: "symbol",
+    filePath: "src/sample.ts",
+    contentHash: "mb",
+  });
+  nodes.set("file:src/consumer.ts", {
+    id: "file:src/consumer.ts",
+    kind: "file",
+    filePath: "src/consumer.ts",
+    contentHash: "fc",
+  });
+  nodes.set("symbol:src/consumer.ts#useSample", {
+    id: "symbol:src/consumer.ts#useSample",
+    kind: "symbol",
+    filePath: "src/consumer.ts",
+    contentHash: "us",
+  });
+
+  const edges: GraphEdge[] = [
+    { source: "doc:d1", target: "REQ-901", kind: "contains", provenances: ["structural"] },
+    { source: "doc:d1", target: "REQ-902", kind: "contains", provenances: ["structural"] },
+    { source: "doc:d1", target: "REQ-903", kind: "contains", provenances: ["structural"] },
+    // Class-level claim (US1-2 AS2: `// @impl REQ-901` directly above the class).
+    {
+      source: "symbol:src/sample.ts#Sample",
+      target: "REQ-901",
+      kind: "implements",
+      provenances: ["code-tag"],
+    },
+    {
+      source: "symbol:src/sample.ts#Sample.methodA",
+      target: "REQ-902",
+      kind: "implements",
+      provenances: ["code-tag"],
+    },
+    {
+      source: "symbol:src/sample.ts#Sample.methodB",
+      target: "REQ-903",
+      kind: "implements",
+      provenances: ["code-tag"],
+    },
+    // FR-006: class -> method containment, forward direction only reused
+    // from spec 019 (FR-007) — no traverse.ts change needed.
+    {
+      source: "symbol:src/sample.ts#Sample",
+      target: "symbol:src/sample.ts#Sample.methodA",
+      kind: "contains",
+      provenances: ["structural"],
+    },
+    {
+      source: "symbol:src/sample.ts#Sample",
+      target: "symbol:src/sample.ts#Sample.methodB",
+      kind: "contains",
+      provenances: ["structural"],
+    },
+    // consumer.ts imports the CLASS (never a method — issue #218's premise:
+    // a consumer can only statically import the class binding).
+    {
+      source: "symbol:src/consumer.ts#useSample",
+      target: "symbol:src/sample.ts#Sample",
+      kind: "imports",
+      provenances: ["ts-import"],
+    },
+  ];
+
+  return { nodes, edges };
+}
+
+describe("impact: class -> method contains (T003, spec 021 / issue #218)", () => {
+  it("(a)/(d)/(e): method-origin impactReqs is its own claim only; affectedFiles excludes the consumer; affectedDocs never carries the parent class", () => {
+    const graph = makeClassMethodFixture();
+    const result = impact(graph, ["symbol:src/sample.ts#Sample.methodA"], {});
+
+    // US2-1: only methodA's own claim — no sibling methodB claim (REQ-903),
+    // no class-level claim (REQ-901).
+    expect(result.impactReqs).toEqual(["REQ-902"]);
+
+    // US2-7: method-origin is a file-internal-precision query — the
+    // consumer file is never reached (method -> class containment isn't
+    // traversed in reverse, and there is no edge FROM the method back to
+    // the importing consumer).
+    expect(result.affectedFiles).not.toContain("src/consumer.ts");
+    expect(result.affectedFiles).toContain("src/sample.ts");
+
+    // FR-008: the parent class can never leak into affectedDocs — it isn't
+    // a "doc" kind node, so the attribution loop's source-kind guard
+    // excludes it structurally. The REAL doc (attributed via REQ-902) is
+    // still present.
+    expect(result.affectedDocs).not.toContain("symbol:src/sample.ts#Sample");
+    expect(result.affectedDocs).toEqual(["doc:d1"]);
+  });
+
+  it("(b): class-origin impactReqs includes every member's REQ (US2-2)", () => {
+    const graph = makeClassMethodFixture();
+    const result = impact(graph, ["symbol:src/sample.ts#Sample"], {});
+
+    expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-902", "REQ-903"]));
+  });
+
+  it("(c): consumer -> imports -> class -> forward-contains reaches every member REQ (US2-3)", () => {
+    const graph = makeClassMethodFixture();
+    const result = impact(graph, ["symbol:src/consumer.ts#useSample"], {});
+
+    expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-902", "REQ-903"]));
+  });
+
+  it("(f): resolveStartIds for a method entry seeds ONLY the method symbol — no parent class, no parent file (FR-010)", () => {
+    const graph = makeClassMethodFixture();
+    const { startIds, unresolvedSymbols } = resolveStartIds(graph, [
+      { path: "src/sample.ts", symbol: "Sample.methodA", line: 1 },
+    ]);
+
+    expect(unresolvedSymbols).toHaveLength(0);
+    expect(startIds).toEqual(["symbol:src/sample.ts#Sample.methodA"]);
+    expect(startIds).not.toContain("symbol:src/sample.ts#Sample");
+    expect(startIds).not.toContain("file:src/sample.ts");
+  });
+});
