@@ -66,9 +66,9 @@
 
 ## Phase D: Polish — 性能・ドッグフーディング・最終ゲート
 
-- [ ] T025 [P] perf テスト `tests/perf/trace-overhead.perf.test.ts`: 500 テスト級 fixture で runner 有効時のスイート実行時間増が **≤ 50%**(SC-005、PoC 実測 33% 基準)
-- [ ] T026 quickstart.md の Phase A/B/C 手順を E2E で通し(SC-001: 3 手順でタグゼロ可視化)、artgraph 自身に runner を有効化して `trace report` を実行(dogfooding — 既存 `@impl` 23 ファイルの corroborated/unexercised 内訳を PR 本文に記載)。`artgraph check --diff` が green のまま(Stop hook 互換)
-- [ ] T027 全 suite 最終確認: `pnpm typecheck && pnpm test:unit && pnpm test:e2e && pnpm test:perf && pnpm knip`。⑦: `git diff --stat` を精査し、plan 外ファイル(CHANGELOG / version / 無関係 spec)への変更が混入していないことを確認(release-please 管理物は不可侵)
+- [X] T025 [P] perf テスト `tests/perf/trace-overhead.perf.test.ts`: 500 テスト級 fixture で runner 有効時のスイート実行時間増が **≤ 50%**(SC-005、PoC 実測 33% 基準)
+- [X] T026 quickstart.md の Phase A/B/C 手順を E2E で通し(SC-001: 3 手順でタグゼロ可視化)、artgraph 自身に runner を有効化して `trace report` を実行(dogfooding — 既存 `@impl` 23 ファイルの corroborated/unexercised 内訳を PR 本文に記載)。`artgraph check --diff` が green のまま(Stop hook 互換)
+- [X] T027 全 suite 最終確認: `pnpm typecheck && pnpm test:unit && pnpm test:e2e && pnpm test:perf && pnpm knip`。⑦: `git diff --stat` を精査し、plan 外ファイル(CHANGELOG / version / 無関係 spec)への変更が混入していないことを確認(release-please 管理物は不可侵)
 
 ---
 
