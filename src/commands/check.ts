@@ -262,10 +262,18 @@ export function registerCheckCommand(program: Command): void {
       // baseline-`"unavailable"` run must stay non-passing regardless of
       // what `--ignore` drops).
       if (ignoreUncoveredIds.size > 0 && opts.diff) {
+        // PR #250 review — the INFO line below must list only the IDs that
+        // ACTUALLY suppressed something (intersection of `--ignore` with the
+        // pre-filter `newIssues.uncovered`), NOT the raw requested set. A
+        // typo'd or misspelled ID in the CSV would otherwise appear in the
+        // "suppressed" list even though it never matched anything, defeating
+        // the diagnostic purpose of the message.
+        const actuallySuppressed = result.newIssues.uncovered.filter((id) =>
+          ignoreUncoveredIds.has(id),
+        );
         const filteredUncovered = result.newIssues.uncovered.filter(
           (id) => !ignoreUncoveredIds.has(id),
         );
-        const suppressedByIgnore = result.newIssues.uncovered.length - filteredUncovered.length;
         result = {
           ...result,
           newIssues: { ...result.newIssues, uncovered: filteredUncovered },
@@ -277,9 +285,9 @@ export function registerCheckCommand(program: Command): void {
                 filteredUncovered.length === 0 &&
                 result.newIssues.testFailures.length === 0,
         };
-        if (suppressedByIgnore > 0) {
+        if (actuallySuppressed.length > 0) {
           console.error(
-            `INFO: --ignore suppressed ${suppressedByIgnore} REQ(s) from newIssues.uncovered: ${[...ignoreUncoveredIds].sort().join(", ")}`,
+            `INFO: --ignore suppressed ${actuallySuppressed.length} REQ(s) from newIssues.uncovered: ${[...actuallySuppressed].sort().join(", ")}`,
           );
         }
       }

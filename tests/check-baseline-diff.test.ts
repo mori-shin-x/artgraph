@@ -753,6 +753,40 @@ describe("check --diff --gate --ignore suppresses newIssues.uncovered (issue #17
     expect(json.newIssues.uncovered).toContain("REQ-500");
     expect(stderr).not.toContain("--ignore suppressed");
   });
+
+  it("(T178-6) INFO message lists only IDs that ACTUALLY suppressed something (PR #250 review)", async () => {
+    // Adversarial review MAJOR: the pre-fix INFO line spelled out the full
+    // requested --ignore CSV even for IDs that didn't match anything, so a
+    // typo'd ID would appear in the "suppressed" list. Pin the correct
+    // behavior: count and list are computed from the intersection with the
+    // pre-filter newIssues.uncovered.
+    const dir = repoSoleImpl("artgraph-178-info-list-");
+    const targetPath = join(dir, "src", "target.ts");
+    const before = readFileSync(targetPath, "utf-8");
+    const after = before
+      .split("\n")
+      .filter((line) => !line.includes("@impl REQ-500"))
+      .join("\n");
+    writeFileSync(targetPath, after);
+
+    // Mix of real (REQ-500) and non-matching (T001, REQ-999) IDs in the CSV.
+    const { stderr, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+      "--ignore",
+      "REQ-500,T001,REQ-999",
+    ]);
+    expect(exitCode).toBe(0);
+    // Count reflects only actually-suppressed IDs.
+    expect(stderr).toContain("--ignore suppressed 1 REQ");
+    // ID list must not include the non-matching entries.
+    expect(stderr).toContain("REQ-500");
+    expect(stderr).not.toMatch(/suppressed .*T001/);
+    expect(stderr).not.toMatch(/suppressed .*REQ-999/);
+  });
 });
 
 function newIssuesEmpty(n: {
