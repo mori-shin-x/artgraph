@@ -249,25 +249,111 @@ describe("parse cache", () => {
     expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp, symbolCfg));
   });
 
-  it("rejects a cache file with schemaVersion 3 (SCHEMA_VERSION was bumped 3→4 in specs/018)", () => {
-    // Populate the cache normally, then hand-edit its schemaVersion down to
-    // the pre-specs/018 value. `readParseCache` must reject it and force a
-    // cold path — otherwise a warm build could serve S2/S3 nodes without
-    // the parser side-channel that supports them, silently diverging from
-    // a cold rebuild (INV-L4 breach).
+  it("rejects a cache file with a stale schemaVersion (SCHEMA_VERSION was bumped 4→5 in spec 021)", () => {
+    // spec 021 (T016, issue #218): literal bumped 3→4 to 4→5 following the
+    // parser's SCHEMA_VERSION bump for class-method-grain symbols. Populate
+    // the cache normally, then hand-edit its schemaVersion down to the
+    // pre-spec-021 value. `readParseCache` must reject it and force a cold
+    // path — otherwise a warm build could serve a fragment that predates
+    // per-method symbol nodes / class->method `contains` edges, silently
+    // diverging from a cold rebuild (INV-L4 breach).
     buildGraph(tmp, config); // populate cache
     const rawPath = join(tmp, CACHE_REL);
     const cache = JSON.parse(readFileSync(rawPath, "utf-8"));
-    expect(cache.schemaVersion).toBe(4);
-    cache.schemaVersion = 3;
+    expect(cache.schemaVersion).toBe(5);
+    cache.schemaVersion = 4;
     writeFileSync(rawPath, JSON.stringify(cache));
 
     // The next build sees a schema-mismatched cache and must fall back to
     // a cold parse. Behaviorally identical to a cache-disabled build.
     const { graph } = buildGraph(tmp, config);
     expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp));
-    // The rewritten cache carries the current schemaVersion (=4).
+    // The rewritten cache carries the current schemaVersion (=5).
     const rewritten = JSON.parse(readFileSync(rawPath, "utf-8"));
-    expect(rewritten.schemaVersion).toBe(4);
+    expect(rewritten.schemaVersion).toBe(5);
+  });
+
+  // spec 021 (T016, issue #218) — warm/cold parity for the NEW parser output:
+  // per-member symbol nodes (`#ClassName.memberName`) and class -> method
+  // `contains` edges for an inline-exported ClassDeclaration. Mirrors the
+  // T12 `export *` warm/cold pin above, but exercises the class-method-grain
+  // path specifically (symbol mode; the base fixture is file-mode).
+  it("spec 021: warm build of a class with methods yields the same lock bytes as cold (SCHEMA_VERSION 5)", () => {
+    const symbolCfg: ArtgraphConfig = { ...config, mode: "symbol" };
+    writeFileSync(
+      join(tmp, "src", "sample.ts"),
+      [
+        "// @impl REQ-001",
+        "export class Sample {",
+        "  methodA(): void {",
+        "    // @impl REQ-002",
+        "  }",
+        "",
+        "  methodB(): void {",
+        "    // @impl REQ-002",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    // Cold: cache-disabled reference (symbol mode).
+    const cold = buildWithoutCache(tmp, symbolCfg);
+    // Warm: populate cache, then rebuild.
+    buildGraph(tmp, symbolCfg);
+    expect(existsSync(join(tmp, CACHE_REL))).toBe(true);
+    const { graph } = buildGraph(tmp, symbolCfg);
+    expect(graph.nodes.has("symbol:src/sample.ts#Sample.methodA")).toBe(true);
+    expect(graph.nodes.has("symbol:src/sample.ts#Sample.methodB")).toBe(true);
+    expect(
+      graph.edges.some(
+        (e) =>
+          e.kind === "contains" &&
+          e.source === "symbol:src/sample.ts#Sample" &&
+          e.target === "symbol:src/sample.ts#Sample.methodA",
+      ),
+    ).toBe(true);
+    const warm = snapshotGraph(graph);
+    expect(warm).toBe(cold);
+  });
+
+  // spec 021 (T016) — editing ONLY a method body must invalidate the file's
+  // cached TS fragment (content-hash mismatch on the file) and the warm
+  // rebuild must still equal a cold rebuild — including the new member
+  // symbol's contentHash (which folds ALL occurrences, so an edit anywhere
+  // in the class re-derives the whole per-member map, not just the touched
+  // member).
+  it("spec 021: editing a method body invalidates the cached fragment and stays warm/cold identical", () => {
+    const symbolCfg: ArtgraphConfig = { ...config, mode: "symbol" };
+    writeFileSync(
+      join(tmp, "src", "sample.ts"),
+      [
+        "// @impl REQ-001",
+        "export class Sample {",
+        "  methodA(): void {",
+        "    // @impl REQ-002",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    buildGraph(tmp, symbolCfg); // populate cache
+
+    writeFileSync(
+      join(tmp, "src", "sample.ts"),
+      [
+        "// @impl REQ-001",
+        "export class Sample {",
+        "  methodA(): void {",
+        "    // @impl REQ-002",
+        "    return;",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const { graph } = buildGraph(tmp, symbolCfg);
+    expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp, symbolCfg));
   });
 });

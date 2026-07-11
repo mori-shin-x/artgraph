@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -568,5 +568,816 @@ describe("createTSParser (symbol mode — class method grain, spec 021 / issue #
     const implEdges = result.edges.filter((e) => e.kind === "implements" && e.target === "REQ-804");
     expect(implEdges).toHaveLength(1);
     expect(implEdges[0].source).toBe("file:src/attr-non-exported.ts");
+  });
+});
+
+// spec 021 (issue #218) — class method grain, 7-observation-point matrix
+// (lane C, tasks.md T010/T011/T013/T014/T017/T020/T022/T023). Each `describe`
+// below owns its own tmp fixture root, following the T001/T002 pattern above.
+
+describe("createTSParser (symbol mode — class method grain, spec 021 — T010 boundary conditions 1)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-t010-"));
+    // T010(a)-1 — a tag directly above a genuinely ONE-LINE class (the whole
+    // class statement, including its sole member, occupies a single source
+    // line) attributes to the CLASS. The class's own attribution range
+    // widens over the tag's comment-only line; the member's range is bounded
+    // below by the (un-widened) class declaration line and never reaches it.
+    write(
+      "src/oneline-tag-above.ts",
+      ["// @impl REQ-1010", "export class S { m() {} }", ""].join("\n"),
+    );
+    // T010(a)-2 — the genuine SAME-SIZE TIE: a trailing `// @impl` on the
+    // very same physical line as a one-line class. Neither the class's nor
+    // the member's attribution range widens (nothing above to climb over),
+    // so both ranges collapse to exactly that one line (size 0) — a true
+    // tie. Symbol ranges are registered class-first (extractSymbols pushes
+    // the class's own range before any member range), so
+    // resolveSymbolsAtLine's "first group wins on a size tie" rule picks the
+    // class (Edge Cases: "1 行クラスの…同サイズ tie" is resolved by
+    // registration order, not by any special-cased tie-break).
+    write(
+      "src/oneline-trailing-tag.ts",
+      ["export class S { m() {} } // @impl REQ-1011", ""].join("\n"),
+    );
+    // T010(b) — `export class Name { methodA(): void {` : the class
+    // declaration and its first member OPEN on the same source line, but the
+    // member's body (and the class) continue on subsequent lines. A tag
+    // directly above the class must still attribute to the CLASS — the
+    // member's leading-trivia rise is bounded by the class declaration's own
+    // (un-widened) start line, so it cannot climb past that line to steal a
+    // tag sitting above the class.
+    write(
+      "src/sameline-open.ts",
+      [
+        "// @impl REQ-1012",
+        "export class SameLineOpenSample { methodA(): void {",
+        "  body();",
+        "} }",
+        "",
+      ].join("\n"),
+    );
+    // T010(c) — a tag between the class's opening brace and its first
+    // member (nothing but the tag and a blank line in between). The rise for
+    // the first member is bounded below by the class declaration line, not
+    // by "the previous member's end" (there is no previous member), so the
+    // gap behaves exactly like the inter-member floating-tag case (T022b):
+    // it deterministically attributes to the NEXT (here: first) member.
+    write(
+      "src/between-open-and-first-member.ts",
+      [
+        "export class BetweenSample {",
+        "  // @impl REQ-1013",
+        "",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const parse = () => createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+
+  it("T010(a)-1: a tag above a one-line class attributes to the class", () => {
+    const result = parse();
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "REQ-1010",
+    );
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/oneline-tag-above.ts#S");
+  });
+
+  it("T010(a)-2: a same-size tie (trailing tag on a one-line class) keeps the class (registration-order tie-break)", () => {
+    const result = parse();
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "REQ-1011",
+    );
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/oneline-trailing-tag.ts#S");
+  });
+
+  it("T010(b): a same-line class-open does not let the method steal the class's own leading tag", () => {
+    const result = parse();
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "REQ-1012",
+    );
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/sameline-open.ts#SameLineOpenSample");
+  });
+
+  it("T010(c): a tag between the class-open brace and the first member resolves deterministically (to the first member)", () => {
+    const result = parse();
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "REQ-1013",
+    );
+    expect(implEdges).toHaveLength(1);
+    // Deterministic — repeated parses agree with each other and with the
+    // single resolved source below (the "next member" rule, generalized to
+    // the class-open/first-member gap).
+    const again = parse().edges.filter((e) => e.kind === "implements" && e.target === "REQ-1013");
+    expect(again).toEqual(implEdges);
+    expect(implEdges[0].source).toBe(
+      "symbol:src/between-open-and-first-member.ts#BetweenSample.methodA",
+    );
+  });
+});
+
+describe("createTSParser (symbol mode — class method grain, spec 021 — T011 boundary conditions 2)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-t011-"));
+    write("src/empty.ts", ["export class EmptyClass {}", ""].join("\n"));
+    write(
+      "src/tail-tag.ts",
+      [
+        "export class TailSample {",
+        "  methodA(): void {}",
+        "",
+        "  // @impl REQ-1014",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    write(
+      "src/one-member.ts",
+      ["export class OneMemberSample {", "  soleMethod(): void {}", "}", ""].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const parse = () => createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+
+  it("T011(a): an empty class produces zero method symbols, zero contains edges, and only the class symbol", () => {
+    const result = parse();
+    const symbolNodes = result.nodes.filter(
+      (n) => n.kind === "symbol" && n.filePath === "src/empty.ts",
+    );
+    expect(symbolNodes.map((n) => n.id)).toEqual(["symbol:src/empty.ts#EmptyClass"]);
+    const containsEdges = result.edges.filter(
+      (e) => e.kind === "contains" && e.source === "symbol:src/empty.ts#EmptyClass",
+    );
+    expect(containsEdges).toHaveLength(0);
+  });
+
+  it("T011(b): a tag after the last member (before the closing brace) attributes to the class", () => {
+    const result = parse();
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "REQ-1014",
+    );
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/tail-tag.ts#TailSample");
+  });
+
+  it("T011(c): a class with exactly one member produces exactly one method symbol and one contains edge", () => {
+    const result = parse();
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/one-member.ts")
+      .map((n) => n.id);
+    expect(symbolIds.sort()).toEqual([
+      "symbol:src/one-member.ts#OneMemberSample",
+      "symbol:src/one-member.ts#OneMemberSample.soleMethod",
+    ]);
+    const containsEdges = result.edges.filter(
+      (e) => e.kind === "contains" && e.source === "symbol:src/one-member.ts#OneMemberSample",
+    );
+    expect(containsEdges).toEqual([
+      {
+        source: "symbol:src/one-member.ts#OneMemberSample",
+        target: "symbol:src/one-member.ts#OneMemberSample.soleMethod",
+        kind: "contains",
+        provenances: ["structural"],
+      },
+    ]);
+  });
+});
+
+describe("createTSParser (symbol mode — class method grain, spec 021 — T013 export-form x member-kind matrix)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-t013-"));
+    // Positive grid: inline named export x {method, getter, setter, static
+    // method, arrow-fn property}, plus the two explicitly-excluded-by-type
+    // cells {abstract method, static block} via a second (abstract) class —
+    // abstract classes are still an INLINE NAMED export, so their CONCRETE
+    // members must still be symbolized while the abstract one falls back.
+    write(
+      "src/matrix.ts",
+      [
+        "export class MatrixSample {",
+        "  // @impl REQ-1020",
+        "  method(): void {}",
+        "  // @impl REQ-1021",
+        "  get g(): number { return 1; }",
+        "  // @impl REQ-1022",
+        "  set g(v: number) {}",
+        "  // @impl REQ-1023",
+        "  static sm(): void {}",
+        "  // @impl REQ-1024",
+        "  onClick = () => {};",
+        "}",
+        "",
+        // Inline DEFAULT export — the same member-kind coverage (method +
+        // arrow-fn property) must work under the `default.` prefix too.
+        "export default class {",
+        "  // @impl REQ-1025",
+        "  defaultMethod(): void {}",
+        "  // @impl REQ-1026",
+        "  onClick = () => {};",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    write(
+      "src/abstract-and-static-block.ts",
+      [
+        "export abstract class AbstractSample {",
+        "  // @impl REQ-1027",
+        "  abstract methodA(): void;",
+        "  // @impl REQ-1028",
+        "  concreteMethod(): void {}",
+        "  static {",
+        "    doInit();",
+        "  }",
+        "}",
+        "function doInit(): void {}",
+        "",
+      ].join("\n"),
+    );
+    // Excluded export forms: separate (`export { X }`) and alias
+    // (`export { X as Y }`) exported classes never reach the inline
+    // ClassDeclaration branch that calls extractClassMembers — only the
+    // class-level symbol (existing pre-021 behavior) is produced.
+    write(
+      "src/separate-export.ts",
+      [
+        "class SeparateSample {",
+        "  methodA(): void {}",
+        "}",
+        "export { SeparateSample };",
+        "",
+      ].join("\n"),
+    );
+    write(
+      "src/alias-export.ts",
+      [
+        "class AliasSample {",
+        "  methodA(): void {}",
+        "}",
+        "export { AliasSample as Renamed };",
+        "",
+      ].join("\n"),
+    );
+    // Double export: the SAME class is exported both inline-default and via
+    // a separate named specifier. Only ONE set of member symbols may exist —
+    // under the inline form's own prefix (`default.`), never duplicated
+    // under the specifier's local name (`DoubleSample.`).
+    write(
+      "src/double-export.ts",
+      [
+        "export default class DoubleSample {",
+        "  methodA(): void {}",
+        "}",
+        "export { DoubleSample };",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const parse = () => createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+
+  it("inline named export: method / getter+setter / static method / arrow-fn property all get their own symbol + implements edge", () => {
+    const result = parse();
+    const implEdges = result.edges.filter((e) => e.kind === "implements");
+    const bySource = (target: string) => implEdges.find((e) => e.target === target)?.source;
+    expect(bySource("REQ-1020")).toBe("symbol:src/matrix.ts#MatrixSample.method");
+    expect(bySource("REQ-1021")).toBe("symbol:src/matrix.ts#MatrixSample.g");
+    expect(bySource("REQ-1022")).toBe("symbol:src/matrix.ts#MatrixSample.g");
+    expect(bySource("REQ-1023")).toBe("symbol:src/matrix.ts#MatrixSample.sm");
+    expect(bySource("REQ-1024")).toBe("symbol:src/matrix.ts#MatrixSample.onClick");
+  });
+
+  it("inline default export: method and arrow-fn property get `default.<name>` symbols", () => {
+    const result = parse();
+    const implEdges = result.edges.filter((e) => e.kind === "implements");
+    const bySource = (target: string) => implEdges.find((e) => e.target === target)?.source;
+    expect(bySource("REQ-1025")).toBe("symbol:src/matrix.ts#default.defaultMethod");
+    expect(bySource("REQ-1026")).toBe("symbol:src/matrix.ts#default.onClick");
+  });
+
+  it("abstract method falls back to the class; the concrete sibling member and a static block do not crash extraction", () => {
+    const result = parse();
+    const implEdges = result.edges.filter((e) => e.kind === "implements");
+    const bySource = (target: string) => implEdges.find((e) => e.target === target)?.source;
+    // The abstract member is excluded (FR-004 category) — falls back to the class.
+    expect(bySource("REQ-1027")).toBe("symbol:src/abstract-and-static-block.ts#AbstractSample");
+    // The concrete sibling is still symbolized normally.
+    expect(bySource("REQ-1028")).toBe(
+      "symbol:src/abstract-and-static-block.ts#AbstractSample.concreteMethod",
+    );
+    // No symbol was synthesized for the anonymous static block.
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/abstract-and-static-block.ts")
+      .map((n) => n.id);
+    expect(symbolIds.sort()).toEqual([
+      "symbol:src/abstract-and-static-block.ts#AbstractSample",
+      "symbol:src/abstract-and-static-block.ts#AbstractSample.concreteMethod",
+    ]);
+  });
+
+  it("separate export (`export { X }`) produces no member symbols, only the pre-existing class-level symbol", () => {
+    const result = parse();
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/separate-export.ts")
+      .map((n) => n.id);
+    expect(symbolIds).toEqual(["symbol:src/separate-export.ts#SeparateSample"]);
+  });
+
+  it("alias export (`export { X as Y }`) produces no member symbols, only the class-level symbol under the alias", () => {
+    const result = parse();
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/alias-export.ts")
+      .map((n) => n.id);
+    expect(symbolIds).toEqual(["symbol:src/alias-export.ts#Renamed"]);
+  });
+
+  it("double export (inline default + separate named): member symbols exist ONLY once, under the inline form's prefix", () => {
+    const result = parse();
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/double-export.ts")
+      .map((n) => n.id);
+    expect(symbolIds.sort()).toEqual([
+      "symbol:src/double-export.ts#DoubleSample",
+      "symbol:src/double-export.ts#default",
+      "symbol:src/double-export.ts#default.methodA",
+    ]);
+    // Never a second, specifier-named member set.
+    expect(symbolIds).not.toContain("symbol:src/double-export.ts#DoubleSample.methodA");
+  });
+});
+
+describe("createTSParser (symbol mode — class method grain, spec 021 — T014 same-name convergence)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-t014-"));
+    write(
+      "src/getset.ts",
+      [
+        "export class GetSetSample {",
+        "  // @impl REQ-1040",
+        "  get value(): number { return 1; }",
+        "  // @impl REQ-1041",
+        "  set value(v: number) {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    write(
+      "src/static-instance.ts",
+      [
+        "export class StaticInstanceSample {",
+        "  // @impl REQ-1042",
+        "  static method(): void {}",
+        "  // @impl REQ-1043",
+        "  method(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const parse = () => createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+
+  it("T014(a): a get+set pair converges to ONE symbol; both occurrences' tags attribute to it", () => {
+    const result = parse();
+    const memberNodes = result.nodes.filter(
+      (n) => n.kind === "symbol" && n.id === "symbol:src/getset.ts#GetSetSample.value",
+    );
+    expect(memberNodes).toHaveLength(1);
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && (e.target === "REQ-1040" || e.target === "REQ-1041"),
+    );
+    expect(implEdges).toHaveLength(2);
+    for (const edge of implEdges) {
+      expect(edge.source).toBe("symbol:src/getset.ts#GetSetSample.value");
+    }
+  });
+
+  it("T014(a)/(d): editing the setter changes the converged hash; editing an unrelated sibling member does not (\\0-joined occurrence hash)", () => {
+    const build = (setterBody: string, otherBody: string) =>
+      [
+        "export class InterleavedSample {",
+        "  get value(): number { return 1; }",
+        "  other(): void {" + otherBody + "}",
+        "  set value(v: number) {" + setterBody + "}",
+        "}",
+        "",
+      ].join("\n");
+    const hashFor = (content: string) => {
+      write("src/interleaved.ts", content);
+      const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+      return result.nodes.find((n) => n.id === "symbol:src/interleaved.ts#InterleavedSample.value")
+        ?.contentHash;
+    };
+    const base = hashFor(build("", ""));
+    const afterEditingOther = hashFor(build("", "doWork();"));
+    const afterEditingSetter = hashFor(build("doWork();", ""));
+
+    expect(base).toBeDefined();
+    // Editing a member sandwiched BETWEEN the get and the set (source-order
+    // between the two occurrences) must NOT drift the converged hash — the
+    // \0-joined hash only ever spans the get/set occurrence texts themselves.
+    expect(afterEditingOther).toBe(base);
+    // Editing the setter's own body — one of the converged occurrences —
+    // MUST drift the hash.
+    expect(afterEditingSetter).not.toBe(base);
+  });
+
+  it("T014(b): static and instance members of the same name converge to ONE symbol; both tags attribute to it", () => {
+    const result = parse();
+    const memberNodes = result.nodes.filter(
+      (n) =>
+        n.kind === "symbol" && n.id === "symbol:src/static-instance.ts#StaticInstanceSample.method",
+    );
+    expect(memberNodes).toHaveLength(1);
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && (e.target === "REQ-1042" || e.target === "REQ-1043"),
+    );
+    expect(implEdges).toHaveLength(2);
+    for (const edge of implEdges) {
+      expect(edge.source).toBe("symbol:src/static-instance.ts#StaticInstanceSample.method");
+    }
+  });
+
+  it("T014(c): two overload signatures + one implementation converge to ONE symbol; editing the implementation body drifts the hash", () => {
+    const build = (body: string) =>
+      [
+        "export class OverloadSample {",
+        "  method(a: number): void;",
+        "  method(a: string): void;",
+        "  method(a: unknown): void {" + body + "}",
+        "}",
+        "",
+      ].join("\n");
+    write("src/overload.ts", build(""));
+    const r1 = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    const memberNodes = r1.nodes.filter(
+      (n) => n.kind === "symbol" && n.id === "symbol:src/overload.ts#OverloadSample.method",
+    );
+    expect(memberNodes).toHaveLength(1);
+    const h1 = memberNodes[0].contentHash;
+
+    write("src/overload.ts", build("doWork();"));
+    const r2 = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    const h2 = r2.nodes.find(
+      (n) => n.id === "symbol:src/overload.ts#OverloadSample.method",
+    )?.contentHash;
+    expect(h2).not.toBe(h1);
+  });
+});
+
+describe("createTSParser (symbol mode — class method grain, spec 021 — T017 fatal-syntax fallback)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-t017-"));
+    write("src/target.ts", "export const t = 1;\n");
+    // A file with a class (incl. a member `@impl` tag) that ALSO contains a
+    // fatal syntax error elsewhere (`const x = ;`). oxc returns an empty
+    // `program` for such files (see typescript-oxc-regression.test.ts R11),
+    // so extractClassMembers is never even reached for this file — the
+    // whole file degrades to file-level `@impl` attribution, same as a
+    // fatal-syntax file with no class at all.
+    write(
+      "src/broken-with-class.ts",
+      [
+        "// @impl BRK-101",
+        'import { t } from "./target.js";',
+        "export class Sample {",
+        "  // @impl BRK-102",
+        "  methodA(): void {}",
+        "}",
+        "const x = ;",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("does not crash on a fatal-syntax file containing a class, and degrades class-member tags to file attribution", () => {
+    const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    const symbolNodes = result.nodes.filter(
+      (n) => n.kind === "symbol" && n.filePath === "src/broken-with-class.ts",
+    );
+    expect(symbolNodes).toEqual([]);
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && (e.target === "BRK-101" || e.target === "BRK-102"),
+    );
+    expect(implEdges).toHaveLength(2);
+    for (const edge of implEdges) {
+      expect(edge.source).toBe("file:src/broken-with-class.ts");
+    }
+  });
+});
+
+describe("createTSParser (symbol mode — class method grain, spec 021 — T020 collision + warning)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-t020-"));
+    // Edge Cases: a string-literal export alias whose VALUE is a dotted
+    // name identical to a class member's synthesized symbol name.
+    write(
+      "src/collision.ts",
+      [
+        "function helper(): void {}",
+        'export { helper as "Sample.methodA" };',
+        "",
+        "export class Sample {",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("T020(a): the class member wins the ID collision and a build warning is emitted (not a silent drop)", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let result;
+    let warningCalls: string[];
+    try {
+      result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+      // Capture (as plain strings) BEFORE mockRestore() runs — mockRestore()
+      // also clears `mock.calls` (same as mockReset()), so reading the spy's
+      // call list after restoring would always see an empty array.
+      warningCalls = warnSpy.mock.calls
+        .map((args) => String(args[0]))
+        .filter((msg) => msg.includes("symbol:src/collision.ts#Sample.methodA"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+    // Exactly one node for the contested id — the class member's, not the
+    // string-literal-aliased export's.
+    const contested = result.nodes.filter((n) => n.id === "symbol:src/collision.ts#Sample.methodA");
+    expect(contested).toHaveLength(1);
+    // A warning was emitted (not a silent first-wins/last-wins drop).
+    expect(warningCalls.length).toBeGreaterThanOrEqual(1);
+    expect(warningCalls[0]).toMatch(/collides with an/);
+  });
+
+  it("T020(b): the collision resolution and warning are deterministic across repeated parses", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let firstWarnings: string[];
+    let secondWarnings: string[];
+    let firstNodeIds: string[];
+    let secondNodeIds: string[];
+    try {
+      const r1 = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+      firstWarnings = warnSpy.mock.calls.map((args) => String(args[0]));
+      firstNodeIds = r1.nodes.filter((n) => n.kind === "symbol").map((n) => n.id);
+      warnSpy.mockClear();
+
+      const r2 = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+      secondWarnings = warnSpy.mock.calls.map((args) => String(args[0]));
+      secondNodeIds = r2.nodes.filter((n) => n.kind === "symbol").map((n) => n.id);
+    } finally {
+      warnSpy.mockRestore();
+    }
+    expect(secondWarnings).toEqual(firstWarnings);
+    expect(secondNodeIds).toEqual(firstNodeIds);
+  });
+});
+
+describe("createTSParser (symbol mode — class method grain, spec 021 — T022 edge cases 1)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-t022-"));
+    // T022(a) — attribution span for a decorated member includes the
+    // decorator; leading-trivia rise reaches a comment ABOVE the decorator.
+    write(
+      "src/decorated.ts",
+      [
+        "function Decorator() { return (target: unknown, key: unknown) => {}; }",
+        "export class DecoratedSample {",
+        "  // @impl REQ-1050",
+        "  @Decorator()",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    // T022(b) — a floating tag between two members (comment/blank lines
+    // only) attributes to the NEXT member, not the previous one.
+    write(
+      "src/float.ts",
+      [
+        "export class FloatSample {",
+        "  methodA(): void {}",
+        "",
+        "  // @impl REQ-1051",
+        "",
+        "  methodB(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    // T022(c) — a run of a tag, a plain comment, a blank line, another plain
+    // comment, and a JSDoc block, all above the member: the rise must climb
+    // through every one of them to reach the tag.
+    write(
+      "src/rise.ts",
+      [
+        "export class RiseSample {",
+        "  // @impl REQ-1052",
+        "  // a plain comment",
+        "",
+        "  // another plain comment",
+        "  /**",
+        "   * jsdoc block",
+        "   */",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const parse = () => createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+
+  it("T022(a): a tag above a decorated method's decorator attributes to the method", () => {
+    const result = parse();
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "REQ-1050",
+    );
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/decorated.ts#DecoratedSample.methodA");
+  });
+
+  it("T022(b): a floating tag between two members attributes to the NEXT member", () => {
+    const result = parse();
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "REQ-1051",
+    );
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/float.ts#FloatSample.methodB");
+  });
+
+  it("T022(c): leading-trivia rise climbs through consecutive comments, a blank line, and a JSDoc block", () => {
+    const result = parse();
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "REQ-1052",
+    );
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/rise.ts#RiseSample.methodA");
+  });
+});
+
+describe("createTSParser (symbol mode — class method grain, spec 021 — T023 edge cases 2)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-t023-"));
+    write(
+      "src/excluded.ts",
+      [
+        "const KEY = 'computed';",
+        "export class ExcludedSample {",
+        "  // @impl REQ-1060",
+        "  [KEY](): void {}",
+        "  // @impl REQ-1061",
+        "  #priv(): void {}",
+        "  // @impl REQ-1062",
+        "  dataProp = 5;",
+        // A function-VALUED `accessor` field — this specifically probes
+        // that the exclusion is because oxc types `accessor` fields as a
+        // DIFFERENT ClassElement (`AccessorProperty`), not merely because a
+        // plain data property fails the Arrow/FunctionExpression check.
+        "  // @impl REQ-1063",
+        "  accessor accField = () => {};",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    write(
+      "src/ctor.ts",
+      ["export class CtorSample {", "  // @impl REQ-1064", "  constructor() {}", "}", ""].join(
+        "\n",
+      ),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const parse = () => createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+
+  it("computed name, private #member, data property, and a function-valued accessor field all fall back to the class", () => {
+    const result = parse();
+    const implEdges = result.edges.filter((e) => e.kind === "implements");
+    const bySource = (target: string) => implEdges.find((e) => e.target === target)?.source;
+    for (const target of ["REQ-1060", "REQ-1061", "REQ-1062", "REQ-1063"]) {
+      expect(bySource(target)).toBe("symbol:src/excluded.ts#ExcludedSample");
+    }
+    // None of the four excluded member kinds produced their own symbol.
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/excluded.ts")
+      .map((n) => n.id);
+    expect(symbolIds).toEqual(["symbol:src/excluded.ts#ExcludedSample"]);
+  });
+
+  it("constructor is symbolized as `ClassName.constructor` and receives its own tag attribution", () => {
+    const result = parse();
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/ctor.ts")
+      .map((n) => n.id);
+    expect(symbolIds.sort()).toEqual([
+      "symbol:src/ctor.ts#CtorSample",
+      "symbol:src/ctor.ts#CtorSample.constructor",
+    ]);
+    const implEdges = result.edges.filter(
+      (e) => e.kind === "implements" && e.target === "REQ-1064",
+    );
+    expect(implEdges).toHaveLength(1);
+    expect(implEdges[0].source).toBe("symbol:src/ctor.ts#CtorSample.constructor");
   });
 });

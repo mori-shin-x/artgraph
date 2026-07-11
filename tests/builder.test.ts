@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { join, resolve } from "node:path";
 import {
   writeFileSync,
@@ -1408,4 +1408,82 @@ describe("buildGraph: SC-004 edge-set baseline invariance (all fixtures)", () =>
       expect(current).toEqual(expected);
     });
   }
+});
+
+// spec 021 (issue #218) — class method grain, T020(b): the class-member vs.
+// string-literal-export-alias ID collision (typescript.ts extractSymbols)
+// must resolve identically and warn identically across independent cold
+// builds — through the FULL buildGraph pipeline, not just the parser layer
+// (see tests/typescript.test.ts's own T020(a)/(b) for the parser-only
+// checks). Two separate tmp roots with byte-identical fixture content rule
+// out any incremental-parse-cache reuse muddying the comparison; disabling
+// the cache via ARTGRAPH_CACHE=0 (same knob tests/parse-cache.test.ts uses)
+// additionally guarantees both builds actually re-parse from scratch.
+describe("buildGraph: class-member symbol collision determinism (spec 021 / T020(b))", () => {
+  it("emits the same collision warning and the same graph across two independent cold builds", () => {
+    const collisionSource = [
+      "function helper(): void {}",
+      'export { helper as "Sample.methodA" };',
+      "",
+      "export class Sample {",
+      "  methodA(): void {}",
+      "}",
+      "",
+    ].join("\n");
+
+    const makeRoot = (): string => {
+      const dir = mkdtempSync(join(tmpdir(), "artgraph-t020b-"));
+      mkdirSync(join(dir, "src"), { recursive: true });
+      mkdirSync(join(dir, "specs"), { recursive: true });
+      writeFileSync(join(dir, "src", "collision.ts"), collisionSource);
+      return dir;
+    };
+    const rootA = makeRoot();
+    const rootB = makeRoot();
+    const symbolConfig: ArtgraphConfig = { ...config, mode: "symbol" };
+
+    const snapshot = (nodes: Map<string, unknown>, edges: unknown[]) =>
+      JSON.stringify({ nodes: [...nodes.entries()], edges });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    process.env.ARTGRAPH_CACHE = "0";
+    let warningsA: string[];
+    let warningsB: string[];
+    let snapshotA: string;
+    let snapshotB: string;
+    let symbolIdsA: string[];
+    try {
+      const { graph: graphA } = buildGraph(rootA, symbolConfig);
+      warningsA = warnSpy.mock.calls
+        .map((args) => String(args[0]))
+        .filter((msg) => msg.includes("Sample.methodA"));
+      snapshotA = snapshot(graphA.nodes, graphA.edges);
+      symbolIdsA = [...graphA.nodes.keys()].filter((id) => id.startsWith("symbol:"));
+      warnSpy.mockClear();
+
+      const { graph: graphB } = buildGraph(rootB, symbolConfig);
+      warningsB = warnSpy.mock.calls
+        .map((args) => String(args[0]))
+        .filter((msg) => msg.includes("Sample.methodA"));
+      snapshotB = snapshot(graphB.nodes, graphB.edges);
+    } finally {
+      warnSpy.mockRestore();
+      delete process.env.ARTGRAPH_CACHE;
+      rmSync(rootA, { recursive: true, force: true });
+      rmSync(rootB, { recursive: true, force: true });
+    }
+
+    // Both cold builds warn about the collision, identically.
+    expect(warningsA.length).toBeGreaterThanOrEqual(1);
+    expect(warningsB).toEqual(warningsA);
+
+    // Both cold builds agree on the resulting graph (paths are identical
+    // across the two roots' relative `src/collision.ts`, so full equality —
+    // not just shape — holds), and the class member won the collision:
+    // exactly one node for the contested id.
+    expect(snapshotB).toBe(snapshotA);
+    expect(symbolIdsA.filter((id) => id === "symbol:src/collision.ts#Sample.methodA")).toHaveLength(
+      1,
+    );
+  });
 });

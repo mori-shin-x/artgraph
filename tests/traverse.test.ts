@@ -1025,3 +1025,48 @@ describe("impact: class -> method contains (T003, spec 021 / issue #218)", () =>
     expect(startIds).not.toContain("file:src/sample.ts");
   });
 });
+
+// spec 021 (T012, issue #218) — boundary condition: class -> method -> REQ is
+// TWO hops (the class->method `contains` edge is the extra hop spec 019-era
+// class-collapsed symbols never needed — Edge Cases "maxDepth への影響").
+// Starting from the CLASS symbol, `maxDepth=1` must reach the class's own
+// direct neighbors (its own `@impl` claim REQ-901, its member symbols via
+// `contains`, and the importing consumer via reverse `imports`) but NOT any
+// member's OWN `@impl` claim (REQ-902/REQ-903, which sit one hop further, at
+// the method symbol). `maxDepth=2` must reach them.
+describe("impact: maxDepth boundary at class -> method -> REQ (T012, spec 021 / issue #218)", () => {
+  it("maxDepth=1 from the class reaches the class's own claim and member symbols, but NOT member REQs", () => {
+    const graph = makeClassMethodFixture();
+    const result = impact(graph, ["symbol:src/sample.ts#Sample"], {}, 1);
+
+    // Depth 0: the class itself. Depth 1: REQ-901 (class's own @impl),
+    // Sample.methodA / Sample.methodB (via forward `contains`), and the
+    // consumer (via reverse `imports`, unaffected by the direction guard).
+    expect(result.impactReqs).toEqual(["REQ-901"]);
+    expect(result.impactReqs).not.toContain("REQ-902");
+    expect(result.impactReqs).not.toContain("REQ-903");
+    expect(result.affectedFiles).toContain("src/sample.ts");
+  });
+
+  it("maxDepth=2 from the class reaches every member's REQ (the 2nd hop, class->method->REQ)", () => {
+    const graph = makeClassMethodFixture();
+    const result = impact(graph, ["symbol:src/sample.ts#Sample"], {}, 2);
+
+    expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-902", "REQ-903"]));
+  });
+
+  it("maxDepth=0 from a method symbol reaches only itself — no class, no REQ", () => {
+    const graph = makeClassMethodFixture();
+    const result = impact(graph, ["symbol:src/sample.ts#Sample.methodA"], {}, 0);
+
+    expect(result.impactReqs).toEqual([]);
+    expect(result.affectedFiles).toEqual(["src/sample.ts"]);
+  });
+
+  it("maxDepth=1 from a method symbol reaches its own REQ (1 hop, method->REQ — no class hop needed)", () => {
+    const graph = makeClassMethodFixture();
+    const result = impact(graph, ["symbol:src/sample.ts#Sample.methodA"], {}, 1);
+
+    expect(result.impactReqs).toEqual(["REQ-902"]);
+  });
+});

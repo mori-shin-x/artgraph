@@ -412,6 +412,200 @@ describe("CLI: impact — `export *` star-barrel entry (specs/018 T13)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// spec 021 (T018, issue #218) — method-grain symbol-input error diagnostics:
+// unresolvedSymbol hint wording (US3-2), the file-mode-graph guidance path
+// applied to a dotted method entry (US3-3), and barrel-relayed method
+// resolution (member symbols only exist on the origin file — Edge Cases
+// "barrel 経由のメソッド指定").
+// ---------------------------------------------------------------------------
+
+function writeClassMethodFixture(root: string): void {
+  mkdirSync(join(root, "specs"), { recursive: true });
+  writeFileSync(
+    join(root, "specs", "sample.md"),
+    "# Sample Spec\n\n- REQ-901: class-level requirement\n- REQ-902: methodA requirement\n",
+  );
+  mkdirSync(join(root, "src"), { recursive: true });
+  writeFileSync(
+    join(root, "src", "sample.ts"),
+    [
+      "// @impl REQ-901",
+      "export class Sample {",
+      "  methodA(): void {",
+      "    // @impl REQ-902",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    join(root, ".artgraph.json"),
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.test.ts"],
+      lockFile: ".trace.lock",
+      mode: "symbol",
+    }),
+  );
+}
+
+describe("CLI: impact — method-grain symbol diagnostics (T018, spec 021 / issue #218)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-impact-classmethod-"));
+    writeClassMethodFixture(root);
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("(a) `Sample.doesNotExist` -> unresolvedSymbol exit 1, hint phrased for a class member (US3-2)", async () => {
+    const { exitCode, stderr } = await runAt(root, ["impact", "src/sample.ts:Sample.doesNotExist"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("No matching symbol found");
+    expect(stderr).toContain("src/sample.ts:Sample.doesNotExist");
+    // The hint must not misdirect toward an `export`-name grep for a class
+    // member — methods are never individually exported, unlike top-level
+    // symbols — it should instead point at the member name itself.
+    expect(stderr).not.toContain('grep "export.*Sample.doesNotExist"');
+    expect(stderr).toContain("doesNotExist");
+  });
+
+  it("(b) `:Sample.methodA` against a FILE-mode graph -> existing scan-mode-mismatch guidance, exit 1 (US3-3)", async () => {
+    const fileRoot = mkdtempSync(join(tmpdir(), "artgraph-impact-classmethod-filemode-"));
+    try {
+      writeClassMethodFixture(fileRoot);
+      // Overwrite config WITHOUT `mode: "symbol"` so scan stays file mode —
+      // the dotted method entry must hit the SAME global guidance a plain
+      // symbol entry does, not a bespoke (and possibly worse) error path.
+      writeFileSync(
+        join(fileRoot, ".artgraph.json"),
+        JSON.stringify({
+          include: ["src/**/*.ts"],
+          specDirs: ["specs"],
+          testPatterns: ["tests/**/*.test.ts"],
+          lockFile: ".trace.lock",
+        }),
+      );
+      const { exitCode, stderr } = await runAt(fileRoot, [
+        "impact",
+        "src/sample.ts:Sample.methodA",
+      ]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("symbol-level input requires");
+      expect(stderr).toContain('`mode: "symbol"` in `.artgraph.json`');
+    } finally {
+      rmSync(fileRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("(c) barrel-relayed method (`src/barrel.ts:Sample.methodA`) -> unresolvedSymbol (member symbols only exist on the origin file)", async () => {
+    writeFileSync(join(root, "src", "barrel.ts"), 'export { Sample } from "./sample.js";\n');
+    const { exitCode, stderr } = await runAt(root, ["impact", "src/barrel.ts:Sample.methodA"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("No matching symbol found");
+    expect(stderr).toContain("src/barrel.ts:Sample.methodA");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// spec 021 (T028, US1/US2, issue #218, SC-001) — issue #218 repro E2E via the
+// real CLI + real parser: method-origin resolution (own claim only, no
+// sibling REQ, no consumer file, no `this.methodB()` call-graph reach) vs.
+// class-origin resolution (every member's REQ).
+// ---------------------------------------------------------------------------
+
+describe("CLI: impact — issue #218 repro E2E (T028, spec 021)", () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-impact-issue218-"));
+    mkdirSync(join(root, "specs"), { recursive: true });
+    writeFileSync(
+      join(root, "specs", "sample.md"),
+      [
+        "# Sample Spec (issue #218 repro)",
+        "",
+        "- REQ-901: class-level requirement",
+        "- REQ-902: methodA requirement",
+        "- REQ-903: methodB requirement",
+        "",
+      ].join("\n"),
+    );
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(
+      join(root, "src", "sample.ts"),
+      [
+        "// @impl REQ-901",
+        "export class Sample {",
+        "  methodA(): void {",
+        "    // @impl REQ-902",
+        "    this.methodB();",
+        "  }",
+        "",
+        "  methodB(): void {",
+        "    // @impl REQ-903",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(root, "src", "consumer.ts"),
+      [
+        'import { Sample } from "./sample.js";',
+        "",
+        "export function useSample(): Sample {",
+        "  return new Sample();",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(root, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        testPatterns: ["tests/**/*.test.ts"],
+        lockFile: ".trace.lock",
+        mode: "symbol",
+      }),
+    );
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("(a) method-origin `Sample.methodA`: own claim only (US2-1), no consumer (US2-7), no this.methodB() call-graph reach (US2-4)", async () => {
+    const { stdout, exitCode } = await runAt(root, [
+      "impact",
+      "src/sample.ts:Sample.methodA",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.impactReqs).toEqual(["REQ-902"]);
+    expect(result.impactReqs).not.toContain("REQ-901");
+    expect(result.impactReqs).not.toContain("REQ-903");
+    expect(result.affectedFiles).toContain("src/sample.ts");
+    expect(result.affectedFiles).not.toContain("src/consumer.ts");
+  });
+
+  it("(b) class-origin `Sample`: every member's REQ is included (US2-2)", async () => {
+    const { stdout, exitCode } = await runAt(root, [
+      "impact",
+      "src/sample.ts:Sample",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-902", "REQ-903"]));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Spec 014 → 016 validation regressions — kept so the redesign doesn't
 // quietly break the navigational error / mutually-exclusive channels /
 // no-source plumbing.

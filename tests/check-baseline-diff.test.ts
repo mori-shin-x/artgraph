@@ -1,7 +1,15 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  writeFileSync,
+  rmSync,
+  readFileSync,
+  mkdirSync,
+  mkdtempSync,
+} from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { runAt } from "./helpers.js";
 import {
   makeRepoWithDebt,
@@ -9,6 +17,8 @@ import {
   introduceNewOrphan,
   makeRepoWithOrphan,
   makeRepoWithSoleImplTag,
+  gitInit,
+  gitCommitAll,
 } from "./helpers.js";
 
 // spec 017 US1 (T011/T014) — `check --diff --gate` must be decided by NEW
@@ -586,3 +596,216 @@ function newIssuesEmpty(n: {
     n.testFailures.length === 0
   );
 }
+
+// ---------------------------------------------------------------------------
+// spec 021 (T015/T019, issue #218) — class-method-grain lock lifecycle and
+// check --diff --gate baseline interaction.
+//
+// Fixture: `src/hub.ts` exports class `Sample` (`@impl REQ-100` above the
+// class) with two methods — `methodA` (`@impl REQ-200`, covered) and
+// `methodB` (`@impl REQ-999`, a PRE-EXISTING orphan committed at HEAD:
+// REQ-999 is never defined in specs/, mirroring `introduceNewOrphan`'s
+// literal-tag convention so artgraph's own dogfood scan of THIS repo never
+// mistakes the fixture text for a real code tag).
+// ---------------------------------------------------------------------------
+
+function makeClassMethodRepo(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(dir, ".gitignore"), ".trace.lock\nnode_modules/\n");
+  writeFileSync(
+    join(dir, ".artgraph.json"),
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.ts"],
+      lockFile: ".trace.lock",
+      mode: "symbol",
+    }),
+  );
+  mkdirSync(join(dir, "specs"), { recursive: true });
+  mkdirSync(join(dir, "src"), { recursive: true });
+
+  writeFileSync(
+    join(dir, "specs", "debt.md"),
+    "# Debt\n\n- REQ-100: class-level requirement covered by Sample\n- REQ-200: methodA requirement\n",
+  );
+  writeFileSync(
+    join(dir, "src", "hub.ts"),
+    [
+      "// @impl REQ-100",
+      "export class Sample {",
+      "  methodA(): void {",
+      "    // @impl REQ-200",
+      "  }",
+      "",
+      "  methodB(): void {",
+      "    // @" + "impl REQ-999",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+  );
+
+  gitInit(dir);
+  gitCommitAll(dir, "init class-method fixture (pre-existing REQ-999 orphan on methodB)");
+  return dir;
+}
+
+describe("spec 021 (T015, issue #218) — old lock (no method symbols) -> new scan -> check/reconcile transition", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    while (dirs.length) {
+      const d = dirs.pop()!;
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("a lock missing the new method-symbol entries (simulating a pre-spec-021 lock) does not flag them as drift", async () => {
+    const dir = makeClassMethodRepo("artgraph-021-t015a-");
+    dirs.push(dir);
+
+    // reconcile() runs the CURRENT (spec-021-aware) parser, so its lock
+    // naturally carries the class + method entries. Simulate an "old" lock
+    // (written before spec 021 shipped) by reconciling once, then stripping
+    // the new method-symbol entries back out — the class + REQ entries stay,
+    // exactly like a pre-upgrade lock would look.
+    const rec = await runAt(dir, ["reconcile"]);
+    expect(rec.exitCode).toBe(0);
+    const lockPath = join(dir, ".trace.lock");
+    const fullLock = JSON.parse(readFileSync(lockPath, "utf-8"));
+    expect(fullLock["symbol:src/hub.ts#Sample.methodA"]).toBeDefined();
+    expect(fullLock["symbol:src/hub.ts#Sample.methodB"]).toBeDefined();
+
+    const oldLock = { ...fullLock };
+    delete oldLock["symbol:src/hub.ts#Sample.methodA"];
+    delete oldLock["symbol:src/hub.ts#Sample.methodB"];
+    writeFileSync(lockPath, JSON.stringify(oldLock, null, 2) + "\n");
+
+    // Plain `check` (no --diff): the method symbols have NO lock entry at
+    // all, so `check()`'s drift loop (which iterates `Object.entries(lock)`)
+    // never visits them — they must not be false-flagged as drifted.
+    const { stdout, exitCode } = await runAt(dir, ["check", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const json = JSON.parse(stdout);
+    expect(
+      json.drifted.some((d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample.methodA"),
+    ).toBe(false);
+    expect(
+      json.drifted.some((d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample.methodB"),
+    ).toBe(false);
+    // No drift at all — the class entry is present and unchanged, and the
+    // (deliberately absent) method entries are skipped rather than flagged.
+    // (`pass` itself stays false here for an UNRELATED reason — methodB's
+    // pre-existing REQ-999 orphan, which a plain non-`--diff` check always
+    // treats as a live issue with no baseline to suppress it against; that's
+    // the fixture's intentional pre-existing debt, exercised properly by the
+    // `--diff --gate` scenario below.)
+    expect(json.drifted).toEqual([]);
+  });
+
+  it("reconcile adds the missing method-symbol lock entries, and a second reconcile is byte-stable", async () => {
+    const dir = makeClassMethodRepo("artgraph-021-t015b-");
+    dirs.push(dir);
+    const lockPath = join(dir, ".trace.lock");
+
+    await runAt(dir, ["reconcile"]);
+    const fullLock = JSON.parse(readFileSync(lockPath, "utf-8"));
+    const oldLock = { ...fullLock };
+    delete oldLock["symbol:src/hub.ts#Sample.methodA"];
+    delete oldLock["symbol:src/hub.ts#Sample.methodB"];
+    writeFileSync(lockPath, JSON.stringify(oldLock, null, 2) + "\n");
+
+    const rec2 = await runAt(dir, ["reconcile"]);
+    expect(rec2.exitCode).toBe(0);
+    const rebuilt = JSON.parse(readFileSync(lockPath, "utf-8"));
+    expect(rebuilt["symbol:src/hub.ts#Sample.methodA"]).toBeDefined();
+    expect(rebuilt["symbol:src/hub.ts#Sample.methodB"]).toBeDefined();
+
+    // Idempotent re-reconcile with nothing changed on disk must be byte-stable
+    // (INV-L4 — buildLockFromGraph preserves `lastReconciled` when nothing
+    // structural changed).
+    const before = readFileSync(lockPath, "utf-8");
+    const rec3 = await runAt(dir, ["reconcile"]);
+    expect(rec3.exitCode).toBe(0);
+    const after = readFileSync(lockPath, "utf-8");
+    expect(after).toBe(before);
+  });
+});
+
+describe("spec 021 (T019, issue #218) — method edit double-drift + baseline union pre-existing debt (#237)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    while (dirs.length) {
+      const d = dirs.pop()!;
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it("editing methodA drifts BOTH the method and class symbols as NEW; the untouched sibling's pre-existing orphan stays suppressed", async () => {
+    const dir = makeClassMethodRepo("artgraph-021-t019-");
+    dirs.push(dir);
+
+    // Reconcile so the CURRENT lock matches HEAD content — the baseline
+    // (base graph vs current lock) then shows NO drift for Sample /
+    // Sample.methodA, so the post-edit drift below is genuinely new (mirrors
+    // the "(c) spec edited after reconcile" pattern above).
+    const rec = await runAt(dir, ["reconcile"]);
+    expect(rec.exitCode).toBe(0);
+
+    // Edit ONLY methodA's body — methodB (carrying the pre-existing REQ-999
+    // orphan, committed at HEAD, untouched by this diff) is left alone.
+    const hubPath = join(dir, "src", "hub.ts");
+    const before = readFileSync(hubPath, "utf-8");
+    const after = before.replace(
+      "  methodA(): void {\n    // @impl REQ-200\n  }",
+      "  methodA(): void {\n    // @impl REQ-200\n    return;\n  }",
+    );
+    expect(after).not.toEqual(before);
+    writeFileSync(hubPath, after);
+
+    const { stdout, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--gate",
+      "--format",
+      "json",
+    ]);
+    const json = JSON.parse(stdout);
+
+    // Both the class AND the method symbol drift — an honest double report
+    // (the class span includes the method span it just contains — Edge
+    // Cases "メソッドシンボルと lock").
+    expect(
+      json.drifted.some((d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample"),
+    ).toBe(true);
+    expect(
+      json.drifted.some((d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample.methodA"),
+    ).toBe(true);
+    // Both are genuinely NEW — the lock was reconciled at HEAD (pre-edit),
+    // so the baseline side shows zero drift for either symbol.
+    expect(
+      json.newIssues.drifted.some(
+        (d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample",
+      ),
+    ).toBe(true);
+    expect(
+      json.newIssues.drifted.some(
+        (d: { nodeId: string }) => d.nodeId === "symbol:src/hub.ts#Sample.methodA",
+      ),
+    ).toBe(true);
+
+    // methodB's pre-existing orphan (REQ-999, unchanged since HEAD) is
+    // dragged into scope by the file-unit `--diff` granularity (the whole
+    // class — including methodB — shares hub.ts), but the #237 baseline
+    // union must still recognize it as pre-existing, not new.
+    expect(json.baselineStatus).toBe("computed");
+    expect(
+      json.orphans.some((o: string) => o.includes("Sample.methodB") && o.includes("REQ-999")),
+    ).toBe(true);
+    expect(json.newIssues.orphans.some((o: string) => o.includes("Sample.methodB"))).toBe(false);
+
+    // The gate still fails overall — because of the genuinely new drift.
+    expect(exitCode).toBe(2);
+    expect(json.pass).toBe(false);
+  });
+});
