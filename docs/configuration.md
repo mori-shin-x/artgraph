@@ -241,6 +241,38 @@ shards (FR-010: output stays byte-identical to before the feature existed).
 > wrapper, wire the cleanup yourself via
 > `test.globalSetup: ["artgraph/vitest/config"]` or clean the trace dir in CI.
 
+### Trace capture engine: `instrument` (default) vs `cdp`
+
+`withTrace()` takes an optional second argument that selects how trace
+evidence is captured:
+
+```ts
+import { withTrace } from 'artgraph/vitest/config';
+export default defineConfig(withTrace({ test: { ... } }, { engine: 'instrument' }));
+```
+
+| Engine | What it does |
+| --- | --- |
+| `instrument` (default) | Build-time static instrumentation: a Vite plugin marks each project-source function's entry point at transform time, and the runner reads those marks per test. Per-test capture cost no longer depends on how many modules are loaded. |
+| `cdp` | The original per-test `Profiler.takePreciseCoverage` capture (inspector-based). Kept as a fallback. |
+
+The environment variable `ARTGRAPH_TRACE_ENGINE` (`instrument` \| `cdp`)
+overrides the `withTrace()` option and takes priority over it. An invalid
+value fails fast — at `withTrace()` call time for the option, at runner
+startup for the environment variable — rather than silently falling back to
+a default.
+
+Choose `cdp` when your source doesn't cleanly pass through vitest's
+transform pipeline for the instrumentation plugin to see — for example, a
+custom transformer positioned so the plugin can't run against the original
+source, or code generated dynamically at runtime. Both engines are
+differential-tested to produce equivalent shard output, so switching engines
+does not change `check` / `trace report` / `impact` results.
+
+See
+[specs/022-instrumented-trace-engine/contracts/config-surface.md](../specs/022-instrumented-trace-engine/contracts/config-surface.md)
+for the full `withTrace()` options contract.
+
 ### Exclusivity / silent / infrastructure
 
 `suggestedImpls` (and the `exercised` coverage status) only fire for symbols

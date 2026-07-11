@@ -1,6 +1,14 @@
 # lefthook は install 時に .git/hooks/ に stub を書き込むため、
 # postinstall スクリプトの実行を許可する必要がある。
+#
+# esbuild は CI の vitest-compat ジョブ (spec 022 T024) が vitest@^3 を
+# --no-lockfile で差し替え install する際にのみ依存ツリーへ入る (通常の
+# lockfile install には現れない)。esbuild のプラットフォームバイナリは
+# optional dependencies (@esbuild/linux-x64 等) で配布されるため postinstall
+# の実行は不要 — 明示的に deny することで未承認ビルド扱いの
+# [ERR_PNPM_IGNORED_BUILDS] (exit 1) を防ぐ。
 allowBuilds:
+  esbuild: false
   lefthook: true
 
 # pnpm 10.16+ ではこのファイルが pnpm 設定の正規ファイル。
