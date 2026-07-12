@@ -144,6 +144,16 @@ function reqExercises(
  * further `reqExercises` roll-down from the parent, which would reopen the
  * "sibling method corroborates via the class" hole this function exists to
  * avoid while staying narrow.
+ *
+ * JS additionally permits `static constructor() {}` — a static method
+ * literally named "constructor" — which spec 021 FR-003's same-name
+ * convergence resolves to the SAME `symbol:<path>#Class.constructor` node as
+ * the instance ctor, so a claim on that node is corroborated by
+ * instantiation evidence exactly as above; this is just FR-003's existing
+ * "a merged symbol's claim is corroborated by evidence from any of its
+ * occurrences" semantics, not a new case. TypeScript rejects the same code
+ * with TS1089 (`'static' modifier cannot appear on a constructor
+ * declaration`), so this path is unreachable there.
  */
 function ctorClassExercised(
   containerIndex: Map<string, string[]>,

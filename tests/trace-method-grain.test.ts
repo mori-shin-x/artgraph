@@ -552,3 +552,40 @@ describe("issue #255 (8): sharedThreshold interaction — 3 methods on one class
     expect(result.suggestedImpls).toEqual([]);
   });
 });
+
+describe("PR #271 meta-review META-D: hasDescendantClaim pin for a NON-ctor case", () => {
+  it("class-node evidence + a method's OWN claim on the SAME reqId -> suggestedImpls suppressed even though the method's claim is itself unexercised (hasDescendantClaim is claim-only, symmetric with hasAncestorClaim)", async () => {
+    const tmp = makeRepo({
+      "src/pump.ts": ["export class Pump {", "  // @impl " + "REQ-1", "  run() {}", "}", ""].join(
+        "\n",
+      ),
+    });
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[" + "REQ-1] instantiates pump",
+        testFile: "tests/req1.test.ts",
+        // No constructor at all here -- this is a plain class-name landing
+        // (e.g. instantiation), unrelated to the `.constructor`-suffixed
+        // mechanism in `ctorClassExercised`. It never touches `run` itself.
+        hits: [{ file: "src/pump.ts", fn: "Pump" }],
+      }),
+    ]);
+
+    const result = await report(tmp);
+    // `run`'s own claim is never corroborated -- its REQ-1 evidence never
+    // lands on `run` itself (only on the class).
+    expect(result.unexercisedClaims).toEqual([
+      { reqId: "REQ-1", node: "symbol:src/pump.ts#Pump.run" },
+    ]);
+    expect(result.corroborated).toEqual([]);
+    // The CLASS node is exclusively exercised by REQ-1 and carries no claim
+    // of its own, so absent suppression it would be a `suggestedImpls`
+    // candidate. But `run` (a descendant, via `contains`) already claims
+    // this SAME reqId -- `hasDescendantClaim` suppresses the suggestion
+    // regardless of whether that descendant claim is itself corroborated
+    // (mirrors `hasAncestorClaim`'s symmetric claims-only semantics; see
+    // `hasDescendantClaim`'s doc in src/trace/report.ts).
+    expect(result.suggestedImpls).toEqual([]);
+  });
+});
