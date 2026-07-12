@@ -24,12 +24,23 @@ function listAllTemplateFiles(): string[] {
   return out;
 }
 
+// `npm pack --dry-run --json`'s top-level shape changed between major npm
+// versions: npm <=11 prints an array (`[{ id, files, ... }]`), npm >=12
+// prints an object keyed by package name (`{ "artgraph": { id, files, ... } }`,
+// presumably to disambiguate multi-workspace packs). `publish.yml` runs
+// `npm install -g npm@latest` right before `prepublishOnly` (Trusted
+// Publishing's OIDC exchange needs npm >=11.5.1), so this suite is the
+// FIRST place in CI that ever exercises a non-bundled npm version — every
+// other job keeps whatever npm ships with the pinned Node version. Handle
+// both shapes rather than pinning to whichever one happens to be current.
 function getPackedFiles(): string[] {
   const raw = execSync("npm pack --dry-run --json", {
     cwd: REPO_ROOT,
     encoding: "utf8",
   });
-  return JSON.parse(raw)[0].files.map((f: { path: string }) => f.path);
+  const parsed: unknown = JSON.parse(raw);
+  const entry = Array.isArray(parsed) ? parsed[0] : Object.values(parsed as object)[0];
+  return (entry as { files: { path: string }[] }).files.map((f) => f.path);
 }
 
 describe("npm packaging", () => {
