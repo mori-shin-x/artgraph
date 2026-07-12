@@ -1150,3 +1150,81 @@ describe("plan-coverage symbol-mode E2E — `export *` chain entry (specs/018 T1
     expect(drift).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// build warnings surfaced (meta-review F2 — issue #265 follow-up gap)
+// ---------------------------------------------------------------------------
+//
+// `runPlanCoverage` used to discard `scan()`'s `BuildWarning[]` entirely
+// (`const { graph } = scan(...)`), so `artgraph plan-coverage` was the one
+// graph-building command issue #265's warning-wiring pass missed. Mirrors
+// the equivalent coverage for `artgraph impact` in
+// tests/impact-cli.test.ts's "build warnings surfaced (issue #265)" block —
+// same fixture shape (a string-literal export alias colliding with a class
+// member's synthesized symbol name), same two assertions (text → stderr,
+// json → payload).
+describe("plan-coverage E2E — build warnings surfaced (meta-review F2)", () => {
+  function makeCollisionFixture(): Fixture {
+    const fx = setupFixture();
+    // Switch the fixture's graph to symbol mode and add a colliding file —
+    // scan() warns about this regardless of what tasks.md's `Files:` list
+    // references, since the warning comes from building the whole graph.
+    writeFileSync(
+      join(fx.root, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        testPatterns: ["tests/**/*.test.ts"],
+        lockFile: ".trace.lock",
+        mode: "symbol",
+      }),
+    );
+    mkdirSync(join(fx.root, "src/other"), { recursive: true });
+    writeFileSync(
+      join(fx.root, "src/other/collision.ts"),
+      [
+        "function helper(): void {}",
+        'export { helper as "Sample.methodA" };',
+        "",
+        "export class Sample {",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    return fx;
+  }
+
+  it("text mode: prints the class-member-collision warning to stderr", async () => {
+    const fx = makeCollisionFixture();
+    try {
+      const { stderr, exitCode } = await runCli(["plan-coverage", "--spec", fx.specDirAbsolute], {
+        cwd: fx.root,
+      });
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain("WARNING:");
+      expect(stderr).toContain("collides with an existing export");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("--format json: embeds warnings[] in the payload and does not also print to stderr", async () => {
+    const fx = makeCollisionFixture();
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        ["plan-coverage", "--spec", fx.specDirAbsolute, "--format", "json"],
+        { cwd: fx.root },
+      );
+      expect(exitCode).toBe(0);
+      const json = JSON.parse(stdout);
+      expect(json.warnings.some((w: { type: string }) => w.type === "class-member-collision")).toBe(
+        true,
+      );
+      // scan/init/check convention: json mode doesn't ALSO print to stderr.
+      expect(stderr).not.toContain("WARNING:");
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+});

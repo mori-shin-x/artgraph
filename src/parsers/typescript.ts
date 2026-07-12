@@ -168,15 +168,52 @@ export function createTSParser(
   };
 }
 
+// issue #266 — every pattern used to be blindly run through `resolve(rootDir,
+// p)`, which mangles fast-glob's `!`-prefixed negative-pattern convention
+// (e.g. `"!src/generated/**"` becomes the absolute path
+// `<rootDir>/!src/generated/**`, which is not a negation — the `!` is no
+// longer at position 0 of the string — so fast-glob just fails to match that
+// bogus path and the exclusion silently does nothing). Recognize the leading
+// `!` BEFORE resolving, strip it, resolve the remainder exactly like a
+// positive pattern, and route the result through fast-glob's dedicated
+// `ignore` option instead of leaving it in the main pattern list. Shared by
+// `globCodeFiles` and `enumerateFiles` below so the two independent
+// file-enumeration paths (used respectively by `buildGraph`'s incremental
+// parse-cache path and by `createTSParser`'s direct parse — see
+// `src/trace/symbol-table.ts`'s `buildSymbolNameTable`, which calls both and
+// depends on them agreeing) never disagree on which files a negative pattern
+// excludes.
+function splitIncludePatterns(
+  rootDir: string,
+  patterns: string[],
+): { include: string[]; ignore: string[] } {
+  const include: string[] = [];
+  const ignore: string[] = [];
+  for (const p of patterns) {
+    const negated = p.startsWith("!");
+    const resolved = resolve(rootDir, negated ? p.slice(1) : p).replace(/\\/g, "/");
+    (negated ? ignore : include).push(resolved);
+  }
+  return { include, ignore };
+}
+
 // Resolve the code-file set for `patterns` in one fast-glob call (cwd =
 // process.cwd(), absolute results). The parse-cache path discovers the file
 // set through this helper so warm runs see byte-for-byte the same set a full
 // createTSParser scan enumerates, without loading the parser.
+//
+// issue #266 — an include list made up ENTIRELY of negative patterns (or an
+// empty list) has no positive pattern to match anything against, so it
+// degenerates to zero files rather than an error — the natural reading of
+// "exclude everything, include nothing". fast-glob@3.3.3's `sync([])` already
+// returns `[]` on its own (it's an empty *string* pattern, e.g. `sync([""])`,
+// that throws) — this early return isn't working around a throw, it's just
+// making the "nothing to match" intent explicit rather than leaning on
+// fast-glob's incidental empty-array behavior.
 export function globCodeFiles(rootDir: string, patterns: string[]): string[] {
-  return fastGlob.sync(
-    patterns.map((p) => resolve(rootDir, p).replace(/\\/g, "/")),
-    { cwd: resolve(), absolute: true },
-  );
+  const { include, ignore } = splitIncludePatterns(rootDir, patterns);
+  if (include.length === 0) return [];
+  return fastGlob.sync(include, { cwd: resolve(), absolute: true, ignore });
 }
 
 // Parse exactly the given files (used by the parse-cache path to reparse only
@@ -202,13 +239,23 @@ export function parseTSFilePaths(
 // backend's project.getSourceFiles() iterated. Preserving that order keeps
 // node/edge output — and therefore `.trace.lock` bytes — stable across the
 // backend swap.
+//
+// issue #266 — negative (`!`-prefixed) patterns are split out via
+// `splitIncludePatterns` and applied as a shared `ignore` list across every
+// remaining positive pattern's glob call, mirroring `globCodeFiles` so this
+// function (used by `createTSParser`, in turn used by
+// `buildSymbolNameTable`) never disagrees with it on which files a negative
+// pattern excludes. An include list with no positive pattern degenerates to
+// zero files, same as `globCodeFiles`.
 function enumerateFiles(rootDir: string, patterns: string[]): string[] {
   const seen = new Set<string>();
   const files: string[] = [];
-  for (const pattern of patterns) {
-    const matches = fastGlob.sync(resolve(rootDir, pattern).replace(/\\/g, "/"), {
+  const { include, ignore } = splitIncludePatterns(rootDir, patterns);
+  for (const pattern of include) {
+    const matches = fastGlob.sync(pattern, {
       cwd: resolve(),
       absolute: true,
+      ignore,
     });
     for (const filePath of matches) {
       if (!seen.has(filePath)) {

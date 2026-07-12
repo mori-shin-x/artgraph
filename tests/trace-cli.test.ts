@@ -354,3 +354,53 @@ describe("CLI: trace report is read-only (Phase A contract)", () => {
     expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);
   });
 });
+
+// issue #265 — `trace status` / `trace report` used to discard
+// `buildGraph()`'s `BuildWarning[]` (`const { graph } = scan(...)` in
+// `loadTraceInputs`), so a `class-member-collision` warning was invisible
+// via either subcommand. Fixture triggers the collision with no `@impl`
+// tags (see tests/typescript.test.ts's T020 fixture), so it needs no REQ
+// coverage and carries zero orphan risk for artgraph's own dogfood scan.
+describe("artgraph trace status/report — build warnings surfaced (issue #265)", () => {
+  function collisionFiles(): Record<string, string> {
+    return {
+      "src/collision.ts": [
+        "function helper(): void {}",
+        'export { helper as "Sample.methodA" };',
+        "",
+        "export class Sample {",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+      "specs/spec.md": "# Spec\n\n- REQ-001: unrelated requirement\n",
+    };
+  }
+
+  it("`trace status` text mode prints the class-member-collision warning to stderr", async () => {
+    const tmp = makeRepo(collisionFiles());
+    const { stderr, exitCode } = await runAt(tmp, ["trace", "status"]);
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain("WARNING:");
+    expect(stderr).toContain("collides with an existing export");
+  });
+
+  it("`trace status --format json` embeds warnings[] and stays quiet on stderr", async () => {
+    const tmp = makeRepo(collisionFiles());
+    const { stdout, stderr, exitCode } = await runAt(tmp, ["trace", "status", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.warnings.some((w: { type: string }) => w.type === "class-member-collision")).toBe(
+      true,
+    );
+    expect(stderr).not.toContain("WARNING:");
+  });
+
+  it("`trace report` text mode also prints the warning (requires at least one shard)", async () => {
+    const tmp = makeRepo(collisionFiles());
+    writeShard(tmp, "w1.jsonl", [metaLine()]);
+    const { stderr, exitCode } = await runAt(tmp, ["trace", "report"]);
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain("collides with an existing export");
+  });
+});

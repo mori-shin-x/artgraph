@@ -2,10 +2,15 @@
 // verbatim from `src/cli.ts` (issue #162) — no behavior change.
 
 import type { RenameResult } from "../../rename-executor.js";
+import { printWarnings } from "./warnings.js";
 
 export function printRenameText(result: RenameResult) {
   if (result.changes.length === 0 && result.lockChanges.length === 0) {
     console.log("No references found.");
+    // issue #265 — build warnings (pathological-bracket-nesting,
+    // class-member-collision, …) matter regardless of whether this
+    // particular rename found any references to rewrite.
+    printWarnings(result.buildWarnings);
     return;
   }
 
@@ -38,6 +43,9 @@ export function printRenameText(result: RenameResult) {
   if (!result.applied) {
     console.log("(dry-run: no files were modified)");
   }
+
+  // issue #265 — see the note in printRenameText's early-return branch above.
+  printWarnings(result.buildWarnings);
 }
 
 export function printRenameJson(result: RenameResult) {

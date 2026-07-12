@@ -592,8 +592,24 @@ export interface PlanCoverageConfig {
 export type PackageManager = "npm" | "pnpm" | "bun" | "deno";
 
 export interface ArtgraphConfig {
+  /**
+   * fast-glob patterns for source files, resolved relative to the repo root.
+   * A leading `!` marks a pattern as an exclusion (issue #266) — see
+   * `globCodeFiles` in `src/parsers/typescript.ts`.
+   */
   include: string[];
   specDirs: string[];
+  /**
+   * fast-glob patterns for test files, resolved relative to the repo root.
+   * A leading `!` exclusion is mechanically supported here too, but prefer
+   * putting exclusions in `include` instead: trace evaluation
+   * (`buildSymbolNameTable`) resolves symbol names against `include` only,
+   * never `testPatterns`, so a `testPatterns`-only negative pattern narrows
+   * the scanned/graph file set without narrowing what trace evaluation sees
+   * — the two can disagree and surface a suggested `@impl` / drift
+   * candidate for a symbol that isn't actually a graph node (issue #275).
+   * See docs/configuration.md's `include` / `testPatterns` section.
+   */
   testPatterns: string[];
   lockFile: string;
   /**

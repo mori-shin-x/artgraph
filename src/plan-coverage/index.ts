@@ -46,6 +46,7 @@ import { readLock } from "../lock.js";
 import { entryOriginIds, impact, resolveStartIds, resolveOriginReqs } from "../graph/traverse.js";
 import { extractFiles, type TaskBlock } from "../parsers/sdd-files.js";
 import type { SymbolEntry } from "../types.js";
+import type { BuildWarning } from "../graph/builder.js";
 import { detectMentions } from "./mention.js";
 
 export interface PlanCoverageOptions {
@@ -157,6 +158,14 @@ export interface PlanCoverageRunResult {
   json: PlanCoverageResult;
   exitCode: 0 | 1;
   text: string;
+  // review F2 (issue #265's own follow-up gap) — `buildGraph()`'s warnings
+  // (pathological-bracket-nesting, class-member-collision, …) used to be
+  // discarded here (`const { graph } = scan(...)`), so `artgraph
+  // plan-coverage` was the one graph-building command #265 missed wiring up.
+  // Threaded through exactly like `impact`/`trace`/`check`: the CLI layer
+  // folds this into the JSON payload for `--format json` and prints it via
+  // `reportGraphWarnings` for text.
+  warnings: BuildWarning[];
 }
 
 // ---------------------------------------------------------------------------
@@ -432,7 +441,7 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
 
   // Load graph + lock once.
   const config = loadConfig(repoRoot);
-  const { graph } = scan(repoRoot, config);
+  const { graph, warnings } = scan(repoRoot, config);
   const lock = readLock(repoRoot, config.lockFile);
 
   // Read source texts. tasks.md is the spine; plan.md / spec.md are
@@ -457,6 +466,7 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
         taskCount: 0,
         tasksWithFilesSection: 0,
       }),
+      warnings,
     };
   }
 
@@ -555,6 +565,7 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
       json: result,
       exitCode: gate && diagnostics.length > 0 ? 1 : 0,
       text: formatText(result, ignore, { requireFilesSection, ...textCounts }),
+      warnings,
     };
   }
 
@@ -642,5 +653,5 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
 
   const text =
     format === "text" ? formatText(json, ignore, { requireFilesSection, ...textCounts }) : "";
-  return { json, exitCode, text };
+  return { json, exitCode, text, warnings };
 }

@@ -19,6 +19,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { runAt, FIXTURE_DIR } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -873,5 +874,114 @@ describe("CLI: impact — issue #215 minimal repro (spec 019 contains direction,
     const result = JSON.parse(stdout);
     expect(result.impactReqs).toEqual(expect.arrayContaining(["REQ-901", "REQ-902"]));
     expect(result.affectedFiles).toContain("src/other.ts");
+  });
+});
+
+// issue #265 — `artgraph impact` used to discard `buildGraph()`'s
+// `BuildWarning[]` entirely (`const { graph } = scan(...)`), so a
+// `class-member-collision` warning (or any other build warning) was
+// invisible via this command. Fixture below triggers a collision with no
+// `@impl` tags at all (a string-literal export alias colliding with a class
+// member's synthesized symbol name — see tests/typescript.test.ts's T020
+// fixture), so it needs no REQ coverage and carries zero orphan risk for
+// artgraph's own dogfood scan.
+describe("artgraph impact — build warnings surfaced (issue #265)", () => {
+  function makeCollisionRepo(): string {
+    const dir = mkdtempSync(join(tmpdir(), "artgraph-impact-265-"));
+    writeFileSync(
+      join(dir, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        mode: "symbol",
+      }),
+    );
+    mkdirSync(join(dir, "specs"), { recursive: true });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "specs", "spec.md"), "# Spec\n\n- REQ-001: unrelated requirement\n");
+    writeFileSync(
+      join(dir, "src", "collision.ts"),
+      [
+        "function helper(): void {}",
+        'export { helper as "Sample.methodA" };',
+        "",
+        "export class Sample {",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    return dir;
+  }
+
+  it("text mode: prints the class-member-collision warning to stderr", async () => {
+    const root = makeCollisionRepo();
+    try {
+      const { stderr, exitCode } = await runAt(root, ["impact", "src/collision.ts"]);
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain("WARNING:");
+      expect(stderr).toContain("collides with an existing export");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("--format json: embeds warnings[] in the JSON payload and does not also print to stderr", async () => {
+    const root = makeCollisionRepo();
+    try {
+      const { stdout, stderr, exitCode } = await runAt(root, [
+        "impact",
+        "src/collision.ts",
+        "--format",
+        "json",
+      ]);
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(stdout);
+      expect(
+        result.warnings.some((w: { type: string }) => w.type === "class-member-collision"),
+      ).toBe(true);
+      // scan/init/check convention: json mode doesn't ALSO print to stderr.
+      expect(stderr).not.toContain("WARNING:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // meta-review F1 — early-exit paths that fire AFTER `scan()` but BEFORE any
+  // output (JSON or text) used to swallow `warnings` entirely: the command
+  // exits via `process.exit(1)` (or, for `--diff` with no changes, an early
+  // `process.exit(0)`) without ever reaching the bottom-of-action
+  // `reportGraphWarnings` call. Two representative early-exit paths below.
+  it('"No matching nodes found" error exit still prints the WARNING to stderr', async () => {
+    const root = makeCollisionRepo();
+    try {
+      const { stderr, exitCode } = await runAt(root, ["impact", "src/does/not/exist.ts"]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("No matching nodes found");
+      expect(stderr).toContain("WARNING:");
+      expect(stderr).toContain("collides with an existing export");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("`--diff` with no changes (text) still prints the WARNING to stderr", async () => {
+    const root = makeCollisionRepo();
+    execFileSync("git", ["init"], { cwd: root, stdio: "pipe" });
+    execFileSync("git", ["add", "-A"], { cwd: root, stdio: "pipe" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=test", "-c", "user.email=test@test.com", "commit", "-m", "init"],
+      { cwd: root, stdio: "pipe" },
+    );
+    try {
+      const { stdout, stderr, exitCode } = await runAt(root, ["impact", "--diff"]);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("No changes detected in git diff.");
+      expect(stderr).toContain("WARNING:");
+      expect(stderr).toContain("collides with an existing export");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import type { SymbolEntry } from "../types.js";
-import { pathsToEntries, TRACE_NO_SHARDS_GUIDANCE } from "./shared.js";
+import { pathsToEntries, reportGraphWarnings, TRACE_NO_SHARDS_GUIDANCE } from "./shared.js";
 import { printImpactText } from "./presenters/impact.js";
 
 // spec 014 (FR-001 / FR-003): REQ-ID inputs are no longer accepted here.
@@ -121,7 +121,13 @@ export function registerImpactCommand(program: Command): void {
         process.exit(1);
       }
 
-      const { graph } = scan(rootDir, config);
+      // issue #265 — `warnings` used to be discarded here, so a
+      // `pathological-bracket-nesting` / `class-member-collision` build
+      // warning was invisible via `artgraph impact`. Threaded through to the
+      // `--diff` "no changes" early-exit JSON payload below (mirrors
+      // `check --diff`'s equivalent branch) and to the final output at the
+      // bottom of this action.
+      const { graph, warnings } = scan(rootDir, config);
       const lock = readLock(rootDir, config.lockFile);
 
       // spec 020 (FR-017) — load evidence once, resolve the staleness
@@ -167,11 +173,17 @@ export function registerImpactCommand(program: Command): void {
                 drifted: [],
                 originReqs: [],
                 summary: { docs: 0, reqs: 0, files: 0, tasks: 0 },
+                warnings,
                 message: "No changes detected in git diff.",
               }),
             );
           } else {
             console.log("No changes detected in git diff.");
+            // review F1 — the json branch above already folds `warnings` into
+            // the payload; this text branch was the asymmetric gap (PR
+            // discussion said "and to the final output" but only actually
+            // wired the json side here).
+            reportGraphWarnings(warnings, opts.format);
           }
           process.exit(0);
         }
@@ -208,6 +220,11 @@ export function registerImpactCommand(program: Command): void {
               "       to enable symbol-mode lookup.",
             ].join("\n"),
           );
+          // review F1 — this hard error exits before any JSON payload is ever
+          // produced, so warnings would otherwise be silently lost regardless
+          // of `--format`. Print unconditionally (no `format` arg) rather
+          // than gating on `opts.format`.
+          reportGraphWarnings(warnings);
           process.exit(1);
         }
       }
@@ -255,11 +272,16 @@ export function registerImpactCommand(program: Command): void {
             `        or verify that \`mode: "symbol"\` is set in \`.artgraph.json\` and re-scan.`,
           );
         }
+        // review F1 — same rationale as the scan-mode-mismatch exit above:
+        // no JSON payload is produced on this path, so print unconditionally.
+        reportGraphWarnings(warnings);
         process.exit(1);
       }
 
       if (startIds.length === 0) {
         console.error(`No matching nodes found for: ${inputDisplayLabels.join(", ")}`);
+        // review F1 — ditto: hard error, no JSON payload produced.
+        reportGraphWarnings(warnings);
         process.exit(1);
       }
 
@@ -357,9 +379,10 @@ export function registerImpactCommand(program: Command): void {
       }
 
       if (opts.format === "json") {
-        console.log(JSON.stringify(result));
+        console.log(JSON.stringify({ ...result, warnings }));
       } else {
         printImpactText(result);
+        reportGraphWarnings(warnings, opts.format);
       }
     });
 }

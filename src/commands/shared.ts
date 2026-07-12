@@ -6,6 +6,8 @@
 import type { ArtgraphConfig, SymbolEntry, TestResultMap } from "../types.js";
 import { parseAgentsList, AgentsParseError } from "../agents/parse-agents.js";
 import { AGENT_IDS, type AgentId } from "../agents/descriptors.js";
+import type { BuildWarning } from "../graph/builder.js";
+import { printWarnings } from "./presenters/warnings.js";
 
 // spec 016 (R-003) — direct CLI / --diff inputs come in as raw
 // strings (file paths or `path:symbol` declarations). lift each into the
@@ -82,6 +84,28 @@ export function parseAgentsFlag(raw: string): AgentId[] {
     }
     throw e;
   }
+}
+
+// issue #265 — `scan`/`init`/`check` were the only commands wiring
+// `printWarnings` to their `buildGraph()`-derived `BuildWarning[]`;
+// `impact`/`trace`/`reconcile`/`rename` all build the same graph (directly
+// or via `scan()`/`rename-executor.ts`) but silently discarded its warnings
+// — a `pathological-bracket-nesting` or `class-member-collision` warning
+// was invisible through any of those four commands. This helper centralizes
+// the "when do we print" policy so a FUTURE command that builds the graph
+// only has to call it, rather than re-deriving the format-aware rule itself
+// (or forgetting to).
+//
+// Mirrors the scan/init/check convention exactly: text mode prints via
+// `printWarnings` (stderr only, never stdout — see warnings.ts). In
+// `--format json` mode this is a no-op: JSON-emitting commands fold
+// `warnings` into their own structured payload instead (as scan/init/check
+// already do), so the same information is never shown twice. Commands with
+// no `--format json` mode at all (e.g. `reconcile`) simply call this with
+// `format` left `undefined`, which also prints.
+export function reportGraphWarnings(warnings: BuildWarning[], format?: string): void {
+  if (format === "json") return;
+  printWarnings(warnings);
 }
 
 // spec 020 (contracts/cli-surface.md §2 / §5, FR-018) — verbatim error UX

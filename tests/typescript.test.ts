@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { createTSParser, hash } from "../src/parsers/typescript.js";
+import { createTSParser, globCodeFiles, hash } from "../src/parsers/typescript.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
 
@@ -1690,5 +1690,75 @@ describe("createTSParser (symbol mode — same-line multi-member trailing tag pi
       .parse()
       .edges.filter((e) => e.kind === "implements" && e.target === "REQ-1080");
     expect(again).toEqual(implEdges);
+  });
+});
+
+// issue #266 — `globCodeFiles` used to `resolve(rootDir, p)` EVERY pattern,
+// including fast-glob-convention negative patterns (`"!src/generated/**"`),
+// which mangled the leading `!` into the middle of an absolute path and
+// silently matched nothing — the exclusion had no effect. Fixture below has
+// three code files under different subdirectories so a positive-only run
+// (regression case) picks up all of them, and each negative-pattern case can
+// assert a specific subset is excluded.
+describe("globCodeFiles (issue #266 — negative glob patterns)", () => {
+  let root: string;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-t266-"));
+    const write = (relPath: string): void => {
+      const abs = join(root, relPath);
+      mkdirSync(dirname(abs), { recursive: true });
+      writeFileSync(abs, "export const x = 1;\n");
+    };
+    write("src/keep.ts");
+    write("src/generated/gen.ts");
+    write("src/other/skip.ts");
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const relFiles = (files: string[]): string[] => files.map((f) => f.slice(root.length + 1)).sort();
+
+  it("regression: a plain (no `!`) pattern list matches every file, unchanged", () => {
+    const files = globCodeFiles(root, ["src/**/*.ts"]);
+    expect(relFiles(files)).toEqual(["src/generated/gen.ts", "src/keep.ts", "src/other/skip.ts"]);
+  });
+
+  it("mixed positive/negative: a leading `!` pattern excludes its matches", () => {
+    const files = globCodeFiles(root, ["src/**/*.ts", "!src/generated/**"]);
+    expect(relFiles(files)).toEqual(["src/keep.ts", "src/other/skip.ts"]);
+  });
+
+  it("multiple negative patterns compose (all excluded subsets are dropped)", () => {
+    const files = globCodeFiles(root, ["src/**/*.ts", "!src/generated/**", "!src/other/**"]);
+    expect(relFiles(files)).toEqual(["src/keep.ts"]);
+  });
+
+  it("negative-only pattern list matches zero files (natural degenerate case)", () => {
+    const files = globCodeFiles(root, ["!src/**/*.ts"]);
+    expect(files).toEqual([]);
+  });
+
+  it("empty pattern list matches zero files", () => {
+    expect(globCodeFiles(root, [])).toEqual([]);
+  });
+
+  // Consistency check (buildSymbolNameTable's own invariant, spec 020):
+  // `createTSParser`'s internal file enumeration (`enumerateFiles`) must
+  // agree with `globCodeFiles` on which files a negative pattern excludes —
+  // they used to be two independent glob call sites and only `globCodeFiles`
+  // is directly under test above.
+  it("createTSParser (via enumerateFiles) excludes the same files as globCodeFiles", () => {
+    const patterns = ["src/**/*.ts", "!src/generated/**"];
+    const globbed = relFiles(globCodeFiles(root, patterns));
+    const parsed = createTSParser(root, patterns).parse();
+    const parsedFiles = parsed.nodes
+      .filter((n) => n.kind === "file" || n.kind === "test")
+      .map((n) => n.filePath)
+      .sort();
+    expect(parsedFiles).toEqual(globbed);
+    expect(parsedFiles).toEqual(["src/keep.ts", "src/other/skip.ts"]);
   });
 });

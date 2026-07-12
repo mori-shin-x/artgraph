@@ -6,6 +6,29 @@ README's end-to-end example. This page documents the blocks users typically
 touch: `reqPatterns`, `ignoreIdPrefixes`, `docGraph`, `taskConventions`, and
 how edge provenance is surfaced.
 
+## `include` / `testPatterns` — code and test file globs
+
+Both are lists of [fast-glob](https://github.com/mrmlnc/fast-glob) patterns
+resolved relative to the repo root (defaults: `include: ["src/**/*.ts",
+"src/**/*.tsx"]`). A leading `!` marks a pattern as an exclusion (e.g.
+`"!src/generated/**"`), matching fast-glob's own negative-pattern
+convention; excluded files are dropped from both scanning and `artgraph
+rename`'s rewrite scope. A list made up entirely of exclusions matches zero
+files.
+
+**Put exclusions in `include`, not `testPatterns`.** A negative pattern on
+`testPatterns` narrows the scanned file set the same way it does on
+`include`, so it lines up with the graph — but trace evaluation
+(`buildSymbolNameTable`) only ever consults `include` when it resolves
+symbol names, never `testPatterns`. A negative pattern that only lives in
+`testPatterns` therefore drifts from what trace evaluation sees, and can
+surface a suggested `@impl` / drift candidate that points at a symbol with
+no corresponding node in the graph. See issue #275.
+
+Degenerate patterns behave as inert rather than as errors: a doubled
+negation (`"!!foo/**"`), a bare `"!"`, and an empty string (`""`) are all
+accepted without complaint and simply do not produce a working exclusion.
+
 ## `reqPatterns` — requirement ID grammar
 
 By default artgraph recognizes `REQ-001`, `auth/FR-2`, and `Requirement-3`.
