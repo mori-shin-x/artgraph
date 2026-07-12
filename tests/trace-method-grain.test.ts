@@ -15,6 +15,14 @@
 // + hand-written shard JSONL, `mode: "symbol"`, driven end-to-end through the
 // real `trace report` CLI command so the real graph — including spec 021's
 // class -> method `contains` edges — is what `classifyEvidence` sees).
+//
+// issue #267 (below, "issue #267 (1..3)") adds the ctor-specific follow-up:
+// a constructor claim (`symbol:<path>#Class.constructor`) whose evidence the
+// capture engine records under the CLASS's own V8-compatible name, landing
+// one containment level ABOVE the claim — the mirror image of #255's
+// class-claim / method-evidence case, needing its own narrow, ctor-only
+// PARENT-ward check (`src/trace/report.ts`'s `ctorClassExercised`) plus a
+// matching `suggestedImpls` noise suppression (`hasDescendantClaim`).
 import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -384,6 +392,111 @@ describe("issue #255 (7): get/set same-name pin (PR #242 FR-003 convergence)", (
       ...result.suggestedImpls.map((p: { node: string }) => p.node),
     ];
     expect(allNodes).not.toContain("file:src/toggle.ts");
+  });
+});
+
+describe("issue #267 (1): ctor claim + instantiation evidence (recorded under the class name) -> corroborated at the ctor's OWN node", () => {
+  it("a `.constructor`-suffixed claim corroborates via the ctor-only parent-ward check, and the class gets no redundant suggestion", async () => {
+    const tmp = makeRepo({
+      "src/widget267.ts": [
+        "export class Widget267 {",
+        "  // @impl " + "REQ-1",
+        "  constructor() {}",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[" + "REQ-1] instantiates widget267",
+        testFile: "tests/req1.test.ts",
+        // The capture engine records a constructor call under the CLASS's
+        // own V8-compatible name (`src/vitest/plugin.ts`), never the literal
+        // string "constructor" — so this hit's `fn` is the class name.
+        hits: [{ file: "src/widget267.ts", fn: "Widget267" }],
+      }),
+    ]);
+
+    const result = await report(tmp);
+    expect(result.corroborated).toEqual([
+      { reqId: "REQ-1", node: "symbol:src/widget267.ts#Widget267.constructor" },
+    ]);
+    expect(result.unexercisedClaims).toEqual([]);
+    // Without F2's descendant-claim suppression, the class node (which DOES
+    // carry this exact instantiation evidence) would look like an
+    // unclaimed, exclusively-exercised node and spuriously suggest
+    // `@impl REQ-1` on the class too — redundant with the ctor's own claim.
+    const suggestedNodes = result.suggestedImpls.map((p: { node: string }) => p.node);
+    expect(suggestedNodes).not.toContain("symbol:src/widget267.ts#Widget267");
+    expect(result.suggestedImpls).toEqual([]);
+  });
+});
+
+describe("issue #267 (2): ctor claims REQ-1, instantiation evidence is REQ-2 only -> REQ-1 stays unexercised, REQ-2's class suggestion is NOT suppressed", () => {
+  it("ctor-only corroboration and descendant-claim suppression are both reqId-scoped, not blanket", async () => {
+    const tmp = makeRepo({
+      "src/gadget267.ts": [
+        "export class Gadget267 {",
+        "  // @impl " + "REQ-1",
+        "  constructor() {}",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[" + "REQ-2] instantiates gadget267 under a different requirement",
+        testFile: "tests/req2.test.ts",
+        hits: [{ file: "src/gadget267.ts", fn: "Gadget267" }],
+      }),
+    ]);
+
+    const result = await report(tmp);
+    // REQ-1's claim has no REQ-1 evidence anywhere (the only evidence here is
+    // REQ-2's) -> stays unexercised; the ctor-only parent-ward check must not
+    // corroborate across a DIFFERENT reqId.
+    expect(result.unexercisedClaims).toEqual([
+      { reqId: "REQ-1", node: "symbol:src/gadget267.ts#Gadget267.constructor" },
+    ]);
+    expect(result.corroborated).toEqual([]);
+    // The class is exclusively exercised by REQ-2, and the only existing
+    // claim (the ctor's) is for REQ-1, a DIFFERENT reqId -> descendant-claim
+    // suppression (reqId-scoped, like `hasAncestorClaim`) must NOT apply, so
+    // the REQ-2 suggestion on the class stands.
+    expect(result.suggestedImpls).toEqual([
+      { reqId: "REQ-2", node: "symbol:src/gadget267.ts#Gadget267" },
+    ]);
+  });
+});
+
+describe("issue #267 (3): class-level claim + ctor execution -> direct match corroborated (no regression)", () => {
+  it("a class-level claim already sits on the SAME node the ctor hit resolves to, so this needs no new machinery", async () => {
+    const tmp = makeRepo({
+      "src/lamp267.ts": [
+        "// @impl " + "REQ-1",
+        "export class Lamp267 {",
+        "  constructor() {}",
+        "}",
+        "",
+      ].join("\n"),
+    });
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[" + "REQ-1] instantiates lamp267",
+        testFile: "tests/req1.test.ts",
+        hits: [{ file: "src/lamp267.ts", fn: "Lamp267" }],
+      }),
+    ]);
+
+    const result = await report(tmp);
+    expect(result.corroborated).toEqual([
+      { reqId: "REQ-1", node: "symbol:src/lamp267.ts#Lamp267" },
+    ]);
+    expect(result.unexercisedClaims).toEqual([]);
+    expect(result.suggestedImpls).toEqual([]);
   });
 });
 
