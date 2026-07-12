@@ -99,12 +99,31 @@ export function readLockWithMeta(rootDir: string, lockPath: string): ReadLockRes
   // a non-object top level would cause cryptic TypeErrors in rename / merge.
   validateLockSchema(parsed);
   const { _meta, ...entries } = parsed as { _meta?: unknown } & Record<string, unknown>;
-  const schemaVersion =
-    _meta &&
-    typeof _meta === "object" &&
-    typeof (_meta as { schemaVersion?: unknown }).schemaVersion === "number"
-      ? (_meta as { schemaVersion: number }).schemaVersion
-      : 0;
+  let schemaVersion = 0;
+  if (_meta !== undefined) {
+    const raw =
+      _meta && typeof _meta === "object" && !Array.isArray(_meta)
+        ? (_meta as { schemaVersion?: unknown }).schemaVersion
+        : undefined;
+    // F2/F3 (meta-review, issue #243 follow-up): `_meta` is present but its
+    // `schemaVersion` cannot be read as a non-negative integer — a string,
+    // an array, `null`, a bare `{}` with no `schemaVersion` field, a
+    // non-integer (1.5), or a negative number. Previously this fell through
+    // to legacy (0) with NO warning, indistinguishable from a genuine
+    // pre-#243 lock that never had a `_meta` key at all — silently hiding a
+    // corrupted or hand-edited stamp. This is a deliberate fail-open: warn
+    // once to stderr, then keep treating the lock as schema v0 (legacy)
+    // rather than blocking every read-only command on a malformed stamp.
+    if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0) {
+      schemaVersion = raw;
+    } else {
+      console.error(
+        `Warning: ${fullPath} has a malformed _meta.schemaVersion (${JSON.stringify(raw)}); ` +
+          `expected a non-negative integer. Treating this lock as schema v0 (legacy).`,
+      );
+      schemaVersion = 0;
+    }
+  }
   return { lock: entries as LockFile, schemaVersion };
 }
 
@@ -126,7 +145,19 @@ export function assertLockSchemaWritable(
   lockFile: string,
   force: boolean,
 ): void {
-  if (schemaVersion <= LOCK_SCHEMA_VERSION || force) return;
+  if (schemaVersion <= LOCK_SCHEMA_VERSION) return;
+  if (force) {
+    // F5 (meta-review) — `--force` on init/reconcile/rename means "downgrade
+    // the lock and accept the loss", not "silently pretend nothing
+    // happened". Without this, the exact PR #242 failure mode (newer
+    // fine-grained entries coarsened/overwritten with no trace) reappears
+    // for anyone who reaches for `--force` without realizing this guard is
+    // what it's overriding.
+    console.error(
+      `Downgrading lock schema v${schemaVersion} -> v${LOCK_SCHEMA_VERSION} (newer entries may be lost): ${lockFile}`,
+    );
+    return;
+  }
   throw new LockSchemaVersionError(
     `${lockFile} was written by a newer version of artgraph (lock schema v${schemaVersion}; ` +
       `this CLI only understands up to v${LOCK_SCHEMA_VERSION}). Rebuilding it with this CLI ` +
@@ -156,13 +187,35 @@ export function writeLock(rootDir: string, lockPath: string, lock: LockFile): vo
   const fullPath = resolve(rootDir, lockPath);
   assertWithinRoot(rootDir, fullPath);
   const tmpPath = resolve(dirname(fullPath), `.${basename(fullPath)}.tmp`);
-  // issue #243 — `_meta` is always stamped fresh on every write, first key
-  // (object spread preserves `lock`'s own key order after it). This is what
-  // makes rename/split/merge's "_meta survives a key-move" requirement a
-  // non-issue: `renameLockKey`/`splitLockKey`/`mergeLockKeys` operate on the
-  // entry-only `LockFile` (no `_meta` key ever reaches them, see `readLock`
-  // above), and the subsequent `reconcile()` → `writeLock()` re-stamps
-  // `_meta` unconditionally regardless of what keys moved.
+  // F1 (meta-review, issue #243 follow-up): `_meta` is the reserved top-level
+  // stamp key stamped below. If `lock` itself already carries a bare `_meta`
+  // entry — from a user-defined `reqPatterns` match, or a markdown
+  // frontmatter `artgraph: { node_id: _meta }` doc id accepted with no
+  // validation (see `src/parsers/markdown.ts`'s `docId`) — the object spread
+  // below would let that entry silently win over the stamp (a later
+  // duplicate key wins, and `lock`'s own `_meta` comes after the stamp
+  // literal in `{ _meta: stamp, ...lock }`). The file on disk would then have
+  // a `_meta` that is actually a `LockEntry`, not `{ schemaVersion }` — the
+  // next `readLockWithMeta` strips it out as "meta", making the real entry
+  // invisible and mis-reporting schemaVersion 0. Fail loudly instead of
+  // silently corrupting the lock; `src/graph/builder.ts` also warns on this
+  // exact-match collision at scan time, before it ever reaches a write.
+  if (Object.prototype.hasOwnProperty.call(lock, "_meta")) {
+    throw new Error(
+      `Refusing to write ${fullPath}: the entry map contains a reserved "_meta" key, which ` +
+        `would silently overwrite the lock schema stamp on write and make the entry invisible ` +
+        `on the next read. This can come from a req/task ID that is literally "_meta" (check a ` +
+        `custom reqPatterns match) or a markdown frontmatter "artgraph: { node_id: _meta }". ` +
+        `Rename the offending ID and re-run.`,
+    );
+  }
+  // issue #243 — `_meta` is stamped fresh on every write. The reader
+  // (`readLockWithMeta`) separates it from the entry map BY NAME (object
+  // destructuring), not by key position, so the key order here is cosmetic
+  // and never load-bearing: `renameLockKey`/`splitLockKey`/`mergeLockKeys`
+  // operate on the entry-only `LockFile` (no `_meta` key ever reaches them,
+  // see `readLock` above), and the subsequent `reconcile()` → `writeLock()`
+  // re-stamps `_meta` unconditionally regardless of what keys moved.
   const stamped = { _meta: { schemaVersion: LOCK_SCHEMA_VERSION }, ...lock };
   writeFileSync(tmpPath, JSON.stringify(stamped, null, 2) + "\n", "utf-8");
   renameSync(tmpPath, fullPath);

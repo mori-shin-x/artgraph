@@ -16,7 +16,7 @@ import {
 } from "./rename.js";
 import { renameLockKey, splitLockKey, mergeLockKeys } from "./rename-lock.js";
 import type { LockChange } from "./rename-lock.js";
-import { readLock, readLockWithMeta, assertLockSchemaWritable } from "./lock.js";
+import { readLockWithMeta, assertLockSchemaWritable, warnIfNewerLockSchema } from "./lock.js";
 import { scan, reconcile } from "./scan.js";
 import { loadConfig } from "./config.js";
 import { globCodeFiles } from "./parsers/typescript.js";
@@ -253,7 +253,9 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
   }
 
   // Project lock changes (also the source of truth for dry-run reporting).
-  const lockChanges = projectLockChanges(rootDir, config, (lock) => renameLockKey(lock, from, to));
+  const lockChanges = projectLockChanges(rootDir, config, dryRun, (lock) =>
+    renameLockKey(lock, from, to),
+  );
 
   // spec 020 T017 (FR-016) — trace shard REQ ID rewrite, separate from the
   // spec/code/test scan above: shards are not enumerated by
@@ -374,7 +376,7 @@ export function executeSplit(
     );
   }
 
-  const lockChanges = projectLockChanges(rootDir, config, (lock) =>
+  const lockChanges = projectLockChanges(rootDir, config, dryRun, (lock) =>
     splitLockKey(lock, splitId, intoIds),
   );
 
@@ -487,7 +489,7 @@ export function executeMerge(
     );
   }
 
-  const lockChanges = projectLockChanges(rootDir, config, (lock) =>
+  const lockChanges = projectLockChanges(rootDir, config, dryRun, (lock) =>
     mergeLockKeys(lock, mergeIds, intoId),
   );
 
@@ -676,14 +678,27 @@ function mergeMarkdown(
  * Compute the projected lock-key changes for reporting / dry-run. The actual
  * on-disk lock is rebuilt by reconcileAfterWrite, so this only needs the change
  * log, not the resulting lock.
+ *
+ * F4 (meta-review, issue #243 follow-up): reads via `readLockWithMeta` and
+ * warns on a newer-schema lock via `warnIfNewerLockSchema`, but ONLY when
+ * `dryRun` is true. `--dry-run` never calls `assertRenameLockWritable` (it's
+ * exempt from the write guard), so without this it silently produced a
+ * preview from a newer-schema lock while a real apply would warn/reject —
+ * the exact asymmetry the meta-review flagged. For a non-dry-run call,
+ * `assertRenameLockWritable` (invoked earlier in each `execute*` before this
+ * function ever runs) already emitted the equivalent notice — either it
+ * threw, or it printed the `--force` downgrade notice — so warning again
+ * here would just be a duplicate.
  */
 function projectLockChanges(
   rootDir: string,
   config: ArtgraphConfig,
+  dryRun: boolean,
   op: (lock: LockFile) => { changes: LockChange[] },
 ): LockChange[] {
   const lockFilePath = resolve(rootDir, config.lockFile);
   if (!existsSync(lockFilePath)) return [];
-  const lock = readLock(rootDir, config.lockFile);
+  const { lock, schemaVersion } = readLockWithMeta(rootDir, config.lockFile);
+  if (dryRun) warnIfNewerLockSchema(schemaVersion, config.lockFile);
   return op(lock).changes;
 }

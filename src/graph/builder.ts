@@ -224,6 +224,24 @@ export function buildGraph(
         // Kit's SC-NNN Success Criteria are outcome statements, not
         // implementation-trackable requirements).
         if (node.kind === "req" && isIgnoredId(node.id)) continue;
+        // F1 (meta-review, issue #243 follow-up) — `_meta` is the lock file's
+        // reserved top-level stamp key (see lock.ts's `writeLock` /
+        // `readLockWithMeta`). A node whose id is EXACTLY `_meta` — whether
+        // from a user-defined `reqPatterns` match (req/task) or a frontmatter
+        // `artgraph: { node_id: _meta }` (doc, checked here before the
+        // doc/nonReqNodes split below) — would overwrite the stamp on the
+        // next lock write and become invisible on the next read
+        // (`writeLock` now hard-fails on this instead of silently
+        // corrupting the lock, but warning here catches it at scan time,
+        // before a write is ever attempted).
+        if (node.id === "_meta") {
+          warnings.push({
+            type: "reserved-prefix",
+            id: node.id,
+            files: [node.filePath],
+            message: `${node.kind} ID "_meta" collides with the lock file's reserved _meta key; this entry would be lost when the lock is written. Rename it.`,
+          });
+        }
         if (node.kind === "req" || node.kind === "task") {
           // T028: reserved-prefix warning
           if (RESERVED_PREFIXES.some((p) => node.id.startsWith(p))) {

@@ -20,6 +20,7 @@ import {
   computeStageGates,
 } from "../src/init.js";
 import { DistributionError } from "../src/agents/distribute.js";
+import { LOCK_SCHEMA_VERSION } from "../src/lock.js";
 import { readSkillSource } from "../src/agents/source.js";
 import { AGENT_DESCRIPTORS } from "../src/agents/descriptors.js";
 
@@ -1168,5 +1169,88 @@ describe("runInit — agents field persistence (#158)", () => {
     writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify({ agents: ["claude"] }));
     runInit(tmp, { force: true, minimal: true, agents: ["claude"] });
     expect(readAgents()).toEqual(["claude"]);
+  });
+});
+
+// F7 (meta-review, issue #243 follow-up) — coverage gap: `init`'s initial
+// scan reconciles the lock via `reconcile(abs, config, scanResult.graph,
+// { force: options.force ?? false })` (src/init.ts), but nothing previously
+// exercised that `options.force` actually reaches `assertLockSchemaWritable`
+// through that path. Pre-seed a `.trace.lock` claiming a newer schema
+// version than this build understands and confirm `init` without `--force`
+// is rejected, while `init --force` proceeds and prints the downgrade notice.
+describe("runInit — --force propagates to the lock schema-version write guard (F7)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(tmp);
+  });
+
+  function seedFutureLock(): void {
+    writeFileSync(
+      join(tmp, ".trace.lock"),
+      JSON.stringify({ _meta: { schemaVersion: LOCK_SCHEMA_VERSION + 1 } }, null, 2) + "\n",
+    );
+  }
+
+  // Isolate just the config + scan + reconcile stage (skip Skills/integrate/
+  // hooks/agent-context, which are orthogonal to this guard and would need
+  // --agents wired up).
+  const isolatedStages = {
+    noSkills: true,
+    noIntegrate: true,
+    noHooks: true,
+    noAgentContext: true,
+  };
+
+  it("without --force: init's scan/reconcile stage rejects a newer-schema lock", () => {
+    mkdirSync(join(tmp, "src"));
+    writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
+    seedFutureLock();
+
+    expect(() => runInit(tmp, isolatedStages)).toThrow(/newer version of artgraph/i);
+    // Refused write: the lock on disk still claims the future version.
+    const raw = JSON.parse(readFileSync(join(tmp, ".trace.lock"), "utf-8"));
+    expect(raw._meta.schemaVersion).toBe(LOCK_SCHEMA_VERSION + 1);
+  });
+
+  it("with --force: init's scan/reconcile stage downgrades the lock and warns on stderr", () => {
+    mkdirSync(join(tmp, "src"));
+    writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
+    seedFutureLock();
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() => runInit(tmp, { ...isolatedStages, force: true })).not.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+    const raw = JSON.parse(readFileSync(join(tmp, ".trace.lock"), "utf-8"));
+    expect(raw._meta.schemaVersion).toBe(LOCK_SCHEMA_VERSION);
+  });
+
+  it("with --force: prints the downgrade notice to stderr", () => {
+    mkdirSync(join(tmp, "src"));
+    writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
+    seedFutureLock();
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      runInit(tmp, { ...isolatedStages, force: true });
+      const messages = spy.mock.calls.map((c) => String(c[0]));
+      expect(
+        messages.some((m) =>
+          new RegExp(
+            `Downgrading lock schema v${LOCK_SCHEMA_VERSION + 1} -> v${LOCK_SCHEMA_VERSION}`,
+          ).test(m),
+        ),
+      ).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

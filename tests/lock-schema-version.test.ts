@@ -112,6 +112,46 @@ describe("writeLock/readLock — _meta separation", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 1b. writeLock — reserved `_meta` entry key collision guard (F1)
+// ---------------------------------------------------------------------------
+
+describe("writeLock — `_meta` reserved-key collision guard (F1)", () => {
+  it("throws instead of silently letting a bare `_meta` entry overwrite the stamp", () => {
+    const dir = mkTmp("artgraph-lock-meta-collision-");
+    const lock: LockFile = {
+      // A real LockEntry masquerading under the reserved key — this is what
+      // a `reqPatterns` match on the literal id "_meta", or a frontmatter
+      // `node_id: _meta`, would produce via buildLockFromGraph.
+      // @ts-expect-error - deliberately malformed input under test
+      _meta: { contentHash: "x", lastReconciled: "now" },
+      "REQ-1": { contentHash: "y", lastReconciled: "now" },
+    };
+    expect(() => writeLock(dir, ".trace.lock", lock)).toThrow(/reserved "_meta" key/);
+  });
+
+  it('buildLockFromGraph on a graph with a node literally id "_meta" produces an entry map writeLock then rejects', () => {
+    const dir = mkTmp("artgraph-lock-meta-collision-");
+    const g = graph([node("_meta", "req"), node("REQ-1", "req")]);
+    const built = buildLockFromGraph(g);
+    expect(Object.prototype.hasOwnProperty.call(built, "_meta")).toBe(true);
+    expect(() => writeLock(dir, ".trace.lock", built)).toThrow(/reserved "_meta" key/);
+  });
+
+  it("reconcile() surfaces the same rejection end-to-end and does not touch the lock file", () => {
+    const dir = mkTmp("artgraph-lock-meta-collision-");
+    const config: ArtgraphConfig = {
+      include: [],
+      specDirs: [],
+      testPatterns: [],
+      lockFile: ".trace.lock",
+    };
+    expect(() => reconcile(dir, config, graph([node("_meta", "req")]))).toThrow(
+      /reserved "_meta" key/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 2. Legacy lock (no `_meta`) — treated as schemaVersion 0
 // ---------------------------------------------------------------------------
 
@@ -153,6 +193,68 @@ describe("legacy lock (no _meta key) — schemaVersion 0", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 2b. Malformed `_meta.schemaVersion` — warn + fall back to legacy (F2/F3)
+// ---------------------------------------------------------------------------
+
+describe("readLockWithMeta — malformed _meta.schemaVersion warns and falls back to v0 (F2/F3)", () => {
+  function writeRawMeta(dir: string, metaValue: unknown): void {
+    writeFileSync(
+      resolve(dir, ".trace.lock"),
+      JSON.stringify(
+        { _meta: metaValue, "REQ-1": { contentHash: "x", lastReconciled: "now" } },
+        null,
+        2,
+      ) + "\n",
+    );
+  }
+
+  const cases: Array<[label: string, metaValue: unknown]> = [
+    ["schemaVersion is a string", { schemaVersion: "1" }],
+    ["schemaVersion is an array", { schemaVersion: [1] }],
+    ["schemaVersion is null", { schemaVersion: null }],
+    ["_meta is an empty object (no schemaVersion field)", {}],
+    ["_meta is a bare string", "not-an-object"],
+    ["schemaVersion is a non-integer float", { schemaVersion: 1.5 }],
+    ["schemaVersion is negative", { schemaVersion: -1 }],
+  ];
+
+  it.each(cases)("warns to stderr and falls back to schemaVersion 0: %s", (_label, metaValue) => {
+    const dir = mkTmp("artgraph-lock-malformed-meta-");
+    writeRawMeta(dir, metaValue);
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { lock, schemaVersion } = readLockWithMeta(dir, ".trace.lock");
+    expect(schemaVersion).toBe(0);
+    expect(lock).toEqual({ "REQ-1": { contentHash: "x", lastReconciled: "now" } });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toMatch(/malformed _meta\.schemaVersion/);
+    spy.mockRestore();
+  });
+
+  it("does NOT warn when _meta.schemaVersion is a valid non-negative integer", () => {
+    const dir = mkTmp("artgraph-lock-malformed-meta-");
+    writeRawMeta(dir, { schemaVersion: 0 });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { schemaVersion } = readLockWithMeta(dir, ".trace.lock");
+    expect(schemaVersion).toBe(0);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("does NOT warn when there is no `_meta` key at all (genuine legacy lock)", () => {
+    const dir = mkTmp("artgraph-lock-malformed-meta-");
+    writeFileSync(
+      resolve(dir, ".trace.lock"),
+      JSON.stringify({ "REQ-1": { contentHash: "x", lastReconciled: "now" } }, null, 2) + "\n",
+    );
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { schemaVersion } = readLockWithMeta(dir, ".trace.lock");
+    expect(schemaVersion).toBe(0);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 3. assertLockSchemaWritable / warnIfNewerLockSchema (unit)
 // ---------------------------------------------------------------------------
 
@@ -172,6 +274,24 @@ describe("assertLockSchemaWritable", () => {
     expect(() =>
       assertLockSchemaWritable(LOCK_SCHEMA_VERSION + 1, ".trace.lock", true),
     ).not.toThrow();
+  });
+
+  it("F5: prints a downgrade notice to stderr when force overrides a newer schema", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    assertLockSchemaWritable(LOCK_SCHEMA_VERSION + 1, ".trace.lock", true);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0]).toMatch(
+      new RegExp(`Downgrading lock schema v${LOCK_SCHEMA_VERSION + 1} -> v${LOCK_SCHEMA_VERSION}`),
+    );
+    spy.mockRestore();
+  });
+
+  it("F5: does not print a downgrade notice when force is true but schema is not newer", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    assertLockSchemaWritable(LOCK_SCHEMA_VERSION, ".trace.lock", true);
+    assertLockSchemaWritable(0, ".trace.lock", true);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });
 
@@ -330,6 +450,18 @@ describe("CLI — reconcile rejects a newer-schema lock, --force overrides", () 
     const raw = JSON.parse(readFileSync(resolve(tmp, ".trace.lock"), "utf-8"));
     expect(raw._meta.schemaVersion).toBe(LOCK_SCHEMA_VERSION);
   });
+
+  // F5 (meta-review) — `--force` must not silently pass; it prints a
+  // downgrade notice so the user sees what they just overrode.
+  it("`artgraph reconcile --force` prints a downgrade notice to stderr", async () => {
+    const tmp = await prepareTempProject();
+    bumpLockToFutureVersion(tmp);
+    const result = await runAt(tmp, ["reconcile", "--force"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toMatch(
+      new RegExp(`Downgrading lock schema v${LOCK_SCHEMA_VERSION + 1} -> v${LOCK_SCHEMA_VERSION}`),
+    );
+  });
 });
 
 describe("CLI — rename rejects a newer-schema lock without mutating source files, --force overrides", () => {
@@ -358,6 +490,18 @@ describe("CLI — rename rejects a newer-schema lock without mutating source fil
     expect(raw["REQ-099"]).toBeDefined();
   });
 
+  // F5 (meta-review) — same downgrade notice as reconcile, since both funnel
+  // through `assertLockSchemaWritable`.
+  it("`artgraph rename --force` prints a downgrade notice to stderr", async () => {
+    const tmp = await prepareTempProject();
+    bumpLockToFutureVersion(tmp);
+    const result = await runAt(tmp, ["rename", "--from", "REQ-001", "--to", "REQ-099", "--force"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toMatch(
+      new RegExp(`Downgrading lock schema v${LOCK_SCHEMA_VERSION + 1} -> v${LOCK_SCHEMA_VERSION}`),
+    );
+  });
+
   it("`artgraph rename --dry-run` is exempt from the guard (never touches the lock)", async () => {
     const tmp = await prepareTempProject();
     bumpLockToFutureVersion(tmp);
@@ -372,6 +516,24 @@ describe("CLI — rename rejects a newer-schema lock without mutating source fil
     expect(result.exitCode).toBe(0);
     const raw = JSON.parse(readFileSync(resolve(tmp, ".trace.lock"), "utf-8"));
     expect(raw._meta.schemaVersion).toBe(LOCK_SCHEMA_VERSION + 1);
+  });
+
+  // F4 (meta-review) — dry-run previously produced a silent preview from a
+  // newer-schema lock while a real apply would warn/reject; it should now
+  // warn just like the read-only `check` path does.
+  it("`artgraph rename --dry-run` warns on stderr about the newer-schema lock", async () => {
+    const tmp = await prepareTempProject();
+    bumpLockToFutureVersion(tmp);
+    const result = await runAt(tmp, [
+      "rename",
+      "--from",
+      "REQ-001",
+      "--to",
+      "REQ-099",
+      "--dry-run",
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toMatch(/WARNING:.*newer version of artgraph/i);
   });
 });
 
