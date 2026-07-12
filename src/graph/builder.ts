@@ -371,6 +371,14 @@ export function buildGraph(
   // call the parser's own file enumeration is built on), so hit and miss
   // paths see the same files a full scan would. Only changed files are
   // handed to the oxc parser; a fully-warm run never loads it at all.
+  // Deliberate constraint: because oxc never loads on a fully-warm run, a
+  // broken environment (see `OxcLoadError`, issue #263's fail-fast) still
+  // succeeds as long as the cache stays valid — the output is just a memo of
+  // a parse that already ran successfully, so this is correct, not a bug.
+  // `OxcLoadError` only fires on the first cache miss that actually needs
+  // oxc. This is an intentional trade-off: it avoids paying the cost of an
+  // unconditional oxc dlopen probe on every command just to fail fast
+  // earlier.
   const codePatterns = [...config.include, ...config.testPatterns];
   const tsMode = config.mode ?? "file";
   const codeId = config.reqPatterns?.codeId;

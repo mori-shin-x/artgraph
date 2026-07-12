@@ -214,7 +214,7 @@ drift = 現在の hash ≠ lock の hash。
 | `artgraph init`                                                    | 設定・lock の雛形生成                                                                                 |
 | `artgraph scan`                                                    | 統合グラフ構築/更新（AST ＋ タグ ＋ frontmatter ＋ 実行トレース成果物 — spec 020）、キャッシュ更新                                     |
 | `artgraph impact <files\|--diff>`                                  | Plan 用: 変更から `{依存元 / 紐づく doc・仕様 / drift / 未カバー}` を出力(粒度は config の `mode` で選択) |
-| `artgraph check [--gate] [--diff]`                                 | 検証: drift（コード・doc 両方）/ orphan / 未カバー-vs-Plan / 未テスト。`--diff --gate` は変更が**新規に導入した**問題のみで exit 2（pre-existing 債務は baseline 差分でゲート対象外、spec 017 / issue #174）。baseline 構築不能時は exit 1 |
+| `artgraph check [--gate] [--diff]`                                 | 検証: drift（コード・doc 両方）/ orphan / 未カバー-vs-Plan / 未テスト。`--diff --gate` は変更が**新規に導入した**問題のみで exit 2（pre-existing 債務は baseline 差分でゲート対象外、spec 017 / issue #174）。baseline 構築不能時は exit 1。環境故障（例: oxc ネイティブバインディングのロード失敗 `OxcLoadError`）も「判定不能」として exit 1（非ブロック）— baseline 構築不能と同じファミリー。stderr に原因と対処法が出力される |
 | `artgraph rename --from … --to … / --split / --merge`              | ID ライフサイクル（req・doc のタグ一括書換 ＋ lock 更新）                                             |
 | `artgraph trace status\|report`                                   | 実行証拠: shard 診断 / `@impl` 宣言 × per-test カバレッジ証拠の突き合わせレポート（spec 020。graph/lock 非改変） |
 | `artgraph mcp-server`                                              | `impact` を MCP ツールとして公開（Plan 時にエージェントが呼ぶ）                                       |

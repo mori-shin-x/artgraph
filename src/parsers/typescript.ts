@@ -2101,6 +2101,14 @@ function isModuleFile(filePath: string, ctx: ResolverContext): boolean {
           ));
     }
   } catch {
+    // This catch-all could also swallow an `OxcLoadError`, but that is
+    // unreachable with the current data flow: `isModuleFile` is only called
+    // from `extractImports`, and `extractImports` only runs after that same
+    // file's `safeParseSync` has already succeeded (i.e. `loadOxc` is
+    // confirmed loaded) — and the negative cache never transitions
+    // success-to-failure within a process. If import resolution is ever
+    // parallelized or the parse order changes, this assumption can break;
+    // reconsider re-throwing `OxcLoadError` here in that case (see #263).
     result = false;
   }
   ctx.moduleCheckCache.set(filePath, result);
