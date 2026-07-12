@@ -53,11 +53,129 @@ function pairCompare(a: ClaimEvidencePair, b: ClaimEvidencePair): number {
  * file-grain fallback still counts as exercised at that same grain (FR-007
  * fail-safe symmetry: the claim and the evidence must be compared at
  * whatever grain the evidence actually landed at).
+ *
+ * spec 020 x spec 021 (issue #255) — `contains` ROLL-UP, claim-corroboration
+ * ONLY. When `node` itself isn't directly exercised, this also checks every
+ * node reachable from it via a `contains` edge (e.g. spec 021's class ->
+ * method edge, FR-006) and counts `node` as exercised if ANY of them is
+ * exercised for the SAME `reqId`. Rationale: a class-level `@impl` claim and
+ * a method-level trace hit are both real signal for the same requirement —
+ * `symbol-table.ts`'s Source 2 now resolves a method hit to the METHOD's own
+ * symbol id when one exists, so without this roll-up a class-level claim
+ * would go "unexercised" purely because the evidence lands one containment
+ * level below the claimed node, not because the requirement is actually
+ * unproven. Recursive with a cycle guard (`seen`) — today's only `contains`
+ * producer is one level deep (class -> method), but nothing here assumes
+ * that stays true. Forward-only, mirroring `graph/traverse.ts`'s `contains`
+ * BFS (spec 019 FR-001〜003) — a node never rolls UP into its container,
+ * only DOWN into what it contains.
+ *
+ * SCOPE: used ONLY inside `classifyEvidence`'s `implements`-edge loop below
+ * (claim corroboration: `corroborated` / `unexercisedClaims`). Do NOT reuse
+ * this for `suggestedImpls`, `infrastructure`, or `isExclusiveNode` — those
+ * intentionally read `trace.reqsByNode` / `perReq` directly, unrolled.
+ * Rolling evidence up through `contains` for THOSE would double-count a
+ * method's exercised evidence at its class and reintroduce the false
+ * suggestedImpls-on-class-node this fix closes (verified experimentally
+ * while designing this fix — a naive "resolve members to the class"
+ * approach broke corroboration; the inverse "roll up everywhere" approach
+ * broke exclusivity). PR #268 review F2 (issue #255 follow-up) later adds
+ * `hasAncestorClaim`, a SEPARATE `contains`-walking helper that DOES touch
+ * `suggestedImpls` — it is not a relaxation of this rule: it never reads
+ * evidence (`perReq`/`reqsByNode`) at all, only pre-existing `implements`
+ * claims, so it cannot reintroduce the double-counting this note warns
+ * against. See that function's doc, below `buildContainerIndex`.
  */
-function reqExercises(trace: IngestedTrace, reqId: string, node: string): boolean {
+function reqExercises(
+  containsIndex: Map<string, string[]>,
+  trace: IngestedTrace,
+  reqId: string,
+  node: string,
+  seen: Set<string> = new Set(),
+): boolean {
   const coverage = trace.perReq.get(reqId);
   if (!coverage) return false;
-  return coverage.symbols.includes(node) || coverage.files.includes(node);
+  if (coverage.symbols.includes(node) || coverage.files.includes(node)) return true;
+  if (seen.has(node)) return false;
+  seen.add(node);
+  for (const target of containsIndex.get(node) ?? []) {
+    if (reqExercises(containsIndex, trace, reqId, target, seen)) return true;
+  }
+  return false;
+}
+
+/**
+ * `contains` adjacency (source -> targets), built ONCE per `classifyEvidence`
+ * call so `reqExercises` doesn't rescan `graph.edges` per claim — that scan
+ * is O(claims x edges), quadratic-ish on repos where class-level `@impl` is
+ * the norm (measured: ~13s at 20k classes vs milliseconds with this index).
+ * Deliberately kind-blind beyond `contains`: today's producers (spec 021's
+ * class -> method, builder.ts's doc -> req|task) live in disjoint id
+ * namespaces so a symbol-node lookup can never reach a doc-sourced edge —
+ * revisit this assumption before adding any new `contains` producer whose
+ * source can be a `symbol:`/`file:` node.
+ */
+function buildContainsIndex(graph: ArtifactGraph): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (edge.kind !== "contains") continue;
+    const targets = index.get(edge.source);
+    if (targets) targets.push(edge.target);
+    else index.set(edge.source, [edge.target]);
+  }
+  return index;
+}
+
+/**
+ * `contains` adjacency inverted (target -> sources, i.e. a node's direct
+ * CONTAINERS) — the parent-ward mirror of `buildContainsIndex` above, built
+ * ONCE per `classifyEvidence` call for the same reason: `hasAncestorClaim`
+ * (below) walks upward per `suggestedImpls` candidate, and rescanning
+ * `graph.edges` per candidate would reintroduce the O(candidates x edges)
+ * cost `buildContainsIndex`'s doc already measured on the forward direction.
+ */
+function buildContainerIndex(graph: ArtifactGraph): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (edge.kind !== "contains") continue;
+    const sources = index.get(edge.target);
+    if (sources) sources.push(edge.source);
+    else index.set(edge.target, [edge.source]);
+  }
+  return index;
+}
+
+/**
+ * PR #268 review F2 (issue #255 follow-up) — a DIFFERENT mechanism from
+ * `reqExercises`'s evidence roll-up above, despite the superficial
+ * similarity (both walk `contains`, both cycle-guard with `seen`). This one
+ * never touches `trace.perReq`/`reqsByNode` at all: it asks "does any
+ * CONTAINER of `node`, at any depth, already carry an `@impl reqId` CLAIM?"
+ * purely from `claimsByNode` (the `implements`-edge map built in
+ * `classifyEvidence` below). Used ONLY to decide whether to hold back a
+ * `suggestedImpls` entry, never to affect `corroborated`/`unexercisedClaims`
+ * — `reqExercises`'s SCOPE note above still holds: evidence never rolls up
+ * into `suggestedImpls`. Rationale: in repos that tag `@impl` at class
+ * granularity, a class-level claim already answers "is REQ-X's code
+ * identified" for that REQ; once the class claims REQ-X, member-level
+ * suggestions to ALSO tag REQ-X are noise, not signal — but a claim on
+ * REQ-X's ancestor says nothing about a DIFFERENT REQ-Y the same member is
+ * exclusively exercised for, so this only suppresses a same-`reqId` match.
+ */
+function hasAncestorClaim(
+  containerIndex: Map<string, string[]>,
+  claimsByNode: Map<string, Set<string>>,
+  reqId: string,
+  node: string,
+  seen: Set<string> = new Set(),
+): boolean {
+  for (const parent of containerIndex.get(node) ?? []) {
+    if (seen.has(parent)) continue;
+    seen.add(parent);
+    if (claimsByNode.get(parent)?.has(reqId)) return true;
+    if (hasAncestorClaim(containerIndex, claimsByNode, reqId, parent, seen)) return true;
+  }
+  return false;
 }
 
 /**
@@ -98,13 +216,19 @@ export function classifyEvidence(
   const corroborated: ClaimEvidencePair[] = [];
   const unexercisedClaims: ClaimEvidencePair[] = [];
   const claimedNodes = new Set<string>();
+  const claimsByNode = new Map<string, Set<string>>();
+  const containsIndex = buildContainsIndex(graph);
+  const containerIndex = buildContainerIndex(graph);
 
   for (const edge of graph.edges) {
     if (edge.kind !== "implements") continue;
     const node = edge.source;
     const reqId = edge.target;
     claimedNodes.add(node);
-    if (reqExercises(trace, reqId, node)) {
+    const reqIdsForNode = claimsByNode.get(node);
+    if (reqIdsForNode) reqIdsForNode.add(reqId);
+    else claimsByNode.set(node, new Set([reqId]));
+    if (reqExercises(containsIndex, trace, reqId, node)) {
       corroborated.push({ reqId, node });
     } else {
       unexercisedClaims.push({ reqId, node });
@@ -119,7 +243,14 @@ export function classifyEvidence(
       infrastructure.push({ node, reqCount: reqIds.size });
     } else if (isExclusiveNode(trace, node)) {
       const [reqId] = reqIds;
-      suggestedImpls.push({ reqId: reqId!, node });
+      // PR #268 review F2: an ancestor already claiming this SAME reqId
+      // means a class-granularity `@impl` has already "found" this
+      // requirement's code — suppress the redundant member-level nudge (see
+      // `hasAncestorClaim`'s doc above for why this is not a `reqExercises`
+      // roll-up).
+      if (!hasAncestorClaim(containerIndex, claimsByNode, reqId!, node)) {
+        suggestedImpls.push({ reqId: reqId!, node });
+      }
     }
     // 2 .. sharedThreshold-1: silent by design (FR-013).
   }
