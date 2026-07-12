@@ -49,6 +49,19 @@ export function printCheckText(result: CheckResult, opts?: PrintOptions): void {
   );
   printNewCategory("ORPHANS", result.newIssues.orphans);
   printNewCategory("UNCOVERED", result.newIssues.uncovered);
+
+  // issue #284 — same hint as the plain-check path, scoped to the NEW
+  // uncovered REQs (result.exercisableUncovered isn't itself diff-scoped by
+  // its own filter, so intersect with newIssues.uncovered here). Placed
+  // right after UNCOVERED (before TEST FAILURES) so both output shapes read
+  // UNCOVERED -> HINT, same as the plain-check path below.
+  if (result.exercisableUncovered && result.exercisableUncovered.length > 0) {
+    const newUncoveredSet = new Set(result.newIssues.uncovered);
+    printExercisableUncoveredHint(
+      result.exercisableUncovered.filter((id) => newUncoveredSet.has(id)),
+    );
+  }
+
   printNewCategory("TEST FAILURES", result.newIssues.testFailures);
 
   if (result.suppressedCount > 0) {
@@ -76,6 +89,25 @@ function plural(count: number, word: string): string {
   return count === 1 ? word : `${word}s`;
 }
 
+// issue #284 — bootstrap's test-tag path tags only test titles (`verifies`
+// edges), which `computeCoverage` never counts as coverage on its own
+// (src/coverage.ts). Those REQs report `untagged`/`uncovered` forever
+// unless `.artgraph.json` sets `trace.acceptExercises: true` — a config
+// flag the old bootstrap SKILL.md never mentioned. This hint surfaces the
+// escape hatch right where a user would otherwise get stuck.
+function printExercisableUncoveredHint(reqIds: string[] | undefined): void {
+  if (!reqIds || reqIds.length === 0) return;
+  const isPlural = reqIds.length !== 1;
+  console.log(
+    `HINT: ${reqIds.join(", ")} ${isPlural ? "have" : "has"} exclusive execution evidence`,
+  );
+  console.log(
+    `      but trace.acceptExercises is off, so ${isPlural ? "they are" : "it is"} not counted as covered.`,
+  );
+  console.log("      To accept execution evidence as coverage, add to .artgraph.json:");
+  console.log('        {"trace": {"acceptExercises": true}}');
+}
+
 // Legacy full listing (pre-017 `printCheckText` body). Lists every scoped
 // issue; used for plain `check` and for the `--diff` baseline-unavailable
 // display-only fallback (§4.5).
@@ -92,6 +124,11 @@ function printScopedIssues(result: CheckResult): void {
     console.log("UNCOVERED:");
     for (const u of result.uncovered) console.log(`  ${u}`);
   }
+  // issue #284 — the bootstrap Skill's test-tag path only ever produces
+  // `verifies` edges, so those REQs land here permanently unless
+  // `trace.acceptExercises` is on (default false). Point users at the
+  // config flag right where they'd otherwise get stuck reading UNCOVERED.
+  printExercisableUncoveredHint(result.exercisableUncovered);
   if (result.testFailures?.length > 0) {
     console.log("TEST FAILURES:");
     for (const t of result.testFailures) console.log(`  ${t}`);

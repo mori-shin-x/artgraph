@@ -166,6 +166,8 @@ export default defineConfig(withTrace({ test: { /* ...既存設定... */ } }));
 
 あとはいつも通りテストを実行するだけ (`vitest run`) — artgraph が正規化された per-test 実行証拠を `.artgraph/trace/` に書き出します。次の `artgraph scan` で、`[REQ-NNN]` タグ付きテストの REQ から、そのテストが実際に実行したシンボルへの `exercises` エッジが埋まります。**コード側の `@impl` タグはゼロのまま** — タグゼロ・トレーサビリティです。
 
+ただし、デフォルトでは `artgraph check` はこれらの REQ を依然として `uncovered` / `untagged` と報告します — `exercised` カバレッジステータスはオプトインであり、自動では有効になりません。実行証拠をカバレッジとして扱うには `.artgraph.json` に `"trace": {"acceptExercises": true}` を追加してください(該当する場合、`check` はこのことを `HINT:` として出力します)。
+
 `artgraph trace report` は「捏造できない」ことの核となる機能です。`@impl` の主張を実行証拠と突き合わせ、REQ-001 のテストが一度も実行していないシンボルに `@impl REQ-001` が付いていれば **UNEXERCISED CLAIM**(宣言はあるが証拠がない)として検出します。逆に、`@impl` は無いが REQ のテストだけが排他的に実行しているシンボルは **SUGGESTED IMPL** として提案されます。
 
 ```bash

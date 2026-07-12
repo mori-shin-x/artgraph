@@ -171,6 +171,26 @@ export function check(
     staleGate = staleness === "gate" && staleEvidence.length > 0;
   }
 
+  // issue #284 — counterfactual hint: which of the (already scope-filtered)
+  // `uncovered` REQs would `computeCoverage` rescue to `exercised` if
+  // `acceptExercises` were on? When it's already on, anything rescuable has
+  // already left `uncovered` above, so the answer is trivially `[]` — no
+  // second `computeCoverage` call needed. Otherwise re-run it with the trace
+  // supplied (using `evidenceTrace`, not `traceOptions.trace`, so
+  // `staleness: "exclude"` filtering applies identically to the real
+  // `exercised` computation) and intersect against `uncovered`, which
+  // inherits `--diff` scoping for free.
+  let exercisableUncovered: string[] | undefined;
+  if (traceOptions) {
+    const counterfactual = acceptExercises
+      ? undefined
+      : computeCoverage(graph, testResults, evidenceTrace ? { trace: evidenceTrace } : undefined);
+    const wouldBeExercised = counterfactual
+      ? new Set(counterfactual.filter((c) => c.status === "exercised").map((c) => c.reqId))
+      : new Set<string>();
+    exercisableUncovered = uncovered.filter((id) => wouldBeExercised.has(id));
+  }
+
   // When test results are supplied, a requirement that has verifies edges but
   // ends up impl-only means its tests ran and failed (or were skipped) — that is
   // a regression the gate must catch, not just display. Without test results
@@ -243,6 +263,7 @@ export function check(
     result.suggestedImpls = suggestedImpls;
     result.staleEvidence = staleEvidence;
     result.staleGate = staleGate;
+    result.exercisableUncovered = exercisableUncovered;
   }
   return result;
 }

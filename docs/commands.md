@@ -120,6 +120,32 @@ untagged REQ backed by exclusive exercises evidence reports `exercised`
 instead of `uncovered`. Declared REQs (`impl-only` / `verified`) are never
 affected — evidence audits claims, it never substitutes for a declared one.
 
+### `exercisableUncovered` — the `acceptExercises` hint (issue #284)
+
+When trace shards exist but `trace.acceptExercises` is `false` (the
+default), `--format json` also includes `exercisableUncovered`: a `string[]`
+of `uncovered` REQ ids that already have exclusive exercises evidence
+(stale evidence is excluded only under `trace.staleness: "exclude"`; under
+the default `"warn"` stale evidence still counts, exactly as it would for
+the real `exercised` status) and would flip to `exercised` — leaving
+`uncovered` — the moment `acceptExercises` is turned on. The eligible nodes
+usually coincide with the ones `suggestedImpls` names, but the two can
+diverge: `suggestedImpls` skips a node already claimed by another REQ's
+`@impl` (it exists to reduce report noise), while the `exercised`
+counterfactual behind `exercisableUncovered` does not — a REQ can be
+`exercisableUncovered` even when its exclusive evidence node is claimed by a
+different REQ. It is purely informational: it never affects `pass`,
+`newIssues`, or any gate/exit-code decision, and is always `[]` once
+`acceptExercises` is already `true` (anything it would rescue has already
+left `uncovered`). Text output (`printCheckText`) surfaces the same
+information as a `HINT:` line right after the `UNCOVERED:` section, naming
+the eligible REQ ids and the exact `.artgraph.json` snippet to add. This is
+the escape hatch for
+projects bootstrapped with the [`artgraph-bootstrap`](../templates/skills/artgraph-bootstrap/SKILL.md)
+Skill's test-tag path (test-title `[REQ-NNN]` tags only, no code-side
+`@impl`) — those REQs are `verifies`-only and stay `untagged`/`uncovered`
+forever without this flag.
+
 ## `artgraph impact`
 
 Forward impact analysis: files/symbols → REQs / docs / tests.
