@@ -35,16 +35,9 @@
 // attribution rather than guessing (fail-safe, FR-007 / SC-006: REQ
 // reachability is never lost, only symbol PRECISION is).
 
-import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { relative } from "node:path";
-import { createTSParser, globCodeFiles } from "../parsers/typescript.js";
-
-const requireCjs = createRequire(import.meta.url);
-let oxcModule: typeof import("oxc-parser") | undefined;
-function loadOxc(): typeof import("oxc-parser") {
-  return (oxcModule ??= requireCjs("oxc-parser") as typeof import("oxc-parser"));
-}
+import { createTSParser, globCodeFiles, safeParseSync } from "../parsers/typescript.js";
 
 type OxcProgram = import("oxc-parser").ParseResult["program"];
 type OxcStatement = OxcProgram["body"][number];
@@ -171,12 +164,24 @@ export function buildSymbolNameTable(rootDir: string, includePatterns: string[])
     } catch {
       continue;
     }
-    let parsed: import("oxc-parser").ParseResult | undefined;
-    try {
-      parsed = loadOxc().parseSync(filePath, content);
-    } catch {
-      parsed = undefined;
-    }
+    // issue #269 — this used to call `loadOxc().parseSync(filePath, content)`
+    // directly, via its own COPY of `loadOxc` (bypassing the bracket-depth
+    // guard added for issue #247: a deeply-nested file reaching this call
+    // site natively SIGSEGVs the whole process, taking down every trace
+    // command with it). Routed through the shared `safeParseSync` (the same
+    // choke point `parseTSFile` uses) so this call gets the depth guard for
+    // free and can never drift from it. A `depthExceeded` skip is treated
+    // exactly like any other unparseable file here — `buildSymbolNameTable`
+    // is documented fail-safe (never throws, only loses symbol-name
+    // PRECISION, see this file's header comment), so silently `continue`ing
+    // past a depth-guard-skipped file is consistent with the pre-existing
+    // `catch { continue; }` immediately above for a plain parse exception.
+    // A genuine `OxcLoadError` (issue #263 — the native binding itself is
+    // missing/broken) is deliberately NOT caught by `safeParseSync` and so
+    // propagates uncaught from here too, keeping this call site fail-FAST
+    // for that failure mode, consistent with every other oxc call site in
+    // the codebase.
+    const parsed = safeParseSync(filePath, content).parsed;
     if (!parsed) continue;
 
     for (const stmt of parsed.program.body) {

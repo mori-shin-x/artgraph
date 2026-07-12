@@ -4,6 +4,7 @@ import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { buildProgram } from "./build-program.js";
 import { installBaselineSignalHandlers } from "./baseline.js";
+import { OxcLoadError } from "./parsers/typescript.js";
 
 // @internal re-export — the in-process test harness lives in
 // `src/testing/run-cli.ts` (issue #162: composition root vs. test-harness
@@ -44,5 +45,28 @@ if (import.meta.url === resolveEntryHref()) {
   // Matches the parseAsync semantics runCli has always used. A rejected
   // handler surfaces as a top-level-await rejection — stack trace + exit 1 —
   // same outcome as the old sync-throw-through-parse() path.
-  await program.parseAsync();
+  //
+  // issue #263 — ONE deliberate, narrow exception to that "stack trace"
+  // default: `OxcLoadError` is a specifically-anticipated, actionable
+  // environment failure (oxc-parser's native binding missing/broken) whose
+  // whole point is a clear diagnostic FOR THE USER, not a debugging aid for
+  // artgraph's own internals — a Node stack trace under it (dist file paths,
+  // `node:internal/modules/cjs/loader` frames, …) is noise that competes
+  // with, rather than adds to, the message's own cause/fix guidance. This is
+  // NOT a general-purpose "pretty error" layer: every OTHER thrown error
+  // still falls through unchanged to the exact pre-existing behavior this
+  // comment describes (rethrown here, then the default stack-trace-and-exit
+  // path). Scoped to real CLI invocations only — `runCli` (the in-process
+  // test harness) has its own independent, pre-existing catch and is not
+  // touched by this.
+  try {
+    await program.parseAsync();
+  } catch (e) {
+    if (e instanceof OxcLoadError) {
+      console.error(e.message);
+      process.exitCode = 1;
+    } else {
+      throw e;
+    }
+  }
 }

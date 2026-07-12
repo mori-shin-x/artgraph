@@ -1,10 +1,17 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createTSParser, globCodeFiles, hash } from "../src/parsers/typescript.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
+
+// Filesystem-permission tests (issue #264) only make sense on POSIX, as a
+// non-root user — root bypasses mode bits entirely, so the chmod-induced
+// EACCES these tests rely on never fires. Same convention as
+// tests/doctor.test.ts / tests/agents/distribute.test.ts.
+const IS_WIN = process.platform === "win32";
+const IS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
 
 describe("createTSParser", () => {
   const parser = createTSParser(FIXTURE_DIR, ["src/**/*.ts", "tests/**/*.ts"]);
@@ -1762,3 +1769,84 @@ describe("globCodeFiles (issue #266 — negative glob patterns)", () => {
     expect(parsedFiles).toEqual(["src/keep.ts", "src/other/skip.ts"]);
   });
 });
+
+// issue #264 — `parseTSFile`'s `readFileSync` used to be unguarded: a single
+// unreadable file (permission error, verified empirically via chmod 000)
+// crashed the ENTIRE scan with an uncaught exception, asymmetric with
+// `isModuleFile` elsewhere in this module, which already guards its own
+// read. Fixed to warn (`unreadable-file`) and synthesize a bare file node
+// for that ONE file while scanning continues normally for every other file.
+describe.skipIf(IS_WIN || IS_ROOT)(
+  "createTSParser survives an unreadable file in the scan set (issue #264)",
+  () => {
+    let root: string;
+    let unreadablePath: string;
+
+    beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), "artgraph-unreadable-file-"));
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(join(root, "src/normal-target.ts"), "export const helloTarget = 1;\n");
+      writeFileSync(
+        join(root, "src/normal.ts"),
+        [
+          'import { helloTarget } from "./normal-target.js";',
+          "// @impl CANARY-264",
+          "export function normalFn(): number {",
+          "  return helloTarget;",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      unreadablePath = join(root, "src/unreadable.ts");
+      writeFileSync(unreadablePath, "export const neverRead = 1;\n");
+      chmodSync(unreadablePath, 0o000);
+    });
+
+    afterAll(() => {
+      chmodSync(unreadablePath, 0o644);
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    it("does not throw scanning a directory containing an unreadable file", () => {
+      expect(() => createTSParser(root, ["src/**/*.ts"], "symbol").parse()).not.toThrow();
+    });
+
+    it("emits exactly one unreadable-file warning for the unreadable file", () => {
+      const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+      const unreadableWarnings = result.warnings.filter((w) => w.type === "unreadable-file");
+      expect(unreadableWarnings).toHaveLength(1);
+      expect(unreadableWarnings[0].filePath).toBe("src/unreadable.ts");
+      expect(unreadableWarnings[0].symbolId).toBe("file:src/unreadable.ts");
+      expect(unreadableWarnings[0].message).toContain("src/unreadable.ts");
+    });
+
+    it("still creates a bare file node for the unreadable file, with no symbols/imports", () => {
+      const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+      const node = result.nodes.find((n) => n.filePath === "src/unreadable.ts");
+      expect(node?.kind).toBe("file");
+      expect(result.nodes.some((n) => n.id.startsWith("symbol:src/unreadable.ts#"))).toBe(false);
+      expect(result.edges.some((e) => e.source === "file:src/unreadable.ts")).toBe(false);
+    });
+
+    it("keeps extracting the normal file's imports/symbols/@impl tags unaffected", () => {
+      const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+      expect(
+        result.edges.some(
+          (e) =>
+            e.kind === "imports" &&
+            e.source === "file:src/normal.ts" &&
+            e.target === "symbol:src/normal-target.ts#helloTarget",
+        ),
+      ).toBe(true);
+      expect(result.nodes.some((n) => n.id === "symbol:src/normal.ts#normalFn")).toBe(true);
+      expect(
+        result.edges.some(
+          (e) =>
+            e.kind === "implements" &&
+            e.source === "symbol:src/normal.ts#normalFn" &&
+            e.target === "CANARY-264",
+        ),
+      ).toBe(true);
+    });
+  },
+);
