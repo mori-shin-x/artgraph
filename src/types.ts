@@ -592,6 +592,12 @@ export interface PlanCoverageConfig {
 export type PackageManager = "npm" | "pnpm" | "bun" | "deno";
 
 export interface ArtgraphConfig {
+  /**
+   * fast-glob patterns for source files, resolved relative to the repo root.
+   * A leading `!` marks a pattern as an exclusion (issue #266) — see
+   * `globCodeFiles` in `src/parsers/typescript.ts`. Applies identically to
+   * `testPatterns` below.
+   */
   include: string[];
   specDirs: string[];
   testPatterns: string[];

@@ -20,6 +20,7 @@ import { readLock } from "./lock.js";
 import { scan, reconcile } from "./scan.js";
 import { loadConfig } from "./config.js";
 import { globCodeFiles } from "./parsers/typescript.js";
+import type { BuildWarning } from "./graph/builder.js";
 import { assertValidTargetId } from "./rename-validate-id.js";
 import { rewriteTraceShards } from "./rename-trace.js";
 import type { ArtgraphConfig, LockFile } from "./types.js";
@@ -62,6 +63,15 @@ export interface RenameResult {
   changes: RewriteChange[];
   lockChanges: LockChange[];
   warnings: RenameWarning[];
+  // issue #265 — `buildGraph()`'s own warnings (pathological-bracket-nesting,
+  // class-member-collision, …) from the pre-rewrite scan that resolved
+  // `existingIds` below. Kept as a separate field from `warnings` above (a
+  // different, rename-specific warning type) to avoid conflating the two.
+  // Only the pre-rewrite scan's warnings are surfaced — `reconcileAfterWrite`
+  // runs a SECOND scan after files are written purely to refresh the lock,
+  // and re-surfacing that scan's warnings here would just print the same
+  // findings twice for the common case where the rewrite doesn't change them.
+  buildWarnings: BuildWarning[];
   applied: boolean;
 }
 
@@ -131,11 +141,14 @@ interface ScanContext {
   config: ArtgraphConfig;
   existingIds: Set<string>;
   rewriteOpts: RewriteOptions;
+  // issue #265 — the pre-rewrite scan's build warnings, threaded into
+  // `RenameResult.buildWarnings` by each `execute*` below.
+  graphWarnings: BuildWarning[];
 }
 
 function loadScanContext(rootDir: string): ScanContext {
   const config = loadConfig(rootDir);
-  const { graph } = scan(rootDir, config);
+  const { graph, warnings } = scan(rootDir, config);
   return {
     config,
     existingIds: new Set(graph.nodes.keys()),
@@ -144,6 +157,7 @@ function loadScanContext(rootDir: string): ScanContext {
       taskConventions: config.taskConventions,
       disableBuiltinTaskConventions: config.disableBuiltinTaskConventions,
     },
+    graphWarnings: warnings,
   };
 }
 
@@ -164,7 +178,7 @@ function applyWrites(
 
 export function executeRename(options: RenameOptions & { from: string; to: string }): RenameResult {
   const { rootDir, dryRun, from, to } = options;
-  const { config, existingIds, rewriteOpts } = loadScanContext(rootDir);
+  const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
 
   // Validate
   if (from === to) {
@@ -238,6 +252,7 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
     changes: allChanges,
     lockChanges,
     warnings,
+    buildWarnings: graphWarnings,
     applied: !dryRun,
   };
 }
@@ -248,7 +263,7 @@ export function executeSplit(
   options: RenameOptions & { splitId: string; intoIds: string[] },
 ): RenameResult {
   const { rootDir, dryRun, splitId, intoIds } = options;
-  const { config, existingIds, rewriteOpts } = loadScanContext(rootDir);
+  const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
 
   // Validate
   assertRenameableSource(splitId);
@@ -347,6 +362,7 @@ export function executeSplit(
     changes: allChanges,
     lockChanges,
     warnings,
+    buildWarnings: graphWarnings,
     applied: !dryRun,
   };
 }
@@ -357,7 +373,7 @@ export function executeMerge(
   options: RenameOptions & { mergeIds: string[]; intoId: string },
 ): RenameResult {
   const { rootDir, dryRun, mergeIds, intoId } = options;
-  const { config, existingIds, rewriteOpts } = loadScanContext(rootDir);
+  const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
 
   // Validate
   if (mergeIds.length < 1) {
@@ -475,6 +491,7 @@ export function executeMerge(
     changes: allChanges,
     lockChanges,
     warnings,
+    buildWarnings: graphWarnings,
     applied: !dryRun,
   };
 }

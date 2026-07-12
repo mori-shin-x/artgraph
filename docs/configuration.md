@@ -6,6 +6,16 @@ README's end-to-end example. This page documents the blocks users typically
 touch: `reqPatterns`, `ignoreIdPrefixes`, `docGraph`, `taskConventions`, and
 how edge provenance is surfaced.
 
+## `include` / `testPatterns` — code and test file globs
+
+Both are lists of [fast-glob](https://github.com/mrmlnc/fast-glob) patterns
+resolved relative to the repo root (defaults: `include: ["src/**/*.ts",
+"src/**/*.tsx"]`). A leading `!` marks a pattern as an exclusion (e.g.
+`"!src/generated/**"`), matching fast-glob's own negative-pattern
+convention; excluded files are dropped from both scanning and `artgraph
+rename`'s rewrite scope. A list made up entirely of exclusions matches zero
+files.
+
 ## `reqPatterns` — requirement ID grammar
 
 By default artgraph recognizes `REQ-001`, `auth/FR-2`, and `Requirement-3`.

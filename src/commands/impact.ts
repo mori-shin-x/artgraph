@@ -2,7 +2,7 @@
 
 import { Command } from "commander";
 import type { SymbolEntry } from "../types.js";
-import { pathsToEntries, TRACE_NO_SHARDS_GUIDANCE } from "./shared.js";
+import { pathsToEntries, reportGraphWarnings, TRACE_NO_SHARDS_GUIDANCE } from "./shared.js";
 import { printImpactText } from "./presenters/impact.js";
 
 // spec 014 (FR-001 / FR-003): REQ-ID inputs are no longer accepted here.
@@ -121,7 +121,13 @@ export function registerImpactCommand(program: Command): void {
         process.exit(1);
       }
 
-      const { graph } = scan(rootDir, config);
+      // issue #265 — `warnings` used to be discarded here, so a
+      // `pathological-bracket-nesting` / `class-member-collision` build
+      // warning was invisible via `artgraph impact`. Threaded through to the
+      // `--diff` "no changes" early-exit JSON payload below (mirrors
+      // `check --diff`'s equivalent branch) and to the final output at the
+      // bottom of this action.
+      const { graph, warnings } = scan(rootDir, config);
       const lock = readLock(rootDir, config.lockFile);
 
       // spec 020 (FR-017) — load evidence once, resolve the staleness
@@ -167,6 +173,7 @@ export function registerImpactCommand(program: Command): void {
                 drifted: [],
                 originReqs: [],
                 summary: { docs: 0, reqs: 0, files: 0, tasks: 0 },
+                warnings,
                 message: "No changes detected in git diff.",
               }),
             );
@@ -357,9 +364,10 @@ export function registerImpactCommand(program: Command): void {
       }
 
       if (opts.format === "json") {
-        console.log(JSON.stringify(result));
+        console.log(JSON.stringify({ ...result, warnings }));
       } else {
         printImpactText(result);
+        reportGraphWarnings(warnings, opts.format);
       }
     });
 }

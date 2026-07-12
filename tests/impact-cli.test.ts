@@ -875,3 +875,74 @@ describe("CLI: impact — issue #215 minimal repro (spec 019 contains direction,
     expect(result.affectedFiles).toContain("src/other.ts");
   });
 });
+
+// issue #265 — `artgraph impact` used to discard `buildGraph()`'s
+// `BuildWarning[]` entirely (`const { graph } = scan(...)`), so a
+// `class-member-collision` warning (or any other build warning) was
+// invisible via this command. Fixture below triggers a collision with no
+// `@impl` tags at all (a string-literal export alias colliding with a class
+// member's synthesized symbol name — see tests/typescript.test.ts's T020
+// fixture), so it needs no REQ coverage and carries zero orphan risk for
+// artgraph's own dogfood scan.
+describe("artgraph impact — build warnings surfaced (issue #265)", () => {
+  function makeCollisionRepo(): string {
+    const dir = mkdtempSync(join(tmpdir(), "artgraph-impact-265-"));
+    writeFileSync(
+      join(dir, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        mode: "symbol",
+      }),
+    );
+    mkdirSync(join(dir, "specs"), { recursive: true });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "specs", "spec.md"), "# Spec\n\n- REQ-001: unrelated requirement\n");
+    writeFileSync(
+      join(dir, "src", "collision.ts"),
+      [
+        "function helper(): void {}",
+        'export { helper as "Sample.methodA" };',
+        "",
+        "export class Sample {",
+        "  methodA(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    return dir;
+  }
+
+  it("text mode: prints the class-member-collision warning to stderr", async () => {
+    const root = makeCollisionRepo();
+    try {
+      const { stderr, exitCode } = await runAt(root, ["impact", "src/collision.ts"]);
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain("WARNING:");
+      expect(stderr).toContain("collides with an existing export");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("--format json: embeds warnings[] in the JSON payload and does not also print to stderr", async () => {
+    const root = makeCollisionRepo();
+    try {
+      const { stdout, stderr, exitCode } = await runAt(root, [
+        "impact",
+        "src/collision.ts",
+        "--format",
+        "json",
+      ]);
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(stdout);
+      expect(
+        result.warnings.some((w: { type: string }) => w.type === "class-member-collision"),
+      ).toBe(true);
+      // scan/init/check convention: json mode doesn't ALSO print to stderr.
+      expect(stderr).not.toContain("WARNING:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

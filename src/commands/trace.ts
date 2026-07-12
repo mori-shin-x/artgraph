@@ -8,7 +8,8 @@
 import { Command } from "commander";
 import type { ArtifactGraph } from "../types.js";
 import type { TraceDiagnostics } from "../trace/schema.js";
-import { TRACE_NO_SHARDS_GUIDANCE } from "./shared.js";
+import type { BuildWarning } from "../graph/builder.js";
+import { reportGraphWarnings, TRACE_NO_SHARDS_GUIDANCE } from "./shared.js";
 import { printTraceReportText, printTraceStatusText } from "./presenters/trace.js";
 
 export interface TraceStatusResult {
@@ -19,6 +20,11 @@ export interface TraceStatusResult {
   /** stale / (# distinct nodes with a recorded trace-capture hash), 0 when
    * there are none — avoids a NaN in the JSON/text output on an empty trace. */
   staleRate: number;
+  // issue #265 — `buildGraph()`'s warnings (pathological-bracket-nesting,
+  // class-member-collision, …), threaded through so `--format json` embeds
+  // them like scan/init/check do; text mode prints them via
+  // `reportGraphWarnings` instead of embedding.
+  warnings: BuildWarning[];
 }
 
 export interface TraceReportResult {
@@ -27,6 +33,8 @@ export interface TraceReportResult {
   suggestedImpls: Array<{ reqId: string; node: string }>;
   infrastructure: Array<{ node: string; reqCount: number }>;
   diagnostics: TraceDiagnostics & { stale: number };
+  // issue #265 — see TraceStatusResult.warnings above.
+  warnings: BuildWarning[];
 }
 
 // `status`'s "record counts" are derived from `IngestedTrace` itself rather
@@ -54,14 +62,17 @@ async function loadTraceInputs(rootDir: string): Promise<{
   config: import("../types.js").ArtgraphConfig;
   graph: ArtifactGraph;
   trace: import("../trace/ingest.js").IngestedTrace;
+  // issue #265 — previously discarded (`const { graph } = scan(...)`), so
+  // `trace status` / `trace report` never surfaced build warnings.
+  warnings: BuildWarning[];
 }> {
   const { loadConfig } = await import("../config.js");
   const { scan } = await import("../scan.js");
   const { ingestTrace } = await import("../trace/ingest.js");
   const config = loadConfig(rootDir);
-  const { graph } = scan(rootDir, config);
+  const { graph, warnings } = scan(rootDir, config);
   const trace = ingestTrace(config, rootDir);
-  return { config, graph, trace };
+  return { config, graph, trace, warnings };
 }
 
 export function registerTraceCommand(program: Command): void {
@@ -75,7 +86,7 @@ export function registerTraceCommand(program: Command): void {
     .option("--format <format>", "Output format: json | text", "text")
     .action(async (opts) => {
       const rootDir = process.cwd();
-      const { graph, trace: ingested } = await loadTraceInputs(rootDir);
+      const { graph, trace: ingested, warnings } = await loadTraceInputs(rootDir);
       const { computeStaleNodeIds } = await import("../trace/report.js");
 
       const staleNodeIds = computeStaleNodeIds(graph, ingested);
@@ -88,12 +99,14 @@ export function registerTraceCommand(program: Command): void {
         skippedCount: ingested.diagnostics.skipped,
         diagnostics: buildDiagnostics(ingested.diagnostics, staleNodeIds.size),
         staleRate,
+        warnings,
       };
 
       if (opts.format === "json") {
         console.log(JSON.stringify(result));
       } else {
         printTraceStatusText(result);
+        reportGraphWarnings(warnings, opts.format);
       }
     });
 
@@ -103,7 +116,7 @@ export function registerTraceCommand(program: Command): void {
     .option("--format <format>", "Output format: json | text", "text")
     .action(async (opts) => {
       const rootDir = process.cwd();
-      const { config, graph, trace: ingested } = await loadTraceInputs(rootDir);
+      const { config, graph, trace: ingested, warnings } = await loadTraceInputs(rootDir);
 
       // contracts/cli-surface.md §2 — zero shards is a hard error, not an
       // empty report: the report's entire premise (evidence exists to
@@ -122,12 +135,14 @@ export function registerTraceCommand(program: Command): void {
       const result: TraceReportResult = {
         ...evidence,
         diagnostics: buildDiagnostics(ingested.diagnostics, staleNodeIds.size),
+        warnings,
       };
 
       if (opts.format === "json") {
         console.log(JSON.stringify(result));
       } else {
         printTraceReportText(result);
+        reportGraphWarnings(warnings, opts.format);
       }
     });
 }

@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
-import { join, resolve } from "node:path";
+import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from "vitest";
+import { dirname, join, resolve } from "node:path";
 import {
   writeFileSync,
   unlinkSync,
@@ -1497,5 +1497,73 @@ describe("buildGraph: class-member symbol collision determinism (spec 021 / T020
     expect(symbolIdsA.filter((id) => id === "symbol:src/collision.ts#Sample.methodA")).toHaveLength(
       1,
     );
+  });
+});
+
+// issue #266 — config-level integration test: a `.artgraph.json`-shaped
+// `include` list with a `!`-prefixed negative pattern must actually exclude
+// the matched files from the graph (file/symbol nodes, and any @impl edges
+// they'd otherwise contribute), not just fail to error.
+describe("buildGraph: negative include patterns (issue #266)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-t266-builder-"));
+    mkdirSync(join(root, "specs"), { recursive: true });
+    writeFileSync(
+      join(root, "specs", "spec.md"),
+      "# Spec\n\n- REQ-500: kept file requirement\n- REQ-600: generated-file requirement (should stay uncovered)\n",
+    );
+    // Literal tags below are string-literal-split (`"@" + "impl ..."`) so
+    // artgraph's OWN dogfood scan of THIS repo never mistakes this fixture
+    // text for a real code tag on `tests/builder.test.ts` itself — the
+    // temp-directory fixture file still receives the concatenated,
+    // unbroken tag. Mirrors the convention in
+    // tests/check-baseline-diff.test.ts / tests/helpers.ts.
+    write("src/keep.ts", "// @" + "impl REQ-500\nexport const keep = 1;\n");
+    // A generated file that (if scanned) would satisfy REQ-600 — the whole
+    // point of the exclusion is that it must NOT be scanned.
+    write("src/generated/gen.ts", "// @" + "impl REQ-600\nexport const gen = 1;\n");
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("excludes files matched by a `!`-prefixed include pattern", () => {
+    const excludeConfig: ArtgraphConfig = {
+      include: ["src/**/*.ts", "!src/generated/**"],
+      specDirs: ["specs"],
+      testPatterns: [],
+      lockFile: ".trace.lock",
+    };
+    const { graph } = buildGraph(root, excludeConfig);
+
+    expect(graph.nodes.has("file:src/keep.ts")).toBe(true);
+    expect(graph.nodes.has("file:src/generated/gen.ts")).toBe(false);
+
+    const implEdges = graph.edges.filter((e) => e.kind === "implements");
+    expect(implEdges.map((e) => e.target).sort()).toEqual(["REQ-500"]);
+  });
+
+  it("regression: without the negative pattern, the generated file is scanned as before", () => {
+    const plainConfig: ArtgraphConfig = {
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: [],
+      lockFile: ".trace.lock",
+    };
+    const { graph } = buildGraph(root, plainConfig);
+
+    expect(graph.nodes.has("file:src/keep.ts")).toBe(true);
+    expect(graph.nodes.has("file:src/generated/gen.ts")).toBe(true);
+    const implEdges = graph.edges.filter((e) => e.kind === "implements");
+    expect(implEdges.map((e) => e.target).sort()).toEqual(["REQ-500", "REQ-600"]);
   });
 });
