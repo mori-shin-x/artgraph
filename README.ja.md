@@ -1,5 +1,9 @@
 <h1 align="center">
-  <img src="./docs/logo.webp" alt="artgraph" width="360">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="./assets/logo-light.svg">
+    <img src="./assets/logo-light.svg" alt="artgraph" width="360">
+  </picture>
 </h1>
 
 <p align="center"><a href="./README.md">English</a> | <strong>日本語</strong></p>
