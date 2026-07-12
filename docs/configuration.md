@@ -10,11 +10,11 @@ how edge provenance is surfaced.
 
 Both are lists of [fast-glob](https://github.com/mrmlnc/fast-glob) patterns
 resolved relative to the repo root (defaults: `include: ["src/**/*.ts",
-"src/**/*.tsx"]`). A leading `!` marks a pattern as an exclusion (e.g.
-`"!src/generated/**"`), matching fast-glob's own negative-pattern
-convention; excluded files are dropped from both scanning and `artgraph
-rename`'s rewrite scope. A list made up entirely of exclusions matches zero
-files.
+"src/**/*.tsx", "!**/node_modules/**"]`). A leading `!` marks a pattern as
+an exclusion (e.g. `"!src/generated/**"`), matching fast-glob's own
+negative-pattern convention; excluded files are dropped from both scanning
+and `artgraph rename`'s rewrite scope. A list made up entirely of
+exclusions matches zero files.
 
 **Put exclusions in `include`, not `testPatterns`.** A negative pattern on
 `testPatterns` narrows the scanned file set the same way it does on
@@ -24,6 +24,18 @@ symbol names, never `testPatterns`. A negative pattern that only lives in
 `testPatterns` therefore drifts from what trace evaluation sees, and can
 surface a suggested `@impl` / drift candidate that points at a symbol with
 no corresponding node in the graph. See issue #275.
+
+**node_modules is excluded by default (issue #287).** `artgraph init`
+generates configs whose `include` ends with `"!**/node_modules/**"` (as
+shown above), because fast-glob does not exclude node_modules on its own —
+without the negation, a broad pattern like `"**/*.ts"` (the config `init`
+produces when no `src/` directory is detected) would ingest thousands of
+vendored `.ts` files into the graph on the very first scan. Projects
+created before this version can add `"!**/node_modules/**"` to their own
+`include` to opt in. `artgraph scan` emits a `node-modules-in-scan` warning
+whenever the matched file set still contains files under a node_modules
+directory, so a missing exclusion is caught rather than silently producing
+a bloated graph.
 
 Degenerate patterns behave as inert rather than as errors: a doubled
 negation (`"!!foo/**"`), a bare `"!"`, and an empty string (`""`) are all

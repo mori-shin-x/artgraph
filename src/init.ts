@@ -177,7 +177,12 @@ export function detectProject(rootDir: string): DetectionResult {
 }
 
 export function generateConfig(detection: DetectionResult): ArtgraphConfig {
-  const include = detection.hasSrc ? [...DEFAULT_CONFIG.include] : ["**/*.ts", "**/*.tsx"];
+  // issue #287 — no `src/` dir means the whole repo tree is scanned, so the
+  // node_modules exclusion matters even more here than in the hasSrc branch
+  // (which inherits it from DEFAULT_CONFIG.include).
+  const include = detection.hasSrc
+    ? [...DEFAULT_CONFIG.include]
+    : ["**/*.ts", "**/*.tsx", "!**/node_modules/**"];
 
   // "specs" and "docs" are always siblings, never parent/child, so this can't
   // produce the parent+child specDirs shape loadConfig's validateSpecDirs

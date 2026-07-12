@@ -664,7 +664,14 @@ export interface ArtgraphConfig {
 }
 
 export const DEFAULT_CONFIG: ArtgraphConfig = {
-  include: ["src/**/*.ts", "src/**/*.tsx"],
+  // issue #287 — the trailing negative pattern excludes node_modules at any
+  // depth (including nested ones, e.g. `packages/*/node_modules` in a
+  // monorepo): fast-glob does not exclude node_modules by default, so
+  // without this a fresh `artgraph scan` would ingest thousands of vendored
+  // .ts files into the graph. Per issue #275 the exclusion deliberately
+  // lives in `include`, not `testPatterns` — see the `testPatterns` doc
+  // comment above for why.
+  include: ["src/**/*.ts", "src/**/*.tsx", "!**/node_modules/**"],
   specDirs: ["specs", "docs"],
   testPatterns: ["**/*.test.ts", "**/*.spec.ts", "**/*.test.tsx"],
   lockFile: ".trace.lock",

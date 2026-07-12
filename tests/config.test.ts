@@ -17,7 +17,9 @@ describe("loadConfig", () => {
   it("should return default config when no file exists", () => {
     const config = loadConfig(TMP_DIR);
     expect(config.reqPatterns).toBeUndefined();
-    expect(config.include).toEqual(["src/**/*.ts", "src/**/*.tsx"]);
+    // issue #287 — DEFAULT_CONFIG.include now ends with a node_modules
+    // exclusion.
+    expect(config.include).toEqual(["src/**/*.ts", "src/**/*.tsx", "!**/node_modules/**"]);
   });
 
   it("should load reqPatterns from config file", () => {

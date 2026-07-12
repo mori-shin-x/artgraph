@@ -92,6 +92,14 @@ export function printWarnings(warnings: BuildWarning[]) {
           `WARNING: ${w.message ?? `unreadable-file "${w.id}" in ${w.files.join(", ")}`}`,
         );
         break;
+      // issue #287 — the include/testPatterns globs matched a file under
+      // node_modules. Shown by default (NOT in SILENT_WARNING_TYPES): the
+      // builder-provided message already carries the count and the
+      // `!**/node_modules/**` config fix, so print it verbatim with the
+      // file list as fallback.
+      case "node-modules-in-scan":
+        console.error(`WARNING: ${w.message ?? `node-modules-in-scan (${w.files.join(", ")})`}`);
+        break;
       // Filtered above via `isSilentWarning`, but the switch still needs
       // cases so the exhaustiveness check below stays happy.
       case "phantom-import-repaired":
