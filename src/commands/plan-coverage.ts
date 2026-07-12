@@ -3,6 +3,7 @@
 import { Command, Option } from "commander";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { reportGraphWarnings } from "./shared.js";
 
 // spec 014 (FR-013 — FR-020): plan-coverage subcommand. Reads tasks.md /
 // plan.md (and the current spec.md) to detect REQs that are *affected*
@@ -97,9 +98,12 @@ export function registerPlanCoverageCommand(program: Command): void {
         });
 
         if (format === "json") {
-          console.log(JSON.stringify(result.json));
+          // review F2 — fold `buildGraph()`'s warnings into the JSON payload,
+          // matching `impact`/`trace`/`check`'s convention (issue #265).
+          console.log(JSON.stringify({ ...result.json, warnings: result.warnings }));
         } else {
           process.stdout.write(result.text);
+          reportGraphWarnings(result.warnings, format);
         }
         if (result.exitCode !== 0) {
           process.exit(result.exitCode);

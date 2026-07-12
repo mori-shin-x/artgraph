@@ -19,6 +19,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { runAt, FIXTURE_DIR } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -941,6 +942,44 @@ describe("artgraph impact — build warnings surfaced (issue #265)", () => {
       ).toBe(true);
       // scan/init/check convention: json mode doesn't ALSO print to stderr.
       expect(stderr).not.toContain("WARNING:");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // meta-review F1 — early-exit paths that fire AFTER `scan()` but BEFORE any
+  // output (JSON or text) used to swallow `warnings` entirely: the command
+  // exits via `process.exit(1)` (or, for `--diff` with no changes, an early
+  // `process.exit(0)`) without ever reaching the bottom-of-action
+  // `reportGraphWarnings` call. Two representative early-exit paths below.
+  it('"No matching nodes found" error exit still prints the WARNING to stderr', async () => {
+    const root = makeCollisionRepo();
+    try {
+      const { stderr, exitCode } = await runAt(root, ["impact", "src/does/not/exist.ts"]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain("No matching nodes found");
+      expect(stderr).toContain("WARNING:");
+      expect(stderr).toContain("collides with an existing export");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("`--diff` with no changes (text) still prints the WARNING to stderr", async () => {
+    const root = makeCollisionRepo();
+    execFileSync("git", ["init"], { cwd: root, stdio: "pipe" });
+    execFileSync("git", ["add", "-A"], { cwd: root, stdio: "pipe" });
+    execFileSync(
+      "git",
+      ["-c", "user.name=test", "-c", "user.email=test@test.com", "commit", "-m", "init"],
+      { cwd: root, stdio: "pipe" },
+    );
+    try {
+      const { stdout, stderr, exitCode } = await runAt(root, ["impact", "--diff"]);
+      expect(exitCode).toBe(0);
+      expect(stdout).toContain("No changes detected in git diff.");
+      expect(stderr).toContain("WARNING:");
+      expect(stderr).toContain("collides with an existing export");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

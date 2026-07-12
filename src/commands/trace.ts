@@ -124,6 +124,11 @@ export function registerTraceCommand(program: Command): void {
       // arrays would hide the real problem (no trace was ever captured).
       if (ingested.shardCount === 0) {
         console.error(TRACE_NO_SHARDS_GUIDANCE);
+        // review F1 — this hard error exits before any JSON payload is ever
+        // produced, so warnings would otherwise be silently lost regardless
+        // of `--format`. Print unconditionally, mirroring `impact.ts`'s
+        // early-exit paths.
+        reportGraphWarnings(warnings);
         process.exit(1);
       }
 

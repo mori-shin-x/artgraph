@@ -66,11 +66,11 @@ export interface RenameResult {
   // issue #265 — `buildGraph()`'s own warnings (pathological-bracket-nesting,
   // class-member-collision, …) from the pre-rewrite scan that resolved
   // `existingIds` below. Kept as a separate field from `warnings` above (a
-  // different, rename-specific warning type) to avoid conflating the two.
-  // Only the pre-rewrite scan's warnings are surfaced — `reconcileAfterWrite`
-  // runs a SECOND scan after files are written purely to refresh the lock,
-  // and re-surfacing that scan's warnings here would just print the same
-  // findings twice for the common case where the rewrite doesn't change them.
+  // different, rename-specific warning type). `reconcileAfterWrite` runs a
+  // SECOND scan after files are written purely to refresh the lock, and that
+  // second scan's warnings are currently discarded outright — not deduped
+  // against these, just dropped. See issue #273 for surfacing (or properly
+  // deduping) that post-write scan's warnings.
   buildWarnings: BuildWarning[];
   applied: boolean;
 }
@@ -133,6 +133,9 @@ function assertRenameableSource(id: string): void {
 function reconcileAfterWrite(rootDir: string, config: ArtgraphConfig): void {
   const lockFilePath = resolve(rootDir, config.lockFile);
   if (!existsSync(lockFilePath)) return;
+  // This second scan's `warnings` are discarded outright (see the
+  // `buildWarnings` doc on `RenameResult` above — issue #273 tracks properly
+  // surfacing them instead of dropping them on the floor).
   const { graph } = scan(rootDir, config);
   reconcile(rootDir, config, graph);
 }

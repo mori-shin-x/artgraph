@@ -205,8 +205,11 @@ function splitIncludePatterns(
 // issue #266 — an include list made up ENTIRELY of negative patterns (or an
 // empty list) has no positive pattern to match anything against, so it
 // degenerates to zero files rather than an error — the natural reading of
-// "exclude everything, include nothing" (fast-glob itself would otherwise
-// throw on an empty `patterns` array).
+// "exclude everything, include nothing". fast-glob@3.3.3's `sync([])` already
+// returns `[]` on its own (it's an empty *string* pattern, e.g. `sync([""])`,
+// that throws) — this early return isn't working around a throw, it's just
+// making the "nothing to match" intent explicit rather than leaning on
+// fast-glob's incidental empty-array behavior.
 export function globCodeFiles(rootDir: string, patterns: string[]): string[] {
   const { include, ignore } = splitIncludePatterns(rootDir, patterns);
   if (include.length === 0) return [];

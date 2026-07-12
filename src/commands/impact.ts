@@ -179,6 +179,11 @@ export function registerImpactCommand(program: Command): void {
             );
           } else {
             console.log("No changes detected in git diff.");
+            // review F1 — the json branch above already folds `warnings` into
+            // the payload; this text branch was the asymmetric gap (PR
+            // discussion said "and to the final output" but only actually
+            // wired the json side here).
+            reportGraphWarnings(warnings, opts.format);
           }
           process.exit(0);
         }
@@ -215,6 +220,11 @@ export function registerImpactCommand(program: Command): void {
               "       to enable symbol-mode lookup.",
             ].join("\n"),
           );
+          // review F1 — this hard error exits before any JSON payload is ever
+          // produced, so warnings would otherwise be silently lost regardless
+          // of `--format`. Print unconditionally (no `format` arg) rather
+          // than gating on `opts.format`.
+          reportGraphWarnings(warnings);
           process.exit(1);
         }
       }
@@ -262,11 +272,16 @@ export function registerImpactCommand(program: Command): void {
             `        or verify that \`mode: "symbol"\` is set in \`.artgraph.json\` and re-scan.`,
           );
         }
+        // review F1 — same rationale as the scan-mode-mismatch exit above:
+        // no JSON payload is produced on this path, so print unconditionally.
+        reportGraphWarnings(warnings);
         process.exit(1);
       }
 
       if (startIds.length === 0) {
         console.error(`No matching nodes found for: ${inputDisplayLabels.join(", ")}`);
+        // review F1 — ditto: hard error, no JSON payload produced.
+        reportGraphWarnings(warnings);
         process.exit(1);
       }
 
