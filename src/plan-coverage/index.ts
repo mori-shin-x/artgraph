@@ -42,7 +42,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import { loadConfig } from "../config.js";
 import { scan } from "../scan.js";
-import { readLock } from "../lock.js";
+import { readLockWithMeta, warnIfNewerLockSchema } from "../lock.js";
 import { entryOriginIds, impact, resolveStartIds, resolveOriginReqs } from "../graph/traverse.js";
 import { extractFiles, type TaskBlock } from "../parsers/sdd-files.js";
 import type { SymbolEntry } from "../types.js";
@@ -442,7 +442,10 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
   // Load graph + lock once.
   const config = loadConfig(repoRoot);
   const { graph, warnings } = scan(repoRoot, config);
-  const lock = readLock(repoRoot, config.lockFile);
+  // issue #243 — plan-coverage is read-only w.r.t. the lock: warn on a
+  // newer schema and keep going (see commands/check.ts's identical comment).
+  const { lock, schemaVersion } = readLockWithMeta(repoRoot, config.lockFile);
+  warnIfNewerLockSchema(schemaVersion, config.lockFile);
 
   // Read source texts. tasks.md is the spine; plan.md / spec.md are
   // optional (per FR-015 they only contribute to mention detection).

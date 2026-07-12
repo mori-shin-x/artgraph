@@ -16,7 +16,7 @@ import {
 } from "./rename.js";
 import { renameLockKey, splitLockKey, mergeLockKeys } from "./rename-lock.js";
 import type { LockChange } from "./rename-lock.js";
-import { readLock } from "./lock.js";
+import { readLock, readLockWithMeta, assertLockSchemaWritable } from "./lock.js";
 import { scan, reconcile } from "./scan.js";
 import { loadConfig } from "./config.js";
 import { globCodeFiles } from "./parsers/typescript.js";
@@ -31,6 +31,11 @@ export interface RenameOptions {
   dryRun: boolean;
   format: "json" | "text";
   rootDir: string;
+  /** issue #243 — overwrite a lock whose `_meta.schemaVersion` is newer than
+   * this CLI's `LOCK_SCHEMA_VERSION` (see `assertLockSchemaWritable`). Only
+   * consulted for a non-dry-run apply — `--dry-run` never touches the lock
+   * file, so it is exempt from the guard. */
+  force?: boolean;
 }
 
 export type RenameWarning =
@@ -130,14 +135,30 @@ function assertRenameableSource(id: string): void {
  * this, `artgraph check` immediately reports drift for every rewritten node
  * (F1). Only runs when a lock file already existed.
  */
-function reconcileAfterWrite(rootDir: string, config: ArtgraphConfig): void {
+function reconcileAfterWrite(rootDir: string, config: ArtgraphConfig, force: boolean): void {
   const lockFilePath = resolve(rootDir, config.lockFile);
   if (!existsSync(lockFilePath)) return;
   // This second scan's `warnings` are discarded outright (see the
   // `buildWarnings` doc on `RenameResult` above — issue #273 tracks properly
   // surfacing them instead of dropping them on the floor).
   const { graph } = scan(rootDir, config);
-  reconcile(rootDir, config, graph);
+  reconcile(rootDir, config, graph, { force });
+}
+
+/**
+ * issue #243 — fail BEFORE any spec/code/test file is rewritten when the
+ * existing lock's schema is newer than this CLI understands and `force` was
+ * not given. Without this early check, `applyWrites` would rewrite every
+ * source file first and only discover the version conflict afterwards (in
+ * `reconcileAfterWrite`), leaving renamed IDs in source files with no
+ * matching lock update — a worse, half-migrated state than refusing upfront.
+ * A no-op when no lock file exists yet (nothing to protect).
+ */
+function assertRenameLockWritable(rootDir: string, config: ArtgraphConfig, force: boolean): void {
+  const lockFilePath = resolve(rootDir, config.lockFile);
+  if (!existsSync(lockFilePath)) return;
+  const { schemaVersion } = readLockWithMeta(rootDir, config.lockFile);
+  assertLockSchemaWritable(schemaVersion, config.lockFile, force);
 }
 
 interface ScanContext {
@@ -169,19 +190,21 @@ function applyWrites(
   config: ArtgraphConfig,
   filesToWrite: Map<string, string>,
   dryRun: boolean,
+  force: boolean,
 ): void {
   if (dryRun) return;
   for (const [absPath, content] of filesToWrite) {
     writeFileSync(absPath, content, "utf-8");
   }
-  reconcileAfterWrite(rootDir, config);
+  reconcileAfterWrite(rootDir, config, force);
 }
 
 // ── executeRename ───────────────────────────────────────────────────
 
 export function executeRename(options: RenameOptions & { from: string; to: string }): RenameResult {
-  const { rootDir, dryRun, from, to } = options;
+  const { rootDir, dryRun, from, to, force = false } = options;
   const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
+  if (!dryRun) assertRenameLockWritable(rootDir, config, force);
 
   // Validate
   if (from === to) {
@@ -245,7 +268,7 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
     filePath,
   }));
 
-  applyWrites(rootDir, config, filesToWrite, dryRun);
+  applyWrites(rootDir, config, filesToWrite, dryRun, force);
 
   return {
     operation: "rename",
@@ -265,8 +288,9 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
 export function executeSplit(
   options: RenameOptions & { splitId: string; intoIds: string[] },
 ): RenameResult {
-  const { rootDir, dryRun, splitId, intoIds } = options;
+  const { rootDir, dryRun, splitId, intoIds, force = false } = options;
   const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
+  if (!dryRun) assertRenameLockWritable(rootDir, config, force);
 
   // Validate
   assertRenameableSource(splitId);
@@ -354,7 +378,7 @@ export function executeSplit(
     splitLockKey(lock, splitId, intoIds),
   );
 
-  applyWrites(rootDir, config, filesToWrite, dryRun);
+  applyWrites(rootDir, config, filesToWrite, dryRun, force);
 
   return {
     operation: "split",
@@ -375,8 +399,9 @@ export function executeSplit(
 export function executeMerge(
   options: RenameOptions & { mergeIds: string[]; intoId: string },
 ): RenameResult {
-  const { rootDir, dryRun, mergeIds, intoId } = options;
+  const { rootDir, dryRun, mergeIds, intoId, force = false } = options;
   const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
+  if (!dryRun) assertRenameLockWritable(rootDir, config, force);
 
   // Validate
   if (mergeIds.length < 1) {
@@ -483,7 +508,7 @@ export function executeMerge(
     filePath,
   }));
 
-  applyWrites(rootDir, config, filesToWrite, dryRun);
+  applyWrites(rootDir, config, filesToWrite, dryRun, force);
 
   return {
     operation: "merge",

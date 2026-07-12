@@ -41,7 +41,7 @@ export function registerScanCommand(program: Command): void {
       }
 
       if (opts.serve || opts.output) {
-        const { readLock } = await import("../lock.js");
+        const { readLockWithMeta, warnIfNewerLockSchema } = await import("../lock.js");
         const { check } = await import("../check.js");
         const { renderGraphData } = await import("../graph/render.js");
         const { startServer, writeStaticExport } = await import("../graph/serve.js");
@@ -52,7 +52,11 @@ export function registerScanCommand(program: Command): void {
         // swallowing them would hide real repo corruption.
         let checkResult;
         try {
-          const lock = readLock(rootDir, config.lockFile);
+          const { lock, schemaVersion } = readLockWithMeta(rootDir, config.lockFile);
+          // issue #243 — this render path is read-only w.r.t. the lock: warn
+          // on a newer schema and keep going (see commands/check.ts's
+          // identical comment).
+          warnIfNewerLockSchema(schemaVersion, config.lockFile);
           if (Object.keys(lock).length > 0) {
             checkResult = check(result.graph, lock);
           }

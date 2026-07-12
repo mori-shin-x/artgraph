@@ -14,6 +14,10 @@ export function registerRenameCommand(program: Command): void {
     .option("--merge <ids...>", "Source IDs to merge")
     .option("--into <ids...>", "Target ID(s) for split or merge")
     .option("--dry-run", "Show changes without applying them")
+    .option(
+      "--force",
+      "Overwrite a lock file written by a newer artgraph (lock schema version newer than this CLI supports). Ignored with --dry-run, which never touches the lock.",
+    )
     .addOption(
       new Option("--format <format>", "Output format").choices(["json", "text"]).default("text"),
     )
@@ -21,7 +25,7 @@ export function registerRenameCommand(program: Command): void {
       const rootDir = process.cwd();
       const { executeRename, executeSplit, executeMerge } = await import("../rename-executor.js");
       const format: "json" | "text" = opts.format;
-      const baseOpts = { dryRun: !!opts.dryRun, format, rootDir };
+      const baseOpts = { dryRun: !!opts.dryRun, format, rootDir, force: !!opts.force };
 
       const fail = (msg: string): never => {
         // Honour --format json even on the error path so JSON consumers never

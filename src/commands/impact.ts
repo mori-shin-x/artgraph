@@ -105,7 +105,7 @@ export function registerImpactCommand(program: Command): void {
 
       const { loadConfig } = await import("../config.js");
       const { scan } = await import("../scan.js");
-      const { readLock } = await import("../lock.js");
+      const { readLockWithMeta, warnIfNewerLockSchema } = await import("../lock.js");
       const { entryOriginIds, impact, resolveStartIds, resolveOriginReqs } =
         await import("../graph/traverse.js");
       const config = loadConfig(rootDir);
@@ -128,7 +128,10 @@ export function registerImpactCommand(program: Command): void {
       // `check --diff`'s equivalent branch) and to the final output at the
       // bottom of this action.
       const { graph, warnings } = scan(rootDir, config);
-      const lock = readLock(rootDir, config.lockFile);
+      // issue #243 — read-only w.r.t. the lock: warn on a newer schema and
+      // keep going (see commands/check.ts's identical comment).
+      const { lock, schemaVersion } = readLockWithMeta(rootDir, config.lockFile);
+      warnIfNewerLockSchema(schemaVersion, config.lockFile);
 
       // spec 020 (FR-017) — load evidence once, resolve the staleness
       // exclusion set (only when `trace.staleness === "exclude"`) so both the

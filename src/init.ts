@@ -651,7 +651,11 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
 
   if (stages.scan) {
     const scanResult = scan(abs, config);
-    reconcile(abs, config, scanResult.graph);
+    // issue #243 — `init --force` already means "overwrite existing
+    // conflicting state" (config / Skills / integration files); extending it
+    // to a newer-schema lock keeps that meaning consistent instead of
+    // requiring a second, redundant force flag just for this one stage.
+    reconcile(abs, config, scanResult.graph, { force: options.force ?? false });
     scanSummary = {
       nodeCount: scanResult.nodeCount,
       edgeCount: scanResult.edgeCount,
