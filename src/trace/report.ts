@@ -85,6 +85,19 @@ function pairCompare(a: ClaimEvidencePair, b: ClaimEvidencePair): number {
  * evidence (`perReq`/`reqsByNode`) at all, only pre-existing `implements`
  * claims, so it cannot reintroduce the double-counting this note warns
  * against. See that function's doc, below `buildContainerIndex`.
+ *
+ * issue #267 adds a THIRD, narrower exception, `ctorClassExercised` (below):
+ * a constructor's evidence is recorded by the capture engine under the
+ * CLASS's own name (V8-compatible naming — see `src/vitest/plugin.ts`'s
+ * `kind === "constructor" ? className : ...`), never under the ctor's own
+ * `Class.constructor` symbol id (spec 021), so it lands one containment
+ * level ABOVE the claim instead of below it — the mirror image of the
+ * class-claim / method-evidence case this function's roll-up already
+ * handles. That direction is intentionally NOT generalized here (a claim
+ * corroborating from ANY exercised descendant OR ancestor would let a
+ * sibling method's evidence corroborate an unrelated method's claim); it is
+ * special-cased to `.constructor`-suffixed claim nodes only, directly in
+ * `classifyEvidence`'s loop, not folded into this function.
  */
 function reqExercises(
   containsIndex: Map<string, string[]>,
@@ -100,6 +113,58 @@ function reqExercises(
   seen.add(node);
   for (const target of containsIndex.get(node) ?? []) {
     if (reqExercises(containsIndex, trace, reqId, target, seen)) return true;
+  }
+  return false;
+}
+
+/**
+ * issue #267 — ctor-only, PARENT-ward corroboration check, the mirror image
+ * of `reqExercises`'s child-ward roll-up above. A `symbol:<path>#Class.
+ * constructor` `@impl` claim's evidence is recorded by the capture engine
+ * (cdp AND instrument both — `src/vitest/plugin.ts`) under the CLASS's own
+ * V8-compatible name, because V8 itself has no distinct `functionName` for a
+ * constructor call; `src/trace/symbol-table.ts` Source 1 then resolves that
+ * class name straight to the class's OWN symbol id, never to the ctor's. So
+ * a real constructor execution always shows up as evidence on the CLASS
+ * node, one containment level ABOVE the ctor claim, never below it or on
+ * the ctor node itself — `reqExercises`'s existing (child-ward) roll-up
+ * structurally cannot see it.
+ *
+ * Deliberately NOT a general "roll evidence up to any claim" rule (that
+ * direction is exactly what `reqExercises`'s own doc above forbids — it
+ * would let a sibling method's or property's evidence corroborate an
+ * unrelated method's claim). It is safe ONLY for `.constructor`: a method
+ * hit is recorded under the method's OWN name, a getter/setter under `"get
+ * <key>"`/`"set <key>"` (`src/vitest/plugin.ts`'s `accessorName`), and a
+ * static block is not attributed to any member symbol at all — none of
+ * those ever land on the bare class name, so resolving a class-name hit as
+ * ctor-corroboration can never accidentally corroborate a different
+ * member's claim. Checked at ONE level only (the direct container via
+ * `containerIndex`), and only the parent's OWN direct evidence — NOT a
+ * further `reqExercises` roll-down from the parent, which would reopen the
+ * "sibling method corroborates via the class" hole this function exists to
+ * avoid while staying narrow.
+ *
+ * JS additionally permits `static constructor() {}` — a static method
+ * literally named "constructor" — which spec 021 FR-003's same-name
+ * convergence resolves to the SAME `symbol:<path>#Class.constructor` node as
+ * the instance ctor, so a claim on that node is corroborated by
+ * instantiation evidence exactly as above; this is just FR-003's existing
+ * "a merged symbol's claim is corroborated by evidence from any of its
+ * occurrences" semantics, not a new case. TypeScript rejects the same code
+ * with TS1089 (`'static' modifier cannot appear on a constructor
+ * declaration`), so this path is unreachable there.
+ */
+function ctorClassExercised(
+  containerIndex: Map<string, string[]>,
+  trace: IngestedTrace,
+  reqId: string,
+  node: string,
+): boolean {
+  const coverage = trace.perReq.get(reqId);
+  if (!coverage) return false;
+  for (const parent of containerIndex.get(node) ?? []) {
+    if (coverage.symbols.includes(parent) || coverage.files.includes(parent)) return true;
   }
   return false;
 }
@@ -179,6 +244,41 @@ function hasAncestorClaim(
 }
 
 /**
+ * issue #267 F2 mirror-noise follow-up — the CHILD-ward counterpart of
+ * `hasAncestorClaim` immediately above (same non-evidence, claims-only
+ * nature: walks `claimsByNode` via `containsIndex`, never touches
+ * `perReq`/`reqsByNode`). Asks "does any DESCENDANT of `node`, at any depth,
+ * already carry an `@impl reqId` CLAIM?" Used ONLY to hold back a
+ * `suggestedImpls` candidate, same as `hasAncestorClaim`.
+ *
+ * Motivating case (issue #267's ctor corroboration, above): a constructor
+ * claims REQ-X, and the instantiation evidence resolves to the CLASS node
+ * (never the ctor's own id — see `ctorClassExercised`'s doc). Once the ctor
+ * claim corroborates via that mechanism, the class node's OWN evidence entry
+ * in `trace.reqsByNode` still exists and, without this check, would surface
+ * a redundant "@impl REQ-X on the class" suggestion — the class is already
+ * covered one level down, so the suggestion is noise, not signal. As with
+ * `hasAncestorClaim`, this only suppresses a same-`reqId` match: a
+ * descendant claiming a DIFFERENT REQ says nothing about whether `node`
+ * itself should claim reqId.
+ */
+function hasDescendantClaim(
+  containsIndex: Map<string, string[]>,
+  claimsByNode: Map<string, Set<string>>,
+  reqId: string,
+  node: string,
+  seen: Set<string> = new Set(),
+): boolean {
+  for (const child of containsIndex.get(node) ?? []) {
+    if (seen.has(child)) continue;
+    seen.add(child);
+    if (claimsByNode.get(child)?.has(reqId)) return true;
+    if (hasDescendantClaim(containsIndex, claimsByNode, reqId, child, seen)) return true;
+  }
+  return false;
+}
+
+/**
  * FR-013 exclusivity predicate: exactly one distinct REQ's evidence reaches
  * `node`. Factored out of `classifyEvidence` (below) so `src/coverage.ts`'s
  * `exercised` status computation (FR-014) shares the EXACT same "what counts
@@ -228,7 +328,16 @@ export function classifyEvidence(
     const reqIdsForNode = claimsByNode.get(node);
     if (reqIdsForNode) reqIdsForNode.add(reqId);
     else claimsByNode.set(node, new Set([reqId]));
-    if (reqExercises(containsIndex, trace, reqId, node)) {
+    // issue #267: a `.constructor`-suffixed symbol claim ALSO corroborates
+    // when the DIRECT containing class node itself is exercised for the
+    // same reqId — see `ctorClassExercised`'s doc for why this parent-ward
+    // check is safe only for constructors (never generalized to any claim
+    // node, which would let a sibling's evidence corroborate this one).
+    const isCtorClaim = node.startsWith("symbol:") && node.endsWith(".constructor");
+    if (
+      reqExercises(containsIndex, trace, reqId, node) ||
+      (isCtorClaim && ctorClassExercised(containerIndex, trace, reqId, node))
+    ) {
       corroborated.push({ reqId, node });
     } else {
       unexercisedClaims.push({ reqId, node });
@@ -247,8 +356,14 @@ export function classifyEvidence(
       // means a class-granularity `@impl` has already "found" this
       // requirement's code — suppress the redundant member-level nudge (see
       // `hasAncestorClaim`'s doc above for why this is not a `reqExercises`
-      // roll-up).
-      if (!hasAncestorClaim(containerIndex, claimsByNode, reqId!, node)) {
+      // roll-up). issue #267 F2 follow-up: the mirror case — a DESCENDANT
+      // (typically a `.constructor` claim whose evidence rolled up to this
+      // very node, per `ctorClassExercised`) already claiming this SAME
+      // reqId is equally redundant noise (see `hasDescendantClaim`'s doc).
+      if (
+        !hasAncestorClaim(containerIndex, claimsByNode, reqId!, node) &&
+        !hasDescendantClaim(containsIndex, claimsByNode, reqId!, node)
+      ) {
         suggestedImpls.push({ reqId: reqId!, node });
       }
     }

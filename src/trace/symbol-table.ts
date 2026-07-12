@@ -193,10 +193,18 @@ export function buildSymbolNameTable(rootDir: string, includePatterns: string[])
         // CLASS's own name (never "constructor"), so registering
         // "constructor" as a candidate name here would never match a real
         // hit — it's simply not the name V8 ever reports. That is a
-        // different gap from this fix (member-id resolution) and isn't
-        // rescued by the `contains` roll-up added in report.ts either,
-        // since a constructor hit already resolves straight to the class
-        // via its own name, never via a member name lookup at all.
+        // different gap from this fix (member-id resolution): a constructor
+        // hit already resolves straight to the class via its own name,
+        // never via a member name lookup at all, so there is nothing for
+        // THIS table to fix. `report.ts`'s `contains` roll-up (`reqExercises`,
+        // child-ward only) doesn't rescue it either, since the evidence
+        // lands one level ABOVE a `.constructor` claim, not below it.
+        // issue #267's actual fix lives entirely in `report.ts`: a narrow,
+        // `.constructor`-suffixed-claim-only PARENT-ward check
+        // (`ctorClassExercised`, called from `classifyEvidence`) that
+        // corroborates the ctor claim when the class node itself is
+        // exercised for the same reqId — see that function's doc for why
+        // it's safe to special-case only constructors this way.
         if (member.kind === "constructor") continue;
         if (member.key?.type !== "Identifier" || !member.key.name) continue;
         const memberSymbolId = `symbol:${relPath}#${exportedName}.${member.key.name}`;
