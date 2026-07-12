@@ -239,7 +239,7 @@ Typically fired by the `artgraph-plan-coverage` Skill after `/speckit-tasks`
 or after editing `.kiro/specs/<name>/tasks.md`. Manual invocation is fine
 during troubleshooting.
 
-## `artgraph reconcile`
+## `artgraph reconcile` <a id="artgraph-reconcile"></a>
 
 Rebuild `.trace.lock` from the current graph. Run after intentional spec/code/
 test edits when `artgraph check` reports drift you accept.
@@ -249,6 +249,16 @@ artgraph reconcile
 ```
 
 `rename` runs this automatically after a non-preview rename.
+
+**Lock schema version**: `.trace.lock` carries a `_meta.schemaVersion` stamp.
+If the on-disk lock was written by a *newer* artgraph than the one running
+`reconcile` (or `rename`, or `init`'s initial scan), the write is refused with
+a clear error — rebuilding it here would silently discard information the
+newer CLI understood. `--force` overwrites it anyway (a "Downgrading lock
+schema vN -> vM" notice is printed, and newer entries may be lost). If this
+happens because **CI is pinned to an older artgraph version**, update CI's
+artgraph instead of reaching for `--force` there — `--force` on every CI run
+just repeatedly discards whatever the newer local CLI wrote.
 
 ## `artgraph rename`
 
@@ -276,6 +286,12 @@ Notes:
   renamed ID is guaranteed to be re-discoverable by the next scan.
 - After a non-preview run the lock is automatically reconciled, so
   `artgraph check` passes immediately for `rename` and `merge`.
+- **Lock schema version**: like `reconcile`, a non-preview `rename` refuses to
+  touch a `.trace.lock` written by a newer artgraph unless `--force` is given
+  (see the note under [`artgraph reconcile`](#artgraph-reconcile) above).
+  `--dry-run` also warns on a newer-schema lock (it never writes, so it isn't
+  rejected) — the same "update CI's artgraph, don't `--force` it" guidance
+  applies.
 
 ### rename does not reassign `@impl` tags <a id="rename-does-not-reassign-impl-tags"></a>
 

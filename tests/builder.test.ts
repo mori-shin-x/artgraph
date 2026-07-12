@@ -281,6 +281,59 @@ artgraph:
       rmSync(tmpRoot, { recursive: true, force: true });
     }
   });
+
+  // F1 (meta-review, issue #243 follow-up) — `_meta` exact-match collision
+  // with the lock file's reserved stamp key. Two collision paths:
+  it('F1: warns when a custom reqPatterns match produces a req ID literally "_meta"', () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-meta-collision-req-"));
+    const tmpSpecs = resolve(tmpRoot, "specs");
+    mkdirSync(tmpSpecs, { recursive: true });
+    writeFileSync(
+      resolve(tmpSpecs, "meta-collision.md"),
+      `# Test\n\n- _meta: this list item's ID literally collides with the lock's _meta key\n`,
+    );
+
+    try {
+      const tmpConfig: ArtgraphConfig = {
+        ...config,
+        include: [],
+        testPatterns: [],
+        reqPatterns: { listItem: "^(_meta):\\s" },
+      };
+      const { graph, warnings } = buildGraph(tmpRoot, tmpConfig);
+      expect(graph.nodes.has("_meta")).toBe(true);
+      const metaWarnings = warnings.filter((w) => w.type === "reserved-prefix" && w.id === "_meta");
+      expect(metaWarnings.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('F1: warns when frontmatter `artgraph: { node_id: _meta }` assigns a doc ID literally "_meta"', () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-meta-collision-doc-"));
+    const tmpSpecs = resolve(tmpRoot, "specs");
+    mkdirSync(tmpSpecs, { recursive: true });
+    writeFileSync(
+      resolve(tmpSpecs, "meta-collision-doc.md"),
+      `---
+artgraph:
+  node_id: "_meta"
+---
+# Test
+`,
+    );
+
+    try {
+      const tmpConfig: ArtgraphConfig = { ...config, include: [], testPatterns: [] };
+      const { graph, warnings } = buildGraph(tmpRoot, tmpConfig);
+      expect(graph.nodes.has("_meta")).toBe(true);
+      expect(graph.nodes.get("_meta")?.kind).toBe("doc");
+      const metaWarnings = warnings.filter((w) => w.type === "reserved-prefix" && w.id === "_meta");
+      expect(metaWarnings.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("buildGraph: contains edges with autoNodes=false + explicit node_id", () => {

@@ -37,11 +37,15 @@ export function registerCheckCommand(program: Command): void {
       }
       const { loadConfig } = await import("../config.js");
       const { scan } = await import("../scan.js");
-      const { readLock } = await import("../lock.js");
+      const { readLockWithMeta, warnIfNewerLockSchema } = await import("../lock.js");
       const { check } = await import("../check.js");
       const config = loadConfig(rootDir);
       const { graph, warnings } = scan(rootDir, config);
-      const lock = readLock(rootDir, config.lockFile);
+      // issue #243 — `check` is read-only w.r.t. the lock: a newer-schema
+      // lock is still readable (unknown fields are simply invisible), so
+      // warn and keep going rather than fail like the write paths do.
+      const { lock, schemaVersion } = readLockWithMeta(rootDir, config.lockFile);
+      warnIfNewerLockSchema(schemaVersion, config.lockFile);
 
       const testResults = await resolveTestResults(config, rootDir);
 

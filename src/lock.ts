@@ -32,7 +32,32 @@ export class LockSchemaError extends Error {
   }
 }
 
-function validateLockSchema(lock: unknown): asserts lock is LockFile {
+// issue #243 — lock schema version stamp. Mirrors `parse-cache.ts`'s
+// `SCHEMA_VERSION` convention: bump this whenever the on-disk `LockEntry`
+// shape gains/changes a field a strictly-older reader would silently
+// misinterpret (e.g. spec 021's method-grain symbol entries). Before this
+// stamp existed, an OLDER CLI's `reconcile` on a lock a NEWER CLI wrote would
+// rebuild the lock from ITS OWN (coarser) model and silently overwrite the
+// finer-grained entries — no warning, exit 0 (PR #242 review). `_meta` is a
+// reserved top-level key (`{ "_meta": { "schemaVersion": N }, "<nodeId>":
+// {...}, ... }`); a lock predating this field has no `_meta` key at all,
+// which is treated as schemaVersion 0 (legacy) throughout this module.
+export const LOCK_SCHEMA_VERSION = 1;
+
+/**
+ * Thrown by the lock-WRITE guard (`assertLockSchemaWritable`) when the
+ * on-disk lock's `_meta.schemaVersion` is newer than this build understands
+ * and the caller did not pass `force`. Distinct from `LockSchemaError` (shape
+ * corruption) — this is a version mismatch, not malformed JSON.
+ */
+export class LockSchemaVersionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LockSchemaVersionError";
+  }
+}
+
+function validateLockSchema(lock: unknown): asserts lock is Record<string, unknown> {
   if (lock === null || typeof lock !== "object" || Array.isArray(lock)) {
     throw new LockSchemaError(
       `LockFile must be a JSON object at the top level. Delete .trace.lock and run \`artgraph reconcile\` to regenerate.`,
@@ -40,28 +65,159 @@ function validateLockSchema(lock: unknown): asserts lock is LockFile {
   }
 }
 
-export function readLock(rootDir: string, lockPath: string): LockFile {
+export interface ReadLockResult {
+  /** Entry map only — `_meta` is never present as a key here (INV: every
+   * existing consumer that iterates a `LockFile` as an entry map — drift
+   * checks, rename/merge, plan-coverage — must never see `_meta` as a
+   * pseudo-entry). */
+  lock: LockFile;
+  /** `_meta.schemaVersion` from the on-disk file, or `0` when absent (no
+   * lock file at all, or a pre-#243 lock with no `_meta` key). */
+  schemaVersion: number;
+}
+
+/**
+ * Reads the lock file and separates the reserved `_meta` stamp from the
+ * entry map. `readLock` (below) is a thin wrapper that discards
+ * `schemaVersion` for the many existing call sites that only ever consumed
+ * entries; call sites that need to gate on version (write paths via
+ * `assertLockSchemaWritable`, read-only paths via `warnIfNewerLockSchema`)
+ * use this directly instead.
+ */
+export function readLockWithMeta(rootDir: string, lockPath: string): ReadLockResult {
   const fullPath = resolve(rootDir, lockPath);
-  if (!existsSync(fullPath)) return {};
+  if (!existsSync(fullPath)) return { lock: {}, schemaVersion: 0 };
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(fullPath, "utf-8"));
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`Warning: failed to parse ${fullPath}, treating as empty: ${msg}`);
-    return {};
+    return { lock: {}, schemaVersion: 0 };
   }
   // Schema validation is a hard fail (LockSchemaError), not a soft warning:
   // a non-object top level would cause cryptic TypeErrors in rename / merge.
   validateLockSchema(parsed);
-  return parsed;
+  const { _meta, ...entries } = parsed as { _meta?: unknown } & Record<string, unknown>;
+  let schemaVersion = 0;
+  if (_meta !== undefined) {
+    const raw =
+      _meta && typeof _meta === "object" && !Array.isArray(_meta)
+        ? (_meta as { schemaVersion?: unknown }).schemaVersion
+        : undefined;
+    // F2/F3 (meta-review, issue #243 follow-up): `_meta` is present but its
+    // `schemaVersion` cannot be read as a non-negative integer — a string,
+    // an array, `null`, a bare `{}` with no `schemaVersion` field, a
+    // non-integer (1.5), or a negative number. Previously this fell through
+    // to legacy (0) with NO warning, indistinguishable from a genuine
+    // pre-#243 lock that never had a `_meta` key at all — silently hiding a
+    // corrupted or hand-edited stamp. This is a deliberate fail-open: warn
+    // once to stderr, then keep treating the lock as schema v0 (legacy)
+    // rather than blocking every read-only command on a malformed stamp.
+    if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0) {
+      schemaVersion = raw;
+    } else {
+      console.error(
+        `Warning: ${fullPath} has a malformed _meta.schemaVersion (${JSON.stringify(raw)}); ` +
+          `expected a non-negative integer. Treating this lock as schema v0 (legacy).`,
+      );
+      schemaVersion = 0;
+    }
+  }
+  return { lock: entries as LockFile, schemaVersion };
+}
+
+export function readLock(rootDir: string, lockPath: string): LockFile {
+  return readLockWithMeta(rootDir, lockPath).lock;
+}
+
+/**
+ * Write-path guard (issue #243): refuse to rebuild/overwrite a lock whose
+ * on-disk `_meta.schemaVersion` is newer than `LOCK_SCHEMA_VERSION`, unless
+ * `force` is set. Callers: `scan.ts#reconcile` (the sole `writeLock` call
+ * site) and `rename-executor.ts` (fail BEFORE any source file is rewritten,
+ * so a rejected rename never leaves spec/code files mutated with no matching
+ * lock update). Read-only commands (check/impact/plan-coverage) must NOT
+ * call this — they call `warnIfNewerLockSchema` instead and keep running.
+ */
+export function assertLockSchemaWritable(
+  schemaVersion: number,
+  lockFile: string,
+  force: boolean,
+): void {
+  if (schemaVersion <= LOCK_SCHEMA_VERSION) return;
+  if (force) {
+    // F5 (meta-review) — `--force` on init/reconcile/rename means "downgrade
+    // the lock and accept the loss", not "silently pretend nothing
+    // happened". Without this, the exact PR #242 failure mode (newer
+    // fine-grained entries coarsened/overwritten with no trace) reappears
+    // for anyone who reaches for `--force` without realizing this guard is
+    // what it's overriding.
+    console.error(
+      `Downgrading lock schema v${schemaVersion} -> v${LOCK_SCHEMA_VERSION} (newer entries may be lost): ${lockFile}`,
+    );
+    return;
+  }
+  throw new LockSchemaVersionError(
+    `${lockFile} was written by a newer version of artgraph (lock schema v${schemaVersion}; ` +
+      `this CLI only understands up to v${LOCK_SCHEMA_VERSION}). Rebuilding it with this CLI ` +
+      `would silently discard information the newer CLI wrote (e.g. finer-grained entries). ` +
+      `Update artgraph to the version that wrote this lock, or re-run with --force to overwrite ` +
+      `it anyway (accepting that loss).`,
+  );
+}
+
+/**
+ * Read-only-path warning (issue #243): a newer-schema lock is still readable
+ * (unknown fields are simply invisible to this build), so `check` / `impact`
+ * / `plan-coverage` continue rather than fail — but a silent continue would
+ * reproduce the exact PR #242 bug for anyone who doesn't also run a write
+ * command. Warns once to stderr and returns.
+ */
+export function warnIfNewerLockSchema(schemaVersion: number, lockFile: string): void {
+  if (schemaVersion <= LOCK_SCHEMA_VERSION) return;
+  console.error(
+    `WARNING: ${lockFile} was written by a newer version of artgraph (lock schema v${schemaVersion}; ` +
+      `this CLI only understands up to v${LOCK_SCHEMA_VERSION}). Continuing, but newer-format ` +
+      `details may not be reflected below — update artgraph for full fidelity.`,
+  );
 }
 
 export function writeLock(rootDir: string, lockPath: string, lock: LockFile): void {
   const fullPath = resolve(rootDir, lockPath);
   assertWithinRoot(rootDir, fullPath);
   const tmpPath = resolve(dirname(fullPath), `.${basename(fullPath)}.tmp`);
-  writeFileSync(tmpPath, JSON.stringify(lock, null, 2) + "\n", "utf-8");
+  // F1 (meta-review, issue #243 follow-up): `_meta` is the reserved top-level
+  // stamp key stamped below. If `lock` itself already carries a bare `_meta`
+  // entry — from a user-defined `reqPatterns` match, or a markdown
+  // frontmatter `artgraph: { node_id: _meta }` doc id accepted with no
+  // validation (see `src/parsers/markdown.ts`'s `docId`) — the object spread
+  // below would let that entry silently win over the stamp (a later
+  // duplicate key wins, and `lock`'s own `_meta` comes after the stamp
+  // literal in `{ _meta: stamp, ...lock }`). The file on disk would then have
+  // a `_meta` that is actually a `LockEntry`, not `{ schemaVersion }` — the
+  // next `readLockWithMeta` strips it out as "meta", making the real entry
+  // invisible and mis-reporting schemaVersion 0. Fail loudly instead of
+  // silently corrupting the lock; `src/graph/builder.ts` also warns on this
+  // exact-match collision at scan time, before it ever reaches a write.
+  if (Object.prototype.hasOwnProperty.call(lock, "_meta")) {
+    throw new Error(
+      `Refusing to write ${fullPath}: the entry map contains a reserved "_meta" key, which ` +
+        `would silently overwrite the lock schema stamp on write and make the entry invisible ` +
+        `on the next read. This can come from a req/task ID that is literally "_meta" (check a ` +
+        `custom reqPatterns match) or a markdown frontmatter "artgraph: { node_id: _meta }". ` +
+        `Rename the offending ID and re-run.`,
+    );
+  }
+  // issue #243 — `_meta` is stamped fresh on every write. The reader
+  // (`readLockWithMeta`) separates it from the entry map BY NAME (object
+  // destructuring), not by key position, so the key order here is cosmetic
+  // and never load-bearing: `renameLockKey`/`splitLockKey`/`mergeLockKeys`
+  // operate on the entry-only `LockFile` (no `_meta` key ever reaches them,
+  // see `readLock` above), and the subsequent `reconcile()` → `writeLock()`
+  // re-stamps `_meta` unconditionally regardless of what keys moved.
+  const stamped = { _meta: { schemaVersion: LOCK_SCHEMA_VERSION }, ...lock };
+  writeFileSync(tmpPath, JSON.stringify(stamped, null, 2) + "\n", "utf-8");
   renameSync(tmpPath, fullPath);
 }
 

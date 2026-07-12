@@ -14,7 +14,7 @@ export function registerInitCommand(program: Command): void {
     )
     .option(
       "--force",
-      "Overwrite existing .artgraph.json, distributed Skill files, and integration files. Refuses symlinks even with --force.",
+      "Overwrite existing .artgraph.json, distributed Skill files, and integration files. Also overrides the lock schema-version write guard (downgrades a newer-schema .trace.lock, printing a warning; see `artgraph reconcile`). Refuses symlinks even with --force.",
     )
     .option("--minimal", "Bare config only — opt out of every extra setup stage")
     // Stage opt-outs (in default mode)
