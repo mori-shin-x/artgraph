@@ -7,6 +7,10 @@
       "changelog-path": "CHANGELOG.md",
       "include-v-in-tag": true,
       "include-component-in-tag": false,
+      "extra-files": [
+        { "type": "generic", "path": "templates/integrate/speckit/extension.yml" },
+        { "type": "generic", "path": ".specify/extensions/artgraph/extension.yml" }
+      ],
       "bootstrap-sha": "ffe249b7d25f070ad8becf119e40147675c69e38",
       "changelog-sections": [
         { "type": "feat", "section": "Features" },
