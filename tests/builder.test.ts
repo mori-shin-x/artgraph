@@ -1622,6 +1622,82 @@ describe("buildGraph: negative include patterns (issue #266)", () => {
   });
 });
 
+// issue #287 — `buildGraph` integration test: a config whose `include`
+// still matches files under node_modules (e.g. a pre-#287 config that
+// predates the `"!**/node_modules/**"` default) should surface a
+// `node-modules-in-scan` warning, while a config carrying the negation
+// should scan cleanly and not false-positive on a file that merely has
+// "node_modules" as a substring of its own name.
+describe("buildGraph: node_modules scan warning (issue #287)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-t287-builder-"));
+    // 6 files across two "packages" so the warning's `files` cap (5) is
+    // actually exercised.
+    write("node_modules/pkgA/a.ts", "export const a = 1;\n");
+    write("node_modules/pkgA/b.ts", "export const b = 1;\n");
+    write("node_modules/pkgA/c.ts", "export const c = 1;\n");
+    write("node_modules/pkgB/d.ts", "export const d = 1;\n");
+    write("node_modules/pkgB/e.ts", "export const e = 1;\n");
+    write("node_modules/pkgB/f.ts", "export const f = 1;\n");
+    // Segment-check regression fixture: this file's name merely CONTAINS
+    // "node_modules" as a substring — it must never be treated as if it
+    // were under a node_modules/ directory.
+    write("node_modules.ts", "export const notNodeModules = 1;\n");
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("warns when include has no node_modules exclusion, capping files at 5", () => {
+    const cfg: ArtgraphConfig = {
+      include: ["**/*.ts"],
+      specDirs: [],
+      testPatterns: [],
+      lockFile: ".trace.lock",
+    };
+    const { warnings } = buildGraph(root, cfg);
+    const nmWarnings = warnings.filter((w) => w.type === "node-modules-in-scan");
+    expect(nmWarnings).toHaveLength(1);
+    expect(nmWarnings[0].message).toContain("6");
+    expect(nmWarnings[0].message).toContain("!**/node_modules/**");
+    expect(nmWarnings[0].files.length).toBeLessThanOrEqual(5);
+  });
+
+  it("does not warn and excludes node_modules files when include carries the negation", () => {
+    const cfg: ArtgraphConfig = {
+      include: ["**/*.ts", "!**/node_modules/**"],
+      specDirs: [],
+      testPatterns: [],
+      lockFile: ".trace.lock",
+    };
+    const { graph, warnings } = buildGraph(root, cfg);
+    expect(warnings.some((w) => w.type === "node-modules-in-scan")).toBe(false);
+    expect(graph.nodes.has("file:node_modules/pkgA/a.ts")).toBe(false);
+    expect(graph.nodes.has("file:node_modules/pkgB/f.ts")).toBe(false);
+  });
+
+  it("includes a root file literally named node_modules.ts without warning (segment check, not substring)", () => {
+    const cfg: ArtgraphConfig = {
+      include: ["**/*.ts", "!**/node_modules/**"],
+      specDirs: [],
+      testPatterns: [],
+      lockFile: ".trace.lock",
+    };
+    const { graph, warnings } = buildGraph(root, cfg);
+    expect(graph.nodes.has("file:node_modules.ts")).toBe(true);
+    expect(warnings.some((w) => w.type === "node-modules-in-scan")).toBe(false);
+  });
+});
+
 // issue #264 — full `buildGraph` integration. Before this fix, an unreadable
 // file crashed HERE first: the incremental parse-cache path in
 // src/graph/builder.ts reads every code file's content unconditionally (to

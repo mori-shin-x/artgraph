@@ -67,7 +67,15 @@ export interface BuildWarning {
     // and a bare file node is still synthesized (see `parseTSFile`). NOT
     // silent — a scan silently missing a whole file's coverage is exactly
     // the kind of thing the author needs to see.
-    | "unreadable-file";
+    | "unreadable-file"
+    // issue #287 — fired when the `include` / `testPatterns` globs matched
+    // at least one file under a node_modules directory (any depth).
+    // fast-glob does not exclude node_modules by default, so pre-#287
+    // configs (which lack a `"!**/node_modules/**"` entry in `include`)
+    // silently ingest vendored files into the graph. NOT silent — shown by
+    // default, to guide the user toward adding the exclusion. Non-fatal:
+    // does not affect exit codes.
+    | "node-modules-in-scan";
   id: string;
   files: string[];
   message?: string;
@@ -402,6 +410,23 @@ export function buildGraph(
   const codeId = config.reqPatterns?.codeId;
   const codeFiles = globCodeFiles(rootDir, codePatterns);
   const relCodeFiles = codeFiles.map((f) => relative(rootDir, f));
+
+  // issue #287 — surface configs that still ingest node_modules (pre-#287
+  // configs lack the `"!**/node_modules/**"` negation added to
+  // DEFAULT_CONFIG.include). Segment-based check (split on both path
+  // separators) rather than a substring test, so a file literally named
+  // `node_modules.ts` doesn't false-positive and Windows backslash paths
+  // still match. `files` is capped at 5 entries to keep `scan --format
+  // json` output bounded on repos with thousands of vendored files.
+  const nodeModulesFiles = relCodeFiles.filter((f) => f.split(/[\\/]/).includes("node_modules"));
+  if (nodeModulesFiles.length > 0) {
+    warnings.push({
+      type: "node-modules-in-scan",
+      id: "node_modules",
+      files: nodeModulesFiles.slice(0, 5),
+      message: `${nodeModulesFiles.length} scanned file(s) are under node_modules/ — add "!**/node_modules/**" to "include" in .artgraph.json to exclude them`,
+    });
+  }
 
   // TS fragments are only reusable while the import-resolution environment is
   // unchanged: tsconfig content (the parser's specifier resolver reads jsx /

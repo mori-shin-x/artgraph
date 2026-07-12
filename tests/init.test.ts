@@ -115,6 +115,18 @@ describe("generateConfig", () => {
     expect(config.include).not.toContain("src/**/*.ts");
   });
 
+  // issue #287 — both branches must exclude node_modules by default, since
+  // fast-glob does not do so on its own.
+  it("excludes node_modules by default when hasSrc is true", () => {
+    const config = generateConfig({ hasSrc: true, hasSpecs: false, hasDocs: false, sddTools: [] });
+    expect(config.include).toContain("!**/node_modules/**");
+  });
+
+  it("excludes node_modules by default when hasSrc is false", () => {
+    const config = generateConfig({ hasSrc: false, hasSpecs: false, hasDocs: false, sddTools: [] });
+    expect(config.include).toContain("!**/node_modules/**");
+  });
+
   it("includes both specs and docs in specDirs when both exist", () => {
     const config = generateConfig({ hasSrc: true, hasSpecs: true, hasDocs: true, sddTools: [] });
     expect(config.specDirs).toEqual(["specs", "docs"]);
@@ -201,6 +213,25 @@ describe("runInit", () => {
     const config = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
     expect(config.include).toContain("**/*.ts");
     expect(config.include).not.toContain("src/**/*.ts");
+  });
+
+  // issue #287 regression: a project without src/ used to generate an
+  // `include` with no node_modules exclusion, so the first scan ingested
+  // vendored .ts files from node_modules into the graph.
+  it("excludes node_modules from the scan when src/ does not exist", () => {
+    writeFileSync(join(tmp, "app.ts"), "export const x = 1;\n");
+    mkdirSync(join(tmp, "node_modules", "somepkg"), { recursive: true });
+    writeFileSync(join(tmp, "node_modules", "somepkg", "index.ts"), "export const y = 1;\n");
+    writeFileSync(
+      join(tmp, "node_modules", "somepkg", "foo.test.ts"),
+      "import { describe, it } from 'vitest';\ndescribe('foo', () => { it('works', () => {}); });\n",
+    );
+
+    const result = runInit(tmp);
+
+    expect(result.scanSummary).toBeDefined();
+    expect(result.scanSummary!.fileCount).toBe(1);
+    expect(result.warnings.some((w) => w.type === "node-modules-in-scan")).toBe(false);
   });
 
   it("includes both specs and docs when both directories exist", () => {
