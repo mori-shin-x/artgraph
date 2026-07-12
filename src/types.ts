@@ -260,8 +260,9 @@ export interface CheckResult {
    * gating is not part of the new-vs-pre-existing baseline model (FR-015). */
   staleGate?: boolean;
   /** issue #284 — counterfactual hint: `uncovered` REQ ids that have
-   * exclusive, non-stale `exercises` evidence and would be rescued to
-   * `exercised` (leaving `uncovered`) if `.artgraph.json`'s
+   * exclusive `exercises` evidence (staleness-filtered the same way the real
+   * `exercised` computation is) and would be rescued to `exercised` (leaving
+   * `uncovered`) if `.artgraph.json`'s
    * `trace.acceptExercises` were turned on. Purely informational — it never
    * affects `pass`, `newIssues`, `suppressedCount`, or any gate/exit-code
    * decision, and it is what the bootstrap Skill's "test-tag path" (issue

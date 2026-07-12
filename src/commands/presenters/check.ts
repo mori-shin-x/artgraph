@@ -49,17 +49,20 @@ export function printCheckText(result: CheckResult, opts?: PrintOptions): void {
   );
   printNewCategory("ORPHANS", result.newIssues.orphans);
   printNewCategory("UNCOVERED", result.newIssues.uncovered);
-  printNewCategory("TEST FAILURES", result.newIssues.testFailures);
 
   // issue #284 — same hint as the plain-check path, scoped to the NEW
   // uncovered REQs (result.exercisableUncovered isn't itself diff-scoped by
-  // its own filter, so intersect with newIssues.uncovered here).
+  // its own filter, so intersect with newIssues.uncovered here). Placed
+  // right after UNCOVERED (before TEST FAILURES) so both output shapes read
+  // UNCOVERED -> HINT, same as the plain-check path below.
   if (result.exercisableUncovered && result.exercisableUncovered.length > 0) {
     const newUncoveredSet = new Set(result.newIssues.uncovered);
     printExercisableUncoveredHint(
       result.exercisableUncovered.filter((id) => newUncoveredSet.has(id)),
     );
   }
+
+  printNewCategory("TEST FAILURES", result.newIssues.testFailures);
 
   if (result.suppressedCount > 0) {
     console.log("");
@@ -96,7 +99,7 @@ function printExercisableUncoveredHint(reqIds: string[] | undefined): void {
   if (!reqIds || reqIds.length === 0) return;
   const isPlural = reqIds.length !== 1;
   console.log(
-    `HINT: ${reqIds.join(", ")} ${isPlural ? "have" : "has"} exclusive execution evidence (see SUGGESTED IMPL)`,
+    `HINT: ${reqIds.join(", ")} ${isPlural ? "have" : "has"} exclusive execution evidence`,
   );
   console.log(
     `      but trace.acceptExercises is off, so ${isPlural ? "they are" : "it is"} not counted as covered.`,

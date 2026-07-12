@@ -734,6 +734,63 @@ describe("check-evidence (issue #284): exercisableUncovered counterfactual hint"
     expect(scoped.exercisableUncovered).toEqual(["REQ-800"]);
     expect(scoped.uncovered).toEqual(["REQ-800"]);
   });
+
+  it("foreign `implements` claim on the exclusive-evidence node: exercisableUncovered still includes the REQ (counterfactual of `exercised`, not `suggestedImpls`'s claimed-node exclusion), while suggestedImpls omits that node", () => {
+    // REQ-A has NO `implements` edge of its own (untagged) and its tests
+    // exclusively exercise symbol:src/y.ts#fnA. REQ-B — a completely
+    // different req — happens to carry an `@impl` claim on that SAME node.
+    // `classifyEvidence`'s `suggestedImpls` treats the node as already
+    // "claimed" (by REQ-B) and skips it as report noise (src/trace/report.ts
+    // line ~350: `if (claimedNodes.has(node)) continue;`). But
+    // `exercisableUncovered`'s predicate is the `exercised` counterfactual
+    // (`isExclusiveNode` — only asks "does exactly one REQ's evidence reach
+    // this node", never consults `claimedNodes`), so REQ-A must still be
+    // rescued here even though the node is claimed by someone else.
+    const nodes = new Map<string, GraphNode>([
+      ["REQ-A", { id: "REQ-A", kind: "req", filePath: "specs/y.md", contentHash: "h1" }],
+      ["REQ-B", { id: "REQ-B", kind: "req", filePath: "specs/y.md", contentHash: "h2" }],
+      [
+        "symbol:src/y.ts#fnA",
+        { id: "symbol:src/y.ts#fnA", kind: "symbol", filePath: "src/y.ts", contentHash: "h3" },
+      ],
+    ]);
+    const edges: GraphEdge[] = [
+      // Foreign claim: REQ-B (not REQ-A) declares `@impl` on the node that
+      // REQ-A's tests exclusively exercise. `implements` edges point
+      // source=code-node -> target=req (see src/coverage.ts's `e.target` /
+      // `e.source` indexing and classifyEvidence's `node = edge.source`,
+      // `reqId = edge.target` above).
+      {
+        source: "symbol:src/y.ts#fnA",
+        target: "REQ-B",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
+    ];
+    const graph: ArtifactGraph = { nodes, edges };
+    const lock: LockFile = {};
+    const trace: IngestedTrace = {
+      perReq: new Map([["REQ-A", { symbols: ["symbol:src/y.ts#fnA"], files: [], tests: [] }]]),
+      hashesAtTrace: new Map(),
+      diagnostics: { dangling: 0, corrupted: 0, skipped: 0, unknownSchema: 0 },
+      reqsByNode: new Map([["symbol:src/y.ts#fnA", new Set(["REQ-A"])]]),
+      shardCount: 1,
+    };
+    const traceOptions = {
+      trace,
+      staleNodeIds: new Set<string>(),
+      acceptExercises: false,
+      staleness: "warn" as const,
+      sharedThreshold: 3,
+    };
+
+    const result = check(graph, lock, undefined, undefined, undefined, false, traceOptions);
+
+    expect(result.exercisableUncovered).toContain("REQ-A");
+    expect(result.suggestedImpls ?? []).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ node: "symbol:src/y.ts#fnA" })]),
+    );
+  });
 });
 
 describe("check-evidence (T019f): staleness: gate composes with --gate (exit 2), independent of warn/exclude", () => {
