@@ -1,6 +1,8 @@
-# artgraph
+<h1 align="center">
+  <img src="./docs/logo.webp" alt="artgraph" width="360">
+</h1>
 
-**English** | [日本語](./README.ja.md)
+<p align="center"><strong>English</strong> | <a href="./README.ja.md">日本語</a></p>
 
 [![CI](https://github.com/mori-shin-x/artgraph/actions/workflows/ci.yml/badge.svg)](https://github.com/mori-shin-x/artgraph/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/artgraph.svg)](https://www.npmjs.com/package/artgraph)
