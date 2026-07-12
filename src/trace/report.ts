@@ -79,7 +79,12 @@ function pairCompare(a: ClaimEvidencePair, b: ClaimEvidencePair): number {
  * suggestedImpls-on-class-node this fix closes (verified experimentally
  * while designing this fix — a naive "resolve members to the class"
  * approach broke corroboration; the inverse "roll up everywhere" approach
- * broke exclusivity).
+ * broke exclusivity). PR #268 review F2 (issue #255 follow-up) later adds
+ * `hasAncestorClaim`, a SEPARATE `contains`-walking helper that DOES touch
+ * `suggestedImpls` — it is not a relaxation of this rule: it never reads
+ * evidence (`perReq`/`reqsByNode`) at all, only pre-existing `implements`
+ * claims, so it cannot reintroduce the double-counting this note warns
+ * against. See that function's doc, below `buildContainerIndex`.
  */
 function reqExercises(
   containsIndex: Map<string, string[]>,
@@ -122,6 +127,58 @@ function buildContainsIndex(graph: ArtifactGraph): Map<string, string[]> {
 }
 
 /**
+ * `contains` adjacency inverted (target -> sources, i.e. a node's direct
+ * CONTAINERS) — the parent-ward mirror of `buildContainsIndex` above, built
+ * ONCE per `classifyEvidence` call for the same reason: `hasAncestorClaim`
+ * (below) walks upward per `suggestedImpls` candidate, and rescanning
+ * `graph.edges` per candidate would reintroduce the O(candidates x edges)
+ * cost `buildContainsIndex`'s doc already measured on the forward direction.
+ */
+function buildContainerIndex(graph: ArtifactGraph): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (edge.kind !== "contains") continue;
+    const sources = index.get(edge.target);
+    if (sources) sources.push(edge.source);
+    else index.set(edge.target, [edge.source]);
+  }
+  return index;
+}
+
+/**
+ * PR #268 review F2 (issue #255 follow-up) — a DIFFERENT mechanism from
+ * `reqExercises`'s evidence roll-up above, despite the superficial
+ * similarity (both walk `contains`, both cycle-guard with `seen`). This one
+ * never touches `trace.perReq`/`reqsByNode` at all: it asks "does any
+ * CONTAINER of `node`, at any depth, already carry an `@impl reqId` CLAIM?"
+ * purely from `claimsByNode` (the `implements`-edge map built in
+ * `classifyEvidence` below). Used ONLY to decide whether to hold back a
+ * `suggestedImpls` entry, never to affect `corroborated`/`unexercisedClaims`
+ * — `reqExercises`'s SCOPE note above still holds: evidence never rolls up
+ * into `suggestedImpls`. Rationale: in repos that tag `@impl` at class
+ * granularity, a class-level claim already answers "is REQ-X's code
+ * identified" for that REQ; once the class claims REQ-X, member-level
+ * suggestions to ALSO tag REQ-X are noise, not signal — but a claim on
+ * REQ-X's ancestor says nothing about a DIFFERENT REQ-Y the same member is
+ * exclusively exercised for, so this only suppresses a same-`reqId` match.
+ */
+function hasAncestorClaim(
+  containerIndex: Map<string, string[]>,
+  claimsByNode: Map<string, Set<string>>,
+  reqId: string,
+  node: string,
+  seen: Set<string> = new Set(),
+): boolean {
+  for (const parent of containerIndex.get(node) ?? []) {
+    if (seen.has(parent)) continue;
+    seen.add(parent);
+    if (claimsByNode.get(parent)?.has(reqId)) return true;
+    if (hasAncestorClaim(containerIndex, claimsByNode, reqId, parent, seen)) return true;
+  }
+  return false;
+}
+
+/**
  * FR-013 exclusivity predicate: exactly one distinct REQ's evidence reaches
  * `node`. Factored out of `classifyEvidence` (below) so `src/coverage.ts`'s
  * `exercised` status computation (FR-014) shares the EXACT same "what counts
@@ -159,13 +216,18 @@ export function classifyEvidence(
   const corroborated: ClaimEvidencePair[] = [];
   const unexercisedClaims: ClaimEvidencePair[] = [];
   const claimedNodes = new Set<string>();
+  const claimsByNode = new Map<string, Set<string>>();
   const containsIndex = buildContainsIndex(graph);
+  const containerIndex = buildContainerIndex(graph);
 
   for (const edge of graph.edges) {
     if (edge.kind !== "implements") continue;
     const node = edge.source;
     const reqId = edge.target;
     claimedNodes.add(node);
+    const reqIdsForNode = claimsByNode.get(node);
+    if (reqIdsForNode) reqIdsForNode.add(reqId);
+    else claimsByNode.set(node, new Set([reqId]));
     if (reqExercises(containsIndex, trace, reqId, node)) {
       corroborated.push({ reqId, node });
     } else {
@@ -181,7 +243,14 @@ export function classifyEvidence(
       infrastructure.push({ node, reqCount: reqIds.size });
     } else if (isExclusiveNode(trace, node)) {
       const [reqId] = reqIds;
-      suggestedImpls.push({ reqId: reqId!, node });
+      // PR #268 review F2: an ancestor already claiming this SAME reqId
+      // means a class-granularity `@impl` has already "found" this
+      // requirement's code — suppress the redundant member-level nudge (see
+      // `hasAncestorClaim`'s doc above for why this is not a `reqExercises`
+      // roll-up).
+      if (!hasAncestorClaim(containerIndex, claimsByNode, reqId!, node)) {
+        suggestedImpls.push({ reqId: reqId!, node });
+      }
     }
     // 2 .. sharedThreshold-1: silent by design (FR-013).
   }

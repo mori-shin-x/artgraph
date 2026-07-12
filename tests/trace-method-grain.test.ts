@@ -149,15 +149,82 @@ describe("issue #255 (2): class-level claim + method hit -> corroborated via con
       { reqId: "REQ-102", node: "symbol:src/engine.ts#Engine" },
     ]);
     expect(result.unexercisedClaims).toEqual([]);
-    // Intended side effect of member-id resolution, not a regression: the
-    // class-level claim only covers the CLASS node (rolled up for
-    // corroboration above), so `Engine.run` itself — now a distinct,
-    // unclaimed node with exactly one REQ's evidence — separately qualifies
-    // as its own suggestion. `suggestedImpls`/`isExclusiveNode` deliberately
-    // do NOT roll up (see `reqExercises`'s doc in src/trace/report.ts), so
-    // this entry existing alongside the class's corroboration is correct.
+    // PR #268 review F2: `Engine.run` is exclusively exercised by REQ-102,
+    // and `Engine` (its ancestor via `contains`) already claims REQ-102 —
+    // `hasAncestorClaim` suppresses the redundant member-level suggestion,
+    // since the class-granularity `@impl` already "found" this requirement.
+    // Before F2 this asserted the OPPOSITE (the entry existing was pinned as
+    // intended behavior); the new spec treats that as noise instead.
+    expect(result.suggestedImpls).toEqual([]);
+  });
+});
+
+describe("PR #268 review F2: ancestor-claim suppression of suggestedImpls", () => {
+  it("(a) ancestor class claims REQ-1; method exclusively exercised by REQ-1 -> suggestion suppressed", async () => {
+    const tmp = makeRepo({
+      "src/alpha.ts": ["// @impl " + "REQ-1", "export class Alpha {", "  run() {}", "}", ""].join(
+        "\n",
+      ),
+    });
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[" + "REQ-1] alpha runs",
+        testFile: "tests/req1.test.ts",
+        hits: [{ file: "src/alpha.ts", fn: "run" }],
+      }),
+    ]);
+
+    const result = await report(tmp);
+    expect(result.corroborated).toEqual([{ reqId: "REQ-1", node: "symbol:src/alpha.ts#Alpha" }]);
+    const suggestedNodes = result.suggestedImpls.map((p: { node: string }) => p.node);
+    expect(suggestedNodes).not.toContain("symbol:src/alpha.ts#Alpha.run");
+    expect(result.suggestedImpls).toEqual([]);
+  });
+
+  it("(b) ancestor class claims REQ-1; method exclusively exercised by a DIFFERENT REQ-2 -> suggestion NOT suppressed", async () => {
+    const tmp = makeRepo({
+      "src/beta.ts": ["// @impl " + "REQ-1", "export class Beta {", "  run() {}", "}", ""].join(
+        "\n",
+      ),
+    });
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[" + "REQ-2] beta runs under a different requirement",
+        testFile: "tests/req2.test.ts",
+        hits: [{ file: "src/beta.ts", fn: "run" }],
+      }),
+    ]);
+
+    const result = await report(tmp);
+    // The class's REQ-1 claim is unexercised (REQ-1 has no evidence at all
+    // here), and `Beta.run` is exclusively exercised by REQ-2 — a claim on
+    // an ancestor for a DIFFERENT reqId must not suppress this suggestion.
+    expect(result.unexercisedClaims).toEqual([{ reqId: "REQ-1", node: "symbol:src/beta.ts#Beta" }]);
     expect(result.suggestedImpls).toEqual([
-      { reqId: "REQ-102", node: "symbol:src/engine.ts#Engine.run" },
+      { reqId: "REQ-2", node: "symbol:src/beta.ts#Beta.run" },
+    ]);
+  });
+
+  it("(c) no ancestor claim at all -> suggestion reported as before (unaffected by F2)", async () => {
+    const tmp = makeRepo({
+      "src/gamma.ts": ["export class Gamma {", "  run() {}", "}", ""].join("\n"),
+    });
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[" + "REQ-3] gamma runs",
+        testFile: "tests/req3.test.ts",
+        hits: [{ file: "src/gamma.ts", fn: "run" }],
+      }),
+    ]);
+
+    const result = await report(tmp);
+    expect(result.corroborated).toEqual([]);
+    expect(result.unexercisedClaims).toEqual([]);
+    expect(result.suggestedImpls).toEqual([
+      { reqId: "REQ-3", node: "symbol:src/gamma.ts#Gamma.run" },
     ]);
   });
 });
