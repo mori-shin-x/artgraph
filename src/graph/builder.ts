@@ -58,7 +58,16 @@ export interface BuildWarning {
     // symbol/import edges are lost. Rare and still worth surfacing when it
     // fires, so NOT silent — shown by default like `class-member-collision`
     // above.
-    | "pathological-bracket-nesting";
+    | "pathological-bracket-nesting"
+    // issue #264 — a file `parseTSFile` could not even READ (permission
+    // errors, e.g. chmod 000; distinct from `pathological-bracket-nesting`,
+    // which reads the file fine but skips handing it to the native parser).
+    // No symbols/imports/@impl edges are extracted from this file until it
+    // becomes readable again, but scanning continues for every other file
+    // and a bare file node is still synthesized (see `parseTSFile`). NOT
+    // silent — a scan silently missing a whole file's coverage is exactly
+    // the kind of thing the author needs to see.
+    | "unreadable-file";
   id: string;
   files: string[];
   message?: string;
@@ -388,7 +397,33 @@ export function buildGraph(
   const missPaths: string[] = [];
   const missHashes = new Map<string, string>();
   for (let i = 0; i < codeFiles.length; i++) {
-    const content = readFileSync(codeFiles[i], "utf-8");
+    // issue #264 — this read (done purely to compute a cache-validity hash)
+    // can throw for exactly the same reason `parseTSFile`'s own read can
+    // (permission errors, e.g. chmod 000). Before this fix that uncaught
+    // throw crashed the WHOLE build here, before a miss path ever even
+    // reached `parseTSFilePaths` / `parseTSFile`'s own (now-guarded) read.
+    // On failure: force this file to always miss the cache (never treat a
+    // stale/sentinel hash as a legitimate match) using a fixed non-hash
+    // sentinel that can never collide with a real `hashContent` output (a
+    // 16-hex-char string) — including the degenerate case of a genuinely
+    // empty-but-READABLE file, which would otherwise coincide with
+    // `hashContent("")` if that were used as the sentinel instead. The
+    // actual "can't read, warn, synthesize a bare node" handling — and the
+    // ONLY place the `unreadable-file` warning is emitted from — lives in
+    // `parseTSFile`, which independently attempts (and fails) the same read
+    // for every path in `missPaths`; this catch only needs to avoid crashing
+    // and route the file there, not duplicate that diagnostic.
+    let content: string | undefined;
+    try {
+      content = readFileSync(codeFiles[i], "utf-8");
+    } catch {
+      content = undefined;
+    }
+    if (content === undefined) {
+      missPaths.push(codeFiles[i]);
+      missHashes.set(codeFiles[i], "unreadable-file:cannot-hash");
+      continue;
+    }
     const contentHash = hashContent(content);
     const hit = tsFragmentsValid ? prevCache!.data.ts[relCodeFiles[i]] : undefined;
     if (hit && hit.contentHash === contentHash && importTargetsExist(hit.edges, rootDir)) {

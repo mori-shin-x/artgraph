@@ -81,6 +81,17 @@ export function printWarnings(warnings: BuildWarning[]) {
           `WARNING: ${w.message ?? `pathological-bracket-nesting "${w.id}" in ${w.files.join(", ")}`}`,
         );
         break;
+      // issue #264 — a file that could not be read at all (e.g. a
+      // permission error). Shown by default (NOT in SILENT_WARNING_TYPES):
+      // the file's symbols/imports/@impl edges are missing from the graph
+      // until it becomes readable again, which the author needs to see. The
+      // parser-built message carries the file and the underlying I/O error,
+      // so print it verbatim with the id as fallback.
+      case "unreadable-file":
+        console.error(
+          `WARNING: ${w.message ?? `unreadable-file "${w.id}" in ${w.files.join(", ")}`}`,
+        );
+        break;
       // Filtered above via `isSilentWarning`, but the switch still needs
       // cases so the exhaustiveness check below stays happy.
       case "phantom-import-repaired":

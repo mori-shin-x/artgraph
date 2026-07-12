@@ -61,9 +61,82 @@ import { NAMESPACED_ID_TOKEN } from "../grammar/tokens.js";
 // dep is synchronous, so callers (buildGraph is sync) don't need to change
 // shape.
 const requireCjs = createRequire(import.meta.url);
+
+// issue #263 — when oxc-parser's native binding is missing/broken for this
+// platform (corrupted node_modules, a musl/glibc mismatch, an npm install
+// that skipped the optional platform package, …), `requireCjs("oxc-parser")`
+// itself throws — this is a fundamentally different failure from a per-file
+// parse error. Before this fix, that throw reached `safeParseSync`'s
+// try/catch (added for issue #247's UNRELATED "parseSync itself throws"
+// case) and was silently swallowed there: every file in the scan came back
+// with zero symbols/imports and NO warning at all (only the plain-text
+// `extractImplTags` regex scan kept working, so the tool looked superficially
+// alive while producing an empty graph), and — because the assignment
+// `oxcModule ??= requireCjs(...)` never completes on a throw — `oxcModule`
+// stayed `undefined` forever, so EVERY subsequent file re-attempted the same
+// (also slow) native dlopen and re-threw, once per file.
+//
+// Fixed by treating a load failure as its own distinct, fail-fast error
+// class (`OxcLoadError`) that is deliberately NOT caught by `safeParseSync`
+// (see its own comment) — it propagates all the way out of `buildGraph` /
+// `createTSParser` / `buildSymbolNameTable` uncaught, so the CLI exits
+// non-zero with a clear diagnostic instead of silently producing a
+// zero-extraction graph. The failure (and the resulting `OxcLoadError`
+// instance) is memoized in `oxcLoadError` below SEPARATELY from `oxcModule`
+// so a first-call failure short-circuits every later call in this process —
+// no repeated dlopen attempts — without needing the assignment to have
+// "succeeded" the way `??=` alone would require.
+export class OxcLoadError extends Error {
+  constructor(cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(
+      [
+        "artgraph: failed to load the oxc-parser native binding — TypeScript/JS parsing cannot proceed.",
+        "",
+        `Underlying error: ${detail}`,
+        "",
+        "This usually means one of the following:",
+        "  - oxc-parser's native binding is missing (e.g. an npm/pnpm install that",
+        "    skipped its optional platform-specific package)",
+        "  - node_modules is corrupted or only partially installed",
+        "  - the installed native binary does not match this machine's OS/CPU",
+        "    architecture (e.g. a lockfile/install from a different platform, or a",
+        "    Docker image built for a different target)",
+        "",
+        "To resolve, try:",
+        "  1. Reinstall dependencies from scratch (e.g. `rm -rf node_modules` then",
+        "     reinstall with your package manager)",
+        "  2. Confirm oxc-parser's platform-specific optional dependency is present",
+        "     for THIS OS/architecture (check node_modules/@oxc-parser/binding-*)",
+        "  3. If this happens in CI/Docker, make sure the image architecture matches",
+        "     what was used to install/lock dependencies",
+      ].join("\n"),
+    );
+    this.name = "OxcLoadError";
+    if (cause instanceof Error && cause.stack) {
+      this.stack = `${this.stack}\nCaused by: ${cause.stack}`;
+    }
+  }
+}
+
 let oxcModule: typeof import("oxc-parser") | undefined;
+// Negative cache (issue #263): once loading has failed, EVERY later call
+// re-throws this SAME error instance instead of re-attempting
+// `requireCjs("oxc-parser")` — a native dlopen failure is an environment
+// property that will not change mid-process, so retrying it per file (the
+// pre-fix behavior) only adds cost without any chance of a different
+// outcome.
+let oxcLoadError: OxcLoadError | undefined;
 function loadOxc(): typeof import("oxc-parser") {
-  return (oxcModule ??= requireCjs("oxc-parser") as typeof import("oxc-parser"));
+  if (oxcLoadError) throw oxcLoadError;
+  if (oxcModule) return oxcModule;
+  try {
+    oxcModule = requireCjs("oxc-parser") as typeof import("oxc-parser");
+  } catch (e) {
+    oxcLoadError = new OxcLoadError(e);
+    throw oxcLoadError;
+  }
+  return oxcModule;
 }
 
 type OxcParseResult = import("oxc-parser").ParseResult;
@@ -112,8 +185,14 @@ function buildIdMatchers(codeId?: string): IdMatchers {
 // warning for the pathological-bracket-nesting parse-skip guard below —
 // `symbolId` holds the FILE id (`file:<path>`) for that variant since there
 // is no symbol to attribute to (parsing never ran).
+// issue #264 — a file-level warning for a file `parseTSFile` could not even
+// READ (e.g. permission denied — chmod 000 — or some other transient I/O
+// failure), as opposed to `pathological-bracket-nesting`'s "read fine, but
+// deliberately not handed to the native parser" skip. `symbolId` holds the
+// FILE id (`file:<path>`), same convention as `pathological-bracket-nesting`,
+// since there is no symbol to attribute to (no content was ever read).
 export interface TsParseWarning {
-  type: "class-member-collision" | "pathological-bracket-nesting";
+  type: "class-member-collision" | "pathological-bracket-nesting" | "unreadable-file";
   // Fully-qualified id the warning is about (`symbol:<path>#<name>`, or
   // `file:<path>` for a file-level warning).
   symbolId: string;
@@ -464,7 +543,7 @@ export function maxBracketNestingDepth(content: string): number {
   return max;
 }
 
-interface SafeParseResult {
+export interface SafeParseResult {
   parsed: OxcParseResult | undefined;
   // Set when parsing was skipped because maxBracketNestingDepth exceeded
   // MAX_BRACKET_NESTING_DEPTH — `parsed` is always undefined in that case.
@@ -474,19 +553,31 @@ interface SafeParseResult {
   depthExceeded?: { depth: number; limit: number };
 }
 
-// Single choke point for both parseSync call sites (issue #247): checks the
+// Single choke point for both parseSync call sites (issue #247, and — via
+// `src/trace/symbol-table.ts`'s own call, issue #269 — a third): checks the
 // nesting-depth guard BEFORE calling into the native parser, then falls back
 // to the pre-existing try/catch for the (unrelated, always-been-there) case
 // where parseSync itself throws a catchable JS exception. See
 // MAX_BRACKET_NESTING_DEPTH's doc comment for why the depth guard exists and
 // maxBracketNestingDepth's for why it over-approximates.
-function safeParseSync(filePath: string, content: string): SafeParseResult {
+//
+// issue #263 — `loadOxc()` is called OUTSIDE the try/catch below, on
+// purpose: a load failure (`OxcLoadError`) must propagate uncaught (see
+// `loadOxc`'s own doc comment for why swallowing it here was the actual bug),
+// while a genuinely catchable exception from `parseSync` itself (the
+// original, narrower reason this try/catch exists) is still swallowed exactly
+// as before. Exported so `symbol-table.ts` shares this exact guard instead of
+// calling `loadOxc().parseSync` directly (issue #269 — that direct call
+// bypassed both the depth guard AND, pre-#263, would have bypassed the
+// fail-fast load-error behavior too).
+export function safeParseSync(filePath: string, content: string): SafeParseResult {
   const depth = maxBracketNestingDepth(content);
   if (depth > MAX_BRACKET_NESTING_DEPTH) {
     return { parsed: undefined, depthExceeded: { depth, limit: MAX_BRACKET_NESTING_DEPTH } };
   }
+  const oxc = loadOxc();
   try {
-    return { parsed: loadOxc().parseSync(filePath, content) };
+    return { parsed: oxc.parseSync(filePath, content) };
   } catch {
     return { parsed: undefined };
   }
@@ -504,10 +595,48 @@ function parseTSFile(
   const warnings: TsParseWarning[] = [];
 
   const relPath = relative(rootDir, filePath);
-  const content = stripBom(readFileSync(filePath, "utf-8"));
-  const fileHash = hash(content);
-
   const isTest = /\.(test|spec)\.(ts|tsx)$/.test(filePath);
+
+  // issue #264 — `readFileSync` throws on a file that exists (so the earlier
+  // glob enumerated it) but cannot be READ (chmod 000 / other permission
+  // errors; verified empirically) — asymmetric with `isModuleFile` elsewhere
+  // in this file, which already guards its own read. Pre-fix, this one
+  // uncaught throw took down the ENTIRE scan (`createTSParser`'s `parse()`
+  // loop has no per-file isolation), so a single unreadable file anywhere in
+  // the tree made every command that builds the graph fail outright. Fixed
+  // fail-SAFE (unlike #263's fail-FAST oxc-load guard, which is an
+  // environment-wide condition, not a per-file one): warn, synthesize a bare
+  // file node so the file still exists in the graph (a silently missing node
+  // would surface as harder-to-diagnose downstream symptoms, e.g. spurious
+  // orphans on whatever pointed at it) with a fixed content hash (no content
+  // was ever read, so there is nothing real to hash), and return early —
+  // none of extractSymbols / extractImports / extractImplTags can run
+  // without content, so this file contributes no symbols, imports, or
+  // impl/verifies edges until it becomes readable again.
+  let rawContent: string;
+  try {
+    rawContent = readFileSync(filePath, "utf-8");
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    warnings.push({
+      type: "unreadable-file",
+      symbolId: `file:${relPath}`,
+      filePath: relPath,
+      message:
+        `could not read "${relPath}" (${message}); skipped symbol/import/@impl extraction for ` +
+        "this file. A file node was still created so it stays visible in the graph, but it " +
+        "carries none of its usual edges until the file becomes readable again.",
+    });
+    nodes.push({
+      id: `file:${relPath}`,
+      kind: isTest ? "test" : "file",
+      filePath: relPath,
+      contentHash: hash(""),
+    });
+    return { nodes, edges, warnings };
+  }
+  const content = stripBom(rawContent);
+  const fileHash = hash(content);
 
   nodes.push({
     id: `file:${relPath}`,

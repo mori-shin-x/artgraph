@@ -10,7 +10,16 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -100,5 +109,56 @@ describe.skipIf(!RUN_PACK)("e2e: npm pack + install", () => {
     const r = spawnSync(binShim, ["--version"], { encoding: "utf-8", timeout: 30000 });
     expect(r.status).toBe(0);
     expect(r.stdout.trim()).toBe(PKG_VERSION);
+  });
+});
+
+// issue #263 — verify the REAL CLI-level error UX for an oxc-parser native
+// binding load failure, spawned as a genuine OS process (the in-process
+// `runCli` harness never reaches `src/cli.ts`'s real-entry-only guard, so it
+// cannot exercise the `OxcLoadError` catch added there). Simulated by
+// temporarily moving this repo's `node_modules/oxc-parser` aside — this
+// suite runs `singleFork`/`fileParallelism:false` (serialized), so no
+// concurrent e2e test can observe the package missing mid-test.
+describe("e2e: oxc-parser native binding load failure (issue #263)", () => {
+  const oxcPath = join(REPO_ROOT, "node_modules", "oxc-parser");
+  const oxcBak = join(REPO_ROOT, "node_modules", "oxc-parser.e2e-bak");
+  let projectDir: string;
+
+  beforeAll(() => {
+    projectDir = mkdtempSync(join(tmpdir(), "artgraph-oxc-load-fail-e2e-"));
+    // Minimal scannable project — content doesn't matter, the load failure
+    // fires before any file-level parsing would happen.
+    mkdirSync(join(projectDir, "src"), { recursive: true });
+    writeFileSync(join(projectDir, "src/a.ts"), "export const a = 1;\n");
+    writeFileSync(
+      join(projectDir, ".artgraph.json"),
+      JSON.stringify({ include: ["src/**/*.ts"], specDirs: [], testPatterns: [] }),
+    );
+    expect(existsSync(oxcPath), "expected node_modules/oxc-parser to exist before this test").toBe(
+      true,
+    );
+    renameSync(oxcPath, oxcBak);
+  });
+
+  afterAll(() => {
+    if (existsSync(oxcBak)) renameSync(oxcBak, oxcPath);
+    if (projectDir) rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  it("`scan` exits non-zero with a clean, actionable message — no raw Node stack trace", () => {
+    const r = spawnSync("node", [CLI, "scan"], {
+      cwd: projectDir,
+      encoding: "utf-8",
+      timeout: 15000,
+    });
+    expect(r.status).not.toBe(0);
+    // The crafted diagnostic (cause + fix guidance) must be present…
+    expect(r.stderr).toMatch(/failed to load the oxc-parser native binding/);
+    expect(r.stderr).toMatch(/Reinstall dependencies/i);
+    // …and it must NOT be buried in / followed by a raw Node stack trace —
+    // no `at <fn> (...)` frames and no `node:internal/` frames, the
+    // hallmark of an unhandled-exception dump.
+    expect(r.stderr).not.toMatch(/^\s*at .+\(.+\)/m);
+    expect(r.stderr).not.toMatch(/node:internal\//);
   });
 });

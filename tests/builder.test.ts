@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   rmdirSync,
   rmSync,
+  chmodSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { buildGraph, type BuildWarning } from "../src/graph/builder.js";
@@ -1567,3 +1568,59 @@ describe("buildGraph: negative include patterns (issue #266)", () => {
     expect(implEdges.map((e) => e.target).sort()).toEqual(["REQ-500", "REQ-600"]);
   });
 });
+
+// issue #264 — full `buildGraph` integration. Before this fix, an unreadable
+// file crashed HERE first: the incremental parse-cache path in
+// src/graph/builder.ts reads every code file's content unconditionally (to
+// compute a cache-validity hash) BEFORE any per-file parse ever runs, so an
+// EACCES on that read crashed the whole build even before reaching
+// `parseTSFile`'s own (separately guarded) read. Same
+// permission-error-only-makes-sense-on-POSIX-non-root caveat as
+// tests/typescript.test.ts's equivalent test — see IS_WIN/IS_ROOT there.
+const IS_WIN_264 = process.platform === "win32";
+const IS_ROOT_264 = typeof process.getuid === "function" && process.getuid() === 0;
+
+describe.skipIf(IS_WIN_264 || IS_ROOT_264)(
+  "buildGraph survives an unreadable file in the scan set (issue #264)",
+  () => {
+    let root: string;
+    let unreadablePath: string;
+
+    beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), "artgraph-builder-unreadable-"));
+      mkdirSync(join(root, "src"), { recursive: true });
+      writeFileSync(join(root, "src/keep.ts"), "export const keep = 1;\n// @impl REQ-264\n");
+      unreadablePath = join(root, "src/broken.ts");
+      writeFileSync(unreadablePath, "export const neverRead = 1;\n");
+      chmodSync(unreadablePath, 0o000);
+    });
+
+    afterAll(() => {
+      chmodSync(unreadablePath, 0o644);
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    const cfg: ArtgraphConfig = {
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: [],
+      lockFile: ".trace.lock",
+    };
+
+    it("does not throw building the graph", () => {
+      expect(() => buildGraph(root, cfg)).not.toThrow();
+    });
+
+    it("emits an unreadable-file warning and still builds the rest of the graph normally", () => {
+      const { graph, warnings } = buildGraph(root, cfg);
+      const unreadableWarnings = warnings.filter((w) => w.type === "unreadable-file");
+      expect(unreadableWarnings).toHaveLength(1);
+      expect(unreadableWarnings[0].files).toEqual(["src/broken.ts"]);
+
+      expect(graph.nodes.has("file:src/broken.ts")).toBe(true);
+      expect(graph.nodes.has("file:src/keep.ts")).toBe(true);
+      const implEdges = graph.edges.filter((e) => e.kind === "implements");
+      expect(implEdges.map((e) => e.target)).toEqual(["REQ-264"]);
+    });
+  },
+);
