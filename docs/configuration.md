@@ -250,7 +250,7 @@ shards (FR-010: output stays byte-identical to before the feature existed).
 | Key | Default | What it does |
 | --- | --- | --- |
 | `artifacts` | `[".artgraph/trace/*.jsonl"]` | Glob(s) matched against trace shard files (same shape as `testResultPaths`, spec 006). |
-| `acceptExercises` | `false` | When `true`, an untagged REQ backed by exclusive exercises evidence gets coverage status `exercised` instead of `uncovered`. Declared REQs (`impl-only` / `verified`) are never affected — evidence audits claims, it never substitutes for one. |
+| `acceptExercises` | `false` | When `true`, an untagged REQ backed by exclusive exercises evidence gets coverage status `exercised` instead of `uncovered`. Declared REQs (`impl-only` / `verified`) are never affected — evidence audits claims, it never substitutes for one. When left `false`, `check` still surfaces the eligible REQs — a `HINT:` in text output and the `exercisableUncovered` field in `--format json` — so a project that only tagged test titles (no code-side `@impl`) doesn't get silently stuck at `untagged`/`uncovered` forever (issue #284). |
 | `staleness` | `"warn"` | How `check` treats exercises evidence whose recorded content hash no longer matches the current graph. `"warn"` reports `staleEvidence` only (exit code unchanged); `"exclude"` drops stale evidence from every judgment (UNEXERCISED CLAIM / SUGGESTED IMPL / `exercised`) while the underlying `exercises` edge stays in the graph for `impact`; `"gate"` makes `check --gate` exit `2` when any stale evidence is present, independent of the spec 017 baseline-diff gate. |
 | `sharedThreshold` | `3` | A symbol exercised by this many or more distinct REQs' tests is classified as shared infrastructure, not a candidate `@impl`. |
 

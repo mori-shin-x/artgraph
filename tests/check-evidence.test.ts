@@ -594,6 +594,148 @@ describe("check-evidence (T019f): staleness: exclude removes stale evidence from
   });
 });
 
+// ---------------------------------------------------------------------------
+// issue #284 — `exercisableUncovered`: a counterfactual hint listing
+// `uncovered` REQs that would be rescued to `exercised` if
+// `trace.acceptExercises` were turned on. Purely informational (never
+// touches `pass`/gate); see src/check.ts's issue #284 comment.
+// ---------------------------------------------------------------------------
+
+describe("check-evidence (issue #284): exercisableUncovered counterfactual hint", () => {
+  it("acceptExercises off: an uncovered REQ with exclusive evidence appears in exercisableUncovered; uncovered/pass/gate are unaffected by the new field", async () => {
+    const tmp = makeMainFixture();
+    const { stdout, exitCode } = await runAt(tmp, ["check", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+
+    expect(result.exercisableUncovered).toEqual(["REQ-002"]);
+    expect(result.uncovered).toContain("REQ-002");
+    // Every non-exclusive band (shared >= threshold infra, and the silent
+    // 2-req band below threshold) must NOT be suggested — exclusivity-only
+    // rule, same as suggestedImpls/exercised.
+    for (const reqId of ["REQ-010", "REQ-011", "REQ-012", "REQ-020", "REQ-021"]) {
+      expect(result.exercisableUncovered).not.toContain(reqId);
+    }
+    // `pass` is unaffected: this fixture has other uncovered REQs regardless
+    // of the new field, so the gate outcome is unchanged by its presence.
+    expect(result.pass).toBe(false);
+  });
+
+  it("text output: HINT appears right after UNCOVERED: when acceptExercises is off, naming the eligible REQ and the config flag to add", async () => {
+    const tmp = makeMainFixture();
+    const { stdout, exitCode } = await runAt(tmp, ["check"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("UNCOVERED:");
+    expect(stdout).toContain("HINT: REQ-002 has exclusive execution evidence");
+    expect(stdout).toContain('{"trace": {"acceptExercises": true}}');
+    // HINT comes after the UNCOVERED: block, not before it.
+    expect(stdout.indexOf("UNCOVERED:")).toBeLessThan(stdout.indexOf("HINT:"));
+  });
+
+  it("text output: no HINT when acceptExercises is already on", async () => {
+    const tmp = makeMainFixture({ trace: { acceptExercises: true } });
+    const { stdout } = await runAt(tmp, ["check"]);
+    expect(stdout).not.toContain("HINT:");
+  });
+
+  it("acceptExercises on: exercisableUncovered is [] (anything rescuable already left `uncovered`)", async () => {
+    const tmp = makeMainFixture({ trace: { acceptExercises: true } });
+    const { stdout } = await runAt(tmp, ["check", "--format", "json"]);
+    const result = JSON.parse(stdout);
+
+    expect(result.exercisableUncovered).toEqual([]);
+    expect(result.uncovered).not.toContain("REQ-002");
+  });
+
+  it("no trace ingested: `exercisableUncovered` key is entirely absent (FR-010-style byte-identical guarantee)", async () => {
+    const tmp = makeRepo({
+      "src/plain.ts": "export function plainFn() {\n  // @impl REQ-800\n}\n",
+      "specs/spec.md": "# Fixture\n\n- REQ-800: plainFn does a thing.\n",
+    });
+    const { stdout } = await runAt(tmp, ["check", "--format", "json"]);
+    const result = JSON.parse(stdout);
+    expect(Object.prototype.hasOwnProperty.call(result, "exercisableUncovered")).toBe(false);
+  });
+
+  it("staleness: exclude + entirely stale evidence -> the REQ is NOT in exercisableUncovered", async () => {
+    const originalSrc = "export function excludedFn() {}\n";
+    const tmp = makeRepo(
+      { "src/excl.ts": originalSrc, "specs/spec.md": "# Fixture\n\n- REQ-600: excludedFn.\n" },
+      { trace: { staleness: "exclude", acceptExercises: false } },
+    );
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[REQ-600] exercises excludedFn",
+        testFile: "tests/req600.test.ts",
+        hits: [{ file: "src/excl.ts", fn: "excludedFn" }],
+        hashes: { "src/excl.ts": "0000000000000000" }, // deliberately stale from the start
+      }),
+    ]);
+
+    const { stdout } = await runAt(tmp, ["check", "--format", "json"]);
+    const result = JSON.parse(stdout);
+
+    expect(result.uncovered).toContain("REQ-600");
+    expect(result.exercisableUncovered).not.toContain("REQ-600");
+  });
+
+  it("scoped call: a REQ outside scope with otherwise-eligible evidence is excluded (exercisableUncovered inherits --diff-style scoping from `uncovered`)", () => {
+    const nodes = new Map<string, GraphNode>([
+      ["REQ-800", { id: "REQ-800", kind: "req", filePath: "specs/x.md", contentHash: "h1" }],
+      ["REQ-801", { id: "REQ-801", kind: "req", filePath: "specs/x.md", contentHash: "h2" }],
+      [
+        "symbol:src/x.ts#fn800",
+        { id: "symbol:src/x.ts#fn800", kind: "symbol", filePath: "src/x.ts", contentHash: "h3" },
+      ],
+      [
+        "symbol:src/x.ts#fn801",
+        { id: "symbol:src/x.ts#fn801", kind: "symbol", filePath: "src/x.ts", contentHash: "h4" },
+      ],
+    ]);
+    const graph: ArtifactGraph = { nodes, edges: [] };
+    const lock: LockFile = {};
+    const trace: IngestedTrace = {
+      perReq: new Map([
+        ["REQ-800", { symbols: ["symbol:src/x.ts#fn800"], files: [], tests: [] }],
+        ["REQ-801", { symbols: ["symbol:src/x.ts#fn801"], files: [], tests: [] }],
+      ]),
+      hashesAtTrace: new Map(),
+      diagnostics: { dangling: 0, corrupted: 0, skipped: 0, unknownSchema: 0 },
+      reqsByNode: new Map([
+        ["symbol:src/x.ts#fn800", new Set(["REQ-800"])],
+        ["symbol:src/x.ts#fn801", new Set(["REQ-801"])],
+      ]),
+      shardCount: 1,
+    };
+    const traceOptions = {
+      trace,
+      staleNodeIds: new Set<string>(),
+      acceptExercises: false,
+      staleness: "warn" as const,
+      sharedThreshold: 3,
+    };
+
+    // Unscoped: both REQ-800 and REQ-801 are exclusive-evidence candidates.
+    const unscoped = check(graph, lock, undefined, undefined, undefined, false, traceOptions);
+    expect(unscoped.exercisableUncovered).toEqual(expect.arrayContaining(["REQ-800", "REQ-801"]));
+
+    // Scoped to REQ-800 only (mirrors a --diff scope): REQ-801 must not
+    // appear even though its evidence is equally eligible.
+    const scoped = check(
+      graph,
+      lock,
+      new Set(["REQ-800"]),
+      undefined,
+      undefined,
+      false,
+      traceOptions,
+    );
+    expect(scoped.exercisableUncovered).toEqual(["REQ-800"]);
+    expect(scoped.uncovered).toEqual(["REQ-800"]);
+  });
+});
+
 describe("check-evidence (T019f): staleness: gate composes with --gate (exit 2), independent of warn/exclude", () => {
   function makeStaleGateFixture(staleness: "warn" | "exclude" | "gate"): string {
     // `@impl REQ-650` is planted on gateFn so the fixture has ZERO other

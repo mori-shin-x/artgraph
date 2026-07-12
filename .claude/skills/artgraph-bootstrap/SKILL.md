@@ -61,7 +61,9 @@ If the user rejects outright, stop cleanly without writing. Never apply on ambig
 
 ### 6. Deterministic verification
 
-Write the approved edits. If the project has `vitest.config.ts` configured with the `artgraph/vitest` runner (`runner: 'artgraph/vitest'` or `withTrace(...)`), ask the user to run the test suite (or run it yourself if already permitted) so a trace shard lands under `.artgraph/trace/`, then run `<PM-exec> trace report --format json` to cross-check the newly-tagged tests against execution evidence *before* touching the graph: a `suggestedImpls` entry whose symbol plausibly matches the REQ's spec text corroborates the tag; an `unexercisedClaims` entry or a nonzero `diagnostics.dangling` pointing at a newly tagged test means the tag doesn't reach the code it claims — propose a concrete fix (retag, move the assertion, or reword the spec) and return to Step 5 instead of silently accepting. If no runner is configured, trace shards stay empty (trace is opt-in, FR-010) — skip straight to the graph-side commands below:
+Write the approved edits. If the project has `vitest.config.ts` configured with the `artgraph/vitest` runner (`runner: 'artgraph/vitest'` or `withTrace(...)`), ask the user to run the test suite (or run it yourself if already permitted) so a trace shard lands under `.artgraph/trace/`, then run `<PM-exec> trace report --format json` to cross-check the newly-tagged tests against execution evidence *before* touching the graph: a `suggestedImpls` entry whose symbol plausibly matches the REQ's spec text corroborates the tag; an `unexercisedClaims` entry or a nonzero `diagnostics.dangling` pointing at a newly tagged test means the tag doesn't reach the code it claims — propose a concrete fix (retag, move the assertion, or reword the spec) and return to Step 5 instead of silently accepting.
+
+If **any** approved REQ used the test-tag path, check `.artgraph.json` for `"trace": {"acceptExercises": true}` **before** running the graph-side commands below. Test-tag REQs only ever produce a `verifies` edge (the test title marker), never an `implements` edge — `check`'s `exercised` coverage status is opt-in and defaults to `false` (see `docs/configuration.md`), so without this flag every test-tag REQ reports `untagged`/`uncovered` **forever**, even once `trace report`'s `suggestedImpls` has corroborated it above. `check` itself now flags this: read its stdout for a `HINT:` line (or the `exercisableUncovered` field in `--format json`) naming exactly the REQs this affects. If `trace.acceptExercises` is absent, fold adding it into the same approval flow as Step 5 — propose the `.artgraph.json` diff alongside the tag edits (this Skill's rule that every write goes through user approval applies to config edits too) — then write it once approved, before running the commands below. If the setting is already present (`true` or an explicit `false` the user has chosen to keep), leave it alone.
 
 ```bash
 <PM-exec> scan
@@ -69,16 +71,17 @@ Write the approved edits. If the project has `vitest.config.ts` configured with 
 <PM-exec> check
 ```
 
-Report the outcome. A clean `check` exit is the success condition — `reconcile` is what wrote the trace lock, and `check` verifies the project now has a consistent, real traceability graph. This runs without `--gate`, so exit 0 does not guarantee a clean graph — read the stdout categories (`drift`, `uncovered`, `orphan`, `duplicate-id`, `impl-only`, and, once a trace exists, `unexercisedClaims` / `suggestedImpls` / `staleEvidence`) rather than relying on the exit code alone. If any are reported, offer to re-propose fixes scoped to just those gaps (return to Step 4 with the gap list as the new target set):
+Report the outcome. A clean `check` exit is the success condition — `reconcile` is what wrote the trace lock, and `check` verifies the project now has a consistent, real traceability graph. This runs without `--gate`, so exit 0 does not guarantee a clean graph — read the stdout categories (`drift`, `uncovered`, `orphan`, `duplicate-id`, `impl-only`, and, once a trace exists, `unexercisedClaims` / `suggestedImpls` / `staleEvidence` / the `acceptExercises` `HINT:`) rather than relying on the exit code alone. If any are reported, offer to re-propose fixes scoped to just those gaps (return to Step 4 with the gap list as the new target set):
 
 - `duplicate-id` — the same REQ ID was claimed in more than one place; resolve by renaming one of the collisions (see the `artgraph-rename` Skill) before re-running `check`.
 - `impl-only` — how the impl-fallback REQs from Step 4 resurface after verification: the code tag exists but no test covers it yet. Non-fatal, but worth following up.
+- `uncovered` REQs that went the test-tag path — before proposing anything else, check whether the `HINT:` above already explains it (missing `trace.acceptExercises`); if so, that's the fix, not a re-propose.
 
 Do not silently re-scan and re-apply — every write goes through user approval.
 
 ## When to stop
 
-- `check` exits 0 with no `drift` / `uncovered` / `orphan` / `duplicate-id` (`impl-only` alone is non-fatal) → **done**; hand off to the user.
+- `check` exits 0 with no `drift` / `uncovered` / `orphan` / `duplicate-id` (`impl-only` alone is non-fatal) → **done**; hand off to the user. If `uncovered` REQs remain and they all went the test-tag path, verify `trace.acceptExercises` was addressed per Step 6 before treating this as a real gap.
 - User rejects the proposal in Step 5 → **done**; stop cleanly with no writes.
 - Scope from Step 3 is too broad (> 50 files) → **done**; ask for a narrower target and re-enter from Step 1 on the next invocation.
 - Two revision rounds through Step 4 → Step 5 still fail to produce an approvable proposal → **done**; hand off for manual editing.

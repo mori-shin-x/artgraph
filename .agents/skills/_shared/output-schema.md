@@ -54,7 +54,8 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
   "staleEvidence": [                                   // {reqId, symbols}[] — traced symbols whose hash changed since capture (FR-015)
     { "reqId": "REQ-003", "symbols": ["symbol:src/billing.ts#charge"] }
   ],
-  "staleGate": false                                   // true only under trace.staleness:"gate" AND staleEvidence non-empty AND --gate
+  "staleGate": false,                                  // true only under trace.staleness:"gate" AND staleEvidence non-empty AND --gate
+  "exercisableUncovered": ["REQ-004"]                  // string[] — uncovered REQs whose exclusive evidence would flip them to `exercised` if trace.acceptExercises were on; display-only, always [] once the flag is on (issue #284)
 }
 ```
 

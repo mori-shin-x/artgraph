@@ -247,6 +247,12 @@ per-test evidence to `.artgraph/trace/`. The next `artgraph scan` fills in
 actually ran — **with zero `@impl` tags in the code**, tag-zero
 traceability.
 
+By default `artgraph check` still reports these REQs as `uncovered` /
+`untagged` — the `exercised` coverage status is opt-in, not automatic. Add
+`"trace": {"acceptExercises": true}` to `.artgraph.json` to have that
+exercises evidence count as coverage (`check` also prints a `HINT:` telling
+you exactly this when it applies).
+
 `artgraph trace report` is the anti-fabrication story: it cross-checks
 `@impl` claims against that evidence. A declared `@impl REQ-001` whose
 REQ-001 tests never execute that symbol surfaces as an **UNEXERCISED

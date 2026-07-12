@@ -259,6 +259,18 @@ export interface CheckResult {
    * separate from `pass` (spec 017's baseline-diff gate) since staleness
    * gating is not part of the new-vs-pre-existing baseline model (FR-015). */
   staleGate?: boolean;
+  /** issue #284 — counterfactual hint: `uncovered` REQ ids that have
+   * exclusive, non-stale `exercises` evidence and would be rescued to
+   * `exercised` (leaving `uncovered`) if `.artgraph.json`'s
+   * `trace.acceptExercises` were turned on. Purely informational — it never
+   * affects `pass`, `newIssues`, `suppressedCount`, or any gate/exit-code
+   * decision, and it is what the bootstrap Skill's "test-tag path" (issue
+   * #284) points users at instead of leaving them at an unexplained
+   * untagged/uncovered dead end. Present ONLY when a trace was ingested
+   * (same FR-010 byte-identical rule as the other spec-020 optional keys
+   * above); when `acceptExercises` is already true this is always `[]`
+   * (anything it would rescue has already left `uncovered`). */
+  exercisableUncovered?: string[];
 }
 
 // spec 017 (data-model §1.1) — the subset of scoped issues that are NEW
