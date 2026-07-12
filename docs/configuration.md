@@ -37,6 +37,16 @@ whenever the matched file set still contains files under a node_modules
 directory, so a missing exclusion is caught rather than silently producing
 a bloated graph.
 
+Configs that omit `include` entirely pick up the new default automatically
+on upgrade, with no action needed — but any previously-scanned files under a
+node_modules path silently leave the graph on the next scan, since they are
+now excluded rather than detected, so no `node-modules-in-scan` warning
+fires for them. Only configs with an explicit `include` need the manual
+opt-in described above. A config that deliberately includes node_modules —
+for checked-in vendored code, say — will instead see the
+`node-modules-in-scan` warning on every run; it is informational only and
+never affects exit codes.
+
 Degenerate patterns behave as inert rather than as errors: a doubled
 negation (`"!!foo/**"`), a bare `"!"`, and an empty string (`""`) are all
 accepted without complaint and simply do not produce a working exclusion.

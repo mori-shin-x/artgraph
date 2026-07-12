@@ -1,7 +1,8 @@
 {
   "include": [
     "src/**/*.ts",
-    "src/**/*.tsx"
+    "src/**/*.tsx",
+    "!**/node_modules/**"
   ],
   "specDirs": [
     "specs",
