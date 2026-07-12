@@ -82,7 +82,7 @@ function pairCompare(a: ClaimEvidencePair, b: ClaimEvidencePair): number {
  * broke exclusivity).
  */
 function reqExercises(
-  graph: ArtifactGraph,
+  containsIndex: Map<string, string[]>,
   trace: IngestedTrace,
   reqId: string,
   node: string,
@@ -93,11 +93,32 @@ function reqExercises(
   if (coverage.symbols.includes(node) || coverage.files.includes(node)) return true;
   if (seen.has(node)) return false;
   seen.add(node);
-  for (const edge of graph.edges) {
-    if (edge.kind !== "contains" || edge.source !== node) continue;
-    if (reqExercises(graph, trace, reqId, edge.target, seen)) return true;
+  for (const target of containsIndex.get(node) ?? []) {
+    if (reqExercises(containsIndex, trace, reqId, target, seen)) return true;
   }
   return false;
+}
+
+/**
+ * `contains` adjacency (source -> targets), built ONCE per `classifyEvidence`
+ * call so `reqExercises` doesn't rescan `graph.edges` per claim — that scan
+ * is O(claims x edges), quadratic-ish on repos where class-level `@impl` is
+ * the norm (measured: ~13s at 20k classes vs milliseconds with this index).
+ * Deliberately kind-blind beyond `contains`: today's producers (spec 021's
+ * class -> method, builder.ts's doc -> req|task) live in disjoint id
+ * namespaces so a symbol-node lookup can never reach a doc-sourced edge —
+ * revisit this assumption before adding any new `contains` producer whose
+ * source can be a `symbol:`/`file:` node.
+ */
+function buildContainsIndex(graph: ArtifactGraph): Map<string, string[]> {
+  const index = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (edge.kind !== "contains") continue;
+    const targets = index.get(edge.source);
+    if (targets) targets.push(edge.target);
+    else index.set(edge.source, [edge.target]);
+  }
+  return index;
 }
 
 /**
@@ -138,13 +159,14 @@ export function classifyEvidence(
   const corroborated: ClaimEvidencePair[] = [];
   const unexercisedClaims: ClaimEvidencePair[] = [];
   const claimedNodes = new Set<string>();
+  const containsIndex = buildContainsIndex(graph);
 
   for (const edge of graph.edges) {
     if (edge.kind !== "implements") continue;
     const node = edge.source;
     const reqId = edge.target;
     claimedNodes.add(node);
-    if (reqExercises(graph, trace, reqId, node)) {
+    if (reqExercises(containsIndex, trace, reqId, node)) {
       corroborated.push({ reqId, node });
     } else {
       unexercisedClaims.push({ reqId, node });
