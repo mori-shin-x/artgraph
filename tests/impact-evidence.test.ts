@@ -230,13 +230,14 @@ describe("impact-evidence (T021a2, US3-1 file-mode regression): --diff --tests w
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
 
-    // Updated for #286: reverse exercises traversal is blocked, so a
-    // file-start impact no longer reaches REQ-003 through the graph-level
-    // BFS. `--tests` still surfaces REQ-003's tests below via the separate
-    // `ingestedTrace.reqsByNode` path, which is BFS-independent. Evidence-only
-    // REQ recovery in `impactReqs` from the symbol/file side is tracked as
-    // #298 (provenance-aware reverse traversal follow-up).
-    expect(result.impactReqs).not.toContain("REQ-003");
+    // Updated for #286 Option 2B (PR #299 meta-review Finding 2): REQ-003
+    // has no `@impl` anywhere in this fixture (evidence-only), so reverse
+    // `exercises` traversal is now ALLOWED for it — the file-start impact
+    // DOES reach REQ-003 through the graph-level BFS (unlike a REQ that also
+    // carries an `implements` edge, which stays blocked per #286). `--tests`
+    // independently surfaces REQ-003's tests below via the separate
+    // `ingestedTrace.reqsByNode` path, which is BFS-independent either way.
+    expect(result.impactReqs).toContain("REQ-003");
 
     expect(result.testsToRun).toEqual([
       {
@@ -256,8 +257,8 @@ describe("impact-evidence (T021a2, US3-1 file-mode regression): --diff --tests w
 // by provenance.
 // ---------------------------------------------------------------------------
 
-describe("impact-evidence (T021b, US3-2, updated for #286): static REQ reachable from symbol; evidence-only REQ is NOT (reverse exercises blocked, see #298 follow-up)", () => {
-  it("REQ-004 (declared @impl) -> reachable with provenance ['static']; REQ-003 (evidence only) -> NOT reachable from symbol side (reverse exercises blocked by #286)", async () => {
+describe("impact-evidence (T021b, US3-2, updated for #286 Option 2B / PR #299 Finding 2): static REQ reachable from symbol via implements; evidence-only REQ is ALSO reachable via the now-conditional reverse exercises allowance", () => {
+  it("REQ-004 (declared @impl) -> reachable with provenance ['static']; REQ-003 (evidence only, no @impl anywhere) -> ALSO reachable from symbol side with provenance ['evidence'] (Option 2B)", async () => {
     const billing = ["export function charge() {", "  // @impl REQ-004", "}", ""].join("\n");
     const tmp = makeRepo({
       "src/billing.ts": billing,
@@ -288,19 +289,22 @@ describe("impact-evidence (T021b, US3-2, updated for #286): static REQ reachable
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
 
-    // Updated for #286: reverse exercises traversal is blocked, so REQ-003
-    // (evidence-only, reached only through reverse exercises pre-fix) is no
-    // longer in `impactReqs` when starting from the symbol. REQ-004 remains
-    // (forward implements). The `evidence` provenance bucket is now populated
-    // only when the evidence path is also reached forward (REQ -> node), or
-    // through a different path — not from symbol-side starts. #298 tracks
-    // provenance-aware reverse traversal that would restore evidence-only
-    // REQ reachability without reopening the #286 sibling-REQ leak.
-    expect(result.impactReqs).toEqual(["REQ-004"]);
+    // Updated for #286 Option 2B (PR #299 meta-review Finding 2): reverse
+    // `exercises` traversal is blocked only for a REQ that has an
+    // `implements` edge somewhere in the graph — REQ-004 has one (so if it
+    // were ALSO the source of a reverse-followed exercises edge, that would
+    // stay blocked), but REQ-003 has none anywhere (true evidence-only, the
+    // `acceptExercises: true` workflow), so the symbol-start BFS now reaches
+    // it too. REQ-004 remains reachable via forward `implements`. Both
+    // entries carry their own single provenance bucket here: REQ-004 is
+    // ['static'] (implements only), REQ-003 is ['evidence'] (exercises
+    // only) — no sibling-REQ leak occurs because REQ-003's only edge in the
+    // whole graph is its own exercises edge to this exact symbol.
+    expect(result.impactReqs.sort()).toEqual(["REQ-003", "REQ-004"]);
     const byReq: Record<string, string[]> = {};
     for (const p of result.reqProvenance ?? []) byReq[p.reqId] = p.provenance;
     expect(byReq["REQ-004"]).toEqual(["static"]);
-    expect(byReq["REQ-003"]).toBeUndefined();
+    expect(byReq["REQ-003"]).toEqual(["evidence"]);
   });
 });
 
@@ -343,7 +347,7 @@ function node(id: string, kind: GraphNode["kind"], filePath: string, hash = "h")
   return { id, kind, filePath, contentHash: hash };
 }
 
-describe("impact-evidence (T021d, ⑥edge case, FR-017, updated for #286): staleness=exclude drops stale exercises edges from traversal; reverse traversal is separately blocked unconditionally by #286", () => {
+describe("impact-evidence (T021d, ⑥edge case, FR-017, updated for #286 Option 2B): staleness=exclude drops stale exercises edges from traversal REGARDLESS of the Option 2B reverse-allowance; a non-stale evidence-only REQ's reverse exercises is otherwise reachable", () => {
   function buildGraph(): ArtifactGraph {
     const nodes = new Map<string, GraphNode>([
       ["REQ-010", node("REQ-010", "req", "specs/x.md")],
@@ -360,19 +364,25 @@ describe("impact-evidence (T021d, ⑥edge case, FR-017, updated for #286): stale
     return { nodes, edges };
   }
 
-  it("warn (no exclusion set passed): symbol -> REQ via reverse exercises is BLOCKED (updated for #286 fix — was reachable pre-#286)", () => {
+  it("warn (no exclusion set passed): symbol -> REQ via reverse exercises is ALLOWED (Option 2B — REQ-010 has no implements edge anywhere, so it's evidence-only)", () => {
     // Pre-#286: reverse exercises made REQ-010 reachable from the symbol.
-    // Post-#286: `exercises` is forward-only (REQ->symbol), so a symbol-start
-    // BFS no longer walks backwards to the REQ. The stale-exclusion pathway
-    // (below) short-circuits the same edge in a different way, so both
-    // "warn" and "exclude" now converge on `impactReqs === []` when starting
-    // from the symbol side. See traverse.ts's file-header comment for #286.
+    // #286 then blocked reverse `exercises` unconditionally. Option 2B (PR
+    // #299 Finding 2) narrows that block to REQs that have an `implements`
+    // edge somewhere in the graph — REQ-010 has none, so it's evidence-only
+    // and the reverse walk is allowed again, restoring reachability for
+    // exactly this case without reopening the sibling-REQ leak (a REQ with
+    // its own `@impl` claim stays blocked in reverse; see the T021b /
+    // #286-regression describe blocks for that contrast). The stale-
+    // exclusion pathway (below) still short-circuits the SAME edge
+    // unconditionally, so "warn" and "exclude" diverge here: "warn" now
+    // reaches REQ-010, "exclude" still does not. See traverse.ts's
+    // file-header comment for the full #286 / Option 2B rationale.
     const graph = buildGraph();
     const result = impact(graph, ["symbol:src/x.ts#fn"], {} as LockFile);
-    expect(result.impactReqs).toEqual([]);
+    expect(result.impactReqs).toEqual(["REQ-010"]);
   });
 
-  it("exclude: the stale exercises edge is skipped entirely, REQ-010 is NOT reachable", () => {
+  it("exclude: the stale exercises edge is skipped entirely, REQ-010 is NOT reachable (staleness exclusion wins over the Option 2B allowance)", () => {
     const graph = buildGraph();
     const result = impact(graph, ["symbol:src/x.ts#fn"], {} as LockFile, undefined, {
       excludeStaleExercises: new Set(["symbol:src/x.ts#fn"]),
@@ -389,7 +399,7 @@ describe("impact-evidence (T021d, ⑥edge case, FR-017, updated for #286): stale
   });
 });
 
-describe("impact-evidence (T021f, updated for #286): exercises edges traverse ONLY forward (req->node); reverse (node->req) is skipped to prevent sibling-REQ leak from incidentally-called symbols", () => {
+describe("impact-evidence (T021f, updated for #286 Option 2B): exercises edges traverse forward always, and reverse (node->req) only for a REQ with no `implements` edge anywhere (evidence-only) — a REQ with an @impl claim stays reverse-blocked to prevent the sibling-REQ leak from incidentally-called symbols", () => {
   it("req -> exercises -> symbol (forward) reaches the symbol's file", () => {
     const nodes = new Map<string, GraphNode>([
       ["REQ-020", node("REQ-020", "req", "specs/x.md")],
@@ -408,12 +418,25 @@ describe("impact-evidence (T021f, updated for #286): exercises edges traverse ON
     expect(result.affectedFiles).toEqual(["src/y.ts"]);
   });
 
-  it("symbol -> (reverse exercises) is now BLOCKED — starting from an incidentally-exercised symbol does NOT reach the REQ (#286 fix)", () => {
+  it("symbol -> (reverse exercises) stays BLOCKED when the REQ has an `implements` claim elsewhere (#286 leak class, unaffected by Option 2B) — starting from an incidentally-exercised symbol does NOT reach the REQ", () => {
+    // REQ-021 has a real `@impl` claim on a DIFFERENT symbol (fnOwn), so it
+    // is NOT evidence-only — this is exactly the #286 leak shape (a REQ
+    // reachable through its own claim must not ALSO be reachable in reverse
+    // through an incidentally-exercised sibling symbol). Option 2B's
+    // conditional allowance only applies to REQs with NO `implements` edge
+    // anywhere, so this case is unaffected by it and stays blocked.
     const nodes = new Map<string, GraphNode>([
       ["REQ-021", node("REQ-021", "req", "specs/x.md")],
+      ["symbol:src/z.ts#fnOwn", node("symbol:src/z.ts#fnOwn", "symbol", "src/z.ts")],
       ["symbol:src/z.ts#fn", node("symbol:src/z.ts#fn", "symbol", "src/z.ts")],
     ]);
     const edges: GraphEdge[] = [
+      {
+        source: "symbol:src/z.ts#fnOwn",
+        target: "REQ-021",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
       {
         source: "REQ-021",
         target: "symbol:src/z.ts#fn",
@@ -423,6 +446,23 @@ describe("impact-evidence (T021f, updated for #286): exercises edges traverse ON
     ];
     const result = impact({ nodes, edges }, ["symbol:src/z.ts#fn"], {} as LockFile);
     expect(result.impactReqs).toEqual([]);
+  });
+
+  it("symbol -> (reverse exercises) is ALLOWED when the REQ is evidence-only (no `implements` edge anywhere, Option 2B) — starting from the exercised symbol DOES reach the REQ", () => {
+    const nodes = new Map<string, GraphNode>([
+      ["REQ-022", node("REQ-022", "req", "specs/x.md")],
+      ["symbol:src/z2.ts#fn", node("symbol:src/z2.ts#fn", "symbol", "src/z2.ts")],
+    ]);
+    const edges: GraphEdge[] = [
+      {
+        source: "REQ-022",
+        target: "symbol:src/z2.ts#fn",
+        kind: "exercises",
+        provenances: ["coverage"],
+      },
+    ];
+    const result = impact({ nodes, edges }, ["symbol:src/z2.ts#fn"], {} as LockFile);
+    expect(result.impactReqs).toEqual(["REQ-022"]);
   });
 
   it("spec 019 pin: a doc `contains`-ing two sibling REQs, one reached via `implements`, the other only via a DIFFERENT REQ's `exercises` edge elsewhere — impacting the implements-side symbol must NOT drag the sibling (or its exercises target) in, exercises edges present in the graph notwithstanding", () => {
@@ -523,15 +563,16 @@ describe("impact-evidence (#286 regression): reverse `exercises` traversal does 
     expect(result.impactReqs).not.toContain("REQ-901");
   });
 
-  it("impact(fnA) still returns REQ-901 via the forward @impl / implements edge — but a residual forward cascade also carries REQ-902 in (documented, tracked as #298)", () => {
+  it("impact(fnA) still returns REQ-901 via the forward @impl / implements edge — but a residual forward cascade also carries REQ-902 in (documented, tracked as #300)", () => {
     // Path: fnA -(forward implements)-> REQ-901 -(forward exercises)-> fnB
     // -(forward implements)-> REQ-902. Option A skips REVERSE exercises but
     // preserves FORWARD, so the cascade "REQ -> incidentally-exercised symbol
-    // -> that symbol's OTHER @impl claim" still leaks. Provenance-aware
-    // reverse traversal (#298) is the intended follow-up that would also
-    // cut this cascade by skipping forward-exercises hops into symbols whose
-    // @impl belongs to a different REQ. Pinning current behavior so any
-    // change to it is intentional.
+    // -> that symbol's OTHER @impl claim" still leaks. This forward-cascade
+    // closure is tracked as #300 — a distinct follow-up from #298 (which
+    // covers reverse traversal re-enable / Option C only, per PR #299's
+    // meta-review Finding 1). Closing #300 would skip forward-exercises hops
+    // into symbols whose @impl belongs to a different REQ. Pinning current
+    // behavior so any change to it is intentional.
     const { nodes, edges } = setup();
     const result = impact({ nodes, edges }, ["symbol:src/sample.ts#fnA"], {} as LockFile);
     expect(result.impactReqs.sort()).toEqual(["REQ-901", "REQ-902"]);
@@ -542,6 +583,61 @@ describe("impact-evidence (#286 regression): reverse `exercises` traversal does 
     const result = impact({ nodes, edges }, ["REQ-901"], {} as LockFile);
     // Both fnA and fnB live in src/sample.ts, so affectedFiles collapses to one entry.
     expect(result.affectedFiles).toEqual(["src/sample.ts"]);
+  });
+});
+
+describe("impact-evidence (#286 Option 2B): evidence-only REQ (no @impl) is still reachable via reverse exercises so check --diff --gate does not silently drop it", () => {
+  it("impact(symbol) reaches an evidence-only REQ (no implements edge for it)", () => {
+    // Setup: REQ-500 has NO @impl claim — only an exercises edge from
+    // running its test. This is the acceptExercises: true workflow.
+    const nodes = new Map<string, GraphNode>([
+      ["REQ-500", node("REQ-500", "req", "specs/x.md")],
+      ["symbol:src/x.ts#fn", node("symbol:src/x.ts#fn", "symbol", "src/x.ts")],
+    ]);
+    const edges: GraphEdge[] = [
+      {
+        source: "REQ-500",
+        target: "symbol:src/x.ts#fn",
+        kind: "exercises",
+        provenances: ["coverage"],
+      },
+    ];
+    const result = impact({ nodes, edges }, ["symbol:src/x.ts#fn"], {} as LockFile);
+    expect(result.impactReqs).toEqual(["REQ-500"]);
+  });
+
+  it("impact(symbol:fnB) still does NOT drag REQ-901 in (the #286 case, REQ-901 has an @impl claim on fnA)", () => {
+    // Same as the earlier #286 regression setup but explicit here so a future
+    // refactor of the earlier block doesn't accidentally weaken this pin.
+    const nodes = new Map<string, GraphNode>([
+      ["REQ-901", node("REQ-901", "req", "specs/x.md")],
+      ["REQ-902", node("REQ-902", "req", "specs/x.md")],
+      ["symbol:src/sample.ts#fnA", node("symbol:src/sample.ts#fnA", "symbol", "src/sample.ts")],
+      ["symbol:src/sample.ts#fnB", node("symbol:src/sample.ts#fnB", "symbol", "src/sample.ts")],
+    ]);
+    const edges: GraphEdge[] = [
+      {
+        source: "symbol:src/sample.ts#fnA",
+        target: "REQ-901",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
+      {
+        source: "symbol:src/sample.ts#fnB",
+        target: "REQ-902",
+        kind: "implements",
+        provenances: ["code-tag"],
+      },
+      {
+        source: "REQ-901",
+        target: "symbol:src/sample.ts#fnB",
+        kind: "exercises",
+        provenances: ["coverage"],
+      },
+    ];
+    const result = impact({ nodes, edges }, ["symbol:src/sample.ts#fnB"], {} as LockFile);
+    expect(result.impactReqs).toEqual(["REQ-902"]);
+    expect(result.impactReqs).not.toContain("REQ-901");
   });
 });
 

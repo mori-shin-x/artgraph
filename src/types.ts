@@ -154,6 +154,12 @@ export interface ImpactResult {
    * `trace.staleness`) exercises evidence directly reaches one of the
    * resolved start nodes. Present only when `--tests` was passed (undefined
    * otherwise, so the flag is a pure opt-in addition to the JSON schema).
+   *
+   * Note: `testsToRun[].reqId` may reference a REQ absent from `impactReqs`.
+   * `testsToRun` is derived from `ingestedTrace.reqsByNode` (BFS-independent,
+   * spec 020 FR-018), while `impactReqs` reflects BFS reachability. Since
+   * #286 restricted BFS reverse-`exercises` traversal, evidence-only REQ
+   * tests may still surface here without the REQ appearing in `impactReqs`.
    */
   testsToRun?: Array<{ testFile: string; testName: string; reqId: string }>;
 }

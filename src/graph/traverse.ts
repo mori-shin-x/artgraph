@@ -41,22 +41,47 @@ import type { LockFile } from "../types.js";
 // input doesn't sweep up its siblings (spec 016 R-006 mitigation).
 //
 // issue #286 — `exercises` (req -> symbol|file, coverage-derived) is now the
-// SECOND edge kind the BFS below does not treat as bidirectional (alongside
-// `contains` above), for the exact same class of reason. A symbol-start BFS
-// that reverse-follows `exercises` (node -> req) reaches every REQ whose test
-// happens to CALL that symbol, not just the REQ(s) the symbol actually
-// implements — e.g. a "create X, then read X back to verify" test pattern
-// means the read-verification symbol's `exercises` edge fans out to every REQ
-// under test, even ones with zero code relationship to that symbol (reported
-// against a real project: `getBookmark` picked up `markRead`/`favorite`/
-// `archive` REQs solely because each of those REQs' tests called `getBookmark`
-// to assert on resulting state). Reverse traversal is dropped entirely rather
-// than filtered by provenance/directness — see specs/020's FR-017 note and
-// issue #298 (filed separately) for provenance-aware reverse traversal as a
-// follow-up. `symbol -> REQ` reachability is NOT lost: it is carried by the
-// (always-forward-and-reverse) `implements` edge, which only exists when the
-// symbol genuinely claims the REQ via `@impl` — exactly the distinction #286
-// needs. `--tests` (`impact --diff --tests`) is unaffected by this change: it
+// SECOND edge kind the BFS below does not unconditionally treat as
+// bidirectional (alongside `contains` above), for the exact same class of
+// reason. A symbol-start BFS that reverse-follows `exercises` (node -> req)
+// reaches every REQ whose test happens to CALL that symbol, not just the
+// REQ(s) the symbol actually implements — e.g. a "create X, then read X back
+// to verify" test pattern means the read-verification symbol's `exercises`
+// edge fans out to every REQ under test, even ones with zero code
+// relationship to that symbol (reported against a real project: `getBookmark`
+// picked up `markRead`/`favorite`/`archive` REQs solely because each of those
+// REQs' tests called `getBookmark` to assert on resulting state).
+//
+// PR #299 meta-review Finding 2 (Option 2B, partial re-enable) — an
+// unconditional reverse-`exercises` skip has a real cost: `check`/
+// `plan-coverage` fold `impact()`'s `impactReqs`/`affectedDocs`/
+// `affectedFiles` into their `--diff --gate` scope filter (see
+// `src/commands/check.ts`'s `buildScope`, `src/plan-coverage/index.ts`), so a
+// REQ with NO `implements` edge at all — the `acceptExercises: true`
+// evidence-only workflow, spec 020 FR-012〜015 — becomes permanently
+// unreachable from a symbol/file startId once reverse `exercises` is fully
+// blocked, and `check --diff --gate` silently drops it from scope. The fix:
+// reverse `exercises` traversal is BLOCKED only when the source REQ has at
+// least one `implements` edge somewhere in the graph (the #286 leak class —
+// a REQ that already has a real `@impl` claim doesn't need a reverse
+// `exercises` walk to be reachable, and allowing it is what leaked sibling
+// REQs). It is ALLOWED when the source REQ has NO `implements` edge at all
+// (evidence-only REQ), since in that case there is no other path back to the
+// REQ and no sibling-REQ leak risk (an evidence-only REQ's `exercises` edges
+// are its ONLY edges, so reverse-walking them reaches only itself, never a
+// sibling). `reqsWithImplements` (computed once per `impact()` call, below)
+// is the precomputed membership check this conditional relies on. This is a
+// partial fix, not full provenance-aware reverse traversal — a REQ that HAS
+// an `@impl` claim on some OTHER symbol still cannot be reached in reverse
+// from an incidentally-exercised symbol (the original #286 case stays
+// fixed); full provenance-aware traversal (e.g. distinguishing "this REQ's
+// own exclusive evidence" from "somebody else's incidental call") is tracked
+// separately as issue #298. See specs/020's FR-017 note for the original
+// analysis. `symbol -> REQ` reachability for a REQ that DOES have an
+// `@impl` claim is NOT lost: it is carried by the (always-forward-and-
+// reverse) `implements` edge, which only exists when the symbol genuinely
+// claims the REQ via `@impl` — exactly the distinction #286 needs.
+// `--tests` (`impact --diff --tests`) is unaffected by any of this: it
 // resolves tests via `ingestedTrace.reqsByNode` directly, never via this BFS.
 // spec 020 (FR-017, contracts/cli-surface.md §5) — `impact()`'s optional 5th
 // argument. Kept as a trailing options object (rather than widening the
@@ -75,14 +100,22 @@ export interface ImpactTraversalOptions {
    * same loop iteration. Every other edge kind, and every non-stale
    * `exercises` edge, traverses exactly as before (US3 baseline unaffected).
    *
-   * Note (issue #286): as of the #286 fix, the loop below never attempts a
-   * node->req reverse walk over a non-stale `exercises` edge in the first
-   * place — `exercises` is forward-only (req->node) regardless of staleness.
-   * The "covers both...in the same loop iteration" language above still
-   * describes this option's own short-circuit correctly (it skips the edge
-   * before either branch runs, so it's a no-op for the reverse direction that
-   * no longer exists) — it does not mean non-stale `exercises` edges are
-   * still bidirectional elsewhere in the function.
+   * Note (issue #286 / PR #299 Finding 2, Option 2B): the loop below never
+   * attempts a node->req reverse walk over a non-stale `exercises` edge whose
+   * source REQ has an `implements` edge (the #286 leak class) — that much is
+   * unconditional, staleness aside. But since Option 2B, reverse `exercises`
+   * is CONDITIONALLY allowed for a REQ with NO `implements` edge at all
+   * (evidence-only, `reqsWithImplements` doesn't contain it). This
+   * `excludeStaleExercises` check runs FIRST in the loop and `continue`s
+   * before either the forward or the conditional-reverse branch below is
+   * reached, so a stale `exercises` edge is skipped regardless of whether its
+   * REQ would otherwise qualify for the reverse-allowed case — staleness
+   * exclusion always wins over the Option 2B allowance. The "covers both...in
+   * the same loop iteration" language above still describes this option's own
+   * short-circuit correctly; it does not mean non-stale `exercises` edges are
+   * unconditionally bidirectional elsewhere in the function — reverse
+   * traversal of a non-stale `exercises` edge remains gated by
+   * `reqsWithImplements` as described in the file-header comment.
    */
   excludeStaleExercises?: ReadonlySet<string>;
 }
@@ -95,6 +128,22 @@ export function impact(
   options?: ImpactTraversalOptions,
 ): ImpactResult {
   const staleExercisesNodes = options?.excludeStaleExercises;
+
+  // PR #299 meta-review Finding 2 (Option 2B) — precompute which REQ ids
+  // have at least one `implements` edge ANYWHERE in the graph (not just
+  // within the eventual `visited` set — this must be known up front,
+  // independent of BFS order, since it gates whether a reverse `exercises`
+  // walk is even attempted). A REQ in this set is the #286 leak class
+  // (reachable via its own `@impl` claim, so reverse `exercises` must stay
+  // blocked for it); a REQ absent from this set is evidence-only and reverse
+  // `exercises` is its only possible path back, so it's allowed through.
+  const reqsWithImplements = new Set<string>();
+  for (const edge of graph.edges) {
+    if (edge.kind !== "implements") continue;
+    const target = graph.nodes.get(edge.target);
+    if (target?.kind === "req") reqsWithImplements.add(edge.target);
+  }
+
   const visited = new Set<string>();
   const queue: Array<{ id: string; depth: number }> = startIds.map((id) => ({ id, depth: 0 }));
 
@@ -131,17 +180,23 @@ export function impact(
       if (edge.source === id && !visited.has(edge.target)) {
         queue.push({ id: edge.target, depth: depth + 1 });
       }
-      // spec 019 (FR-001〜003) / issue #286: reverse traversal (target ->
-      // source) skips `contains` edges so a req/task node cannot walk
-      // "backwards" into its parent doc during BFS, AND skips `exercises`
-      // edges so a symbol/file node cannot walk "backwards" into every REQ
-      // whose test happens to call it (see the file-header comment above for
-      // the full #286 rationale and the readlater/getBookmark repro). Every
-      // other edge kind keeps reverse traversal.
+      // spec 019 (FR-001〜003) / issue #286 / PR #299 Finding 2 (Option 2B):
+      // reverse traversal (target -> source) skips `contains` edges so a
+      // req/task node cannot walk "backwards" into its parent doc during
+      // BFS. Reverse traversal of an `exercises` edge is BLOCKED only when
+      // its source REQ has an `implements` edge somewhere in the graph (the
+      // #286 leak class — see the file-header comment for the full
+      // rationale and the readlater/getBookmark repro); it is ALLOWED when
+      // the source REQ has no `implements` edge at all, so an evidence-only
+      // REQ (`acceptExercises: true` workflow, no `@impl` anywhere) stays
+      // reachable from the symbol/file it's exercised by — otherwise
+      // `check --diff --gate` / `plan-coverage` would silently drop it from
+      // scope (issue #286, full provenance-aware traversal tracked as
+      // #298). Every other edge kind keeps unconditional reverse traversal.
       if (
         edge.target === id &&
         edge.kind !== "contains" &&
-        edge.kind !== "exercises" && // issue #286 — reverse traversal of exercises leaked sibling REQs
+        !(edge.kind === "exercises" && reqsWithImplements.has(edge.source)) &&
         !visited.has(edge.source)
       ) {
         queue.push({ id: edge.source, depth: depth + 1 });
