@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, renameSync, realpathSync } fro
 import { resolve, dirname, basename, relative, isAbsolute } from "node:path";
 import type { LockFile, ArtifactGraph, LockEntry, EdgeProvenance } from "./types.js";
 import { unionDeps, sortUniqueProvenances } from "./graph/canonical.js";
+import { UNREADABLE_DOC_CONTENT_HASH } from "./graph/builder.js";
 
 // Defence-in-depth against symlinked directory components escaping the project
 // root. `loadConfig` validates the lockFile path with string-only resolve/relative,
@@ -293,6 +294,19 @@ export function buildLockFromGraph(graph: ArtifactGraph, prevLock?: LockFile): L
         candidate.lastReconciled = prev.lastReconciled;
       }
       lock[id] = candidate;
+      continue;
+    }
+
+    // meta-review finding #1 (PR #293, issue #277 follow-up) — a bare `doc:`
+    // node synthesized by builder.ts for an unreadable .md carries the
+    // `UNREADABLE_DOC_CONTENT_HASH` sentinel instead of a real content hash.
+    // Locking it here would write that sentinel into `.trace.lock`; the next
+    // time the file becomes readable again with BYTE-IDENTICAL content to
+    // what it had before it went unreadable, `check()` would compare the
+    // real hash against the sentinel and report spurious drift. Skip locking
+    // this node entirely — it reappears in the lock (with a real hash) the
+    // next time the file is actually read successfully.
+    if (node.kind === "doc" && node.contentHash === UNREADABLE_DOC_CONTENT_HASH) {
       continue;
     }
 

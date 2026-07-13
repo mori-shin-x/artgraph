@@ -33,6 +33,8 @@ export function printRenameText(result: RenameResult) {
       console.log(
         `WARNING: ${w.filePath} — unrecognized trace schema generation; left unrewritten (re-run the test suite to regenerate this trace)`,
       );
+    } else if (w.type === "unreadable-file") {
+      console.log(`WARNING: ${w.message}`);
     } else {
       console.log(
         `WARNING: ${w.filePath} contains @impl ${w.oldId} — manual assignment to ${w.newIds.join(", ")} needed`,

@@ -93,6 +93,13 @@ export function isSilentWarning(type: BuildWarning["type"]): boolean {
   return SILENT_WARNING_TYPES.has(type);
 }
 
+// issue #277 — placeholder hash for a bare doc node synthesized when its
+// source .md is unreadable. Never collides with a real hashContent() output
+// (which is 64-hex sha256), so buildLockFromGraph can safely skip nodes
+// carrying this sentinel and check() will not compare against it. Chosen to
+// include a colon so it is trivially unmistakable for a hash.
+export const UNREADABLE_DOC_CONTENT_HASH = "unreadable-file:no-content";
+
 interface CollectedReq {
   id: string;
   specDir: string;
@@ -223,13 +230,27 @@ export function buildGraph(
             "but it carries none of its usual reqs/tasks/edges until the file becomes readable " +
             "again.",
         });
+        // meta-review (PR #293, issue #277 follow-up) — asymmetry with the
+        // readable path: for a readable doc, `autoNodes: false` only
+        // suppresses nodes whose id equals `expectedAutoDocId` (a doc with
+        // a frontmatter `node_id` override survives). Here the file could
+        // not be read at all, so we cannot know whether it would have
+        // declared a custom `node_id` — there is no frontmatter to parse.
+        // We gate this synthesis unconditionally on `autoNodes`, on the
+        // assumption that the user opted out of ALL auto-generated doc
+        // nodes and would rather see nothing than a possibly-wrong auto id.
+        // The documented cost: a file that WOULD have declared a custom
+        // `node_id` produces ZERO graph node while unreadable — a real
+        // divergence from the readable path, where a custom-`node_id` doc
+        // is immune to `autoNodes: false`. See the "documents the
+        // autoNodes=false asymmetry" test below.
         if (autoNodes) {
           nonReqNodes.push({
             id: `doc:${docRelPath}`,
             kind: "doc",
             filePath: relFile,
             label: `doc:${docRelPath}`,
-            contentHash: hashContent(""),
+            contentHash: UNREADABLE_DOC_CONTENT_HASH,
           });
         }
         continue;

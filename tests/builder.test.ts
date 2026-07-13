@@ -1815,6 +1815,39 @@ describe.skipIf(IS_WIN_277 || IS_ROOT_277)(
       const { graph } = buildGraph(root, cfg);
       expect(graph.edges.some((e) => e.source === "doc:broken.md")).toBe(false);
     });
+
+    // meta-review finding #1 / #3 (PR #293, issue #277 follow-up) — the bare
+    // doc node's placeholder `contentHash` must never be written into
+    // `.trace.lock`, or the file becoming readable again with byte-identical
+    // content would spuriously look like drift (a real hash vs. the
+    // sentinel). Regression test for the `buildLockFromGraph` guard in
+    // src/lock.ts.
+    it("does not write the placeholder hash into the lock (spurious-drift guard, meta-review #1)", () => {
+      const { graph } = buildGraph(root, cfg);
+      const lock = buildLockFromGraph(graph);
+
+      // The bare doc node for the unreadable file is NOT locked.
+      expect(lock["doc:broken.md"]).toBeUndefined();
+
+      // The sibling readable file's req is still locked normally.
+      expect(lock["REQ-2771"]).toBeDefined();
+      expect(lock["REQ-2771"].contentHash).toBeTruthy();
+
+      // Second scan on the now-readable file preserves the lock hash: make
+      // broken.md readable, rebuild, and confirm its REQ locks in cleanly
+      // with a real hash (not the sentinel) — a full round trip through the
+      // "unreadable -> readable" transition never poisons the lock.
+      chmodSync(unreadablePath, 0o644);
+      try {
+        const { graph: graph2 } = buildGraph(root, cfg);
+        const lock2 = buildLockFromGraph(graph2, lock);
+        expect(lock2["doc:broken.md"]).toBeDefined();
+        expect(lock2["doc:broken.md"].contentHash).not.toBe("unreadable-file:no-content");
+        expect(lock2["REQ-2772"]).toBeDefined();
+      } finally {
+        chmodSync(unreadablePath, 0o000);
+      }
+    });
   },
 );
 
@@ -1851,6 +1884,44 @@ describe.skipIf(IS_WIN_277 || IS_ROOT_277)(
       const unreadableWarnings = warnings.filter((w) => w.type === "unreadable-file");
       expect(unreadableWarnings).toHaveLength(1);
       expect(graph.nodes.has("doc:broken.md")).toBe(false);
+    });
+
+    // meta-review finding #2 (PR #293, issue #277 follow-up) — documents the
+    // deliberate asymmetry vs. the READABLE path: a readable doc with an
+    // explicit frontmatter `node_id` survives `autoNodes: false` (only
+    // auto-generated ids are filtered there). An UNREADABLE doc has no
+    // frontmatter to inspect, so builder.ts cannot know whether it would
+    // have declared a custom node_id — it gates synthesis unconditionally
+    // on `autoNodes` instead. Net effect: a readable custom-node_id doc
+    // always shows up in the graph regardless of `autoNodes`, but an
+    // unreadable file NEVER does while `autoNodes: false` is set, even if
+    // it would have declared its own custom node_id. This test locks in
+    // that divergence rather than "fixing" it — see the comment above `if
+    // (autoNodes)` in the catch branch of src/graph/builder.ts.
+    it("readable custom-node_id doc survives autoNodes=false, but an unreadable file never does (documents the asymmetry, meta-review #2)", () => {
+      const customPath = join(root, "specs/custom.md");
+      writeFileSync(
+        customPath,
+        [
+          "---",
+          "artgraph:",
+          '  node_id: "doc:my-custom-id"',
+          "---",
+          "- REQ-2775: custom doc req",
+          "",
+        ].join("\n"),
+      );
+      try {
+        const { graph } = buildGraph(root, cfg);
+        // Readable doc with an explicit node_id survives autoNodes:false.
+        expect(graph.nodes.has("doc:my-custom-id")).toBe(true);
+        // The unreadable file still produces NO doc node at all — even
+        // though it, too, might have declared its own custom node_id we
+        // will never get to see.
+        expect(graph.nodes.has("doc:broken.md")).toBe(false);
+      } finally {
+        rmSync(customPath, { force: true });
+      }
     });
   },
 );
