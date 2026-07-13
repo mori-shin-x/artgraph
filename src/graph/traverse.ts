@@ -39,6 +39,25 @@ import type { LockFile } from "../types.js";
 // reason a file startId still drags in same-file symbols; for symbol startIds
 // `resolveStartIds` deliberately omits the parent file node so a symbol-unit
 // input doesn't sweep up its siblings (spec 016 R-006 mitigation).
+//
+// issue #286 — `exercises` (req -> symbol|file, coverage-derived) is now the
+// SECOND edge kind the BFS below does not treat as bidirectional (alongside
+// `contains` above), for the exact same class of reason. A symbol-start BFS
+// that reverse-follows `exercises` (node -> req) reaches every REQ whose test
+// happens to CALL that symbol, not just the REQ(s) the symbol actually
+// implements — e.g. a "create X, then read X back to verify" test pattern
+// means the read-verification symbol's `exercises` edge fans out to every REQ
+// under test, even ones with zero code relationship to that symbol (reported
+// against a real project: `getBookmark` picked up `markRead`/`favorite`/
+// `archive` REQs solely because each of those REQs' tests called `getBookmark`
+// to assert on resulting state). Reverse traversal is dropped entirely rather
+// than filtered by provenance/directness — see specs/020's FR-017 note and
+// issue #298 (filed separately) for provenance-aware reverse traversal as a
+// follow-up. `symbol -> REQ` reachability is NOT lost: it is carried by the
+// (always-forward-and-reverse) `implements` edge, which only exists when the
+// symbol genuinely claims the REQ via `@impl` — exactly the distinction #286
+// needs. `--tests` (`impact --diff --tests`) is unaffected by this change: it
+// resolves tests via `ingestedTrace.reqsByNode` directly, never via this BFS.
 // spec 020 (FR-017, contracts/cli-surface.md §5) — `impact()`'s optional 5th
 // argument. Kept as a trailing options object (rather than widening the
 // existing `maxDepth?: number` 4th param) so every pre-020 call site
@@ -55,6 +74,15 @@ export interface ImpactTraversalOptions {
    * both the req->node forward walk and the node->req reverse walk in the
    * same loop iteration. Every other edge kind, and every non-stale
    * `exercises` edge, traverses exactly as before (US3 baseline unaffected).
+   *
+   * Note (issue #286): as of the #286 fix, the loop below never attempts a
+   * node->req reverse walk over a non-stale `exercises` edge in the first
+   * place — `exercises` is forward-only (req->node) regardless of staleness.
+   * The "covers both...in the same loop iteration" language above still
+   * describes this option's own short-circuit correctly (it skips the edge
+   * before either branch runs, so it's a no-op for the reverse direction that
+   * no longer exists) — it does not mean non-stale `exercises` edges are
+   * still bidirectional elsewhere in the function.
    */
   excludeStaleExercises?: ReadonlySet<string>;
 }
@@ -103,10 +131,19 @@ export function impact(
       if (edge.source === id && !visited.has(edge.target)) {
         queue.push({ id: edge.target, depth: depth + 1 });
       }
-      // spec 019 (FR-001〜003): reverse traversal (target -> source) skips
-      // `contains` edges so a req/task node cannot walk "backwards" into its
-      // parent doc during BFS. Every other edge kind keeps reverse traversal.
-      if (edge.target === id && edge.kind !== "contains" && !visited.has(edge.source)) {
+      // spec 019 (FR-001〜003) / issue #286: reverse traversal (target ->
+      // source) skips `contains` edges so a req/task node cannot walk
+      // "backwards" into its parent doc during BFS, AND skips `exercises`
+      // edges so a symbol/file node cannot walk "backwards" into every REQ
+      // whose test happens to call it (see the file-header comment above for
+      // the full #286 rationale and the readlater/getBookmark repro). Every
+      // other edge kind keeps reverse traversal.
+      if (
+        edge.target === id &&
+        edge.kind !== "contains" &&
+        edge.kind !== "exercises" && // issue #286 — reverse traversal of exercises leaked sibling REQs
+        !visited.has(edge.source)
+      ) {
         queue.push({ id: edge.source, depth: depth + 1 });
       }
     }
