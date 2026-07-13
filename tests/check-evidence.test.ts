@@ -12,7 +12,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { runAt } from "./helpers.js";
+import { runAt, gitInit, gitCommitAll } from "./helpers.js";
 import { SCHEMA_VERSION } from "../src/trace/schema.js";
 import { check } from "../src/check.js";
 import type { ArtifactGraph, LockFile, TestResultMap, GraphNode, GraphEdge } from "../src/types.js";
@@ -833,4 +833,57 @@ describe("check-evidence (T019f): staleness: gate composes with --gate (exit 2),
       expect(exitCode).toBe(expectedExit);
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// issue #286 Option 2B (PR #299 meta-review Finding 2) — `buildScope` in
+// `src/commands/check.ts` folds `impact()`'s `impactReqs` into the `--diff`
+// scope filter. An evidence-only REQ (no `@impl` anywhere, only an
+// `exercises` edge from its test — the `acceptExercises: true` workflow)
+// must still be reachable from a symbol/file startId so `check --diff` does
+// not silently drop it from `uncovered` when the diff touches exactly the
+// symbol/file it's exercised by.
+// ---------------------------------------------------------------------------
+
+describe("check-evidence (#286 Option 2B integration): check --diff scope includes an evidence-only REQ reachable only via reverse exercises", () => {
+  it("check --diff --format json: REQ-500 (no @impl, exercises-only) surfaces in uncovered when the diff touches its exercised symbol", async () => {
+    const original = ["export function fn() {}", ""].join("\n");
+    const tmp = makeRepo({
+      "src/x.ts": original,
+      "specs/spec.md": [
+        "# Fixture",
+        "",
+        "- REQ-500: fn is exercised only (acceptExercises workflow, no @impl).",
+        "",
+      ].join("\n"),
+    });
+    gitInit(tmp);
+    gitCommitAll(tmp, "init");
+
+    // Working-tree edit to x.ts — this is what `check --diff` picks up.
+    const edited = ["export function fn() {", "  // edited after the commit", "}", ""].join("\n");
+    writeFileSync(join(tmp, "src/x.ts"), edited, "utf-8");
+
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[REQ-500] exercises fn",
+        testFile: "tests/x.test.ts",
+        hits: [{ file: "src/x.ts", fn: "fn" }],
+        hashes: { "src/x.ts": hashOf(edited) },
+      }),
+    ]);
+
+    const { stdout, exitCode } = await runAt(tmp, ["check", "--diff", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+
+    // REQ-500 has no `implements` edge anywhere (evidence-only), so per
+    // Option 2B the reverse `exercises` walk from `symbol:src/x.ts#fn` (the
+    // diff's resolved start id) reaches it, pulling it into `buildScope`'s
+    // scope set. `findUncovered` already flags it (no `@impl`); before the
+    // Option 2B fix it would have been silently dropped from `uncovered`
+    // because it never entered scope at all.
+    expect(result.uncovered).toContain("REQ-500");
+  });
 });
