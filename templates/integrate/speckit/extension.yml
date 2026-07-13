@@ -3,7 +3,7 @@ schema_version: "1.0"
 extension:
   id: artgraph
   name: "artgraph — SDD verification"
-  version: "0.2.0" # x-release-please-version
+  version: "0.2.1" # x-release-please-version
   description: "Run artgraph scan/reconcile/check at Spec Kit workflow checkpoints."
   author: artgraph
   repository: https://github.com/mori-shin-x/artgraph
