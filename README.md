@@ -1,6 +1,12 @@
-# artgraph
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="./assets/logo-light.svg">
+    <img src="./assets/logo-light.svg" alt="artgraph" width="360">
+  </picture>
+</h1>
 
-**English** | [日本語](./README.ja.md)
+<p align="center"><strong>English</strong> | <a href="./README.ja.md">日本語</a></p>
 
 [![CI](https://github.com/mori-shin-x/artgraph/actions/workflows/ci.yml/badge.svg)](https://github.com/mori-shin-x/artgraph/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/artgraph.svg)](https://www.npmjs.com/package/artgraph)
