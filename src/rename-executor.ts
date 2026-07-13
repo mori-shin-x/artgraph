@@ -51,6 +51,19 @@ export type RenameWarning =
   | {
       type: "unknown-trace-schema";
       filePath: string;
+    }
+  // meta-review (PR #293, issue #277 follow-up) — same unreadable-file
+  // crash class as builder.ts's #277 fix, but for rename/split/merge: a
+  // scanned spec/code/test file that exists (enumerateRewriteFiles already
+  // matched it) but cannot be READ (permission errors, EISDIR, …) used to
+  // throw uncaught here, crashing the whole rename/split/merge command with
+  // no per-file isolation. Fixed fail-safe: warn, skip the file, and keep
+  // rewriting every OTHER file exactly like builder.ts's #277 fix skips
+  // parsing (but keeps scanning) an unreadable .md.
+  | {
+      type: "unreadable-file";
+      filePath: string;
+      message: string;
     };
 
 export interface RenameResult {
@@ -113,6 +126,36 @@ function enumerateRewriteFiles(rootDir: string, config: ArtgraphConfig): string[
     absPaths.add(resolve(file));
   }
   return filterRelevantFiles([...absPaths].map((f) => relative(rootDir, f))).sort();
+}
+
+/**
+ * meta-review (PR #293, issue #277 follow-up) — read a scanned file's
+ * content, catching the EISDIR/EACCES class of errors that a bare
+ * `readFileSync` would otherwise throw uncaught (mirrors builder.ts's
+ * #277 fix for the identical failure mode in `buildGraph`'s markdown loop).
+ * Pre-fix, a single unreadable spec/code/test file anywhere in the scanned
+ * set crashed the whole `rename`/`split`/`merge` command with no per-file
+ * isolation. On failure: push an `unreadable-file` RenameWarning and return
+ * `undefined` so the caller can skip (not rewrite, not throw) this one file
+ * and keep going — matching what already happens for a file `enumerateRewriteFiles`
+ * lists but that no longer `existsSync`s.
+ */
+function tryReadFile(
+  absPath: string,
+  relPath: string,
+  warnings: RenameWarning[],
+): string | undefined {
+  try {
+    return readFileSync(absPath, "utf-8");
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    warnings.push({
+      type: "unreadable-file",
+      filePath: relPath,
+      message: `could not read "${relPath}" (${message}); skipped rewrite for this file.`,
+    });
+    return undefined;
+  }
 }
 
 /**
@@ -228,18 +271,21 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
   const allChanges: RewriteChange[] = [];
   const filesToWrite = new Map<string, string>();
   const scannedFiles = enumerateRewriteFiles(rootDir, config);
+  const readWarnings: RenameWarning[] = [];
 
   for (const relPath of scannedFiles) {
     const absPath = resolve(rootDir, relPath);
     if (!existsSync(absPath)) continue;
 
-    const content = readFileSync(absPath, "utf-8");
+    const content = tryReadFile(absPath, relPath, readWarnings);
+    if (content === undefined) continue;
     const result = rewriteFile(relPath, content, from, to, rewriteOpts);
     if (result.changes.length > 0) {
       allChanges.push(...result.changes);
       filesToWrite.set(absPath, result.content);
     }
   }
+  const unreadableCount = readWarnings.length;
 
   // Safety valve (issue #212): the graph knows `from`, so at least one scanned
   // file must carry a rewritable reference. Zero hits means the enumeration
@@ -265,10 +311,15 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
   const traceRewrite = rewriteTraceShards(rootDir, config, [[from, to]]);
   for (const [absPath, content] of traceRewrite.filesToWrite) filesToWrite.set(absPath, content);
   allChanges.push(...traceRewrite.changes);
-  const warnings: RenameWarning[] = traceRewrite.unknownSchemaShards.map((filePath) => ({
-    type: "unknown-trace-schema" as const,
-    filePath,
-  }));
+  const warnings: RenameWarning[] = [
+    ...readWarnings,
+    ...traceRewrite.unknownSchemaShards.map(
+      (filePath): RenameWarning => ({
+        type: "unknown-trace-schema" as const,
+        filePath,
+      }),
+    ),
+  ];
 
   applyWrites(rootDir, config, filesToWrite, dryRun, force);
 
@@ -276,7 +327,9 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
     operation: "rename",
     from,
     to,
-    filesScanned: scannedFiles.length,
+    // meta-review (PR #293, issue #277 follow-up) — a file that could not be
+    // read is skipped, not scanned, so it is excluded from this count.
+    filesScanned: scannedFiles.length - unreadableCount,
     changes: allChanges,
     lockChanges,
     warnings,
@@ -326,11 +379,16 @@ export function executeSplit(
 
   const implRe = /\/\/[^\S\n]*@impl[^\S\n]+/;
 
+  let unreadableCount = 0;
   for (const relPath of scannedFiles) {
     const absPath = resolve(rootDir, relPath);
     if (!existsSync(absPath)) continue;
 
-    const content = readFileSync(absPath, "utf-8");
+    const content = tryReadFile(absPath, relPath, warnings);
+    if (content === undefined) {
+      unreadableCount++;
+      continue;
+    }
     const ext = extOf(relPath);
 
     if (ext === ".md") {
@@ -387,7 +445,9 @@ export function executeSplit(
     from: splitId,
     sourceIds: [splitId],
     intoIds,
-    filesScanned: scannedFiles.length,
+    // meta-review (PR #293, issue #277 follow-up) — a file that could not be
+    // read is skipped, not scanned, so it is excluded from this count.
+    filesScanned: scannedFiles.length - unreadableCount,
     changes: allChanges,
     lockChanges,
     warnings,
@@ -435,12 +495,14 @@ export function executeMerge(
   const allChanges: RewriteChange[] = [];
   const filesToWrite = new Map<string, string>();
   const scannedFiles = enumerateRewriteFiles(rootDir, config);
+  const readWarnings: RenameWarning[] = [];
 
   for (const relPath of scannedFiles) {
     const absPath = resolve(rootDir, relPath);
     if (!existsSync(absPath)) continue;
 
-    const content = readFileSync(absPath, "utf-8");
+    const content = tryReadFile(absPath, relPath, readWarnings);
+    if (content === undefined) continue;
     const ext = extOf(relPath);
 
     if (ext === ".md") {
@@ -505,10 +567,15 @@ export function executeMerge(
   );
   for (const [absPath, content] of traceRewrite.filesToWrite) filesToWrite.set(absPath, content);
   allChanges.push(...traceRewrite.changes);
-  const warnings: RenameWarning[] = traceRewrite.unknownSchemaShards.map((filePath) => ({
-    type: "unknown-trace-schema" as const,
-    filePath,
-  }));
+  const warnings: RenameWarning[] = [
+    ...readWarnings,
+    ...traceRewrite.unknownSchemaShards.map(
+      (filePath): RenameWarning => ({
+        type: "unknown-trace-schema" as const,
+        filePath,
+      }),
+    ),
+  ];
 
   applyWrites(rootDir, config, filesToWrite, dryRun, force);
 
@@ -517,7 +584,9 @@ export function executeMerge(
     to: intoId,
     sourceIds: mergeIds,
     intoIds: [intoId],
-    filesScanned: scannedFiles.length,
+    // meta-review (PR #293, issue #277 follow-up) — a file that could not be
+    // read is skipped, not scanned, so it is excluded from this count.
+    filesScanned: scannedFiles.length - readWarnings.length,
     changes: allChanges,
     lockChanges,
     warnings,

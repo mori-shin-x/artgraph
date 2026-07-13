@@ -93,6 +93,13 @@ export function isSilentWarning(type: BuildWarning["type"]): boolean {
   return SILENT_WARNING_TYPES.has(type);
 }
 
+// issue #277 — placeholder hash for a bare doc node synthesized when its
+// source .md is unreadable. Never collides with a real hashContent() output
+// (which is 64-hex sha256), so buildLockFromGraph can safely skip nodes
+// carrying this sentinel and check() will not compare against it. Chosen to
+// include a colon so it is trivially unmistakable for a hash.
+export const UNREADABLE_DOC_CONTENT_HASH = "unreadable-file:no-content";
+
 interface CollectedReq {
   id: string;
   specDir: string;
@@ -185,7 +192,69 @@ export function buildGraph(
     const specFiles = globSync(resolve(rootDir, specDirName, "**/*.md"));
     for (const file of specFiles) {
       const relFile = relative(rootDir, file);
-      const mdSource = readFileSync(file, "utf-8");
+
+      // issue #277 — `readFileSync` throws on a markdown/spec file that exists
+      // (the glob above already enumerated it) but cannot be READ (chmod 000 /
+      // other permission errors; the same failure mode fixed for the TS side
+      // in issue #264's `parseTSFile`, mirrored here). Pre-fix, this uncaught
+      // throw took down the ENTIRE scan/check/impact command — there is no
+      // per-file isolation in this loop, so a single unreadable .md anywhere
+      // under any specDir made every command that builds the graph fail
+      // outright with a raw stack trace. Fixed fail-SAFE, matching #264's
+      // pattern exactly: warn, synthesize a bare `doc:` node (unless
+      // `docGraph.autoNodes` is off, matching the existing opt-out already
+      // honored below for auto-generated doc nodes) so the file still shows
+      // up in the graph instead of silently vanishing, and skip to the next
+      // file — no cache write, no parse, no edge collection for this file.
+      // Deliberate side-effect: every REQ/task this file would have defined
+      // disappears from the graph until it becomes readable again, so any
+      // `@impl REQ-X` pointing at one of them becomes an orphan-edge warning
+      // in the meantime — this is expected and surfaces the real problem
+      // (the file is unreadable) rather than a confusing crash.
+      let mdSource: string;
+      try {
+        mdSource = readFileSync(file, "utf-8");
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        const docRelPath =
+          specDirName && relFile.startsWith(specDirName + "/")
+            ? relFile.slice(specDirName.length + 1)
+            : relFile;
+        warnings.push({
+          type: "unreadable-file",
+          id: `doc:${docRelPath}`,
+          files: [relFile],
+          message:
+            `could not read "${relFile}" (${message}); skipped req/task/edge extraction for ` +
+            "this file. A bare doc node was still created so it stays visible in the graph, " +
+            "but it carries none of its usual reqs/tasks/edges until the file becomes readable " +
+            "again.",
+        });
+        // meta-review (PR #293, issue #277 follow-up) — asymmetry with the
+        // readable path: for a readable doc, `autoNodes: false` only
+        // suppresses nodes whose id equals `expectedAutoDocId` (a doc with
+        // a frontmatter `node_id` override survives). Here the file could
+        // not be read at all, so we cannot know whether it would have
+        // declared a custom `node_id` — there is no frontmatter to parse.
+        // We gate this synthesis unconditionally on `autoNodes`, on the
+        // assumption that the user opted out of ALL auto-generated doc
+        // nodes and would rather see nothing than a possibly-wrong auto id.
+        // The documented cost: a file that WOULD have declared a custom
+        // `node_id` produces ZERO graph node while unreadable — a real
+        // divergence from the readable path, where a custom-`node_id` doc
+        // is immune to `autoNodes: false`. See the "documents the
+        // autoNodes=false asymmetry" test below.
+        if (autoNodes) {
+          nonReqNodes.push({
+            id: `doc:${docRelPath}`,
+            kind: "doc",
+            filePath: relFile,
+            label: `doc:${docRelPath}`,
+            contentHash: UNREADABLE_DOC_CONTENT_HASH,
+          });
+        }
+        continue;
+      }
       const mdHash = hashContent(mdSource);
       // Key by specDir too: a file nested under two specDirs is parsed once
       // per dir with a different `specDirPrefix` (and thus a different doc id).

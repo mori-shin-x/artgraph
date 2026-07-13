@@ -39,7 +39,7 @@
 // with N typically <= 20 the cost is negligible.
 
 import { existsSync, readFileSync } from "node:fs";
-import { resolve as resolvePath } from "node:path";
+import { resolve as resolvePath, relative as relativePath } from "node:path";
 import { loadConfig } from "../config.js";
 import { scan } from "../scan.js";
 import { readLockWithMeta, warnIfNewerLockSchema } from "../lock.js";
@@ -172,10 +172,39 @@ export interface PlanCoverageRunResult {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function safeRead(path: string | undefined): string | undefined {
+// meta-review (PR #293, issue #277 follow-up) — same unreadable-file crash
+// class as builder.ts's #277 fix and rename-executor.ts's own #277
+// follow-up: `existsSync` only proves the path exists, not that it is a
+// readable regular file (a directory named tasks.md/plan.md/spec.md passes
+// `existsSync` but throws EISDIR on `readFileSync`). Pre-fix, that uncaught
+// throw crashed `runPlanCoverage` outright. Fixed fail-safe: catch the read,
+// push an `unreadable-file` warning onto the SAME `warnings: BuildWarning[]`
+// channel `runPlanCoverage` already threads through from `scan()` (see
+// `PlanCoverageRunResult.warnings`), and return `undefined` exactly like a
+// missing file — callers already treat `safeRead` returning `undefined` as
+// "nothing to read here" (tasks.md's caller falls back to an
+// `emptyExtraction` result; plan.md/spec.md simply contribute nothing to
+// mention detection).
+function safeRead(
+  path: string | undefined,
+  repoRoot: string,
+  warnings: BuildWarning[],
+): string | undefined {
   if (path === undefined || path === "") return undefined;
   if (!existsSync(path)) return undefined;
-  return readFileSync(path, "utf-8");
+  try {
+    return readFileSync(path, "utf-8");
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const relPath = relativePath(repoRoot, path);
+    warnings.push({
+      type: "unreadable-file",
+      id: `doc:${relPath}`,
+      files: [relPath],
+      message: `could not read "${relPath}" (${message}); skipped for plan-coverage analysis.`,
+    });
+    return undefined;
+  }
 }
 
 function sortStrings(arr: string[]): string[] {
@@ -449,7 +478,7 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
 
   // Read source texts. tasks.md is the spine; plan.md / spec.md are
   // optional (per FR-015 they only contribute to mention detection).
-  const tasksContent = safeRead(tasksPath);
+  const tasksContent = safeRead(tasksPath, repoRoot, warnings);
   if (tasksContent === undefined) {
     // The CLI layer should have already failed with a clearer error, but
     // be defensive — return an emptyExtraction shaped result so callers
@@ -473,9 +502,9 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
     };
   }
 
-  const planContent = safeRead(planPath);
+  const planContent = safeRead(planPath, repoRoot, warnings);
   const specPath = resolvePath(specDir, "spec.md");
-  const specContent = safeRead(specPath);
+  const specContent = safeRead(specPath, repoRoot, warnings);
 
   // Stage A/B extraction. tasks.md is the structured source; plan.md
   // contributes additional file seeds when present.

@@ -520,6 +520,101 @@ describe("runPlanCoverage — empty extraction", () => {
 });
 
 // ---------------------------------------------------------------------------
+// meta-review (PR #293, issue #277 follow-up) — `tasks.md` / `plan.md` /
+// `spec.md` existing as a DIRECTORY (not a regular file) passes `existsSync`
+// but throws EISDIR on `readFileSync`. `safeRead` must catch that, push an
+// `unreadable-file` BuildWarning, and let `runPlanCoverage` return a safe
+// result instead of crashing outright.
+// ---------------------------------------------------------------------------
+describe("runPlanCoverage — unreadable tasks.md/plan.md/spec.md (#277 follow-up)", () => {
+  let fx: FixtureRoot;
+  afterEach(() => {
+    if (fx) rmSync(fx.root, { recursive: true, force: true });
+  });
+
+  it("does not throw when tasks.md is a directory, and surfaces an unreadable-file warning", () => {
+    fx = setupFixture();
+    // Replace the tasks.md FILE with a directory of the same name (EISDIR).
+    rmSync(fx.tasksPath, { force: true });
+    mkdirSync(fx.tasksPath);
+
+    let result: ReturnType<typeof runPlanCoverage> | undefined;
+    expect(() => {
+      result = runPlanCoverage({
+        repoRoot: fx.root,
+        specDir: fx.specDir,
+        tasksPath: fx.tasksPath,
+        planPath: fx.planPath,
+        format: "json",
+        gate: false,
+        ignore: [],
+        requireFilesSection: false,
+      });
+    }).not.toThrow();
+
+    expect(result).toBeDefined();
+    // tasks.md unreadable => nothing was extractable => emptyExtraction, same
+    // as a genuinely-missing tasks.md.
+    expect(result!.json.diagnostics.find((d) => d.kind === "emptyExtraction")).toBeDefined();
+    expect(
+      result!.warnings.some(
+        (w) => w.type === "unreadable-file" && w.files.includes("specs/014-test/tasks.md"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not throw when plan.md is a directory, and surfaces an unreadable-file warning", () => {
+    fx = setupFixture();
+    rmSync(fx.planPath, { force: true });
+    mkdirSync(fx.planPath);
+
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+
+    // tasks.md is still readable, so its Files: entry still produces impact.
+    expect(result.json.implicitImpacts.length).toBeGreaterThan(0);
+    expect(
+      result.warnings.some(
+        (w) => w.type === "unreadable-file" && w.files.includes("specs/014-test/plan.md"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not throw when spec.md is a directory, and surfaces an unreadable-file warning", () => {
+    fx = setupFixture();
+    const specMdPath = join(fx.specDir, "spec.md");
+    rmSync(specMdPath, { force: true });
+    mkdirSync(specMdPath);
+
+    const result = runPlanCoverage({
+      repoRoot: fx.root,
+      specDir: fx.specDir,
+      tasksPath: fx.tasksPath,
+      planPath: fx.planPath,
+      format: "json",
+      gate: false,
+      ignore: [],
+      requireFilesSection: false,
+    });
+
+    expect(result.json.implicitImpacts.length).toBeGreaterThan(0);
+    expect(
+      result.warnings.some(
+        (w) => w.type === "unreadable-file" && w.files.includes("specs/014-test/spec.md"),
+      ),
+    ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Spec Kit standard flat checklist — issues #219 / #220
 // ---------------------------------------------------------------------------
 

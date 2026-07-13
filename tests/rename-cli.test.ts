@@ -377,6 +377,98 @@ describe("CLI: rename --merge/--into", () => {
 });
 
 // ---------------------------------------------------------------------------
+// meta-review (PR #293, issue #277 follow-up) — an unreadable file scanned by
+// enumerateRewriteFiles (a directory named `*.md` under `specDirs` passes
+// `existsSync` but throws EISDIR on `readFileSync`) must not crash rename/
+// split/merge outright. It should be skipped with an `unreadable-file`
+// warning while every OTHER scanned file is still rewritten normally.
+// ---------------------------------------------------------------------------
+describe("CLI: rename/split/merge skip unreadable files (#277 follow-up)", () => {
+  /** Create a directory named `broken.md` under `specs/` — EISDIR on read,
+   *  root-safe (no chmod required), and still glob-matched by `specs/**\/*.md`
+   *  since `enumerateRewriteFiles` doesn't pass `nodir` to `globSync`. */
+  function makeUnreadableSpecFile(tmp: string): string {
+    const dirAsFile = resolve(tmp, "specs/broken.md");
+    mkdirSync(dirAsFile);
+    return dirAsFile;
+  }
+
+  it("rename: skips the unreadable file, warns, and still rewrites REQ-001 elsewhere", async () => {
+    const tmp = await prepareTempDir();
+    makeUnreadableSpecFile(tmp);
+
+    const { exitCode, stdout } = await runCli(
+      ["rename", "--from", "REQ-001", "--to", "REQ-100", "--format", "json"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+
+    expect(
+      result.warnings.some(
+        (w: { type: string; filePath: string }) =>
+          w.type === "unreadable-file" && w.filePath === "specs/broken.md",
+      ),
+    ).toBe(true);
+
+    // Normal rewrites on the OTHER scanned files still happened.
+    const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
+    expect(spec).toContain("REQ-100: ユーザー認証");
+    const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
+    expect(src).toContain("@impl REQ-100");
+  });
+
+  it("split: skips the unreadable file, warns, and still splits REQ-001 elsewhere", async () => {
+    const tmp = await prepareTempDir();
+    makeUnreadableSpecFile(tmp);
+
+    const { exitCode, stdout } = await runCli(
+      ["rename", "--split", "REQ-001", "--into", "REQ-101", "REQ-102", "--format", "json"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+
+    expect(
+      result.warnings.some(
+        (w: { type: string; filePath: string }) =>
+          w.type === "unreadable-file" && w.filePath === "specs/broken.md",
+      ),
+    ).toBe(true);
+
+    const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
+    expect(spec).not.toMatch(/^- REQ-001:/m);
+    expect(spec).toContain("REQ-101");
+    expect(spec).toContain("REQ-102");
+  });
+
+  it("merge: skips the unreadable file, warns, and still merges REQ-001/REQ-002 elsewhere", async () => {
+    const tmp = await prepareTempDir();
+    makeUnreadableSpecFile(tmp);
+
+    const { exitCode, stdout } = await runCli(
+      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100", "--format", "json"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+
+    expect(
+      result.warnings.some(
+        (w: { type: string; filePath: string }) =>
+          w.type === "unreadable-file" && w.filePath === "specs/broken.md",
+      ),
+    ).toBe(true);
+
+    const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
+    expect(src).toContain("@impl REQ-100");
+    const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
+    const defLines = spec.split("\n").filter((l) => /^- REQ-100:/.test(l));
+    expect(defLines).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // issue #212 — file enumeration is `.artgraph.json`-pattern based, not
 // git-tracked. Untracked (pre-commit) files must be rewritten like committed
 // ones, a zero-hit scan must fail loudly, and JSON output must expose the
