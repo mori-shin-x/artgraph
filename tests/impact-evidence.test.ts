@@ -343,7 +343,7 @@ function node(id: string, kind: GraphNode["kind"], filePath: string, hash = "h")
   return { id, kind, filePath, contentHash: hash };
 }
 
-describe("impact-evidence (T021d, ⑥edge case, FR-017): staleness=exclude drops stale exercises edges from traversal; warn keeps them", () => {
+describe("impact-evidence (T021d, ⑥edge case, FR-017, updated for #286): staleness=exclude drops stale exercises edges from traversal; reverse traversal is separately blocked unconditionally by #286", () => {
   function buildGraph(): ArtifactGraph {
     const nodes = new Map<string, GraphNode>([
       ["REQ-010", node("REQ-010", "req", "specs/x.md")],
