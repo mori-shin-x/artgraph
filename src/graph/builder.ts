@@ -185,7 +185,55 @@ export function buildGraph(
     const specFiles = globSync(resolve(rootDir, specDirName, "**/*.md"));
     for (const file of specFiles) {
       const relFile = relative(rootDir, file);
-      const mdSource = readFileSync(file, "utf-8");
+
+      // issue #277 — `readFileSync` throws on a markdown/spec file that exists
+      // (the glob above already enumerated it) but cannot be READ (chmod 000 /
+      // other permission errors; the same failure mode fixed for the TS side
+      // in issue #264's `parseTSFile`, mirrored here). Pre-fix, this uncaught
+      // throw took down the ENTIRE scan/check/impact command — there is no
+      // per-file isolation in this loop, so a single unreadable .md anywhere
+      // under any specDir made every command that builds the graph fail
+      // outright with a raw stack trace. Fixed fail-SAFE, matching #264's
+      // pattern exactly: warn, synthesize a bare `doc:` node (unless
+      // `docGraph.autoNodes` is off, matching the existing opt-out already
+      // honored below for auto-generated doc nodes) so the file still shows
+      // up in the graph instead of silently vanishing, and skip to the next
+      // file — no cache write, no parse, no edge collection for this file.
+      // Deliberate side-effect: every REQ/task this file would have defined
+      // disappears from the graph until it becomes readable again, so any
+      // `@impl REQ-X` pointing at one of them becomes an orphan-edge warning
+      // in the meantime — this is expected and surfaces the real problem
+      // (the file is unreadable) rather than a confusing crash.
+      let mdSource: string;
+      try {
+        mdSource = readFileSync(file, "utf-8");
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        const docRelPath =
+          specDirName && relFile.startsWith(specDirName + "/")
+            ? relFile.slice(specDirName.length + 1)
+            : relFile;
+        warnings.push({
+          type: "unreadable-file",
+          id: `doc:${docRelPath}`,
+          files: [relFile],
+          message:
+            `could not read "${relFile}" (${message}); skipped req/task/edge extraction for ` +
+            "this file. A bare doc node was still created so it stays visible in the graph, " +
+            "but it carries none of its usual reqs/tasks/edges until the file becomes readable " +
+            "again.",
+        });
+        if (autoNodes) {
+          nonReqNodes.push({
+            id: `doc:${docRelPath}`,
+            kind: "doc",
+            filePath: relFile,
+            label: `doc:${docRelPath}`,
+            contentHash: hashContent(""),
+          });
+        }
+        continue;
+      }
       const mdHash = hashContent(mdSource);
       // Key by specDir too: a file nested under two specDirs is parsed once
       // per dir with a different `specDirPrefix` (and thus a different doc id).

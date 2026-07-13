@@ -1753,3 +1753,104 @@ describe.skipIf(IS_WIN_264 || IS_ROOT_264)(
     });
   },
 );
+
+// issue #277 — the markdown/spec-file counterpart to #264's TS fix. Before
+// this fix, an unreadable `.md` under a specDir crashed the whole
+// scan/check/impact command right here in `buildGraph`'s markdown loop:
+// `readFileSync` on a chmod-000 file throws with no per-file isolation.
+// Same permission-error-only-makes-sense-on-POSIX-non-root caveat as
+// tests/builder.test.ts's #264 test above.
+const IS_WIN_277 = process.platform === "win32";
+const IS_ROOT_277 = typeof process.getuid === "function" && process.getuid() === 0;
+
+describe.skipIf(IS_WIN_277 || IS_ROOT_277)(
+  "buildGraph survives an unreadable .md file in a specDir (issue #277)",
+  () => {
+    let root: string;
+    let unreadablePath: string;
+
+    beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), "artgraph-builder-unreadable-md-"));
+      mkdirSync(join(root, "specs"), { recursive: true });
+      writeFileSync(join(root, "specs/good.md"), "- REQ-2771: keep me\n");
+      unreadablePath = join(root, "specs/broken.md");
+      writeFileSync(unreadablePath, "- REQ-2772: never read\n");
+      chmodSync(unreadablePath, 0o000);
+    });
+
+    afterAll(() => {
+      chmodSync(unreadablePath, 0o644);
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    const cfg: ArtgraphConfig = {
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: [],
+      lockFile: ".trace.lock",
+    };
+
+    it("does not throw building the graph", () => {
+      expect(() => buildGraph(root, cfg)).not.toThrow();
+    });
+
+    it("emits exactly one unreadable-file warning for the unreadable .md", () => {
+      const { warnings } = buildGraph(root, cfg);
+      const unreadableWarnings = warnings.filter((w) => w.type === "unreadable-file");
+      expect(unreadableWarnings).toHaveLength(1);
+      expect(unreadableWarnings[0].files).toEqual(["specs/broken.md"]);
+    });
+
+    it("still creates a bare doc node for the unreadable .md", () => {
+      const { graph } = buildGraph(root, cfg);
+      expect(graph.nodes.has("doc:broken.md")).toBe(true);
+    });
+
+    it("still parses sibling .md files normally", () => {
+      const { graph } = buildGraph(root, cfg);
+      expect(graph.nodes.has("REQ-2771")).toBe(true);
+    });
+
+    it("bare doc node has no children edges", () => {
+      const { graph } = buildGraph(root, cfg);
+      expect(graph.edges.some((e) => e.source === "doc:broken.md")).toBe(false);
+    });
+  },
+);
+
+describe.skipIf(IS_WIN_277 || IS_ROOT_277)(
+  "buildGraph respects docGraph.autoNodes=false for an unreadable .md file (issue #277)",
+  () => {
+    let root: string;
+    let unreadablePath: string;
+
+    beforeAll(() => {
+      root = mkdtempSync(join(tmpdir(), "artgraph-builder-unreadable-md-noauto-"));
+      mkdirSync(join(root, "specs"), { recursive: true });
+      writeFileSync(join(root, "specs/good.md"), "- REQ-2773: keep me too\n");
+      unreadablePath = join(root, "specs/broken.md");
+      writeFileSync(unreadablePath, "- REQ-2774: never read\n");
+      chmodSync(unreadablePath, 0o000);
+    });
+
+    afterAll(() => {
+      chmodSync(unreadablePath, 0o644);
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    const cfg: ArtgraphConfig = {
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: [],
+      lockFile: ".trace.lock",
+      docGraph: { autoNodes: false },
+    };
+
+    it("does not synthesize a bare doc node when autoNodes is false, but still warns", () => {
+      const { graph, warnings } = buildGraph(root, cfg);
+      const unreadableWarnings = warnings.filter((w) => w.type === "unreadable-file");
+      expect(unreadableWarnings).toHaveLength(1);
+      expect(graph.nodes.has("doc:broken.md")).toBe(false);
+    });
+  },
+);
