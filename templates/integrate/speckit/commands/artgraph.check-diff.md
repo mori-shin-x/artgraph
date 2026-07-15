@@ -16,3 +16,5 @@ Used in two places:
 ## Execution
 
 - **Bash**: `artgraph check --diff`
+
+> CI note (spec 023): in a CI pipeline the working tree is clean, so gate the PR's commit range instead with `artgraph check --diff --base origin/<base-branch> --gate` (requires a `fetch-depth: 0` checkout).

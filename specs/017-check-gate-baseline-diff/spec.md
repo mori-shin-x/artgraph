@@ -107,7 +107,7 @@
 ### Functional Requirements
 
 - **FR-001**: システムは `check --diff --gate` の合否を、変更が **新規に導入した** 問題 (`current issues \ baseline issues`) のみで決定しなければならない。範囲内に存在する pre-existing の drift / orphan / uncovered は合否に影響してはならない。
-- **FR-002**: システムは baseline を「base ref 時点のプロジェクト状態」から算出しなければならない。本 feature (Phase 1) では base ref を現在の HEAD に固定する。
+- **FR-002**: システムは baseline を「base ref 時点のプロジェクト状態」から算出しなければならない。本 feature (Phase 1) では base ref を現在の HEAD に固定する。→ Phase 2 (`--base <ref>` CLI 露出) は spec 023 (`specs/023-check-base-ref/`, issue #185) で実装。
 - **FR-003**: 変更ファイルの集合は、現在の git 差分 (staged + unstaged + untracked の和集合) から求めなければならない (現状の `--diff` の定義を維持)。
 - **FR-004**: baseline の算出は、ユーザーの作業ツリー・git index・lock ファイルを一切変更してはならない。`git stash` のような作業ツリーを書き換える方式を採ってはならない。
 - **FR-005**: baseline の算出は、現在の状態で新規候補となる問題が 1 件も無い場合は実行を省略してよい (遅延評価)。問題なしのケースで追加コストが発生しないこと。
@@ -117,7 +117,7 @@
 - **FR-009**: `--format json` 出力は、範囲内の全 issue を含め、各 issue が新規かどうかを区別できるフラグを持たなければならない。
 - **FR-010**: システムは baseline を算出できない異常系 (非 git / worktree 等の baseline 構築失敗) に、判定不能を黙って合格にしてはならない。ゲートの合否 (exit 2 / exit 0) とは区別できる専用の exit code (exit 1) と明示メッセージで終了しなければならない。縮退した別判定 (直接 claim のみ等) は行わない。なお HEAD が存在しない初回コミット前は「baseline 空 = 全 current issue が新規」として扱い (FR-014)、これは異常系ではなく正常系である。
 - **FR-011**: baseline の drift 判定は、`.trace.lock` が gitignore されコミットされないことを前提に、**現在の lock** を基準に行わなければならない (base ref 時点の graph を現在の lock と比較して得た drift を baseline drift とする)。
-- **FR-012**: 内部構造は、将来 base ref を任意指定できるように、base ref をパラメータとして受け取れる形で実装しなければならない (Phase 2 準備。CLI への露出は本 feature のスコープ外)。
+- **FR-012**: 内部構造は、将来 base ref を任意指定できるように、base ref をパラメータとして受け取れる形で実装しなければならない (Phase 2 準備。CLI への露出は本 feature のスコープ外)。→ Phase 2 は spec 023 (issue #185) で実装。
 - **FR-013**: 変更が「グラフに登録されたノードに一切対応しない」場合 (グラフ外のファイルのみの変更) の挙動は、現状の `check --diff` の挙動を維持しなければならない。
 - **FR-014**: HEAD が存在しない初回コミット前は、baseline を「空」(比較対象なし) として扱い、現在の全 current issue を新規とみなさなければならない。これは異常系ではなく正常系であり、FR-010 のエラー終了とは区別する。
 
@@ -144,7 +144,7 @@
 - **lock は gitignore されコミットされない**: 本プロジェクトの `.trace.lock` は gitignore されている (確認済み)。したがって baseline の drift 判定は base ref 時点の lock ではなく現在の lock を基準に行う (FR-011)。この前提が変わり lock がコミット対象になっても、現在の lock を基準にする方針は有効なままである。
 - **git worktree が利用可能な環境**: baseline 状態の構築は、ユーザーの作業ツリーを汚さずに base ref のファイル内容を別領域へ展開できる手段 (git worktree 等) が利用できることを前提とする。parse キャッシュは当該領域では自動的に無効化され、キャッシュ汚染は生じない (別領域に依存パッケージ環境が無いため)。
 - **baseline 構築不能時はエラー終了 (Clarification 2026-07-07 で確定)**: baseline を構築できない異常系 (非 git / worktree 生成失敗等) では、縮退した別判定は行わず、ゲート合否 (exit 2 / exit 0) と区別できる専用 exit code (exit 1) と明示メッセージで終了する (FR-010)。判定不能の黙殺 (Constitution 原則 I 違反) を避けつつ、稀な異常系のために別判定ロジックを維持しないシンプルさを優先した。HEAD 無しの初回コミット前は異常系ではなく「baseline 空」の正常系として扱う (FR-014)。
-- **Phase 2 (`--base <ref>` の CLI 露出) は本 feature のスコープ外**: コミット済み / プッシュ済み / PR 済みブランチを base ref 指定でチェックする機能は follow-up の別 PR とする。本 feature では内部構造を base ref パラメータ化するに留める (FR-012)。
+- **Phase 2 (`--base <ref>` の CLI 露出) は本 feature のスコープ外**: コミット済み / プッシュ済み / PR 済みブランチを base ref 指定でチェックする機能は follow-up の別 PR とする。本 feature では内部構造を base ref パラメータ化するに留める (FR-012)。→ Phase 2 は spec 023 (`specs/023-check-base-ref/`, issue #185) で実装。
 - **中間実装状態のゲート挙動 (#178) はスコープ外**: 新 spec で REQ を追加し実装途中の状態で、未実装 REQ が新規 uncovered として正当にゲートを止める問題は本 feature の対象外であり、issue #178 で別途扱う。
 - **pre-existing 債務そのものの解消はスコープ外**: 他 spec の未タグ付け REQ・重複 / ambiguous ID の整理は本 feature の対象外。baseline 差分によりゲートからは無害化されるため、債務解消は独立した衛生タスクとする。
 - **Submodule / Git LFS (issue #182 レビュー B9)**: Submodule は Phase 1 の対象外。`git worktree add` は submodule を init しないため base graph が submodule 配下のノードを丸ごと欠落させ、issue #174 と同型の誤爆 (全 new 判定) を別経路で再発しうる。`computeBaselineIssues` は submodule の存在 (`git submodule status --recursive` が非空) を検出した時点で `unavailable` を返し、縮退した誤判定を避ける (対応は #185 で別途検討)。LFS はスコープ内だが `GIT_LFS_SKIP_SMUDGE=1` で smudge (実バイナリ取得) を skip する — `scan()` はテキストソースしか読まないため実害はなく、帯域・タイムアウトの悪化を避ける。

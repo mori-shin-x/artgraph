@@ -133,6 +133,55 @@ export function installBaselineSignalHandlers(): void {
   process.on("unhandledRejection", fatalHandler(1, "unhandledRejection"));
 }
 
+// spec 023 (FR-004/FR-005) — the single shallow-clone remedy hint (SSOT).
+// Both `--base` failure stages (ref resolution via `classifyBaseRef` and
+// merge-base computation below) append this same constant, because in CI the
+// dominant root cause is identical for both: `actions/checkout`'s default
+// `fetch-depth: 1` fetched neither the base ref nor the common ancestor.
+// @impl 023-check-base-ref/FR-004
+export const FETCH_DEPTH_HINT =
+  "hint: if this is a shallow clone, fetch full history (actions/checkout: fetch-depth: 0) or fetch the base ref first.";
+
+// spec 023 (FR-005, D1) — resolve `git merge-base <ref> HEAD` exactly ONCE.
+// The returned sha is the single base point shared by the diff range, rename
+// detection, the tracked-path probe AND the baseline worktree (the caller —
+// src/commands/check.ts — distributes it by argument; nothing re-resolves).
+// Using `<ref>`'s tip instead would mis-judge in both directions whenever
+// the base branch moved ahead of the branch point (research.md R1): issues
+// fixed on base since the branch point would false-fail the gate, and issues
+// introduced on base since then would suppress a PR's identical new issue.
+//
+// Failure shape (verified empirically, T001): a shallow clone with a missing
+// common ancestor and unrelated histories both exit 1 with EMPTY stdout and
+// EMPTY stderr, so `extractErrorMessage` alone would surface only Node's
+// generic "Command failed" text — the context line + FETCH_DEPTH_HINT are
+// prepended/appended here so the diagnostic is actionable either way.
+// @impl 023-check-base-ref/FR-005
+export function resolveMergeBase(
+  rootDir: string,
+  ref: string,
+): { sha: string } | { error: string } {
+  try {
+    const out = execFileSync("git", ["merge-base", ref, "HEAD"], {
+      cwd: rootDir,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const sha = out.trim();
+    if (sha) return { sha };
+    // Defensive: exit 0 always prints the sha, but never return an empty
+    // base point that downstream git calls would misparse.
+    return {
+      error: `git merge-base ${ref} HEAD produced no output\n${FETCH_DEPTH_HINT}`,
+    };
+  } catch (e) {
+    debugLog("resolveMergeBase", e);
+    return {
+      error: `could not determine merge-base of "${ref}" and HEAD (shallow clone or unrelated histories?): ${extractErrorMessage(e)}\n${FETCH_DEPTH_HINT}`,
+    };
+  }
+}
+
 // spec 017 — baseline computation is base-ref-parameterised (Phase 1 pins
 // "HEAD"), side-effect-free, and distinguishes the unborn-HEAD "empty" case
 // from the "unavailable" error case.
@@ -145,6 +194,14 @@ export function computeBaselineIssues(
   baseRef: string,
   currentLock: LockFile,
   config: ArtgraphConfig,
+  // spec 023 (FR-008, data-model §5 SSOT) — the rename map computed by the
+  // caller (`getGitRenameMap(rootDir, baseSha?)`) so the inverse-rename
+  // startId resolution in src/commands/check.ts and the orphan-key
+  // normalization below always share ONE map instance (no re-resolution —
+  // an internally recomputed HEAD-based map would silently miss committed
+  // base..HEAD renames whenever `--base` is in play). Omitted (legacy /
+  // direct callers): falls back to the pre-023 HEAD-vs-working-tree map.
+  renameMap?: Map<string, string>,
 ): BaselineIssues {
   const empty = (): BaselineIssues => ({ keys: new Set(), status: "empty" });
   const unavailable = (error: string): BaselineIssues => ({
@@ -167,11 +224,13 @@ export function computeBaselineIssues(
   // never initializes submodules, so a submodule-backed repo would compute a
   // base graph missing every submodule node: everything the current graph
   // covers there would look brand-new (issue #174's failure mode, relocated
-  // to submodule boundaries). Phase 1 declines to support this and fails
-  // closed instead of silently mis-scoring (spec.md Assumptions).
+  // to submodule boundaries). Declined support, fail-closed instead of
+  // silently mis-scoring (spec.md Assumptions) — still the case after
+  // spec 023 (`check --base`), which generalises the base ref but not the
+  // worktree mechanics (023/FR-011: the old "see #185" pointer is consumed).
   if (hasSubmodules(rootDir)) {
     return unavailable(
-      "submodules are not supported by baseline diff — remove submodules or use plain check (see #185)",
+      "submodules are not supported by baseline diff — remove submodules or use plain check",
     );
   }
 
@@ -225,11 +284,17 @@ export function computeBaselineIssues(
     const { graph } = scan(worktree, config);
     // Fix C2 (High, issue #182 review) — computed against `rootDir` (the
     // REAL repo, not the throwaway `worktree` checkout of `baseRef`, which
-    // has no working-tree changes of its own to diff).
-    const renameMap = getGitRenameMap(rootDir);
+    // has no working-tree changes of its own to diff). spec 023 (FR-008):
+    // when the caller already resolved a (possibly base-range-aware) map,
+    // reuse that exact instance instead of recomputing.
+    const effectiveRenameMap = renameMap ?? getGitRenameMap(rootDir);
     // `graph` (issue #229) — reused by `src/commands/check.ts` for `--diff`
     // scope expansion; see the `BaselineIssues.graph` JSDoc above.
-    return { keys: collectIssueKeys(graph, currentLock, renameMap), status: "computed", graph };
+    return {
+      keys: collectIssueKeys(graph, currentLock, effectiveRenameMap),
+      status: "computed",
+      graph,
+    };
   } catch (e) {
     // fix B1 (Critical, issue #182 review) — surface *why* the baseline
     // could not be built instead of a single generic "unavailable". Covers

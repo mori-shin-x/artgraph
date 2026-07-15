@@ -98,6 +98,82 @@ export function makeRepoWithDebt(prefix: string): string {
   return dir;
 }
 
+// ---------------------------------------------------------------------------
+// spec 023 (T002) — base-branch fixtures for `check --diff --base <ref>`.
+// ---------------------------------------------------------------------------
+
+/** Switch to (or with `create`) create-and-switch-to branch `name`. */
+export function gitCheckoutBranch(dir: string, name: string, create = false): void {
+  execFileSync("git", create ? ["checkout", "-q", "-b", name] : ["checkout", "-q", name], {
+    cwd: dir,
+    stdio: "pipe",
+  });
+}
+
+export function gitRevParse(dir: string, ref: string): string {
+  return execFileSync("git", ["rev-parse", ref], { cwd: dir, encoding: "utf-8" }).trim();
+}
+
+/**
+ * spec 023 (T002) — graft a `base` + `feature` branch pair onto an existing
+ * committed repo: `base` is created at the current HEAD (the branch point)
+ * and `feature` is created and checked out from the same commit. Tests then
+ * stack independent commits on either side (`gitCheckoutBranch` +
+ * `gitCommitAll`) to build moved-ahead-base / committed-change fixtures for
+ * `check --diff --base base`.
+ */
+export function withBaseAndFeatureBranches(dir: string): string {
+  execFileSync("git", ["branch", "base"], { cwd: dir, stdio: "pipe" });
+  gitCheckoutBranch(dir, "feature", true);
+  return dir;
+}
+
+/** `makeRepoWithDebt` (pre-existing uncovered REQ-200) + base/feature branches. */
+export function makeRepoWithBaseBranch(prefix: string): string {
+  return withBaseAndFeatureBranches(makeRepoWithDebt(prefix));
+}
+
+/**
+ * spec 023 (T002/T003) — point `name` at a second ROOT commit (no parent, no
+ * shared history) built via plumbing (`mktree` + `commit-tree`). tasks.md
+ * sketched `git checkout --orphan` for this, but plumbing never touches the
+ * working tree / index / HEAD, so the fixture repo's checked-out branch is
+ * guaranteed byte-identical before and after. `git merge-base <name> HEAD`
+ * then deterministically fails (unrelated histories — the shallow-clone
+ * failure's local stand-in).
+ */
+export function gitUnrelatedRootBranch(dir: string, name: string): void {
+  const tree = execFileSync("git", ["mktree"], { cwd: dir, input: "", encoding: "utf-8" }).trim();
+  const commit = execFileSync("git", ["commit-tree", tree, "-m", "unrelated root"], {
+    cwd: dir,
+    encoding: "utf-8",
+  }).trim();
+  execFileSync("git", ["branch", name, commit], { cwd: dir, stdio: "pipe" });
+}
+
+/**
+ * spec 023 (T011) — run `mutate` as a commit on the `base` branch (moving it
+ * ahead of the branch point), then return to `feature`. The feature branch's
+ * working tree ends up exactly as it started.
+ */
+export function commitOnBase(dir: string, mutate: () => void, message: string): void {
+  gitCheckoutBranch(dir, "base");
+  mutate();
+  gitCommitAll(dir, message);
+  gitCheckoutBranch(dir, "feature");
+}
+
+/**
+ * spec 023 (T011) — cover `makeRepoWithDebt`'s pre-existing uncovered
+ * REQ-200 with an `@impl` claim (the "base fixed the branch-point issue"
+ * mutation for the moved-ahead-base scenario). The literal tag string lives
+ * here (non-`.test.ts`, outside the `src/**` include set) for the same
+ * dogfood-scan reason as `introduceNewOrphan`.
+ */
+export function coverDebtReq(dir: string): void {
+  appendFileSync(join(dir, "src", "hub.ts"), "// @impl REQ-200\n");
+}
+
 /**
  * spec 017 — introduce a brand-new orphan: an `@impl` claim on an in-scope
  * file pointing at a REQ that does not exist. The literal tag string lives

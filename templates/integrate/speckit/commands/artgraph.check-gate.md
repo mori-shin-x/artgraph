@@ -18,3 +18,5 @@ Hard-fails the workflow if drift/orphan/uncovered exist (exit 2). Use before `/s
 ## Execution
 
 - **Bash**: `artgraph check --gate`
+
+> CI note (spec 023): CI で PR をゲートする場合は `artgraph check --diff --base origin/<base-branch> --gate` を使う (PR のコミット範囲が新規に導入した問題のみで判定。`fetch-depth: 0` の checkout が必要)。

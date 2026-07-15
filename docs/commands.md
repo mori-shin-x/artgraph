@@ -88,7 +88,31 @@ artgraph check                             # text output
 artgraph check --gate                      # exit non-zero on findings
 artgraph check --diff                      # only report items changed since the lock
 artgraph check --format json               # per-requirement rows + counts
+artgraph check --diff --base origin/main --gate   # CI: gate the PR's commit range
 ```
+
+### `--base <ref>` — commit-range gating for CI (spec 023)
+
+In CI the checked-out working tree matches the commit exactly, so the plain
+`--diff` set (staged + unstaged + untracked) is empty on every run.
+`--base <ref>` extends the changed-file set with the committed range and
+re-bases the baseline:
+
+- **Merge-base semantics** — everything is judged against
+  `git merge-base <ref> HEAD` (the branch point), never `<ref>`'s tip, so a
+  base branch that moved ahead after the branch point can't cause false
+  failures or mask the PR's own issues. The changed-file set is the
+  working-tree union PLUS the committed `mergeBase..HEAD` range — untracked
+  local edits still count.
+- **Requires `--diff`** — `--base` without `--diff` is a usage error
+  (exit `1`); it is never silently ignored.
+- **Exit codes** — `0` gate pass (including a genuinely empty merged diff),
+  `2` the change range introduced new drift / orphans / uncovered / test
+  failures, `1` the baseline could not be established (unresolvable ref,
+  shallow clone with no merge-base, worktree failure) — fail-closed, with a
+  `fetch-depth: 0` hint in the error message.
+- **CI recipe** — `actions/checkout@v4` with `fetch-depth: 0`, then
+  `artgraph check --diff --base "origin/${{ github.base_ref }}" --gate`.
 
 ### Evidence-aware findings (spec 020)
 

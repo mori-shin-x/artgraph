@@ -170,8 +170,10 @@ describe("check --diff --gate baseline diff (US1)", () => {
 // working tree already matches the commit under test, so `--diff` finds an
 // empty git diff on essentially every run and silently no-ops (exit 0, "no
 // changes") regardless of what the PR actually changed. This does not fail
-// the gate (exit code stays 0 — Phase 2 / issue #185 is the real fix) but the
-// run must warn loudly that nothing was actually compared.
+// the gate (exit code stays 0) but the run must warn loudly that nothing was
+// actually compared — and point at `--base <ref>` (spec 023), which is the
+// fix. With `--base` supplied the comparison IS real, so the warning is
+// suppressed everywhere (spec 023 FR-010, T015).
 describe("check --diff CI shallow-clone silent no-op warning (E1)", () => {
   const prevCI = process.env.CI;
   afterEach(() => {
@@ -191,7 +193,7 @@ describe("check --diff CI shallow-clone silent no-op warning (E1)", () => {
     ]);
     expect(exitCode).toBe(0);
     expect(stderr).toContain(
-      "WARNING: gate is not active in CI without --base <ref> (Phase 2 — see #185).",
+      "WARNING: gate is not active in CI without --base <ref> — pass --base <ref> (e.g. --base origin/main) to gate the PR's commit range.",
     );
     const json = JSON.parse(stdout);
     expect(json.baselineStatus).toBe("skipped");
@@ -200,6 +202,33 @@ describe("check --diff CI shallow-clone silent no-op warning (E1)", () => {
         (w) => typeof w === "string" && w.includes("gate is not active in CI"),
       ),
     ).toBe(true);
+  });
+
+  it("CI=true + empty merged diff + --base → NO warning on stderr nor in json warnings[] (spec 023 FR-010)", async () => {
+    const dir = repo("artgraph-debt-us1-ci-base-");
+    process.env.CI = "true";
+    // `--base HEAD` keeps this fixture branch-name-agnostic: merge-base(HEAD,
+    // HEAD) == HEAD, so the merged diff is empty exactly like the case above —
+    // but a base point WAS compared, so the warning must not fire.
+    const { stdout, stderr, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--base",
+      "HEAD",
+      "--gate",
+      "--format",
+      "json",
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stderr).not.toContain("gate is not active in CI");
+    const json = JSON.parse(stdout);
+    expect(json.baselineStatus).toBe("skipped");
+    expect(json.message).toContain("No changes detected in git diff.");
+    expect(
+      (json.warnings as unknown[]).some(
+        (w) => typeof w === "string" && w.includes("gate is not active in CI"),
+      ),
+    ).toBe(false);
   });
 
   it("CI=1 + empty git diff (text format) → stderr warns, exit code unchanged", async () => {
