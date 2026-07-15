@@ -9,13 +9,14 @@ artgraph check --diff --base <ref> [--gate] [--format json|text] [--ignore <csv>
 ```
 
 - `--base <ref>`: 値必須。`<ref>` は git が解決できる任意の参照 (ブランチ名 / `origin/main` 等のリモート追跡ブランチ / SHA / タグ)。range 構文 (`A..B` / `A...B`) は受理しない (単一 ref のみ — merge-base 計算は内部で行う)。
+- **値の parse 時検証 (PR #304 review F1/F2)**: 空文字列、および `-` で始まる値は option パース時点で usage error (exit 1) として拒否する。commander の必須 option-arg は貪欲で、`--base --gate` (CI で base-ref 変数が空展開) は `--gate` を値として食い gate を解除してしまう / `--base ""` は falsy として全 `--base` 分岐をスキップし no-base no-op に縮退する — どちらも fail-closed の設計目標 (D2) を破るため、値の段階で遮断する。`-` で始まる正当な ref は完全形 (`refs/heads/--gate`) で指定可能 (先頭が `r` になるため通過する)。
 - 意味論: 変更ファイル集合とベースライン基準点を `mergeBase = git merge-base <ref> HEAD` に拡張する (D1)。`<ref>` の tip は判定に使われない。
 
 ## 2. 検証順 (SSOT: `src/commands/check.ts`)
 
 | # | 検証 | 失敗時 |
 |---|------|--------|
-| 1 | commander の option パース (`--base` に値があるか) | commander 標準エラー、exit 1 |
+| 1 | commander の option パース (`--base` に値があるか、値が非空かつ非 option 形 — §1 の parse 時検証) | commander 標準エラー (`InvalidArgumentError`)、exit 1 |
 | 2 | `--base` かつ `--diff` なし (FR-002) | stderr にエラー + 「`--diff` を併せて指定せよ」の案内、exit 1。**JSON を出力しない** (usage error は判定結果ではない)。警告して続行しない |
 | 3 | `classifyBaseRef(rootDir, <ref>)` ≠ `"resolved"` (FR-004) | `baselineStatus:"unavailable"` に合流 (§5)。named ref は決して `"unborn"` にならない (`isUnbornHead` の非 HEAD early return を pin) |
 | 4 | `git merge-base <ref> HEAD` 失敗 (FR-005) | 同上 `unavailable` 合流。shallow clone / unrelated histories がここに落ちる |
@@ -70,7 +71,9 @@ mergedDiff = (staged ∪ unstaged ∪ untracked)                            // 0
 ## 7. text 出力
 
 - 正常系 (computed / skipped / gate fail) は 017 契約 §4.1–4.3 と同一フォーマット (new issue サマリ + 抑制件数 + `impact --diff` 誘導)。
-- `unavailable` + `--gate` (017 §4.4 の拡張): ERROR 行に原因 (baselineError) と fetch-depth ヒントが含まれる。
+- `unavailable` + `--gate` (017 §4.4 の拡張): ERROR 行に原因 (baselineError) と fetch-depth ヒントが含まれる。**見出しは stage 別 (PR #304 review F3)**: ref 解決 / merge-base 段の失敗のみ下記の「base ref ... unresolved or no merge-base」形を使い、ref が解決した後の下流失敗 (worktree 構築 / submodule / scan 失敗) は 017 の「git worktree unavailable」見出しを維持する (原因の誤帰属防止)。detail 行 (baselineError) はどちらの stage でも出力する。
+- `unavailable` + `--gate` なし (PR #304 review F4): 017 の 2 行警告に続けて、`--base` 指定時は baselineError の detail 行 (原因 + 該当時 fetch-depth ヒント) を stderr に出力する (`--base` なしは 017 出力と byte-identical)。
+- **unborn HEAD + `--base HEAD` (PR #304 review F5, documented)**: コミットゼロの repo で `--base HEAD` を指定すると `classifyBaseRef` が `"unborn"` を返し、「does not resolve」扱いの `unavailable` → `--gate` で exit 1 になる。017/FR-014 の自然な縮退 (empty baseline = 全部新規 → exit 2) とは exit code もメッセージも異なるが、fail-closed であり実運用で踏む形ではないため仕様として許容する (修正しない)。
   ```text
   check --diff --base origin/main --gate
 

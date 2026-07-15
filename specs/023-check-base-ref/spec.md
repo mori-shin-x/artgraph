@@ -99,7 +99,7 @@ CI 担当者が `actions/checkout` を既定 (`fetch-depth: 1`) のまま `--bas
 ### Functional Requirements
 
 - **FR-001**: システムは `check` コマンドに `--base <ref>` オプションを追加しなければならない。`<ref>` は任意の git ref (ブランチ名 / リモート追跡ブランチ / SHA / タグ)。`impact` コマンドには追加しない (D3)。
-- **FR-002**: `--base` は `--diff` と併用されなければならない。`--diff` なしの `--base` は fail-closed の usage error として exit 1 で即時終了しなければならない (D2)。警告して無視・続行する縮退 (`--ignore` 型) は許容しない。`--format json` 指定時もエラーは対称に扱う。
+- **FR-002**: `--base` は `--diff` と併用されなければならない。`--diff` なしの `--base` は fail-closed の usage error として exit 1 で即時終了しなければならない (D2)。警告して無視・続行する縮退 (`--ignore` 型) は許容しない。`--format json` 指定時もエラーは対称に扱う。また `<ref>` の**値そのもの**も fail-closed に検証する (PR #304 review F1/F2): 空文字列、および `-` で始まる値 (CI で base-ref 変数が空展開し次のフラグを値として食うケース) は option パース時点で usage error (exit 1) として拒否し、no-base 動作への無言縮退や gate フラグの喪失を許さない。
 - **FR-003**: `--base` 未指定時の `check` (plain / `--diff` / `--gate` の全組み合わせ) の挙動は、本 feature 導入前と byte-identical でなければならない。配布 Stop hook テンプレート (`templates/hooks/settings.json.template` の `check --gate --diff`) は変更しない。
 - **FR-004**: `<ref>` の検証は `classifyBaseRef` (src/baseline.ts:362) で行わなければならない。解決しない named ref は決して "unborn" に分類してはならない (`isUnbornHead` は非 HEAD で常に false — src/baseline.ts:381 の既存挙動を pin)。解決不能な `--base` は `baselineStatus:"unavailable"` として扱い、`--gate` 時は exit 1 (017/FR-010 意味論)。エラーメッセージには shallow clone の可能性と `fetch-depth: 0` (または対象 ref の fetch) の対処ヒントを含めなければならない。
 - **FR-005**: システムは merge-base を **1 回だけ** 解決しなければならない: `git merge-base <ref> HEAD`。以後の全処理 (diff range / rename 検出 / tracked-path probe / baseline worktree) はこの単一の merge-base SHA を共有する。merge-base 解決の失敗 (shallow clone / unrelated histories) は `baselineStatus:"unavailable"` + FR-004 と同じ fetch-depth ヒントで扱う。`<ref>` の tip を直接使ってはならない (D1)。

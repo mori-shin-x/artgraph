@@ -7,9 +7,17 @@
 // `--gate`.
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, writeFileSync, readFileSync, mkdirSync, rmSync } from "node:fs";
+import {
+  appendFileSync,
+  writeFileSync,
+  readFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
 import { runAt } from "./helpers.js";
+import { tmpdir } from "node:os";
 import {
   makeRepoWithBaseBranch,
   makeRepoWithDebt,
@@ -17,6 +25,7 @@ import {
   makeRepoWithSoleImplTag,
   withBaseAndFeatureBranches,
   gitCommitAll,
+  gitInit,
   gitUnrelatedRootBranch,
   commitOnBase,
   coverDebtReq,
@@ -297,6 +306,102 @@ describe("check --base fail-closed errors (spec 023 US3)", () => {
     expect(asJson.exitCode).toBe(1);
     expect(asJson.stdout.trim()).toBe(""); // a usage error is not a verdict
     expect(asJson.stderr).toContain("--base requires --diff");
+  });
+
+  // PR #304 review F1 — commander's required option-args are greedy: without
+  // parse-time validation, `--base --gate` (an EMPTY ${{ github.base_ref }}
+  // expanding to nothing on a push-triggered workflow) assigns ref="--gate"
+  // and UNSETS the gate, so a committed orphan sails through at exit 0.
+  it("(F1) --base swallowing the next flag (--base --gate) → parse-time usage error exit 1", async () => {
+    const dir = track(makeRepoWithBaseBranch("artgraph-023-f1-eaten-"));
+    writeFileSync(join(dir, "src", "hub.ts"), "// @" + "impl REQ-999\nexport const hub = 1;\n");
+    gitCommitAll(dir, "committed orphan");
+
+    const { stdout, stderr, exitCode } = await runAt(dir, ["check", "--diff", "--base", "--gate"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('must not start with "-"');
+    expect(stdout.trim()).toBe(""); // no verdict-shaped output on a usage error
+  });
+
+  // PR #304 review F2 — `--base ""` (quoted-empty CI variable) is falsy and
+  // would skip every opts.base branch: clean tree → "No changes" exit 0, the
+  // exact no-base no-op the feature exists to eliminate.
+  it("(F2) --base with an empty-string ref → parse-time usage error exit 1", async () => {
+    const dir = track(makeRepoWithBaseBranch("artgraph-023-f2-empty-"));
+    writeFileSync(join(dir, "src", "hub.ts"), "// @" + "impl REQ-999\nexport const hub = 1;\n");
+    gitCommitAll(dir, "committed orphan");
+
+    const { stdout, stderr, exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--base",
+      "",
+      "--gate",
+    ]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("must not be empty");
+    expect(stdout.trim()).toBe("");
+  });
+
+  // PR #304 review F1 (non-breaking check) — a ref that legitimately starts
+  // with "-" stays usable via its full refs/... spelling, which the
+  // leading-dash rejection never matches.
+  it("(F1) a branch literally named '--gate' stays reachable via refs/heads/--gate", async () => {
+    const dir = track(makeRepoWithBaseBranch("artgraph-023-f1-dashref-"));
+    // Porcelain `git branch` refuses leading-dash names; the ref store does not.
+    execFileSync("git", ["update-ref", "refs/heads/--gate", "base"], { cwd: dir, stdio: "pipe" });
+    introduceNewOrphan(dir);
+
+    const { exitCode } = await runAt(dir, [
+      "check",
+      "--diff",
+      "--base",
+      "refs/heads/--gate",
+      "--gate",
+    ]);
+    expect(exitCode).toBe(2); // judged against the ref — parse guard did not fire
+  });
+
+  // PR #304 review F3 — a DOWNSTREAM baseline failure (here: submodules) with
+  // a perfectly valid --base ref must keep spec 017's accurate headline, not
+  // misattribute the failure to the ref; the true cause still follows as a
+  // detail line.
+  it("(F3) downstream unavailable with a valid ref → 'git worktree unavailable' headline + true cause", async () => {
+    const dir = track(makeRepoWithBaseBranch("artgraph-023-f3-headline-"));
+    const subSrc = track(mkdtempSync(join(tmpdir(), "artgraph-023-f3-subsrc-")));
+    gitInit(subSrc);
+    writeFileSync(join(subSrc, "lib.txt"), "lib\n");
+    gitCommitAll(subSrc, "lib init");
+    execFileSync(
+      "git",
+      ["-c", "protocol.file.allow=always", "submodule", "add", subSrc, "vendor/lib"],
+      { cwd: dir, stdio: "pipe" },
+    );
+    gitCommitAll(dir, "add submodule");
+    // An in-graph change so the run reaches the unavailable REPORTING path —
+    // a diff touching only non-graph files (.gitmodules, the gitlink) takes
+    // the pre-existing "not tracked" early exit before baselineStatus is
+    // ever surfaced (same shape as on main without --base; noted for
+    // follow-up, out of scope here).
+    introduceNewOrphan(dir);
+
+    const { stderr, exitCode } = await runAt(dir, ["check", "--diff", "--base", "base", "--gate"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("could not establish a baseline (git worktree unavailable).");
+    expect(stderr).not.toContain("unresolved or no merge-base");
+    expect(stderr).toContain("submodules are not supported");
+  });
+
+  // PR #304 review F4 — without --gate, text mode must still surface the
+  // cause + fetch-depth hint on stderr when --base was given (JSON already
+  // carries baselineError; --base-less output stays byte-identical).
+  it("(F4) unresolvable ref without --gate → warning + cause + fetch-depth hint on stderr, exit 0", async () => {
+    const dir = track(makeRepoWithBaseBranch("artgraph-023-f4-nogate-"));
+    const { stderr, exitCode } = await runAt(dir, ["check", "--diff", "--base", "nosuchref"]);
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain("could not establish a baseline; showing all issues");
+    expect(stderr).toContain('base ref "nosuchref" does not resolve');
+    expect(stderr).toContain("fetch-depth: 0");
   });
 
   it("(b) unresolvable ref + --gate → exit 1 with the fetch-depth hint (A10)", async () => {

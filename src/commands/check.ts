@@ -1,6 +1,6 @@
 // `artgraph check` — extracted verbatim from `src/cli.ts` (issue #162).
 
-import { Command } from "commander";
+import { Command, InvalidArgumentError, Option } from "commander";
 import type { ArtifactGraph, CheckResult } from "../types.js";
 import type { BaselineIssues } from "../baseline.js";
 import { pathsToEntries, resolveTestResults } from "./shared.js";
@@ -17,10 +17,37 @@ export function registerCheckCommand(program: Command): void {
     // semantics are merge-base-based (D1): both the diff range and the
     // baseline worktree use `git merge-base <ref> HEAD`, never <ref>'s tip.
     // `impact` deliberately does NOT get this option (D3 — follow-up issue).
+    //
+    // PR #304 review (F1/F2) — the <ref> value is validated at PARSE time,
+    // fail-closed (D2/FR-002's accident class, value edition). commander's
+    // required option-args are greedy: `--base --gate` (an EMPTY
+    // `${{ github.base_ref }}` expanding to nothing on a push-triggered
+    // workflow) would otherwise assign ref="--gate" and UNSET the gate flag,
+    // turning `unavailable` into a display-only warning — a green CI run
+    // that gated nothing. Likewise `--base ""` (quoted-empty variable) is
+    // falsy and would skip every `opts.base` branch, silently degrading to
+    // the exact no-base no-op this feature exists to eliminate. A ref that
+    // legitimately starts with `-` stays reachable via its full spelling
+    // (`refs/heads/--gate`), which never has a leading dash.
     // @impl 023-check-base-ref/FR-001
-    .option(
-      "--base <ref>",
-      "Gate against merge-base(<ref>, HEAD) in addition to the working tree (requires --diff; for CI use --base origin/<default-branch>)",
+    // @impl 023-check-base-ref/FR-002
+    .addOption(
+      new Option(
+        "--base <ref>",
+        "Gate against merge-base(<ref>, HEAD) in addition to the working tree (requires --diff; for CI use --base origin/<default-branch>)",
+      ).argParser((value: string) => {
+        if (value === "") {
+          throw new InvalidArgumentError(
+            "ref must not be empty (is the CI base-ref variable unset?).",
+          );
+        }
+        if (value.startsWith("-")) {
+          throw new InvalidArgumentError(
+            `ref must not start with "-" (got "${value}" — a missing value swallows the next flag; use the full refs/... spelling for a ref that really starts with "-").`,
+          );
+        }
+        return value;
+      }),
     )
     .option(
       "--ignore <csv>",
@@ -94,6 +121,13 @@ export function registerCheckCommand(program: Command): void {
         };
       }
 
+      // PR #304 review (F3) — declared at action scope (not inside the
+      // `--diff` branch) because the `unavailable` error REPORTING below
+      // needs to know which stage failed: set = the ref/merge-base stage
+      // (spec 023 — headline names the base ref, hint applies), unset = a
+      // downstream baseline failure (worktree/scan — spec 017's wording).
+      let baseUnavailableError: string | undefined;
+
       let result: CheckResult;
       if (opts.diff) {
         const { getGitDiffFiles, getGitRenameMap, getHeadTrackedPaths } =
@@ -117,7 +151,6 @@ export function registerCheckCommand(program: Command): void {
         // @impl 023-check-base-ref/FR-005
         // @impl 023-check-base-ref/FR-012
         let baseSha: string | undefined;
-        let baseUnavailableError: string | undefined;
         if (opts.base) {
           const baseRef = opts.base as string;
           if (classifyBaseRef(rootDir, baseRef) !== "resolved") {
@@ -422,18 +455,29 @@ export function registerCheckCommand(program: Command): void {
       // it is display-only, so warn on stderr and exit 0.
       // @impl 017-check-gate-baseline-diff/FR-010
       if (result.baselineStatus === "unavailable") {
+        // spec 023 / PR #304 review (F3, F4) — with `--base`, surface the
+        // cause on stderr in EVERY mode (`baselineError` carries the git
+        // diagnostic, plus FETCH_DEPTH_HINT when the ref/merge-base stage
+        // failed). The headline is stage-specific: `baseUnavailableError`
+        // set = the base ref itself is the problem (name it, the hint
+        // applies); unset = the ref resolved fine and a DOWNSTREAM baseline
+        // failure (worktree add / submodules / scan crash) occurred — keep
+        // spec 017's accurate wording rather than misattributing it to the
+        // ref. `--base`-less output stays byte-identical (FR-003): no
+        // detail lines, spec 017 headline.
+        const printBaseDetail = () => {
+          for (const line of (result.baselineError ?? "").split("\n")) {
+            if (line.trim()) console.error(`       ${line}`);
+          }
+        };
         if (opts.gate) {
           if (opts.base) {
-            // spec 023 (contracts/cli-check-base.md §7) — surface the cause
-            // (baselineError already carries the git diagnostic + the
-            // FETCH_DEPTH_HINT for ref/merge-base failures). The `--base`-less
-            // wording below stays byte-identical (FR-003).
             console.error(
-              `ERROR: could not establish a baseline (base ref "${opts.base}" unresolved or no merge-base).`,
+              baseUnavailableError !== undefined
+                ? `ERROR: could not establish a baseline (base ref "${opts.base}" unresolved or no merge-base).`
+                : "ERROR: could not establish a baseline (git worktree unavailable).",
             );
-            for (const line of (result.baselineError ?? "").split("\n")) {
-              if (line.trim()) console.error(`       ${line}`);
-            }
+            printBaseDetail();
             console.error("       gate result is undetermined; not treating as pass.");
             process.exit(1);
           }
@@ -443,6 +487,7 @@ export function registerCheckCommand(program: Command): void {
         }
         console.error("WARNING: could not establish a baseline; showing all issues without");
         console.error("         new/pre-existing distinction.");
+        if (opts.base) printBaseDetail();
       }
 
       // Exit code 2 (contract §2): `--gate` and a NEW issue was introduced.
