@@ -20,9 +20,9 @@
 
 ## Phase 1: Setup & 前提検証
 
-- [ ] T001 023 配管の再利用可能性を実コードで裏取りする (Cat6): (a) `resolveMergeBase` / `FETCH_DEPTH_HINT` / `classifyBaseRef` が `src/baseline.ts` から export されている、(b) `getGitDiffFiles(rootDir, baseSha?)` の optional 引数が impact からそのまま呼べる (src/diff.ts:48)、(c) `nonOptionValue` (src/commands/shared.ts:24) が `--base` 値ガードに流用可能、(d) `src/commands/impact.ts:65` が raw `--format` である (D-7 の前提)、(e) `--diff` エントリは `line: 1` (impact.ts:193 — 016 契約 §1.3 の `line: 0` は drift、contract §1.2 に記載済み)。〔観点: 前提検証〕
+- [x] T001 023 配管の再利用可能性を実コードで裏取りする (Cat6): (a) `resolveMergeBase` / `FETCH_DEPTH_HINT` / `classifyBaseRef` が `src/baseline.ts` から export されている、(b) `getGitDiffFiles(rootDir, baseSha?)` の optional 引数が impact からそのまま呼べる (src/diff.ts:48)、(c) `nonOptionValue` (src/commands/shared.ts:24) が `--base` 値ガードに流用可能、(d) `src/commands/impact.ts:65` が raw `--format` である (D-7 の前提)、(e) `--diff` エントリは `line: 1` (impact.ts:193 — 016 契約 §1.3 の `line: 0` は drift、contract §1.2 に記載済み)。〔観点: 前提検証〕
   - Files: (実測のみ — 変更なし)
-- [ ] T002 `tests/helpers.ts` に `--tests` 用の fixture を追加する: spec 023 の `makeRepoWithBaseBranch` / `withBaseAndFeatureBranches` / `gitCheckoutBranch` を再利用し、trace shard (`.artgraph/trace/*.jsonl` を fixture として直書き — `tests/impact-evidence.test.ts` の既存 shard 組み立てパターンを流用) を持つ base/feature ブランチ repo を組み立てられるようにする。feature ブランチのコミットが「evidence が exercise している symbol の変更」になる形を 1 ヘルパーで提供。
+- [x] T002 `tests/helpers.ts` に `--tests` 用の fixture を追加する: spec 023 の `makeRepoWithBaseBranch` / `withBaseAndFeatureBranches` / `gitCheckoutBranch` を再利用し、trace shard (`.artgraph/trace/*.jsonl` を fixture として直書き — `tests/impact-evidence.test.ts` の既存 shard 組み立てパターンを流用) を持つ base/feature ブランチ repo を組み立てられるようにする。feature ブランチのコミットが「evidence が exercise している symbol の変更」になる形を 1 ヘルパーで提供。
   - Files: tests/helpers.ts
 
 ---
@@ -31,14 +31,14 @@
 
 **⚠️ Phase 3 以降の全 US はここに依存。option 定義と検証順 (contract §2) が土台。**
 
-- [ ] T003 [P] Red: `tests/impact-base-ref.test.ts` を新規作成し、parse 層のテストを書く (失敗する):
+- [x] T003 [P] Red: `tests/impact-base-ref.test.ts` を新規作成し、parse 層のテストを書く (失敗する):
   (a) `--format yaml` → exit 1 (choices エラー、従来の silent text fallback の廃止 — I11)、(b) `--format --diff` → exit 1 (swallow 拒否)、(c) `--format json` / `--format text` は従来どおり、(d) `--base ""` → exit 1、(e) `--base --tests` → exit 1 (I13 — 値ガードが次フラグの swallow を遮断)。〔観点: 実運用事故 (CI 変数の空展開)・境界条件〕
   - Files: tests/impact-base-ref.test.ts
-- [ ] T004 Green: `src/commands/impact.ts` の option 定義を変換する — `--format` を `new Option(...).choices(["json", "text"]).default("text")` に (FR-010)、`--base <ref>` を `new Option(...).argParser(nonOptionValue("--base", { hint: ... }))` で追加 (FR-001。hint は `refs/...` 完全形の案内)。`Option` / `nonOptionValue` の import を追加。
+- [x] T004 Green: `src/commands/impact.ts` の option 定義を変換する — `--format` を `new Option(...).choices(["json", "text"]).default("text")` に (FR-010)、`--base <ref>` を `new Option(...).argParser(nonOptionValue("--base", { hint: ... }))` で追加 (FR-001。hint は `refs/...` 完全形の案内)。`Option` / `nonOptionValue` の import を追加。
   - Files: src/commands/impact.ts
-- [ ] T005 [P] Red: 検証順 (contract §2 / D-3) のテストを書く (失敗する): (a) `impact --base x` (`--diff` なし・targets なし) → exit 1 + §5.1 文言 + stdout 空、(b) `impact src/a.ts --base x` (`--diff` なし・targets あり) → **同じ** §5.1 文言 (排他エラーではない — I1 の優先順位 pin)、(c) `impact src/a.ts --diff --base x` → 既存の排他エラー文言、(d) `impact REQ-001 --base x` → 既存の REQ-ID rejection (rejection が requires-diff より先)、(e) `--format json` 併用でも (a)(b) は JSON を出さない。〔観点: 条件分岐の組み合わせ・不正な状態遷移 (エラー優先順位)〕
+- [x] T005 [P] Red: 検証順 (contract §2 / D-3) のテストを書く (失敗する): (a) `impact --base x` (`--diff` なし・targets なし) → exit 1 + §5.1 文言 + stdout 空、(b) `impact src/a.ts --base x` (`--diff` なし・targets あり) → **同じ** §5.1 文言 (排他エラーではない — I1 の優先順位 pin)、(c) `impact src/a.ts --diff --base x` → 既存の排他エラー文言、(d) `impact REQ-001 --base x` → 既存の REQ-ID rejection (rejection が requires-diff より先)、(e) `--format json` 併用でも (a)(b) は JSON を出さない。〔観点: 条件分岐の組み合わせ・不正な状態遷移 (エラー優先順位)〕
   - Files: tests/impact-base-ref.test.ts
-- [ ] T006 Green: `src/commands/impact.ts` に FR-002 の requires-diff 検証を実装する — 位置は REQ-ID / `doc:` rejection ループの直後・排他/no-source 検査の前 (contract §2 の 3)。文言は contract §5.1 の canonical string。
+- [x] T006 Green: `src/commands/impact.ts` に FR-002 の requires-diff 検証を実装する — 位置は REQ-ID / `doc:` rejection ループの直後・排他/no-source 検査の前 (contract §2 の 3)。文言は contract §5.1 の canonical string。
   - Files: src/commands/impact.ts
 
 **Checkpoint**: parse 層と検証順が green。`--base` の値はまだ何もしない (次 Phase で配線)。
@@ -50,15 +50,15 @@
 **Goal**: 作業ツリー clean でも `impact --diff --base <ref> --tests` が base range の変更から testsToRun を返す。
 **Independent Test**: base ブランチ fixture + trace shards で、コミット済み変更 → testsToRun 非空、`--base` なし同一入力 → No changes。
 
-- [ ] T007 [P] [US1] Red: `tests/impact-base-ref.test.ts` に US1 の主経路テストを書く (失敗する): T002 の fixture で (a) feature ブランチに evidence 対象 symbol の変更をコミット (tree clean) → `impact --diff --base base --tests --format json` の `testsToRun` に該当 REQ のテストが列挙され exit 0 (I3)、(b) 同一 repo で `--base` なし → `message: "No changes detected in git diff."` (現状の CI 空振りの再現 = 本 feature が解く問題の pin)、(c) `--tests` なしの `--base` でも `impactReqs` が base range の変更から解決される (Assumptions — テスト選択専用ではない)。〔観点: 条件分岐の組み合わせ (CI の主経路)〕
+- [x] T007 [P] [US1] Red: `tests/impact-base-ref.test.ts` に US1 の主経路テストを書く (失敗する): T002 の fixture で (a) feature ブランチに evidence 対象 symbol の変更をコミット (tree clean) → `impact --diff --base base --tests --format json` の `testsToRun` に該当 REQ のテストが列挙され exit 0 (I3)、(b) 同一 repo で `--base` なし → `message: "No changes detected in git diff."` (現状の CI 空振りの再現 = 本 feature が解く問題の pin)、(c) `--tests` なしの `--base` でも `impactReqs` が base range の変更から解決される (Assumptions — テスト選択専用ではない)。〔観点: 条件分岐の組み合わせ (CI の主経路)〕
   - Files: tests/impact-base-ref.test.ts
-- [ ] T008 [US1] Green: `src/commands/impact.ts` に data-model §3 のフローを実装する — `--tests` shard ガードの後・`scan()` の前に `classifyBaseRef` → `resolveMergeBase` (FR-004/FR-005: 失敗は stderr + exit 1、JSON なし、fast fail)、成功時の `baseSha` を `getGitDiffFiles(rootDir, baseSha)` に配線 (FR-006)。merge-base は 1 回だけ解決 (SSOT)。空 merged diff は既存 early exit にそのまま乗る (分岐追加なし)。rename map / tracked probe / baseline は **呼ばない** (D-1/D-8) — その旨と FR-011 の意図 (new-path 畳み込みが current-graph query に正しい) をコードコメントで明記。
+- [x] T008 [US1] Green: `src/commands/impact.ts` に data-model §3 のフローを実装する — `--tests` shard ガードの後・`scan()` の前に `classifyBaseRef` → `resolveMergeBase` (FR-004/FR-005: 失敗は stderr + exit 1、JSON なし、fast fail)、成功時の `baseSha` を `getGitDiffFiles(rootDir, baseSha)` に配線 (FR-006)。merge-base は 1 回だけ解決 (SSOT)。空 merged diff は既存 early exit にそのまま乗る (分岐追加なし)。rename map / tracked probe / baseline は **呼ばない** (D-1/D-8) — その旨と FR-011 の意図 (new-path 畳み込みが current-graph query に正しい) をコードコメントで明記。
   - Files: src/commands/impact.ts
-- [ ] T009 [P] [US1] Red→Green: グラフ未追跡ファイルの無言許容 (D-1 の非削除側) — base range のコミットに README 等のグラフ外ファイル変更 + コード変更を混在させ、エラー・警告なしでコード側だけから選択されること (I3 変形)。〔観点: エッジケース (silent contribution ゼロ)〕
+- [x] T009 [P] [US1] Red→Green: グラフ未追跡ファイルの無言許容 (D-1 の非削除側) — base range のコミットに README 等のグラフ外ファイル変更 + コード変更を混在させ、エラー・警告なしでコード側だけから選択されること (I3 変形)。〔観点: エッジケース (silent contribution ゼロ)〕
   - Files: tests/impact-base-ref.test.ts
-- [ ] T010 [P] [US1] Red→Green: base..HEAD 内のコミットで sole `@impl` ファイルを削除 (I5 / SC-003) — (a) `impact --diff --base <base>` が削除ファイル由来の startId を持たず、エラーなしで残りから出力する (D-1 の削除側 pin)、(b) 同一 fixture で `check --diff --base <base> --gate` が exit 2 (spec 023 SC-003 の再確認 = check-scope ⊇ impact-reach の分業を 1 テストで固定)。023 の `makeRepoWithSoleImplTag` 系 fixture を再利用。〔観点: 例外系・実運用事故 (宣言された選択限界の境界)〕
+- [x] T010 [P] [US1] Red→Green: base..HEAD 内のコミットで sole `@impl` ファイルを削除 (I5 / SC-003) — (a) `impact --diff --base <base>` が削除ファイル由来の startId を持たず、エラーなしで残りから出力する (D-1 の削除側 pin)、(b) 同一 fixture で `check --diff --base <base> --gate` が exit 2 (spec 023 SC-003 の再確認 = check-scope ⊇ impact-reach の分業を 1 テストで固定)。023 の `makeRepoWithSoleImplTag` 系 fixture を再利用。〔観点: 例外系・実運用事故 (宣言された選択限界の境界)〕
   - Files: tests/impact-base-ref.test.ts, tests/helpers.ts
-- [ ] T011 [US1] Red→Green: agreement (i) (I4 / SC-002 / FR-013) — US4 agreement suite (`tests/check-baseline-diff.test.ts:576-609`) を `--base` variant で拡張する: base ブランチ fixture で `impact --diff --base <ref> --format json` の `affectedFiles` 系到達と `check --diff --base <ref>` の scope が一致すること (既存テストと同じ「impact の view と check の scope は乖離しない」不変条件を merged diff に持ち上げる)。〔観点: 変更外影響 (check との契約整合)〕
+- [x] T011 [US1] Red→Green: agreement (i) (I4 / SC-002 / FR-013) — US4 agreement suite (`tests/check-baseline-diff.test.ts:576-609`) を `--base` variant で拡張する: base ブランチ fixture で `impact --diff --base <ref> --format json` の `affectedFiles` 系到達と `check --diff --base <ref>` の scope が一致すること (既存テストと同じ「impact の view と check の scope は乖離しない」不変条件を merged diff に持ち上げる)。〔観点: 変更外影響 (check との契約整合)〕
   - Files: tests/check-baseline-diff.test.ts
 
 **Checkpoint**: CI の主経路 (US1) が単独で動作・テスト可能。MVP。
@@ -70,11 +70,11 @@
 **Goal**: `--base` はコミット間差分を **追加** する — 作業ツリー差分 (untracked 含む) は縮小しない。
 **Independent Test**: コミット済み + 未コミットの混在 diff で両方が startId 入力に入る。
 
-- [ ] T012 [P] [US2] Red→Green: (a) コミット済み変更 + untracked 新規ファイル (グラフ追跡対象) の混在 → 両系統が `affectedFiles` に現れる (I9)、(b) untracked のみ + `--base` → 現行 `--diff` と同じ判定。〔観点: 境界条件 (union の両端)〕
+- [x] T012 [P] [US2] Red→Green: (a) コミット済み変更 + untracked 新規ファイル (グラフ追跡対象) の混在 → 両系統が `affectedFiles` に現れる (I9)、(b) untracked のみ + `--base` → 現行 `--diff` と同じ判定。〔観点: 境界条件 (union の両端)〕
   - Files: tests/impact-base-ref.test.ts
-- [ ] T013 [P] [US2] Red→Green: `--base HEAD` (merge-base == HEAD) → `--base` なし `--diff` と同一の出力に退化 (I10 / SC-007)。〔観点: 境界条件〕
+- [x] T013 [P] [US2] Red→Green: `--base HEAD` (merge-base == HEAD) → `--base` なし `--diff` と同一の出力に退化 (I10 / SC-007)。〔観点: 境界条件〕
   - Files: tests/impact-base-ref.test.ts
-- [ ] T014 [P] [US2] Red→Green: 空 merged diff + `--base` (base と同一 tip かつ clean) → 「No changes detected in git diff.」exit 0、`--format json` の E4 payload が contract §4.2 の shape と一致 (フィールド追加なし — I8)。〔観点: エッジケース (正当な clean 判定)〕
+- [x] T014 [P] [US2] Red→Green: 空 merged diff + `--base` (base と同一 tip かつ clean) → 「No changes detected in git diff.」exit 0、`--format json` の E4 payload が contract §4.2 の shape と一致 (フィールド追加なし — I8)。〔観点: エッジケース (正当な clean 判定)〕
   - Files: tests/impact-base-ref.test.ts
 
 **Checkpoint**: union 意味論が両環境 (CI clean tree / ローカル dirty tree) で正しい。
@@ -86,11 +86,11 @@
 **Goal**: 誤構成・shallow clone を「黙って空選択 / 黙って全選択」にしない (exit 1 + 対処ヒント、JSON なし)。
 **Independent Test**: 存在しない ref / unrelated histories / `--diff` なし、の 3 系統で exit 1 + stdout 空。
 
-- [ ] T015 [P] [US3] Red: (a) `impact --diff --base nosuchref` → exit 1、stderr に contract §5.2 の見出し + `FETCH_DEPTH_HINT` (I6)、(b) unrelated histories fixture (023 helpers の orphan-branch 組み立てを再利用) で merge-base 失敗 → exit 1 + `resolveMergeBase` の診断、(c) (a)(b) とも `--format json` で **stdout が空** (JSON なし — SC-004)、(d) `--tests` 併用時も同じ (shard ガードが先に通っていれば base 失敗で落ちる — contract §2 の 5→6 順)。〔観点: 例外系・実運用事故 (shallow clone)〕
+- [x] T015 [P] [US3] Red: (a) `impact --diff --base nosuchref` → exit 1、stderr に contract §5.2 の見出し + `FETCH_DEPTH_HINT` (I6)、(b) unrelated histories fixture (023 helpers の orphan-branch 組み立てを再利用) で merge-base 失敗 → exit 1 + `resolveMergeBase` の診断、(c) (a)(b) とも `--format json` で **stdout が空** (JSON なし — SC-004)、(d) `--tests` 併用時も同じ (shard ガードが先に通っていれば base 失敗で落ちる — contract §2 の 5→6 順)。〔観点: 例外系・実運用事故 (shallow clone)〕
   - Files: tests/impact-base-ref.test.ts, tests/helpers.ts
-- [ ] T016 [US3] Green: T008 のエラー分岐を contract §5.2 の canonical string で仕上げる (`FETCH_DEPTH_HINT` は import — 文言の重複定義禁止、data-model §4)。
+- [x] T016 [US3] Green: T008 のエラー分岐を contract §5.2 の canonical string で仕上げる (`FETCH_DEPTH_HINT` は import — 文言の重複定義禁止、data-model §4)。
   - Files: src/commands/impact.ts
-- [ ] T017 [P] [US3] Red→Green: merged diff 全 path 未解決 (削除のみ / グラフ外のみの base range) → 既存の「No matching nodes found」exit 1 が **文言・経路とも byte-identical** に出る (I7 / FR-008 — `--base` は新しい early exit を追加しない)。〔観点: 変更外影響 (既存エラー経路の不変)〕
+- [x] T017 [P] [US3] Red→Green: merged diff 全 path 未解決 (削除のみ / グラフ外のみの base range) → 既存の「No matching nodes found」exit 1 が **文言・経路とも byte-identical** に出る (I7 / FR-008 — `--base` は新しい early exit を追加しない)。〔観点: 変更外影響 (既存エラー経路の不変)〕
   - Files: tests/impact-base-ref.test.ts
 
 **Checkpoint**: US1〜US3 が揃い、選択の意味論とエラー系が完成。
@@ -99,9 +99,9 @@
 
 ## Phase 6: D-9 警告 + 回帰固定
 
-- [ ] T018 [P] Red→Green: D-9 staleness 警告 (I12 / SC-006 / FR-012) — `trace.staleness: "exclude"` の fixture で: (a) `--tests` + `--base` + exclude の 3 条件共起 → stderr に contract §5.3 の WARNING が 1 回、exit code / stdout は不変、(b) 3 条件のうち任意の 1 つを欠く組み合わせ (`--base` なし / `--tests` なし / `staleness: "warn"`) → 警告なし。実装は scan 後の staleness 解決箇所 (impact.ts の `excludeStaleExercises` 分岐) に隣接させる。〔観点: 条件分岐の組み合わせ (3 変数の全周辺)・実運用事故 (選択の目的反転)〕
+- [x] T018 [P] Red→Green: D-9 staleness 警告 (I12 / SC-006 / FR-012) — `trace.staleness: "exclude"` の fixture で: (a) `--tests` + `--base` + exclude の 3 条件共起 → stderr に contract §5.3 の WARNING が 1 回、exit code / stdout は不変、(b) 3 条件のうち任意の 1 つを欠く組み合わせ (`--base` なし / `--tests` なし / `staleness: "warn"`) → 警告なし。実装は scan 後の staleness 解決箇所 (impact.ts の `excludeStaleExercises` 分岐) に隣接させる。〔観点: 条件分岐の組み合わせ (3 変数の全周辺)・実運用事故 (選択の目的反転)〕
   - Files: tests/impact-base-ref.test.ts, src/commands/impact.ts
-- [ ] T019 [P] SC-005 の回帰固定 — `--base` なしの代表経路 (`--diff` json / targets text / REQ-ID rejection / `doc:` rejection / no-source / 排他) の出力・exit code が本 feature 前と一致することを 1 describe で pin。rejection 文言に `--base` が **現れない** こと (FR-003 — `--base` は start source ではない) も明示アサート。既存 `tests/impact-cli.test.ts` / `tests/impact-evidence.test.ts` が `pnpm test` で無修正のまま green であることを確認 (`--format` choices 化で期待値が変わるテストがあれば、それは bogus 値に依存していた箇所のみ — 新挙動側に追随)。〔観点: 変更外影響 (byte-identical)〕
+- [x] T019 [P] SC-005 の回帰固定 — `--base` なしの代表経路 (`--diff` json / targets text / REQ-ID rejection / `doc:` rejection / no-source / 排他) の出力・exit code が本 feature 前と一致することを 1 describe で pin。rejection 文言に `--base` が **現れない** こと (FR-003 — `--base` は start source ではない) も明示アサート。既存 `tests/impact-cli.test.ts` / `tests/impact-evidence.test.ts` が `pnpm test` で無修正のまま green であることを確認 (`--format` choices 化で期待値が変わるテストがあれば、それは bogus 値に依存していた箇所のみ — 新挙動側に追随)。〔観点: 変更外影響 (byte-identical)〕
   - Files: tests/impact-base-ref.test.ts, (確認: tests/impact-cli.test.ts, tests/impact-evidence.test.ts)
 
 ---
@@ -110,29 +110,29 @@
 
 ### 7A. docs / README (FR-009 consumer rule の配布)
 
-- [ ] T020 [P] `docs/commands.md` の `impact --diff --tests` 節 (:190 付近) に `--base <ref>` を追記: merge-base 意味論 / `--diff` 必須 / exit code と fallback 規則 / **consumer rule (FR-009 の文言)** / D-1 の選択限界 (削除・グラフ未追跡は寄与しない、正しさは `check --diff --base --gate`) / D-9 相互作用。exit code 表に「exit 1 → full suite に fallback」の行を追加。〔観点: doc 同時更新 (Cat3)〕
+- [x] T020 [P] `docs/commands.md` の `impact --diff --tests` 節 (:190 付近) に `--base <ref>` を追記: merge-base 意味論 / `--diff` 必須 / exit code と fallback 規則 / **consumer rule (FR-009 の文言)** / D-1 の選択限界 (削除・グラフ未追跡は寄与しない、正しさは `check --diff --base --gate`) / D-9 相互作用。exit code 表に「exit 1 → full suite に fallback」の行を追加。〔観点: doc 同時更新 (Cat3)〕
   - Files: docs/commands.md
-- [ ] T021 [P] `README.md` / `README.ja.md` の CI 節 (check --base レシピの隣) に quickstart.md S1 のテスト選択レシピ (jq 抽出 + full-suite fallback パターン) を追加。`impact --tests` は最適化であり gate は check 側という分業を 1 文で明記。両言語で等価に。
+- [x] T021 [P] `README.md` / `README.ja.md` の CI 節 (check --base レシピの隣) に quickstart.md S1 のテスト選択レシピ (jq 抽出 + full-suite fallback パターン) を追加。`impact --tests` は最適化であり gate は check 側という分業を 1 文で明記。両言語で等価に。
   - Files: README.md, README.ja.md
 
 ### 7B. skills / templates (配布物の consistency テストに注意)
 
-- [ ] T022 `templates/skills/artgraph-impact/SKILL.md` に CI 実行形 (`impact --diff --base <ref> --tests --format json`) と consumer rule / D-1 限界 / D-9 注意を追記し、`templates/skills/_shared/output-schema.md` の impact 節に (a) `--base` 時の `testsToRun` は merged set (working tree ∪ merge-base..HEAD) 上で評価される旨、(b) staleness "exclude" × `--base` × `--tests` の反転注意 (D-9)、を追記。**per-agent 配布複製** (`.claude/` / `.agents/` / `.cursor/` / `.github/` / `.kiro/` 配下の 5 ミラー) を同時更新し、`tests/skills-templates.test.ts` の同期検査と `tests/docs-trio-consistency.test.ts` を green に保つ。〔観点: 変更外影響 (dogfood parity)〕
+- [x] T022 `templates/skills/artgraph-impact/SKILL.md` に CI 実行形 (`impact --diff --base <ref> --tests --format json`) と consumer rule / D-1 限界 / D-9 注意を追記し、`templates/skills/_shared/output-schema.md` の impact 節に (a) `--base` 時の `testsToRun` は merged set (working tree ∪ merge-base..HEAD) 上で評価される旨、(b) staleness "exclude" × `--base` × `--tests` の反転注意 (D-9)、を追記。**per-agent 配布複製** (`.claude/` / `.agents/` / `.cursor/` / `.github/` / `.kiro/` 配下の 5 ミラー) を同時更新し、`tests/skills-templates.test.ts` の同期検査と `tests/docs-trio-consistency.test.ts` を green に保つ。〔観点: 変更外影響 (dogfood parity)〕
   - Files: templates/skills/artgraph-impact/SKILL.md, templates/skills/_shared/output-schema.md, .claude/skills/**, .agents/skills/**, .cursor/skills/**, .github/skills/**, .kiro/skills/** (配布複製), tests/skills-templates.test.ts (期待値追随が必要な場合)
-- [ ] T023 [P] `templates/agent-context/agents-md-snippet.md` の trace 行 (`impact --diff --tests` 言及) に CI 形 (`--base origin/<base>` 併用) を追記し、この repo の `AGENTS.md` の同じ行にも反映 (snippet と実体の等価性を保つ — spec 023 T030 と同型)。
+- [x] T023 [P] `templates/agent-context/agents-md-snippet.md` の trace 行 (`impact --diff --tests` 言及) に CI 形 (`--base origin/<base>` 併用) を追記し、この repo の `AGENTS.md` の同じ行にも反映 (snippet と実体の等価性を保つ — spec 023 T030 と同型)。
   - Files: templates/agent-context/agents-md-snippet.md, AGENTS.md
 
 ### 7C. タグ付け / 契約整合 / dogfood
 
-- [ ] T024 本 spec の FR にコード側 `@impl 024-impact-base-ref/FR-NNN` タグを付与 (原則 III。spec 023 の `// @impl 023-check-base-ref/FR-010` 形式を踏襲): FR-001/002/004/005/006/010/012 → `src/commands/impact.ts` の各分岐点。FR-007/008/011 は「変更しない/追加しない」型のため、D-1/D-8 の意図コメント (T008) とテスト側 pin が主。FR-003/013 は回帰・agreement テストで担保。新規 REQ-ID (`024-impact-base-ref/FR-001`〜`FR-013`) の既存衝突なしを再確認 (Cat6)。〔観点: 変更外影響 (dogfood)〕
+- [x] T024 本 spec の FR にコード側 `@impl 024-impact-base-ref/FR-NNN` タグを付与 (原則 III。spec 023 の `// @impl 023-check-base-ref/FR-010` 形式を踏襲): FR-001/002/004/005/006/010/012 → `src/commands/impact.ts` の各分岐点。FR-007/008/011 は「変更しない/追加しない」型のため、D-1/D-8 の意図コメント (T008) とテスト側 pin が主。FR-003/013 は回帰・agreement テストで担保。新規 REQ-ID (`024-impact-base-ref/FR-001`〜`FR-013`) の既存衝突なしを再確認 (Cat6)。〔観点: 変更外影響 (dogfood)〕
   - Files: src/commands/impact.ts, tests/impact-base-ref.test.ts, tests/check-baseline-diff.test.ts
-- [ ] T025 [P] `specs/016-impact-plan-symbol-level/contracts/cli-flags.md` §1.3 の forward-pointer 注記が入っていることを確認 (本 spec 作成時に追記済み — spec 024 への参照 + `line: 1` の drift 明記)。`specs/023-check-base-ref/` 側は変更不要 (D3 / Out of Scope / plan.md Follow-up が既に本 feature を指している) ことを確認。
+- [x] T025 [P] `specs/016-impact-plan-symbol-level/contracts/cli-flags.md` §1.3 の forward-pointer 注記が入っていることを確認 (本 spec 作成時に追記済み — spec 024 への参照 + `line: 1` の drift 明記)。`specs/023-check-base-ref/` 側は変更不要 (D3 / Out of Scope / plan.md Follow-up が既に本 feature を指している) ことを確認。
   - Files: specs/016-impact-plan-symbol-level/contracts/cli-flags.md (確認のみ)
-- [ ] T026 `pnpm exec artgraph scan && pnpm exec artgraph check` で 024 の FR が意図どおり登録され、実装前は uncovered として見えることを確認 (実装完了で解消)。`pnpm exec artgraph plan-coverage` で本 tasks.md の Files: からの implicit impact を消化 (Considered 記録を本ファイル末尾に追記)。
+- [x] T026 `pnpm exec artgraph scan && pnpm exec artgraph check` で 024 の FR が意図どおり登録され、実装前は uncovered として見えることを確認 (実装完了で解消)。`pnpm exec artgraph plan-coverage` で本 tasks.md の Files: からの implicit impact を消化 (Considered 記録を本ファイル末尾に追記)。
   - Files: specs/024-impact-base-ref/tasks.md (Considered 追記)
-- [ ] T027 `quickstart.md` S1〜S5 を手動実行し全期待値を確認。特に S1 (fallback パターンの実挙動) と S5 (byte-identical 回帰)。
+- [x] T027 `quickstart.md` S1〜S5 を手動実行し全期待値を確認。特に S1 (fallback パターンの実挙動) と S5 (byte-identical 回帰)。
   - Files: (検証のみ)
-- [ ] T028 `pnpm build && pnpm test` (unit+e2e+perf) 全通過、`pnpm knip` / `pnpm typecheck` クリーン、本 repo で `node dist/cli.js impact --diff --format json` (回帰なし) と `git fetch origin main && node dist/cli.js impact --diff --base origin/main --tests` の動作確認。
+- [x] T028 `pnpm build && pnpm test` (unit+e2e+perf) 全通過、`pnpm knip` / `pnpm typecheck` クリーン、本 repo で `node dist/cli.js impact --diff --format json` (回帰なし) と `git fetch origin main && node dist/cli.js impact --diff --base origin/main --tests` の動作確認。
   - Files: (検証のみ)
 
 ---
@@ -166,13 +166,13 @@ Phase 1 (Setup: T001 前提検証 / T002 fixture)
 
 ## Definition of Done (実装時 Engineering Hygiene)
 
-- [ ] 全テスト green (TDD: 各ユニットで Red を先に確認してから Green)。
-- [ ] `--base` なしの全経路が byte-identical (SC-005 回帰テストで固定。例外は `--format` choices 化のみ、新挙動を pin — Cat5)。
-- [ ] 共有配管 (src/diff.ts / src/baseline.ts / traverse.ts / check.ts) への変更ゼロ (plan.md Constraints — diff で確認)。
-- [ ] merge-base の単一解決 (resolveMergeBase 1 回 → baseSha 変数のみ) と FETCH_DEPTH_HINT の import 共有 (Cat2, data-model §4)。
-- [ ] エラー時 JSON 非出力 (usage / 環境失敗の全系統) をテストで pin (Cat1/Cat5)。
-- [ ] 変更外ファイル (impact-cli / impact-evidence 既存テスト / skills 5 複製 / docs) の追随完了 (Cat3)。
-- [ ] ドッグフード: `artgraph check --diff` drift=0、`artgraph plan-coverage` implicit=0 (T026 の Considered 消化)。
+- [x] 全テスト green (TDD: 各ユニットで Red を先に確認してから Green)。
+- [x] `--base` なしの全経路が byte-identical (SC-005 回帰テストで固定。例外は `--format` choices 化のみ、新挙動を pin — Cat5)。
+- [x] 共有配管 (src/diff.ts / src/baseline.ts / traverse.ts / check.ts) への変更ゼロ (plan.md Constraints — diff で確認)。
+- [x] merge-base の単一解決 (resolveMergeBase 1 回 → baseSha 変数のみ) と FETCH_DEPTH_HINT の import 共有 (Cat2, data-model §4)。
+- [x] エラー時 JSON 非出力 (usage / 環境失敗の全系統) をテストで pin (Cat1/Cat5)。
+- [x] 変更外ファイル (impact-cli / impact-evidence 既存テスト / skills 5 複製 / docs) の追随完了 (Cat3)。
+- [x] ドッグフード: `artgraph check --diff` drift=0、`artgraph plan-coverage` implicit=0 (T026 の Considered 消化)。
 
 ---
 

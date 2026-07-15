@@ -8,8 +8,10 @@ import {
   appendFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { runCli } from "../src/cli.js";
+import { SCHEMA_VERSION } from "../src/trace/schema.js";
 
 // Kept as a public export so a small set of tests (SC-004 perf) can still
 // spawn the real bin via subprocess.
@@ -172,6 +174,91 @@ export function commitOnBase(dir: string, mutate: () => void, message: string): 
  */
 export function coverDebtReq(dir: string): void {
   appendFileSync(join(dir, "src", "hub.ts"), "// @impl REQ-200\n");
+}
+
+/**
+ * spec 024 (T002) — base/feature branch repo WITH trace shards, for
+ * `impact --diff --base <ref> --tests` (CI test selection). The shape is the
+ * CI-normal state spec 024 exists for: the feature branch's only change is a
+ * COMMITTED edit to the exact symbol the trace evidence exercises, the
+ * working tree is clean, and the shards live under the gitignored
+ * `.artgraph/trace/` (base-branch-cached shards in real CI), so plain
+ * `impact --diff` sees an empty changed-file set while `--base base` sees
+ * the commit range.
+ *
+ *  - `specs/billing.md` defines `REQ-601` (evidence-only — no `@impl`
+ *    anywhere, the `acceptExercises` workflow; reverse `exercises`
+ *    reachability per #286 Option 2B).
+ *  - `src/billing.ts` holds `charge`, edited by the feature commit.
+ *  - The shard's `[REQ-601]`-tagged test exercises `charge`, hashed against
+ *    the CURRENT (feature) content so the evidence is fresh under the
+ *    default staleness "warn". The literal tag strings live HERE
+ *    (non-`.test.ts`, outside the `src/**` include set) for the same
+ *    dogfood-scan reason as `introduceNewOrphan`.
+ *
+ * `opts.staleness` flips `.artgraph.json`'s `trace.staleness` for the D-9
+ * co-occurrence tests (spec 024 FR-012): the warning depends only on the
+ * `--tests` × `--base` × `"exclude"` co-occurrence, never on whether the
+ * evidence actually went stale.
+ */
+export function makeRepoWithTraceAndBaseBranch(
+  prefix: string,
+  opts: { staleness?: "warn" | "exclude" } = {},
+): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  writeFileSync(join(dir, ".gitignore"), ".trace.lock\nnode_modules/\n.artgraph/\n");
+  writeFileSync(
+    join(dir, ".artgraph.json"),
+    JSON.stringify({
+      include: ["src/**/*.ts"],
+      specDirs: ["specs"],
+      testPatterns: ["tests/**/*.ts"],
+      lockFile: ".trace.lock",
+      ...(opts.staleness ? { trace: { staleness: opts.staleness } } : {}),
+    }),
+  );
+  mkdirSync(join(dir, "specs"), { recursive: true });
+  mkdirSync(join(dir, "src"), { recursive: true });
+  writeFileSync(
+    join(dir, "specs", "billing.md"),
+    "# Billing\n\n- REQ-601: charge bills a positive amount (evidence-only)\n",
+  );
+  writeFileSync(join(dir, "src", "billing.ts"), "export function charge() {\n  return 1;\n}\n");
+  gitInit(dir);
+  gitCommitAll(dir, "branch point: charge v1");
+  withBaseAndFeatureBranches(dir);
+
+  // The CI-normal state: the change is committed, the tree stays clean.
+  const edited = "export function charge() {\n  // edited on feature\n  return 2;\n}\n";
+  writeFileSync(join(dir, "src", "billing.ts"), edited);
+  gitCommitAll(dir, "feature edits charge (committed)");
+
+  const shardDir = join(dir, ".artgraph", "trace");
+  mkdirSync(shardDir, { recursive: true });
+  const hash = createHash("sha256").update(edited).digest("hex").slice(0, 16);
+  writeFileSync(
+    join(shardDir, "w1.jsonl"),
+    [
+      JSON.stringify({
+        schemaVersion: SCHEMA_VERSION,
+        kind: "meta",
+        runToken: "run-1",
+        pool: "forks",
+        vitest: "4.1.10",
+        startedAt: "2026-07-15T00:00:00Z",
+      }),
+      JSON.stringify({
+        kind: "test",
+        testName: "[REQ-601] charge bills a positive amount",
+        suitePath: [],
+        testFile: "tests/billing.test.ts",
+        passed: true,
+        hits: [{ file: "src/billing.ts", fn: "charge" }],
+        hashes: { "src/billing.ts": hash },
+      }),
+    ].join("\n"),
+  );
+  return dir;
 }
 
 /**

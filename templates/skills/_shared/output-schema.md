@@ -124,6 +124,8 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
 
 Array order is not part of the contract — treat every array as an unordered set. Same-spec sibling REQs with no code or dependency link of their own never appear in `impactReqs` (spec 019); when you need whole-feature context, open the spec file listed in `affectedDocs` instead.
 
+With `--diff --base <ref>` (spec 024, CI test selection) the shape above is unchanged — no field is added. `testsToRun` (and every other array) is evaluated over the **merged** changed-file set: the working-tree union ∪ the committed `git merge-base <ref> HEAD`..HEAD range — the same set `check --diff --base <ref>` judges. Start ids still resolve against the *current* graph only, so a file deleted inside the commit range (or a graph-untracked change) contributes nothing, silently — treat `impact --tests` as an optimization and fall back to the full suite on exit `1`; the correctness gate remains `check --diff --base --gate`. A `--base` environment failure (unresolvable ref / no merge-base) exits `1` with **no JSON on stdout** — never parse an exit-1 run's output. Caution (spec 024 D-9): under `trace.staleness: "exclude"`, `--base --tests` in CI drops the changed code's stale-by-construction evidence — the tests the selection exists to find — and a stderr WARNING fires on that 3-way combination; use `staleness: "warn"` for CI selection.
+
 ## artgraph rename
 
 The same shape is emitted for `--from/--to`, `--split/--into`, and `--merge/--into` (see `RenameResult` in `src/rename-executor.ts`). Which structural fields are populated depends on `operation`.
@@ -189,5 +191,5 @@ On error, the CLI writes the following to stderr (NOT stdout) and exits 1:
 | code | meaning |
 | ---- | ------- |
 | 0    | success / clean (or `--gate` with no NEW issue) |
-| 1    | error (invalid input, I/O, validation); for `check --diff --gate`, also "baseline could not be established" (spec 017, gate undetermined). `check --base <ref>` without `--diff` is a usage error → exit 1, no JSON emitted (spec 023 FR-002) |
+| 1    | error (invalid input, I/O, validation); for `check --diff --gate`, also "baseline could not be established" (spec 017, gate undetermined). `check --base <ref>` without `--diff` is a usage error → exit 1, no JSON emitted (spec 023 FR-002). `impact --base <ref>` fails the same way — without `--diff` (usage) or on an unresolvable ref / merge-base (environment): exit 1, no JSON; a CI consumer falls back to the full suite (spec 024) |
 | 2    | `check --gate`: a NEW issue (drift / orphan / uncovered / test-failure) was introduced by the change. With `--diff`, pre-existing debt in the blast radius is excluded from the gate (spec 017 / issue #174). Note: with `--base <ref>` the wider commit-range scope can newly pull stale trace evidence into `trace.staleness:"gate"`'s independent exit-2 channel — semantically correct, the REQ really is in the change range (spec 023) |

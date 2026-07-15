@@ -500,3 +500,23 @@ CLI / check surface spec 014 owns (`src/commands/check.ts`, `src/baseline.ts`,
 - Considered: 023-check-base-ref/FR-010 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
 - Considered: 023-check-base-ref/FR-011 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
 - Considered: 023-check-base-ref/FR-012 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+
+These REQs belong to spec **024-impact-base-ref** and are reached because
+spec 024 added `@impl 024-impact-base-ref/FR-XXX` claims to the impact
+command surface spec 014 owns (`src/commands/impact.ts` — `--base <ref>`
+CI test selection, issue #305). No behavioural change to spec 014 is
+intended; every `--base`-less path stays byte-identical (spec 024 FR-003).
+
+- Considered: 024-impact-base-ref/FR-001 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-002 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-003 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-004 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-005 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-006 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-007 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-008 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-009 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-010 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-011 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-012 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
+- Considered: 024-impact-base-ref/FR-013 — added post-merge by spec 024 (impact --base CI test selection), no spec 014 behaviour change
