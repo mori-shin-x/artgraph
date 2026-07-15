@@ -3,7 +3,7 @@
 import { Command, InvalidArgumentError, Option } from "commander";
 import type { ArtifactGraph, CheckResult } from "../types.js";
 import type { BaselineIssues } from "../baseline.js";
-import { pathsToEntries, resolveTestResults } from "./shared.js";
+import { nonOptionValue, pathsToEntries, resolveTestResults } from "./shared.js";
 import { printWarnings } from "./presenters/warnings.js";
 import { printCheckText } from "./presenters/check.js";
 
@@ -49,12 +49,23 @@ export function registerCheckCommand(program: Command): void {
         return value;
       }),
     )
-    .option(
-      "--ignore <csv>",
-      "Comma-separated REQ-IDs to drop from newIssues.uncovered (one-shot; not persisted). See issue #178.",
-      "",
+    // issue #306 (F6) — parse-time swallow guard (see `nonOptionValue`):
+    // `--ignore --gate` must be a usage error, never a disarmed gate. An
+    // empty CSV stays legal-by-design (T178-4).
+    .addOption(
+      new Option(
+        "--ignore <csv>",
+        "Comma-separated REQ-IDs to drop from newIssues.uncovered (one-shot; not persisted). See issue #178.",
+      )
+        .default("")
+        .argParser(nonOptionValue("--ignore", { allowEmpty: true })),
     )
-    .option("--format <format>", "Output format: json | text", "text")
+    // issue #306 (F7) — `.choices()` (the doctor/rename/plan-coverage/
+    // integrate convention) rejects both a swallowed flag (`--format --gate`)
+    // and a bogus value (previously a silent fall-through to text), exit 1.
+    .addOption(
+      new Option("--format <format>", "Output format").choices(["json", "text"]).default("text"),
+    )
     .action(async (opts) => {
       const rootDir = process.cwd();
 

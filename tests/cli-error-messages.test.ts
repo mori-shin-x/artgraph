@@ -19,7 +19,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runAt } from "./helpers.js";
+import { gitInit, runAt } from "./helpers.js";
 
 describe("CLI: --agents error UX (spec 013 FR-001 / FR-002 / SC-006 / A1)", () => {
   let initTmp: string;
@@ -139,5 +139,88 @@ describe("CLI: --agents error UX (spec 013 FR-001 / FR-002 / SC-006 / A1)", () =
     expect(stderr).toContain('Did you mean "claude"?');
     expect(stderr).toContain("Also duplicated once case is normalized");
     expect(stderr).toContain('"claude"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #306 (PR #304 review F6/F7) — value-required options on GATE-relevant
+// commands must reject option-like and (for paths) empty values at parse
+// time. commander's required option-args are greedy, so `--ignore --gate`
+// consumes `--gate` as the CSV and silently DISARMS the gate — the run then
+// exits 0 with the issue printed but not judged (fail-open). Same class as
+// spec 023's `--base --gate` guard (contracts/cli-check-base.md §1).
+// Parse-time errors need no real project fixture — commander rejects the
+// argv before the action ever runs — but we still run inside a tmp dir so a
+// stray `.artgraph.json` in the repo can't leak in.
+// ---------------------------------------------------------------------------
+describe("CLI: gate-relevant option-value swallow guards (issue #306)", () => {
+  let tmp: string;
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "artgraph-306-"));
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("check --diff --ignore --gate → parse error exit 1 (F6: gate must not be swallowed)", async () => {
+    const { exitCode, stderr, stdout } = await runAt(tmp, [
+      "check",
+      "--diff",
+      "--ignore",
+      "--gate",
+    ]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('must not start with "-"');
+    expect(stdout.trim()).toBe("");
+  });
+
+  it('check --diff --ignore "" stays legal (T178-4 contract preserved)', async () => {
+    // Minimal git repo so the action reaches its normal "no changes" exit —
+    // the point is the PARSER accepts the empty CSV (no InvalidArgumentError).
+    gitInit(tmp);
+    const { exitCode, stderr } = await runAt(tmp, ["check", "--diff", "--ignore", ""]);
+    expect(exitCode).toBe(0);
+    expect(stderr).not.toContain("must not be empty");
+    expect(stderr).not.toContain('must not start with "-"');
+  });
+
+  it("check --diff --format --gate → parse error exit 1 (F7: swallowed flag rejected by choices)", async () => {
+    const { exitCode, stderr } = await runAt(tmp, ["check", "--diff", "--format", "--gate"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Allowed choices are json, text");
+  });
+
+  it("check --format bogus → exit 1 (F7: no more silent fall-through to text)", async () => {
+    const { exitCode, stderr } = await runAt(tmp, ["check", "--format", "bogus"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("Allowed choices are json, text");
+  });
+
+  it("plan-coverage --tasks --gate → parse error exit 1 (was: gate silently disarmed, exit 0)", async () => {
+    const { exitCode, stderr } = await runAt(tmp, ["plan-coverage", "--tasks", "--gate"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('must not start with "-"');
+  });
+
+  it('plan-coverage --spec "" --gate → parse error exit 1 (empty path can only be an unset variable)', async () => {
+    const { exitCode, stderr } = await runAt(tmp, ["plan-coverage", "--spec", "", "--gate"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("must not be empty");
+  });
+
+  it('plan-coverage --ignore --gate → parse error exit 1; --ignore "" stays legal', async () => {
+    const swallowed = await runAt(tmp, ["plan-coverage", "--ignore", "--gate"]);
+    expect(swallowed.exitCode).toBe(1);
+    expect(swallowed.stderr).toContain('must not start with "-"');
+
+    const empty = await runAt(tmp, ["plan-coverage", "--ignore", ""]);
+    expect(empty.stderr).not.toContain("must not be empty");
+    expect(empty.stderr).not.toContain('must not start with "-"');
+  });
+
+  it("plan-coverage --plan --gate → parse error exit 1", async () => {
+    const { exitCode, stderr } = await runAt(tmp, ["plan-coverage", "--plan", "--gate"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('must not start with "-"');
   });
 });
