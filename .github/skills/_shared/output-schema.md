@@ -65,11 +65,11 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
 
 | `baselineStatus` | when it occurs | `newIssues` contents | `pass` / gate meaning |
 | --- | --- | --- | --- |
-| `"computed"` | `--diff`, scope had issues, base ref resolved and scanned | real `current \ baseline` diff | spec-017 gate semantics (new issues only) |
+| `"computed"` | `--diff`, scope had issues, base ref resolved and scanned. With `--base <ref>` (spec 023, CI) the baseline is the `git merge-base <ref> HEAD` commit, and the diff set is working-tree ∪ committed `mergeBase..HEAD` range | real `current \ baseline` diff | spec-017 gate semantics (new issues only) |
 | `"empty"` | `--diff`, unborn HEAD (repo's first commit, FR-014) | == scoped arrays (baseline is trivially empty, so everything counts as new) | spec-017 semantics; often `pass:false` on a non-trivial repo |
-| `"skipped"` | `--diff`, but the scoped issue count was already zero (lazy eval, SC-005) — no baseline worktree was ever built | all empty (trivially, since scoped was already empty) | trivially `pass:true` |
+| `"skipped"` | `--diff`, but the scoped issue count was already zero (lazy eval, SC-005) — no baseline worktree was ever built. Also the "No changes detected" short-circuit, including an empty *merged* diff under `--base` (a legitimately clean run — no CI warning, spec 023 FR-010) | all empty (trivially, since scoped was already empty) | trivially `pass:true` |
 | `"not_applicable"` | **no `--diff` at all** — a plain `check` / `check --gate` run. The current-vs-baseline distinction doesn't apply because there's no diff to compare against. | == scoped arrays verbatim (NOT a real "new" determination) | matches the pre-spec-017 "all scoped issues clear" meaning (back-compat, R8) |
-| `"unavailable"` | `--diff`, baseline construction failed (non-git repo, `git worktree add` failure, `scan()` exception, mkdtemp error, …) | forced empty — **means "undetermined"**, not "no issues" | `pass` forced `false` (safe default, never silently passes); see `baselineError` below |
+| `"unavailable"` | `--diff`, baseline construction failed (non-git repo, `git worktree add` failure, `scan()` exception, mkdtemp error, …). With `--base <ref>` (spec 023) also: the ref does not resolve, or `git merge-base` fails — a shallow clone (`fetch-depth: 1`) is the classic CI cause; `baselineError` then carries a `fetch-depth: 0` remedy hint | forced empty — **means "undetermined"**, not "no issues" | `pass` forced `false` (safe default, never silently passes); see `baselineError` below |
 
 **Do not confuse `"skipped"` with `"not_applicable"`.** Both can leave `newIssues` looking "uninteresting", but for different reasons: `"skipped"` only ever occurs when the scoped issue count is *already* zero (so an empty `newIssues` is trivially correct). `"not_applicable"` can carry a full, non-empty `newIssues` on a dirty repo — it means "this run never attempted a baseline diff", not "nothing is wrong".
 
@@ -189,5 +189,5 @@ On error, the CLI writes the following to stderr (NOT stdout) and exits 1:
 | code | meaning |
 | ---- | ------- |
 | 0    | success / clean (or `--gate` with no NEW issue) |
-| 1    | error (invalid input, I/O, validation); for `check --diff --gate`, also "baseline could not be established" (spec 017, gate undetermined) |
-| 2    | `check --gate`: a NEW issue (drift / orphan / uncovered / test-failure) was introduced by the change. With `--diff`, pre-existing debt in the blast radius is excluded from the gate (spec 017 / issue #174) |
+| 1    | error (invalid input, I/O, validation); for `check --diff --gate`, also "baseline could not be established" (spec 017, gate undetermined). `check --base <ref>` without `--diff` is a usage error → exit 1, no JSON emitted (spec 023 FR-002) |
+| 2    | `check --gate`: a NEW issue (drift / orphan / uncovered / test-failure) was introduced by the change. With `--diff`, pre-existing debt in the blast radius is excluded from the gate (spec 017 / issue #174). Note: with `--base <ref>` the wider commit-range scope can newly pull stale trace evidence into `trace.staleness:"gate"`'s independent exit-2 channel — semantically correct, the REQ really is in the change range (spec 023) |

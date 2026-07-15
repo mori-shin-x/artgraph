@@ -14,6 +14,7 @@ This steering file tells the Kiro agent how to use artgraph to keep code, specs,
 | ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `artgraph impact <file>`                             | List affected REQs/docs/files for a given path                                     |
 | `artgraph check --diff`                              | Validate the current git diff against the trace graph                              |
+| `artgraph check --diff --base origin/<base> --gate`  | CI: gate only what the PR's commit range introduced (needs `fetch-depth: 0`)       |
 | `artgraph reconcile`                                 | Update `.trace.lock` to current graph (use with care)                              |
 | `artgraph plan-coverage --spec .kiro/specs/<name>/`  | Detect implicit REQ impacts in this spec's tasks.md (`--gate` for CI).             |
 

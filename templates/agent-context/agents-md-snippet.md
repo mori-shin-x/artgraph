@@ -18,6 +18,7 @@ See `<agent_skills_path>/<skill-name>/SKILL.md` for each Skill's full descriptio
 
 - After editing `tasks.md` / `plan.md`: run **artgraph-plan-coverage** to catch implicit REQ impacts.
 - Before review: run **artgraph-verify** (`{{ARTGRAPH_EXEC}} check --diff`).
+- CI gate for PRs: `{{ARTGRAPH_EXEC}} check --diff --base origin/<base> --gate` judges only what the PR's commit range introduced (needs `fetch-depth: 0`; fail-closed exit 1 on a shallow clone).
 - When proposing a code change: invoke **artgraph-impact** with `path:symbol`.
 - With trace shards present (`artgraph/vitest` runner): `{{ARTGRAPH_EXEC}} impact --diff --tests` selects only the tests exercising a change; `{{ARTGRAPH_EXEC}} trace report` cross-checks `@impl` claims against execution evidence.
 

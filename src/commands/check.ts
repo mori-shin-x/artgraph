@@ -13,6 +13,15 @@ export function registerCheckCommand(program: Command): void {
     .description("Check for drift, orphans, and uncovered REQs")
     .option("--gate", "Exit 2 on any issue (for Stop hook)")
     .option("--diff", "Scope check to files changed in git diff")
+    // spec 023 (FR-001) — CI PR gating (issue #185 / spec 017 Phase 2). The
+    // semantics are merge-base-based (D1): both the diff range and the
+    // baseline worktree use `git merge-base <ref> HEAD`, never <ref>'s tip.
+    // `impact` deliberately does NOT get this option (D3 — follow-up issue).
+    // @impl 023-check-base-ref/FR-001
+    .option(
+      "--base <ref>",
+      "Gate against merge-base(<ref>, HEAD) in addition to the working tree (requires --diff; for CI use --base origin/<default-branch>)",
+    )
     .option(
       "--ignore <csv>",
       "Comma-separated REQ-IDs to drop from newIssues.uncovered (one-shot; not persisted). See issue #178.",
@@ -21,6 +30,23 @@ export function registerCheckCommand(program: Command): void {
     .option("--format <format>", "Output format: json | text", "text")
     .action(async (opts) => {
       const rootDir = process.cwd();
+
+      // spec 023 (FR-002, D2) — `--base` without `--diff` is a fail-closed
+      // usage error, checked BEFORE any scan work: `--base` only re-bases the
+      // `--diff` changed-file set, so without `--diff` there is nothing for
+      // it to act on, and silently continuing as a plain check would let a
+      // CI YAML typo (`--diff` dropped) turn the gate into a different
+      // command that still exits green. No JSON is emitted even under
+      // `--format json` — a usage error is not a verdict, and a `pass`-shaped
+      // payload here would invite exactly the misread this guard prevents.
+      // @impl 023-check-base-ref/FR-002
+      if (opts.base && !opts.diff) {
+        console.error(
+          "ERROR: --base requires --diff (--base sets the base point of the git diff; without --diff there is nothing to compare).",
+        );
+        console.error("       run: artgraph check --diff --base <ref> [--gate]");
+        process.exit(1);
+      }
 
       // issue #178 — one-shot escape hatch, mirrors `plan-coverage --ignore`.
       // Parse before the `--diff` branch so the WARNING below can fire on the
@@ -73,24 +99,59 @@ export function registerCheckCommand(program: Command): void {
         const { getGitDiffFiles, getGitRenameMap, getHeadTrackedPaths } =
           await import("../diff.js");
         const { impact, resolveStartIds } = await import("../graph/traverse.js");
-        const { computeBaselineIssues } = await import("../baseline.js");
-        const diffFiles = getGitDiffFiles(rootDir);
-        if (diffFiles.length === 0) {
+        const { computeBaselineIssues, classifyBaseRef, resolveMergeBase, FETCH_DEPTH_HINT } =
+          await import("../baseline.js");
+
+        // spec 023 (FR-004/FR-005, D1) — resolve the merge-base exactly ONCE,
+        // before any diff work; `baseSha` is then the single base point every
+        // downstream git call shares (diff range, rename map, tracked-path
+        // probe, baseline worktree — nothing re-resolves the ref). Both
+        // failure stages funnel into ONE `baseUnavailableError`, which later
+        // merges into the existing `baselineStatus:"unavailable"` handling
+        // (FR-012): no new failure channel, so the `--ignore` pass
+        // recomputation below keeps treating it as non-passing. A named ref
+        // that fails to resolve is always classified "error", never "unborn"
+        // (`isUnbornHead`'s non-HEAD early return) — an unfetched
+        // `--base origin/main` can never masquerade as an empty baseline.
+        // @impl 023-check-base-ref/FR-004
+        // @impl 023-check-base-ref/FR-005
+        // @impl 023-check-base-ref/FR-012
+        let baseSha: string | undefined;
+        let baseUnavailableError: string | undefined;
+        if (opts.base) {
+          const baseRef = opts.base as string;
+          if (classifyBaseRef(rootDir, baseRef) !== "resolved") {
+            baseUnavailableError = `base ref "${baseRef}" does not resolve\n${FETCH_DEPTH_HINT}`;
+          } else {
+            const mergeBase = resolveMergeBase(rootDir, baseRef);
+            if ("error" in mergeBase) baseUnavailableError = mergeBase.error;
+            else baseSha = mergeBase.sha;
+          }
+        }
+
+        // spec 023 (FR-006) — merged diff: three-way working-tree union, plus
+        // the committed baseSha..HEAD range when `--base` resolved.
+        // @impl 023-check-base-ref/FR-006
+        const diffFiles = getGitDiffFiles(rootDir, baseSha);
+        if (diffFiles.length === 0 && baseUnavailableError === undefined) {
           // spec 017 (Critical fix E1, issue #182 review) — in CI the checked-
           // out working tree already matches the commit under test, so `git
           // diff` (staged+unstaged+untracked) is empty on essentially every
-          // run regardless of what the PR actually changed. Without a `--base
-          // <ref>` (Phase 2, issue #185) the gate silently no-ops right here:
-          // it exits 0 looking like "nothing to check" when it never actually
-          // compared anything. Warn (exit code stays 0 — this is not a gate
-          // failure) so CI logs surface the gap instead of a green check that
-          // checked nothing. No FR covers this directly (issue #182 review
-          // finding, not an original spec 017 requirement) — see issue #185
-          // for the tracked Phase 2 follow-up that actually closes the gap.
+          // run regardless of what the PR actually changed. Without `--base
+          // <ref>` (spec 023) the gate no-ops right here: it exits 0 looking
+          // like "nothing to check" when it never actually compared anything,
+          // so CI runs get a loud warning pointing at the flag that fixes it.
+          // WITH `--base` an empty merged diff is a legitimately clean run
+          // (the commit range WAS compared — e.g. a re-run right after a
+          // merge), so the warning is suppressed on stderr and in the json
+          // `warnings[]` alike (spec 023 FR-010).
+          // @impl 023-check-base-ref/FR-010
+          // @impl 023-check-base-ref/FR-011
           const isCI = process.env.CI === "true" || process.env.CI === "1";
+          const showCiWarning = isCI && !opts.base;
           const ciWarning =
-            "WARNING: gate is not active in CI without --base <ref> (Phase 2 — see #185).";
-          if (isCI) console.error(ciWarning);
+            "WARNING: gate is not active in CI without --base <ref> — pass --base <ref> (e.g. --base origin/main) to gate the PR's commit range.";
+          if (showCiWarning) console.error(ciWarning);
 
           // E4: same fix as `impact --diff` — don't ignore `--format json` on
           // the "no changes" case. Shape matches the normal `check
@@ -116,7 +177,7 @@ export function registerCheckCommand(program: Command): void {
                 },
                 suppressedCount: 0,
                 baselineStatus: "skipped",
-                warnings: isCI ? [...warnings, ciWarning] : warnings,
+                warnings: showCiWarning ? [...warnings, ciWarning] : warnings,
                 message: "No changes detected in git diff.",
               }),
             );
@@ -133,7 +194,13 @@ export function registerCheckCommand(program: Command): void {
         // change resolves only the NEW path via getGitDiffFiles; the
         // baseline graph only knows the OLD path, so translate through
         // git's rename detection so the baseline side still resolves.
-        const renameMap = getGitRenameMap(rootDir);
+        // spec 023 (FR-008) — base-parameterised: `git diff -M <baseSha>`
+        // sees committed base..HEAD renames too, and this ONE map instance
+        // feeds both the inverse-rename below and (via the
+        // `computeBaselineIssues` argument) the baseline orphan-key
+        // normalization, so the two consumers can never disagree.
+        // @impl 023-check-base-ref/FR-008
+        const renameMap = getGitRenameMap(rootDir, baseSha);
         const inverseRenameMap = new Map<string, string>();
         for (const [oldPath, newPath] of renameMap) inverseRenameMap.set(newPath, oldPath);
         const baselineEntries = entries.map((e) => {
@@ -152,9 +219,9 @@ export function registerCheckCommand(program: Command): void {
         // computed for `--diff` and its graph is reused below to also
         // compute scope on the BASELINE side, so a REQ reachable via an edge
         // that exists on EITHER side of the diff still lands in scope.
-        // Correctness over SC-005's perf win. Phase 1 pins the base ref to
-        // HEAD (FR-002); the internal API already takes a `baseRef`
-        // parameter so Phase 2 can expose `--base` (FR-012).
+        // Correctness over SC-005's perf win. The base ref is HEAD unless
+        // `--base <ref>` resolved a merge-base above (spec 023 — the Phase 2
+        // that 017/FR-012's `baseRef` parameter was reserved for).
         //
         // issue #229 review (Finding 2) — the fully-unconditional eager
         // baseline above regressed the case where the diff touches only
@@ -169,9 +236,17 @@ export function registerCheckCommand(program: Command): void {
         // startId either, so building it would only be thrown away. Building
         // is still the default whenever there's any chance it's needed —
         // this only ever skips work that would provably go unused.
+        // spec 023 (FR-009) — with `--base`, the probe also consults the
+        // merge-base tree: a file deleted by a COMMIT in baseSha..HEAD is
+        // untracked at HEAD, absent from the working tree AND absent from
+        // the current graph, so HEAD-only probing would skip the baseline
+        // build and fail open on its lost sole `@impl` edge (issue #229's
+        // failure mode, committed edition).
+        // @impl 023-check-base-ref/FR-009
         const headTrackedPaths = getHeadTrackedPaths(
           rootDir,
           entries.map((e) => e.path),
+          baseSha,
         );
         const anyBaselineResolvable =
           currentStartIds.length > 0 ||
@@ -181,8 +256,19 @@ export function registerCheckCommand(program: Command): void {
         let baseline: BaselineIssues | undefined;
         let baselineGraph: ArtifactGraph | undefined;
         let baselineStartIds: string[] = [];
-        if (anyBaselineResolvable) {
-          baseline = computeBaselineIssues(rootDir, "HEAD", lock, config);
+        if (baseUnavailableError !== undefined) {
+          // spec 023 (FR-004/FR-005/FR-012) — ref resolution or merge-base
+          // failed: merge into the EXISTING unavailable semantics (017
+          // contract §4.4/§4.5) instead of a new early exit, so `--gate`
+          // reaches the dedicated exit 1, no-`--gate` stays display-only
+          // exit 0, and `--format json` keeps the exact CheckResult shape
+          // with `baselineError` carrying cause + fetch-depth hint.
+          baseline = { keys: new Set(), status: "unavailable", error: baseUnavailableError };
+        } else if (anyBaselineResolvable) {
+          // spec 023 (FR-007) — the baseline worktree is built at the SAME
+          // merge-base sha the diff range used; never at <ref>'s tip.
+          // @impl 023-check-base-ref/FR-007
+          baseline = computeBaselineIssues(rootDir, baseSha ?? "HEAD", lock, config, renameMap);
           baselineGraph = baseline.graph;
           baselineStartIds = baselineGraph
             ? resolveStartIds(baselineGraph, baselineEntries).startIds
@@ -194,7 +280,15 @@ export function registerCheckCommand(program: Command): void {
         // wrongly take this early exit for e.g. a deleted file whose sole
         // `@impl` claim needs to surface as newly-uncovered: the file is gone
         // from the current graph but still resolves against the baseline.
-        if (currentStartIds.length === 0 && baselineStartIds.length === 0) {
+        // spec 023 — never taken when `--base` failed to resolve: the merged
+        // diff (and hence "not tracked") is unverifiable without a base
+        // point, so the run falls through to the fail-closed `unavailable`
+        // verdict instead of a green early exit.
+        if (
+          currentStartIds.length === 0 &&
+          baselineStartIds.length === 0 &&
+          baseUnavailableError === undefined
+        ) {
           // spec 017 (Critical fix D1, issue #182 review) — same E4-style gap
           // as the `diffFiles.length === 0` branch above: `--format json` was
           // silently ignored here, breaking a CI/Skill consumer piping `check
@@ -329,6 +423,20 @@ export function registerCheckCommand(program: Command): void {
       // @impl 017-check-gate-baseline-diff/FR-010
       if (result.baselineStatus === "unavailable") {
         if (opts.gate) {
+          if (opts.base) {
+            // spec 023 (contracts/cli-check-base.md §7) — surface the cause
+            // (baselineError already carries the git diagnostic + the
+            // FETCH_DEPTH_HINT for ref/merge-base failures). The `--base`-less
+            // wording below stays byte-identical (FR-003).
+            console.error(
+              `ERROR: could not establish a baseline (base ref "${opts.base}" unresolved or no merge-base).`,
+            );
+            for (const line of (result.baselineError ?? "").split("\n")) {
+              if (line.trim()) console.error(`       ${line}`);
+            }
+            console.error("       gate result is undetermined; not treating as pass.");
+            process.exit(1);
+          }
           console.error("ERROR: could not establish a baseline (git worktree unavailable).");
           console.error("       gate result is undetermined; not treating as pass.");
           process.exit(1);

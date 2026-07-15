@@ -482,3 +482,21 @@ introduced after spec 014 was merged.
 - Considered: 017-check-gate-baseline-diff/SC-004 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
 - Considered: 017-check-gate-baseline-diff/SC-005 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
 - Considered: 017-check-gate-baseline-diff/SC-006 — added post-merge by spec 017 (baseline-diff gate), no spec 014 behaviour change
+
+These REQs belong to spec **023-check-base-ref** and are reached because
+spec 023 added `@impl 023-check-base-ref/FR-XXX` claims to the same shared
+CLI / check surface spec 014 owns (`src/commands/check.ts`, `src/baseline.ts`,
+`src/diff.ts`). No behavioural change to spec 014 is intended.
+
+- Considered: 023-check-base-ref/FR-001 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+- Considered: 023-check-base-ref/FR-002 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+- Considered: 023-check-base-ref/FR-003 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+- Considered: 023-check-base-ref/FR-004 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+- Considered: 023-check-base-ref/FR-005 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+- Considered: 023-check-base-ref/FR-006 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+- Considered: 023-check-base-ref/FR-007 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+- Considered: 023-check-base-ref/FR-008 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+- Considered: 023-check-base-ref/FR-009 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+- Considered: 023-check-base-ref/FR-010 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+- Considered: 023-check-base-ref/FR-011 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change
+- Considered: 023-check-base-ref/FR-012 — added post-merge by spec 023 (check --base CI gating), no spec 014 behaviour change

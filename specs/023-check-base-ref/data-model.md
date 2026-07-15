@@ -51,7 +51,7 @@ export function getHeadTrackedPaths(
 
 **不変条件**:
 - `baseSha === undefined` のとき、3 関数とも現行と同一の git 呼び出し列・同一の戻り値 (SC-005 の回帰テストで固定)。ただし `getGitDiffFiles` の `-z` 化により、非 ASCII path の **表記** のみ octal-escape → verbatim に変わる (`getGitTrackedFiles` と同じ方式に統一。R3 参照 — グラフ側 path と一致する方向の修正であり、ASCII-only repo では byte-identical)。
-- `getGitDiffFiles` の戻り値は重複なし (Set 経由)。base range の rename (R レコード) は old/new 両 path が集合に入る。
+- `getGitDiffFiles` の戻り値は重複なし (Set 経由)。base range の rename (R レコード) は **new path のみ** が集合に入る (実測 T001d: `--name-only -M` は old path を出力しない)。old path は `getGitRenameMap(rootDir, baseSha)` の inverse map 経由で baseline 側 startId 解決に回復される (作業ツリー rename の既存経路と同型)。
 - `getGitRenameMap(rootDir, baseSha)` の map は `src/commands/check.ts` の inverse-rename (:136) と `computeBaselineIssues` → `normalizeOrphanSource` (src/baseline.ts:229 経由) の **両方** に同一インスタンスとして渡る (二重解決禁止 — §5 SSOT)。
 
 ---

@@ -34,6 +34,7 @@ See [install-check](../_shared/install-check.md) for the standard pre-flight che
 
 - `--diff` scopes the check to files changed by git diff.
 - Do NOT add `--gate` — that exits 2 on issues, which is for hook use only. We want the result for inspection.
+- **CI form** (spec 023): a CI pipeline gating a pull request runs `check --diff --base origin/<base-branch> --gate` instead — the working tree is clean in CI, so `--base <ref>` extends the diff with the committed `merge-base(<ref>, HEAD)..HEAD` range and judges only what the PR introduced. `--base` requires `--diff` (usage error exit 1 otherwise) and needs the full history (`actions/checkout` with `fetch-depth: 0`).
 
 ### 3. Interpret the JSON output
 
@@ -61,7 +62,7 @@ When a trace exists, `check --format json` additionally carries `unexercisedClai
 `baselineStatus` values:
 - `computed` / `empty` / `skipped`: a real (possibly trivial) baseline diff was applied — `newIssues` reflects genuinely new problems. Proceed to step 4 normally.
 - `not_applicable`: no baseline diff was attempted at all — step 2's command was run without `--diff`. This should not happen when step 2 is followed as written; if you see it, re-run with `--diff` before reporting anything.
-- `unavailable`: the baseline could not be built. `baselineError` carries the reason (a git failure, a `scan()` exception, etc.) — treat the result as undetermined (do NOT report "passed") and investigate git / worktree state using that message.
+- `unavailable`: the baseline could not be built. `baselineError` carries the reason (a git failure, a `scan()` exception, etc.) — treat the result as undetermined (do NOT report "passed") and investigate git / worktree state using that message. With `--base <ref>` (CI) this also covers an unresolvable ref and a failed `git merge-base` — the classic cause is a shallow clone (`fetch-depth: 1`), and `baselineError` then includes the remedy hint (`fetch-depth: 0`, or fetch the base ref); relay that hint verbatim in your report.
 
 ### 4. Conclude
 

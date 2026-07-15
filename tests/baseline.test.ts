@@ -18,11 +18,23 @@ import {
   driftKey,
   classifyBaseRef,
   removeWorktree,
+  resolveMergeBase,
+  FETCH_DEPTH_HINT,
 } from "../src/baseline.js";
 import { scan, reconcile } from "../src/scan.js";
 import { readLock } from "../src/lock.js";
 import { loadConfig } from "../src/config.js";
-import { makeRepoWithDebt, gitInit, gitCommitAll, deadPid, blockWorktreeAdd } from "./helpers.js";
+import {
+  makeRepoWithDebt,
+  makeRepoWithBaseBranch,
+  gitInit,
+  gitCommitAll,
+  gitCheckoutBranch,
+  gitRevParse,
+  gitUnrelatedRootBranch,
+  deadPid,
+  blockWorktreeAdd,
+} from "./helpers.js";
 
 // Track temp dirs so every test cleans up even on failure.
 const created: string[] = [];
@@ -372,6 +384,79 @@ describe("baseline error propagation (B1)", () => {
     const result = computeBaselineIssues(dir, "HEAD", {}, config);
     expect(result.status).toBe("unavailable");
     expect(result.error).toContain("submodules are not supported");
+  });
+});
+
+// spec 023 (T003, FR-005) — `resolveMergeBase` resolves `git merge-base
+// <ref> HEAD` exactly once; every failure (unresolvable ref, unrelated
+// histories, shallow clone) surfaces as a non-empty `{ error }` carrying the
+// shared FETCH_DEPTH_HINT so CI users always see the fetch-depth: 0 fix.
+describe("resolveMergeBase (spec 023 FR-005)", () => {
+  it("(a) two diverged branches → resolves the branch-point sha, not either tip", () => {
+    const dir = track(makeRepoWithBaseBranch("artgraph-023-mb-diverged-"));
+    const branchPoint = gitRevParse(dir, "HEAD");
+    // Move BOTH sides ahead so branch point ≠ base tip ≠ feature tip.
+    gitCheckoutBranch(dir, "base");
+    writeFileSync(join(dir, "base-only.txt"), "base moved ahead\n");
+    gitCommitAll(dir, "base moves ahead");
+    gitCheckoutBranch(dir, "feature");
+    writeFileSync(join(dir, "feature-only.txt"), "feature commit\n");
+    gitCommitAll(dir, "feature commit");
+
+    const result = resolveMergeBase(dir, "base");
+    expect(result).toEqual({ sha: branchPoint });
+    expect((result as { sha: string }).sha).not.toBe(gitRevParse(dir, "base"));
+    expect((result as { sha: string }).sha).not.toBe(gitRevParse(dir, "HEAD"));
+  });
+
+  it("(b) <ref> at the same tip as HEAD → merge-base == HEAD (degenerate case)", () => {
+    const dir = track(makeRepoWithBaseBranch("artgraph-023-mb-sametip-"));
+    const result = resolveMergeBase(dir, "base");
+    expect(result).toEqual({ sha: gitRevParse(dir, "HEAD") });
+  });
+
+  it("(c) unrelated histories → { error } (non-empty, includes FETCH_DEPTH_HINT)", () => {
+    const dir = track(makeRepoWithBaseBranch("artgraph-023-mb-unrelated-"));
+    gitUnrelatedRootBranch(dir, "unrelated");
+    const result = resolveMergeBase(dir, "unrelated");
+    expect("error" in result).toBe(true);
+    const { error } = result as { error: string };
+    expect(error.length).toBeGreaterThan(0);
+    expect(error).toContain(FETCH_DEPTH_HINT);
+  });
+
+  it("(d) an unresolvable ref → { error } (fails at merge-base already)", () => {
+    const dir = track(makeRepoWithBaseBranch("artgraph-023-mb-noref-"));
+    const result = resolveMergeBase(dir, "nosuchref");
+    expect("error" in result).toBe(true);
+    expect((result as { error: string }).error).toContain(FETCH_DEPTH_HINT);
+  });
+
+  it("FETCH_DEPTH_HINT names the actions/checkout fetch-depth: 0 remedy (SSOT constant)", () => {
+    expect(FETCH_DEPTH_HINT).toContain("fetch-depth: 0");
+    expect(FETCH_DEPTH_HINT).toContain("shallow");
+  });
+});
+
+// spec 023 (T005, FR-004) — regression pin for the safety precondition the
+// `--base` path relies on: a NAMED ref that fails to resolve must classify
+// as "error", never "unborn" (`isUnbornHead`'s non-HEAD early return,
+// src/baseline.ts). If this ever regressed, an unfetched `--base origin/main`
+// would silently become an EMPTY baseline (= every pre-existing issue counts
+// as new) instead of failing closed as "unavailable".
+describe("classifyBaseRef: named ref is never unborn (spec 023 FR-004 pin)", () => {
+  it("an unresolvable named ref in a repo WITH commits classifies as error", () => {
+    const dir = track(makeRepoWithDebt("artgraph-023-b10-named-"));
+    expect(classifyBaseRef(dir, "origin/nosuch")).toBe("error");
+    expect(classifyBaseRef(dir, "nosuchbranch")).toBe("error");
+  });
+
+  it("an unresolvable named ref even in an UNBORN repo classifies as error, not unborn", () => {
+    const dir = track(mkdtempSync(join(tmpdir(), "artgraph-023-b10-unbornrepo-")));
+    gitInit(dir); // no commits: HEAD itself is unborn…
+    expect(classifyBaseRef(dir, "HEAD")).toBe("unborn");
+    // …but a NAMED ref must still be an error — never empty-baseline'd.
+    expect(classifyBaseRef(dir, "origin/main")).toBe("error");
   });
 });
 

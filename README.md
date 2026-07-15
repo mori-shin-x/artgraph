@@ -169,6 +169,39 @@ you rarely type `artgraph check` yourself:
 Every hook reduces to `artgraph check` on the same graph, and `--diff`
 compares against `.trace.lock`. No LLM in the loop.
 
+### CI gate for pull requests
+
+In CI the checked-out working tree matches the commit exactly, so a plain
+`check --diff` has nothing to compare. Pass `--base <ref>` to gate the PR's
+commit range instead: the verdict is computed against
+`git merge-base <ref> HEAD`, so only issues the PR itself introduced fail the
+gate — pre-existing debt on the base branch is suppressed.
+
+```yaml
+name: artgraph-gate
+on: pull_request
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # required — on a shallow clone the merge-base cannot be resolved and the gate fails closed (exit 1)
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec artgraph check --diff --base "origin/${{ github.base_ref }}" --gate
+```
+
+Exit codes: `0` = no new issues, `2` = the PR introduced drift / orphans /
+uncovered REQs, `1` = the gate could not be evaluated (e.g. shallow clone —
+fail-closed, never a silent pass). The local Stop hook keeps using plain
+`check --gate --diff` (working-tree diff); `--base` is for commit-range
+gating.
+
 ## End-to-end: spec → `@impl` → `check`
 
 ```bash
