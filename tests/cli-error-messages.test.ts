@@ -196,7 +196,7 @@ describe("CLI: gate-relevant option-value swallow guards (issue #306)", () => {
     expect(stderr).toContain("Allowed choices are json, text");
   });
 
-  it("plan-coverage --tasks --gate → parse error exit 1 (was: gate silently disarmed, exit 0)", async () => {
+  it("plan-coverage --tasks --gate → parse error exit 1 (was: gate swallowed, confusing path error)", async () => {
     const { exitCode, stderr } = await runAt(tmp, ["plan-coverage", "--tasks", "--gate"]);
     expect(exitCode).toBe(1);
     expect(stderr).toContain('must not start with "-"');

@@ -23,7 +23,7 @@ import { printWarnings } from "./presenters/warnings.js";
 // where an empty value can only be an unset variable (paths / dirs).
 export function nonOptionValue(
   flag: string,
-  { allowEmpty = false }: { allowEmpty?: boolean } = {},
+  { allowEmpty = false, hint }: { allowEmpty?: boolean; hint?: string } = {},
 ): (value: string) => string {
   return (value: string): string => {
     if (!allowEmpty && value === "") {
@@ -31,12 +31,17 @@ export function nonOptionValue(
     }
     if (value.startsWith("-")) {
       throw new InvalidArgumentError(
-        `${flag} value must not start with "-" (got "${value}" — a missing value swallows the next flag).`,
+        `${flag} value must not start with "-" (got "${value}" — a missing value swallows the next flag${hint ? `; ${hint}` : ""}).`,
       );
     }
     return value;
   };
 }
+
+// The escape hatch for a path that genuinely starts with `-` (mirrors the
+// `check --base` guard documenting its `refs/...` spelling — review F3).
+export const DASH_PATH_HINT =
+  'prefix a relative path with "./" for a name that really starts with "-"';
 
 // spec 016 (R-003) — direct CLI / --diff inputs come in as raw
 // strings (file paths or `path:symbol` declarations). lift each into the
