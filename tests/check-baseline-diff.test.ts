@@ -1054,3 +1054,66 @@ describe("spec 021 (T019, issue #218) — method edit double-drift + baseline un
     expect(json.pass).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// issue #307 — a DOWNSTREAM baseline failure (here: submodules → worktree
+// path unavailable) combined with a diff whose changed files are all outside
+// the current graph used to take the "Changed files are not tracked in the
+// graph." early exit at exit 0: `baselineStartIds` was empty only because
+// there was NO baseline graph to resolve against, not because the baseline
+// side had nothing to say. Fail closed instead (spec 017 FR-010) — with
+// `--gate` the dedicated unavailable exit 1, without it the display-only
+// warning path. The classic safe case (changed files outside the graph AND
+// baseline never attempted) keeps its exit 0.
+// ---------------------------------------------------------------------------
+describe("check --diff: downstream unavailable must not hide behind the not-tracked exit (issue #307)", () => {
+  function repoWithSubmoduleAndOutOfGraphEdit(prefix: string): string {
+    const dir = repo(prefix); // makeRepoWithDebt, tracked via repos[]
+    const subSrc = track(mkdtempSync(join(tmpdir(), `${prefix}subsrc-`)));
+    gitInit(subSrc);
+    writeFileSync(join(subSrc, "lib.txt"), "lib\n");
+    gitCommitAll(subSrc, "lib init");
+    execFileSync(
+      "git",
+      ["-c", "protocol.file.allow=always", "submodule", "add", subSrc, "vendor/lib"],
+      { cwd: dir, stdio: "pipe" },
+    );
+    writeFileSync(join(dir, "README.md"), "# readme\n");
+    gitCommitAll(dir, "add submodule + tracked out-of-graph README");
+    // The unstaged edit to a TRACKED, out-of-graph file makes the diff
+    // non-empty and `anyBaselineResolvable` true (README is in HEAD's tree),
+    // so the baseline IS attempted — and fails on the submodule guard.
+    appendFileSync(join(dir, "README.md"), "\nout-of-graph edit\n");
+    return dir;
+  }
+
+  it("--gate → unavailable exit 1 (was: 'not tracked' exit 0, fail-open)", async () => {
+    const dir = repoWithSubmoduleAndOutOfGraphEdit("artgraph-307-gate-");
+    const { stdout, stderr, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("could not establish a baseline (git worktree unavailable).");
+    expect(stderr).toContain("gate result is undetermined; not treating as pass.");
+    expect(stdout).not.toContain("Changed files are not tracked in the graph.");
+  });
+
+  it("no --gate, --format json → exit 0 display-only with baselineStatus unavailable", async () => {
+    const dir = repoWithSubmoduleAndOutOfGraphEdit("artgraph-307-nogate-");
+    const { stdout, exitCode } = await runAt(dir, ["check", "--diff", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const json = JSON.parse(stdout);
+    expect(json.baselineStatus).toBe("unavailable");
+    expect(json.pass).toBe(false);
+    expect(json.baselineError).toContain("submodules are not supported");
+    expect(json.message ?? "").not.toContain("not tracked");
+  });
+
+  it("regression: healthy repo + out-of-graph edit keeps the 'not tracked' exit 0", async () => {
+    const dir = repo("artgraph-307-healthy-");
+    writeFileSync(join(dir, "README.md"), "# readme\n");
+    gitCommitAll(dir, "tracked out-of-graph README");
+    appendFileSync(join(dir, "README.md"), "\nedit\n");
+    const { stdout, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Changed files are not tracked in the graph.");
+  });
+});
