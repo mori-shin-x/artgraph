@@ -3,11 +3,45 @@
 // behavior change, only relocation so each command module can import just
 // what it needs instead of everything living in one 2,000-line file.
 
+import { InvalidArgumentError } from "commander";
 import type { ArtgraphConfig, SymbolEntry, TestResultMap } from "../types.js";
 import { parseAgentsList, AgentsParseError } from "../agents/parse-agents.js";
 import { AGENT_IDS, type AgentId } from "../agents/descriptors.js";
 import type { BuildWarning } from "../graph/builder.js";
 import { printWarnings } from "./presenters/warnings.js";
+
+// issue #306 (PR #304 review F6/F7) — commander's required option-args are
+// greedy: a value-taking `--flag` immediately followed by ANOTHER flag
+// consumes that flag as its value (commander Readme, "Options with an
+// expected option-argument are greedy"). On a gate-relevant command the
+// swallowed flag is typically `--gate` itself, so a CI variable expanding to
+// nothing (`--ignore $CSV --gate` → `--ignore --gate`) silently DISARMS the
+// gate and the run exits 0 — fail-open. This parse-time guard mirrors
+// `check --base`'s bespoke validator (spec 023, contracts/cli-check-base.md
+// §1): a value may never start with `-`. `allowEmpty` distinguishes flags
+// whose empty value is legal-by-design (`--ignore ""`, T178-4) from flags
+// where an empty value can only be an unset variable (paths / dirs).
+export function nonOptionValue(
+  flag: string,
+  { allowEmpty = false, hint }: { allowEmpty?: boolean; hint?: string } = {},
+): (value: string) => string {
+  return (value: string): string => {
+    if (!allowEmpty && value === "") {
+      throw new InvalidArgumentError(`${flag} value must not be empty (is a CI variable unset?).`);
+    }
+    if (value.startsWith("-")) {
+      throw new InvalidArgumentError(
+        `${flag} value must not start with "-" (got "${value}" — a missing value swallows the next flag${hint ? `; ${hint}` : ""}).`,
+      );
+    }
+    return value;
+  };
+}
+
+// The escape hatch for a path that genuinely starts with `-` (mirrors the
+// `check --base` guard documenting its `refs/...` spelling — review F3).
+export const DASH_PATH_HINT =
+  'prefix a relative path with "./" for a name that really starts with "-"';
 
 // spec 016 (R-003) — direct CLI / --diff inputs come in as raw
 // strings (file paths or `path:symbol` declarations). lift each into the
