@@ -32,3 +32,19 @@ pnpm exec artgraph doctor                 # diagnose distribution health
 
 For full CLI reference, run `pnpm exec artgraph --help` or see https://github.com/mori-shin-x/artgraph.
 <!-- artgraph:end -->
+
+## Internal dev process (artgraph contributors only)
+
+このセクションは artgraph リポジトリ自体を開発するコントリビュータ向け。下流プロジェクトには配布されない。
+
+### Step 0-pre: graph-core 変更時の shift-left インパクト調査 (#301)
+
+`src/graph/traverse.ts` / `src/graph/builder.ts`、エッジ意味論、または `impact()` / `check()` / `buildGraph()` などの graph-core 関数を変更する issue/PR では、設計 (Step 0) の**前に** [`.claude/skills/artgraph-graph-primitive-impact/SKILL.md`](./.claude/skills/artgraph-graph-primitive-impact/SKILL.md) の 9 チェック調査を実行する。調査は**クリーンな Sonnet 5 (`claude-sonnet-5`) サブエージェント**に委譲する (brief テンプレは SKILL.md 内)。
+
+この skill は一般配布 (`templates/skills/`) には含まれないリポジトリ内部専用 skill で、canonical コピーは `.claude/skills/` 配下のみ。`artgraph doctor` / `artgraph init --force` は canonical 外のディレクトリに触れないため共存できる。
+
+### 10 ステップ issue 対応ループ (#302)
+
+issue 対応の 10 ステップ・ループ本体 (issue-loop / retro skill) は artgraph のドメイン外の汎用 dev process として、メンテナの個人環境 (dotfiles リポジトリ) 側で管理される。artgraph 側の接続点は上記 Step 0-pre のみ: loop の Step 0-pre で graph-core を触る場合は本セクションに従うこと。
+
+Step 9 (振り返り) で「事前に検出可能だった finding」が特定された場合は、その検出条件を `artgraph-graph-primitive-impact` のチェックリストに追加する PR を出す (フィードバックループ)。
