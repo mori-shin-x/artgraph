@@ -378,11 +378,11 @@ describe("check --base fail-closed errors (spec 023 US3)", () => {
       { cwd: dir, stdio: "pipe" },
     );
     gitCommitAll(dir, "add submodule");
-    // An in-graph change so the run reaches the unavailable REPORTING path —
-    // a diff touching only non-graph files (.gitmodules, the gitlink) takes
-    // the pre-existing "not tracked" early exit before baselineStatus is
-    // ever surfaced (same shape as on main without --base; noted for
-    // follow-up, out of scope here).
+    // An in-graph change so this test exercises the unavailable REPORTING
+    // path through the normal scope flow. (A diff touching only non-graph
+    // files now ALSO fails closed — issue #307 — pinned by its own tests in
+    // tests/check-baseline-diff.test.ts; this test keeps the in-graph shape
+    // so the two pins stay independent.)
     introduceNewOrphan(dir);
 
     const { stderr, exitCode } = await runAt(dir, ["check", "--diff", "--base", "base", "--gate"]);

@@ -328,10 +328,23 @@ export function registerCheckCommand(program: Command): void {
         // diff (and hence "not tracked") is unverifiable without a base
         // point, so the run falls through to the fail-closed `unavailable`
         // verdict instead of a green early exit.
+        // issue #307 — same rule for a DOWNSTREAM baseline failure (worktree
+        // add / submodules / scan crash → `status:"unavailable"`, no graph):
+        // `baselineStartIds` is then empty not because the changed files
+        // resolved to nothing on the baseline side but because there was no
+        // baseline graph to resolve against. Taking the green early exit
+        // here fails open on exactly the case the baseline union exists for
+        // (a deleted file whose sole `@impl` edge lives only on the baseline
+        // side — spec 017 US2 AS3 / #229). Note `baseline` is only ever
+        // built when `anyBaselineResolvable` said the baseline COULD matter,
+        // so this never blocks the classic "untracked README" exit 0 (there
+        // `baseline` stays undefined and the exit is safe). FR-010:
+        // undeterminable is never a silent pass.
         if (
           currentStartIds.length === 0 &&
           baselineStartIds.length === 0 &&
-          baseUnavailableError === undefined
+          baseUnavailableError === undefined &&
+          baseline?.status !== "unavailable"
         ) {
           // spec 017 (Critical fix D1, issue #182 review) — same E4-style gap
           // as the `diffFiles.length === 0` branch above: `--format json` was
