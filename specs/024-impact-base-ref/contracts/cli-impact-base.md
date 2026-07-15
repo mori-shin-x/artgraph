@@ -47,6 +47,8 @@ artgraph impact --diff --base <ref> [--tests] [--format json|text]
 
 - (c) は `--base` なしの同経路と完全に同一 — `--base` は新しい early exit・新しいメッセージ・新しい exit code を追加しない (D-4)。
 - 縮退判定 (merge-base 失敗時に working-tree-only diff へフォールバック等) は行わない (FR-004 / research.md R2)。
+- **AG-2 (PR #316 review)**: PR がテストファイル自体を削除した場合、`testsToRun` が存在しないパスのみになり得る — consumer は runner 起動前に選択ファイルを存在フィルタすること (`vitest run <存在しない path>` は exit 1 で正当な PR を落とす)。quickstart.md S1 / README のレシピが実装例。
+- **AG-1 (PR #316 review)**: base..HEAD 内で rename されたファイルのテストは、旧パス基準の stale evidence と join せず非空・exit 0 の選択から落ち得る (§4.1) — exit 0 の非空選択も「rename を含む PR」では完全性を保証しない。
 
 ## 4. 変更ファイル集合と JSON 不変条件
 
@@ -59,7 +61,7 @@ mergedDiff = (staged ∪ unstaged ∪ untracked)                 // 現行 --dif
 
 - 定義・実装とも `getGitDiffFiles(rootDir, baseSha?)` (src/diff.ts、spec 023 FR-006) を check と共有する。**agreement property (FR-013)**: 同一 repo 状態・同一 `<ref>` で impact と check の merged changed-file set は一致し (i)、check-scope ⊇ impact-reach (ii) — deleted-edge ケースで check だけが baseline 側解決を持つため正当に真の superset になる。
 - untracked は `--base` 指定時も含まれる (US2)。非 ASCII path の verbatim 扱い (`-z` + `core.quotePath=false`) は 023 から継承。
-- base range の rename は new path 1 エントリに畳まれる (`-M`)。**impact は rename map を持たない (FR-011/D-8)** — current-graph query にとって new path が正しい入力であり、old path への翻訳対象 (baseline グラフ) が存在しない。
+- base range の rename は new path 1 エントリに畳まれる (`-M`)。**impact は rename map を持たない (FR-011/D-8)** — current-graph query にとって new path が正しい入力であり、old path への翻訳対象 (baseline グラフ) が存在しない。ただし **stale evidence に対しては選択限界になる (PR #316 review AG-1)**: 旧パスで evidence を記録した trace shards (base ブランチのキャッシュ等) とは `--tests` の path join が繋がらず、rename されたファイルのテストは非空・exit 0 の選択から無言で落ちる (FR-007 の宣言された限界 — 回復は research.md R1 trace-join follow-up)。
 
 ### 4.2 `--format json` 不変条件
 

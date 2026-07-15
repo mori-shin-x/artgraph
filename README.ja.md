@@ -145,6 +145,8 @@ trace shards がある場合 (`artgraph/vitest` runner)、`impact --diff --base 
             pnpm test; exit $?
           fi
           files=$(echo "$out" | jq -r '[.testsToRun[]?.testFile] | unique | .[]')
+          # PR が削除したテストファイルを除外 — 存在しないパスを渡すと vitest が exit 1 になる
+          files=$(for f in $files; do [ -f "$f" ] && echo "$f"; done)
           if [ -z "$files" ]; then
             pnpm test   # 空選択 — 安全側に倒して全部走らせる
           else
@@ -152,7 +154,7 @@ trace shards がある場合 (`artgraph/vitest` runner)、`impact --diff --base 
           fi
 ```
 
-削除された、またはグラフ未追跡の変更ファイルは選択の入力に寄与しません (宣言された限界 — その正しさは `check --diff --base --gate` ステップが捕まえます)。また `trace.staleness: "exclude"` では変更コードの evidence が構造的に stale になるため、CI のテスト選択では `"warn"` を使ってください (この組み合わせでは実行時警告が出ます)。
+削除された、またはグラフ未追跡の変更ファイルは選択の入力に寄与しません。また PR のコミット範囲内で rename されたファイルは、旧パスで記録された trace evidence と join しなくなるため、そのテストは選択から無言で落ちます (宣言された限界 — その正しさは `check --diff --base --gate` ステップが捕まえます)。`trace.staleness: "exclude"` では変更コードの evidence が構造的に stale になるため、CI のテスト選択では `"warn"` を使ってください (この組み合わせでは実行時警告が出ます)。
 
 ## エンドツーエンド: 仕様 → `@impl` → `check`
 

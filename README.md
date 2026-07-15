@@ -224,6 +224,8 @@ in the graph) or whenever the selection looks doubtful.
             pnpm test; exit $?
           fi
           files=$(echo "$out" | jq -r '[.testsToRun[]?.testFile] | unique | .[]')
+          # drop files the PR itself deleted — vitest exits 1 on nonexistent paths
+          files=$(for f in $files; do [ -f "$f" ] && echo "$f"; done)
           if [ -z "$files" ]; then
             pnpm test   # empty selection — run everything to stay safe
           else
@@ -231,7 +233,9 @@ in the graph) or whenever the selection looks doubtful.
           fi
 ```
 
-Deleted or graph-untracked changed files contribute no selection input
+Deleted or graph-untracked changed files contribute no selection input, and
+a file renamed inside the PR's commit range no longer joins trace evidence
+recorded under its old path, so its tests silently drop from the selection
 (declared limitation — their correctness is what the `check --diff --base
 --gate` step catches), and under `trace.staleness: "exclude"` the changed
 code's evidence is stale by construction, so use `"warn"` for CI selection

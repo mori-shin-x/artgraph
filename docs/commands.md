@@ -244,12 +244,21 @@ artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format j
   the graph does not track, contributes no start ids — silently, exactly
   like graph-external files always have under `--diff`. `impact` takes no
   baseline worktree and no rename map (a base-range rename is folded to its
-  new path, which is the correct current-graph input).
-- **Consumer rule** — deleted or graph-untracked changed files contribute no
-  start ids. Treat `impact --tests` as an **optimization** — fall back to
+  new path, which is the correct current-graph input). A file **renamed**
+  in the range is in the same boat with respect to *stale evidence*: its
+  start ids resolve under the new path, but trace shards cached from the
+  base branch record evidence under the old path, so the `--tests` join
+  misses and its tests silently drop from the selection.
+- **Consumer rule** — deleted, renamed (w.r.t. stale pre-rename evidence),
+  or graph-untracked changed files contribute nothing to the selection.
+  Treat `impact --tests` as an **optimization** — fall back to
   the full suite on exit `1` or whenever unsure. The correctness gate
   remains `check --diff --base --gate` (which *does* resolve deletions
   against the baseline and fails the PR on the resulting uncovered REQs).
+  Also filter the selected test files for existence before handing them to
+  the runner — a PR that deletes a test file can yield a selection of
+  nonexistent paths, and `vitest run` exits `1` on those (red CI on a
+  legitimate PR).
 - **`trace.staleness: "exclude"` interaction** — in CI the trace shards
   necessarily predate the change (e.g. cached from the base branch), so the
   changed code's evidence is stale *by construction* and `"exclude"` drops
