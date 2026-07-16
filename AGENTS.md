@@ -45,6 +45,8 @@ For full CLI reference, run `pnpm exec artgraph --help` or see https://github.co
 
 ### 10 ステップ issue 対応ループ (#302)
 
-issue 対応の 10 ステップ・ループ本体 (issue-loop / retro skill) は artgraph のドメイン外の汎用 dev process として、メンテナの個人環境 (dotfiles リポジトリ) 側で管理される。artgraph 側の接続点は上記 Step 0-pre のみ: loop の Step 0-pre で graph-core を触る場合は本セクションに従うこと。
+issue 対応の 10 ステップ・ループ本体は [`.claude/skills/issue-loop/SKILL.md`](./.claude/skills/issue-loop/SKILL.md)、Step 9 (振り返り) 単体は [`.claude/skills/issue-retro/SKILL.md`](./.claude/skills/issue-retro/SKILL.md) を使う。loop の Step 0-pre で graph-core を触る場合は上記 Step 0-pre セクションに従うこと。
+
+この 2 つは artgraph のドメイン外の汎用 dev process のため、**canonical はメンテナの個人環境 (dotfiles リポジトリ) 側**にあり、リモートセッション (クラウド実行環境はユーザーレベル `~/.claude/skills/` を読み込まない) でも使えるよう本リポジトリに内部コピーを同梱している。編集する場合は dotfiles 側を先に更新し、同内容をここへ同期すること。graph-primitive-impact 同様、一般配布 (`templates/skills/`) には含めない。
 
 Step 9 (振り返り) で「事前に検出可能だった finding」が特定された場合は、その検出条件を `artgraph-graph-primitive-impact` のチェックリストに追加する PR を出す (フィードバックループ)。

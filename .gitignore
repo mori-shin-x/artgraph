@@ -11,6 +11,8 @@ templates/graph/vendor/
 !.claude/skills/artgraph-*/
 !.claude/skills/_shared/
 !.claude/skills/speckit-*/
+!.claude/skills/issue-loop/
+!.claude/skills/issue-retro/
 # CLAUDE.md is user-editable — each maintainer keeps a local copy. Not tracked.
 CLAUDE.md
 

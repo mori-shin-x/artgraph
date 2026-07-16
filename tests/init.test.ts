@@ -937,12 +937,12 @@ describe("skill template <-> dogfood sync", () => {
   const templateDir = resolve(REPO_ROOT, "templates", "skills");
   // Every canonical agent path, not just Claude. See AGENT_DESCRIPTORS.
   const dogfoodDirs = AGENT_DESCRIPTORS.map((d) => resolve(REPO_ROOT, d.skillsPath));
-  // Repo-internal dev-process skills (issue #301) — deliberately NOT
-  // distributed via templates/skills/; the canonical copy lives under
-  // .claude/skills/ only. Listed explicitly (not a prefix rule) so an
-  // accidentally undistributed public skill still fails the reverse check.
+  // Repo-internal dev-process skills (issues #301 / #302) — deliberately NOT
+  // distributed via templates/skills/; they live under .claude/skills/ only.
+  // Listed explicitly (not a prefix rule) so an accidentally undistributed
+  // public skill still fails the reverse check.
   // See AGENTS.md "Internal dev process".
-  const INTERNAL_SKILL_DIRS = ["artgraph-graph-primitive-impact"];
+  const INTERNAL_SKILL_DIRS = ["artgraph-graph-primitive-impact", "issue-loop", "issue-retro"];
 
   function walk(dir: string, out: string[]): void {
     for (const entry of readdirSync(dir)) {
