@@ -16,7 +16,7 @@
 
 ### User Story 1 — 新規 REQ 実装時の暗黙波及検知 (Priority: P1)
 
-ユーザーが新規 REQ-005 を実装するため tasks.md に `Files: src/auth.ts, src/new-2fa.ts` と書いて `/speckit-implement` を起動する。`src/auth.ts` は既存で `@impl REQ-001` を持っており、REQ-003 にも `verifies` edge で間接的に繋がっている。ユーザーは REQ-001 / REQ-003 を意識していない。
+ユーザーが新規 REQ-005 を実装するため tasks.md に `Files: src/auth.ts, src/new-2fa.ts` と書いて `/speckit-implement` を起動する。`src/auth.ts` は既存で `@impl REQ-001` を持っており、REQ-003 にも(`@impl` を持たない evidence-only REQ として)`src/auth.ts` を verify するテストの `verifies` edge 経由で間接的に繋がっている。ユーザーは REQ-001 / REQ-003 を意識していない。
 
 `artgraph plan-coverage` を実行すると「`src/auth.ts` を編集すると REQ-001 と REQ-003 にも影響が及ぶが、tasks.md / spec.md でこれらは一切言及されていない」と暗黙波及を列挙する。ユーザーは各 REQ を調査し、(a) 実際に対応が必要なら tasks.md に追加 / (b) 影響無しと判明したら tasks.md に `Considered: REQ-003 — investigated, no impact` 等の任意形式で記録 / (c) CI を一時的に通すために `--ignore` で suppress、のいずれかを選ぶ。
 

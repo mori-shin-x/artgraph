@@ -127,7 +127,7 @@ traversal セマンティクスの SSOT が変わるため、(a) `src/graph/trav
 #### BFS 方向制約 (core)
 
 - **FR-001**: `impact()` の BFS は `contains` 辺を**順方向のみ** (edge.source = doc → edge.target = req|task) 辿る。逆方向 (req|task → 親 doc) はトラバースしない。
-- **FR-002**: `contains` 以外の 5 辺種 (`depends_on` / `derives_from` / `implements` / `verifies` / `imports`) の双方向トラバース、および file→symbol 展開 (spec 016 R-006 の挙動) は一切変更しない。
+- **FR-002**: `contains` 以外の 5 辺種 (`depends_on` / `derives_from` / `implements` / `verifies` / `imports`) の双方向トラバース、および file→symbol 展開 (spec 016 R-006 の挙動) は一切変更しない。**issue #303 による事後修正**: この不変性は `verifies` / `imports` について部分的に狭められた。reverse `verifies`/`imports` で `kind: test` のノードへ到達した場合、その到達に限り「制限付きテストハブ」となり、当該ハブ自身の forward `verifies` は target REQ が evidence-only (`implements` 辺を全く持たない) の場合のみ許可、forward `imports` は常に不許可となる — test ノードがハブとなって無関係な sibling REQ / sibling ファイルへブリッジする leak (#215 / #286 と同じクラス) を防ぐため。test 以外のノードへの reverse `verifies`/`imports`、および test ノード自身を startId とした到達は無制限のまま、5 辺種のうち `depends_on` / `derives_from` / `implements` は完全に無制限のまま。詳細は `src/graph/traverse.ts` のファイルヘッダコメント(issue #303 節)および spec 020 FR-017 を参照。
 - **FR-003**: 方向制約は `contains` 辺の target 種別 (req / task) を問わず一律に適用する。**これは一貫性のためではなく修正の成立条件である**: task preset が有効なプロジェクト (Spec Kit の `T\d{3}` 等) では tasks.md の各 task が参照 REQ への `implements` 辺 (task-tag provenance) を持ち、feature の tasks.md は集合としてその feature のほぼ全 REQ を参照する。req のみ制約して task を除外すると、`REQ → (逆implements) task → (逆contains) doc:tasks.md → (順contains) 兄弟 task → (順implements) feature 全 REQ` の経路で #215 の症状がほぼ完全に復活する。
 
 #### 親 doc の帰属アトリビューション

@@ -225,6 +225,8 @@ artgraph impact src/auth.ts:validateToken --format json |
 
 Spec Kit / Kiro の標準構成は「1 feature = 1 spec.md に複数 REQ」です。`artgraph impact` / `artgraph plan-coverage` の `impactReqs` は、対象の file / symbol が実際にコードで到達する REQ (`@impl` / `imports` 経由) と、spec 側で明示された依存 (`depends_on` / `derives_from`) の到達先だけを含みます。**同じ spec.md に定義されているだけの兄弟 REQ は、コード上の依存が無ければ `impactReqs` / `affectedFiles` / `drifted` に混入しません。**
 
+ただし、`@impl` を一切持たない evidence-only REQ(`acceptExercises: true` またはテストタグのみでの運用)同士には、この保証は及びません。evidence-only REQ は「自分を検証するテストの `verifies` 辺だけが唯一の到達経路」であるため、同一のテストファイル(共有シンボル経由で到達する同じ test hub)を介して兄弟の evidence-only REQ も一緒に `impactReqs` へ現れることがあります。これはゲートの偽陰性(false green)を防ぐための意図的なトレードオフであり、既知の制限として issue #322 で追跡しています。
+
 一方、到達した REQ の親 spec doc は帰属情報として `affectedDocs` に残り続け、**doc 自体は drift 判定の対象のまま**です — spec ファイルの contentHash が lock とずれていれば `drifted` に doc エントリとして現れます(`plan-coverage` にはこの帰属フィールドはありません)。その feature 全体の文脈が必要な場合は、`affectedDocs` に載っている spec ファイルを開いて読んでください — 兄弟 REQ を `impactReqs` に混ぜて渡すのではなく、必要な時に agent 自身が spec を読みに行く設計です。
 
 ### クラスメソッド粒度 — `path:ClassName.methodName` (spec 021)
