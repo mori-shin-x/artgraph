@@ -360,7 +360,7 @@ describe("check-evidence (T019d/US4-3): a REQ with @impl + passing verifies + ex
         ],
       ]),
       hashesAtTrace: new Map(),
-      diagnostics: { dangling: 0, corrupted: 0, skipped: 0, unknownSchema: 0 },
+      diagnostics: { dangling: 0, corrupted: 0, skipped: 0, unknownSchema: 0, offGraph: 0 },
       reqsByNode: new Map([["symbol:src/x.ts#fn", new Set(["REQ-900"])]]),
       shardCount: 1,
     };
@@ -701,7 +701,7 @@ describe("check-evidence (issue #284): exercisableUncovered counterfactual hint"
         ["REQ-801", { symbols: ["symbol:src/x.ts#fn801"], files: [], tests: [] }],
       ]),
       hashesAtTrace: new Map(),
-      diagnostics: { dangling: 0, corrupted: 0, skipped: 0, unknownSchema: 0 },
+      diagnostics: { dangling: 0, corrupted: 0, skipped: 0, unknownSchema: 0, offGraph: 0 },
       reqsByNode: new Map([
         ["symbol:src/x.ts#fn800", new Set(["REQ-800"])],
         ["symbol:src/x.ts#fn801", new Set(["REQ-801"])],
@@ -735,17 +735,21 @@ describe("check-evidence (issue #284): exercisableUncovered counterfactual hint"
     expect(scoped.uncovered).toEqual(["REQ-800"]);
   });
 
-  it("foreign `implements` claim on the exclusive-evidence node: exercisableUncovered still includes the REQ (counterfactual of `exercised`, not `suggestedImpls`'s claimed-node exclusion), while suggestedImpls omits that node", () => {
+  it("issue #285: foreign `implements` claim (a DIFFERENT REQ) on the exclusive-evidence node no longer suppresses THIS REQ's suggestedImpls — suppression is REQ-scoped, not node-scoped; exercisableUncovered agrees as before", () => {
     // REQ-A has NO `implements` edge of its own (untagged) and its tests
     // exclusively exercise symbol:src/y.ts#fnA. REQ-B — a completely
     // different req — happens to carry an `@impl` claim on that SAME node.
-    // `classifyEvidence`'s `suggestedImpls` treats the node as already
-    // "claimed" (by REQ-B) and skips it as report noise (src/trace/report.ts
-    // line ~350: `if (claimedNodes.has(node)) continue;`). But
-    // `exercisableUncovered`'s predicate is the `exercised` counterfactual
-    // (`isExclusiveNode` — only asks "does exactly one REQ's evidence reach
-    // this node", never consults `claimedNodes`), so REQ-A must still be
-    // rescued here even though the node is claimed by someone else.
+    // Pre-#285, `classifyEvidence`'s `suggestedImpls` treated the node as
+    // already "claimed" (by REQ-B) via a NODE-scoped `claimedNodes` set and
+    // skipped it as report noise — silently hiding REQ-A's legitimately
+    // unclaimed suggestion just because a foreign REQ happened to share the
+    // node. Post-#285, the suppression is REQ-scoped
+    // (`src/coverage.ts`'s `buildClaimedReqIds`, shared with `classifyEvidence`
+    // in src/trace/report.ts): REQ-A itself has no claim anywhere in the
+    // graph, so it is no longer suppressed by REQ-B's unrelated claim.
+    // `exercisableUncovered`'s predicate is unaffected either way — it's the
+    // `exercised` counterfactual (`isExclusiveNode` — only asks "does exactly
+    // one REQ's evidence reach this node", never consults claims at all).
     const nodes = new Map<string, GraphNode>([
       ["REQ-A", { id: "REQ-A", kind: "req", filePath: "specs/y.md", contentHash: "h1" }],
       ["REQ-B", { id: "REQ-B", kind: "req", filePath: "specs/y.md", contentHash: "h2" }],
@@ -772,7 +776,7 @@ describe("check-evidence (issue #284): exercisableUncovered counterfactual hint"
     const trace: IngestedTrace = {
       perReq: new Map([["REQ-A", { symbols: ["symbol:src/y.ts#fnA"], files: [], tests: [] }]]),
       hashesAtTrace: new Map(),
-      diagnostics: { dangling: 0, corrupted: 0, skipped: 0, unknownSchema: 0 },
+      diagnostics: { dangling: 0, corrupted: 0, skipped: 0, unknownSchema: 0, offGraph: 0 },
       reqsByNode: new Map([["symbol:src/y.ts#fnA", new Set(["REQ-A"])]]),
       shardCount: 1,
     };
@@ -787,9 +791,122 @@ describe("check-evidence (issue #284): exercisableUncovered counterfactual hint"
     const result = check(graph, lock, undefined, undefined, undefined, false, traceOptions);
 
     expect(result.exercisableUncovered).toContain("REQ-A");
-    expect(result.suggestedImpls ?? []).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ node: "symbol:src/y.ts#fnA" })]),
+    // issue #285: REQ-A's suggestion now stands DESPITE REQ-B's foreign claim
+    // on the same node (inverted from the pre-#285 node-scoped suppression).
+    expect(result.suggestedImpls).toEqual(
+      expect.arrayContaining([{ reqId: "REQ-A", node: "symbol:src/y.ts#fnA" }]),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #285 — `suggestedImpls` REQ-scoped claim suppression. The B-T2 test
+// above (nested in the #284 describe, updated in place) pins the inversion
+// via `check`'s `classifyEvidence` call; these pin the remaining scenarios
+// from the plan directly through `trace report` / a hand-built `check()`
+// call.
+// ---------------------------------------------------------------------------
+
+describe("check-evidence (issue #285): suggestedImpls REQ-scoped claim suppression", () => {
+  it("B-T1 [issue reproduction pin]: a symbol claimed `@impl REQ-101` but exclusively exercised by a [REQ-100]-tagged test surfaces REQ-100 in suggestedImpls (not suppressed by the foreign claim)", async () => {
+    const tmp = makeRepo({
+      "src/shared.ts": ["export function sharedFn() {", "  // @impl REQ-101", "}", ""].join("\n"),
+    });
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[REQ-100] exercises sharedFn",
+        testFile: "tests/req100.test.ts",
+        hits: [{ file: "src/shared.ts", fn: "sharedFn" }],
+      }),
+    ]);
+
+    const { stdout, exitCode } = await runAt(tmp, ["trace", "report", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+
+    expect(result.suggestedImpls).toEqual([
+      { reqId: "REQ-100", node: "symbol:src/shared.ts#sharedFn" },
+    ]);
+    // REQ-101's own claim stays unexercised: nothing tagged REQ-101 ever hit
+    // sharedFn (only REQ-100's test did).
+    expect(result.unexercisedClaims).toEqual([
+      { reqId: "REQ-101", node: "symbol:src/shared.ts#sharedFn" },
+    ]);
+  });
+
+  it("B-T3 [new side-effect pin]: a REQ already claimed elsewhere in the graph is suppressed from suggestedImpls even on a DIFFERENT node its evidence exclusively reaches", async () => {
+    const tmp = makeRepo({
+      "src/multi2.ts": [
+        "export function claimedElsewhere() {",
+        "  // @impl REQ-960",
+        "}",
+        "",
+        "export function otherFn() {}",
+        "",
+      ].join("\n"),
+    });
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[REQ-960] exercises otherFn",
+        testFile: "tests/req960.test.ts",
+        hits: [{ file: "src/multi2.ts", fn: "otherFn" }],
+      }),
+    ]);
+
+    const { stdout } = await runAt(tmp, ["trace", "report", "--format", "json"]);
+    const result = JSON.parse(stdout);
+
+    // REQ-960 already has a code-claim (on claimedElsewhere) — its exclusive
+    // evidence on the UNRELATED otherFn node must not ALSO surface as a
+    // suggestedImpls candidate (REQ-scoped suppression, not node-scoped).
+    expect(result.suggestedImpls).toEqual([]);
+    // The declared claim itself has no evidence of its own (all evidence
+    // landed on otherFn, not claimedElsewhere) — stays unexercised.
+    expect(result.unexercisedClaims).toEqual([
+      { reqId: "REQ-960", node: "symbol:src/multi2.ts#claimedElsewhere" },
+    ]);
+  });
+
+  it("B-T4 [task-exclusion pin]: a REQ whose ONLY implements edge is task-sourced stays a suggestedImpls candidate — matches check()'s task-exclusion rule for exercised/uncovered (src/coverage.ts's isClaimEdge, shared with classifyEvidence)", () => {
+    const nodes = new Map<string, GraphNode>([
+      ["REQ-961", { id: "REQ-961", kind: "req", filePath: "specs/z.md", contentHash: "h1" }],
+      ["T900", { id: "T900", kind: "task", filePath: "specs/tasks.md", contentHash: "h2" }],
+      [
+        "symbol:src/z.ts#fnZ",
+        { id: "symbol:src/z.ts#fnZ", kind: "symbol", filePath: "src/z.ts", contentHash: "h3" },
+      ],
+    ]);
+    const edges: GraphEdge[] = [
+      // task -> implements -> req is a planning relation, not a code-claim
+      // (data-model.md §7) — must NOT suppress REQ-961's suggestedImpls.
+      { source: "T900", target: "REQ-961", kind: "implements", provenances: ["task-tag"] },
+    ];
+    const graph: ArtifactGraph = { nodes, edges };
+    const lock: LockFile = {};
+    const trace: IngestedTrace = {
+      perReq: new Map([["REQ-961", { symbols: ["symbol:src/z.ts#fnZ"], files: [], tests: [] }]]),
+      hashesAtTrace: new Map(),
+      diagnostics: { dangling: 0, corrupted: 0, skipped: 0, unknownSchema: 0, offGraph: 0 },
+      reqsByNode: new Map([["symbol:src/z.ts#fnZ", new Set(["REQ-961"])]]),
+      shardCount: 1,
+    };
+    const traceOptions = {
+      trace,
+      staleNodeIds: new Set<string>(),
+      acceptExercises: false,
+      staleness: "warn" as const,
+      sharedThreshold: 3,
+    };
+
+    const result = check(graph, lock, undefined, undefined, undefined, false, traceOptions);
+
+    expect(result.suggestedImpls).toEqual([{ reqId: "REQ-961", node: "symbol:src/z.ts#fnZ" }]);
+    // Consistent with `check`'s own coverage status: a task-only-claimed REQ
+    // stays "untagged"/uncovered too (src/coverage.ts's implByTarget already
+    // excludes task sources — this is the SAME rule, now shared).
+    expect(result.uncovered).toContain("REQ-961");
   });
 });
 

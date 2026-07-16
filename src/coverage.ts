@@ -1,4 +1,4 @@
-import type { ArtifactGraph, CoverageStatus, TestResultMap } from "./types.js";
+import type { ArtifactGraph, CoverageStatus, GraphEdge, TestResultMap } from "./types.js";
 import { isExclusiveNode } from "./trace/report.js";
 import type { IngestedTrace } from "./trace/ingest.js";
 
@@ -7,6 +7,38 @@ export interface CoverageEntry {
   status: CoverageStatus;
   implFiles: string[];
   testFiles: string[];
+}
+
+// issue #285 — the "claim-eligible" rule: a `implements` edge counts as a
+// code-claim on its TARGET req only when its SOURCE is not a task node
+// (`task → implements → req` is a planning relation, data-model.md §7 —
+// `check`'s `implByTarget`/`implFiles` below has always excluded it). Shared
+// by `computeCoverage`'s `implByTarget` construction AND
+// `src/trace/report.ts`'s `classifyEvidence` (`suggestedImpls` suppression)
+// so the two can never drift on what "this REQ is already claimed" means —
+// before this fix `classifyEvidence` used a NODE-scoped `claimedNodes` set
+// (suppressing a REQ's suggestion whenever the shared symbol/file happened
+// to carry ANY REQ's claim, even a completely different one) while `check`
+// used this REQ-scoped rule, so a foreign `@impl` on an exclusively-evidenced
+// node silently hid a legitimately-unclaimed REQ's suggestion (issue #285).
+export function isClaimEdge(graph: ArtifactGraph, edge: GraphEdge): boolean {
+  return edge.kind === "implements" && graph.nodes.get(edge.source)?.kind !== "task";
+}
+
+/**
+ * The set of REQ ids that already have at least one code-claim (per
+ * `isClaimEdge` above) anywhere in the graph — REQ-grain, independent of
+ * which node(s) carry the claim. `src/trace/report.ts`'s `classifyEvidence`
+ * calls this ONCE (O(edges)) to build its `suggestedImpls` suppression set,
+ * matching `computeCoverage`'s own `implFiles.length === 0` ⟺ "uncovered by
+ * @impl" rule below exactly.
+ */
+export function buildClaimedReqIds(graph: ArtifactGraph): Set<string> {
+  const claimed = new Set<string>();
+  for (const e of graph.edges) {
+    if (isClaimEdge(graph, e)) claimed.add(e.target);
+  }
+  return claimed;
 }
 
 // spec 020 (data-model.md §6, FR-014) — opt-in `exercised` status input.
@@ -60,10 +92,12 @@ export function computeCoverage(
   };
   for (const e of graph.edges) {
     if (e.kind === "implements") {
-      // task → implements → req is a planning relation, not a code-claim. Filtering
-      // here keeps a req that only has `task → implements` from being upgraded out
-      // of `untagged` (data-model.md §7: task は coverage 集計対象外).
-      if (graph.nodes.get(e.source)?.kind === "task") continue;
+      // task → implements → req is a planning relation, not a code-claim
+      // (data-model.md §7: task は coverage 集計対象外) — `isClaimEdge`
+      // (issue #285) is the shared definition `src/trace/report.ts`'s
+      // `classifyEvidence` also uses, so the two can never drift on what
+      // "this REQ is already claimed" means.
+      if (!isClaimEdge(graph, e)) continue;
       indexEdge(implByTarget, e.target, e.source);
     } else if (e.kind === "verifies") {
       // Same rule for verifies: only code-side test sources prove a req is verified.

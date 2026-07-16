@@ -331,6 +331,19 @@ export interface TraceDiagnostics {
    * source of truth (data-model.md §2).
    */
   dangling: number;
+  /**
+   * Always 0 here, same "reserved, overridden one layer up" pattern as
+   * `dangling` above. issue #275: `src/trace/ingest.ts`'s
+   * `filterTraceToGraph` — which needs the built `ArtifactGraph`, so it runs
+   * one layer above even `ingestTrace` itself — is the ONLY place this is
+   * ever set to a nonzero value: the count of distinct node ids `ingestTrace`
+   * produced (`buildSymbolNameTable` resolves against `config.include` only)
+   * that the graph (`[...include, ...testPatterns]`) could not resolve at
+   * all, dropped from `perReq`/`reqsByNode`/`hashesAtTrace` before those
+   * reach `classifyEvidence`/`computeCoverage`/`computeStaleNodeIds` (never a
+   * silent drop).
+   */
+  offGraph: number;
 }
 
 export interface NormalizedTrace {
@@ -446,6 +459,6 @@ export function normalizeTrace(shards: ParsedShard[]): NormalizedTrace {
   return {
     tests,
     skipped,
-    diagnostics: { unknownSchema, corrupted, skipped: skipped.length, dangling: 0 },
+    diagnostics: { unknownSchema, corrupted, skipped: skipped.length, dangling: 0, offGraph: 0 },
   };
 }

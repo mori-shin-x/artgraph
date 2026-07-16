@@ -13,6 +13,16 @@
 
 import type { ArtifactGraph } from "../types.js";
 import type { IngestedTrace, ReqCoverage } from "./ingest.js";
+// issue #285 — `classifyEvidence` shares `computeCoverage`'s REQ-scoped
+// "already claimed" definition (`buildClaimedReqIds`, task-sourced
+// `implements` edges excluded) instead of re-deriving a node-scoped one, so
+// `suggestedImpls`'s suppression can never drift from `check`'s exercised/
+// uncovered computation. This is a deliberate module-cycle (`../coverage.js`
+// itself imports `isExclusiveNode` from THIS module) — safe because both
+// sides only reference the other's export from inside a function body
+// (`classifyEvidence` below / `computeCoverage`), never at module top-level,
+// so it never depends on load order.
+import { buildClaimedReqIds } from "../coverage.js";
 
 export const DEFAULT_SHARED_THRESHOLD = 3;
 
@@ -299,10 +309,16 @@ export function isExclusiveNode(trace: IngestedTrace, node: string): boolean {
  *
  * Every `implements` edge in the graph is checked against its claiming
  * REQ's evidence (-> `corroborated` / `unexercisedClaims`). Every node with
- * ANY exercises evidence but NO `implements` claim (from any REQ) is then
- * classified purely by how many distinct REQs exercise it:
- *   - exactly 1  -> `suggestedImpls`
- *   - >= threshold -> `infrastructure`
+ * ANY exercises evidence is then classified purely by how many distinct
+ * REQs exercise it:
+ *   - exactly 1  -> `suggestedImpls`, UNLESS that one REQ already has a
+ *     code-claim somewhere in the graph (issue #285's REQ-scoped
+ *     `buildClaimedReqIds` — NOT "does this exact node have ANY claim",
+ *     which used to let a claim from a completely different REQ silently
+ *     hide a legitimately-unclaimed REQ's suggestion on a shared node)
+ *   - >= threshold -> `infrastructure`, UNLESS the node itself already
+ *     carries some claim (`claimedNodes`, unchanged — infra has no single
+ *     claiming REQ to scope a REQ-level check to)
  *   - otherwise (2 .. threshold-1) -> silent (omitted from every list; the
  *     underlying exercises evidence is untouched and still reachable via
  *     impact traversal once T015 lands — this classifier only produces
@@ -319,6 +335,9 @@ export function classifyEvidence(
   const claimsByNode = new Map<string, Set<string>>();
   const containsIndex = buildContainsIndex(graph);
   const containerIndex = buildContainerIndex(graph);
+  // issue #285 — one O(edges) walk, same cost class as `buildContainsIndex`/
+  // `buildContainerIndex` above.
+  const claimedReqIds = buildClaimedReqIds(graph);
 
   for (const edge of graph.edges) {
     if (edge.kind !== "implements") continue;
@@ -347,20 +366,36 @@ export function classifyEvidence(
   const suggestedImpls: ClaimEvidencePair[] = [];
   const infrastructure: InfrastructureEntry[] = [];
   for (const [node, reqIds] of trace.reqsByNode) {
-    if (claimedNodes.has(node)) continue; // already handled above (FR-013: "implements なし" only)
     if (reqIds.size >= sharedThreshold) {
+      // Node-scoped, unchanged (issue #285 only touches the suggestedImpls
+      // branch below — infra has no single claiming REQ to scope a
+      // REQ-level check to; a node already carrying SOME claim is still
+      // "already handled above", FR-013: "implements なし" only).
+      if (claimedNodes.has(node)) continue;
       infrastructure.push({ node, reqCount: reqIds.size });
     } else if (isExclusiveNode(trace, node)) {
       const [reqId] = reqIds;
-      // PR #268 review F2: an ancestor already claiming this SAME reqId
+      // issue #285: REQ-scoped suppression — this REQ already has a
+      // code-claim SOMEWHERE in the graph (not necessarily on `node`), so
+      // `@impl`-tagging it here would be a redundant nudge, exactly the
+      // "already found" rule `check`'s `implFiles.length === 0` uses (both
+      // now share `src/coverage.ts`'s `buildClaimedReqIds`). Deliberately
+      // NOT `claimedNodes.has(node)` (the pre-#285 node-scoped check) — that
+      // silently hid THIS reqId's suggestion whenever a DIFFERENT REQ's
+      // `@impl` happened to sit on the same exclusively-exercised node.
+      //
+      // PR #268 review F2 (kept as-is, `hasAncestorClaim`/`hasDescendantClaim`
+      // doc above): an ancestor/descendant already claiming this SAME reqId
       // means a class-granularity `@impl` has already "found" this
-      // requirement's code — suppress the redundant member-level nudge (see
-      // `hasAncestorClaim`'s doc above for why this is not a `reqExercises`
-      // roll-up). issue #267 F2 follow-up: the mirror case — a DESCENDANT
-      // (typically a `.constructor` claim whose evidence rolled up to this
-      // very node, per `ctorClassExercised`) already claiming this SAME
-      // reqId is equally redundant noise (see `hasDescendantClaim`'s doc).
+      // requirement's code — suppress the redundant member-level nudge. In
+      // the non-task-claim case this is now subsumed by `claimedReqIds`
+      // (any ancestor/descendant claim on reqId means reqId ∈
+      // claimedReqIds already), but a TASK-sourced ancestor/descendant claim
+      // is invisible to `claimedReqIds` (task edges are excluded there,
+      // matching `check`) while still visible to `claimsByNode` here — kept
+      // so that narrower case's suppression is unchanged.
       if (
+        !claimedReqIds.has(reqId!) &&
         !hasAncestorClaim(containerIndex, claimsByNode, reqId!, node) &&
         !hasDescendantClaim(containsIndex, claimsByNode, reqId!, node)
       ) {

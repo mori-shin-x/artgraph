@@ -18,7 +18,12 @@ import {
 } from "../parse-cache.js";
 import { dedupEdges, sortNodesById } from "./canonical.js";
 import { expandStarReexports } from "./star-expansion.js";
-import { ingestTrace, hasTraceShards, type IngestedTrace } from "../trace/ingest.js";
+import {
+  ingestTrace,
+  hasTraceShards,
+  resolveTraceGraphNodeId,
+  type IngestedTrace,
+} from "../trace/ingest.js";
 import type { ArtifactGraph, GraphNode, GraphEdge, ArtgraphConfig } from "../types.js";
 
 export interface BuildWarning {
@@ -1019,27 +1024,17 @@ function inferConventionEdges(nodes: Map<string, GraphNode>): GraphEdge[] {
 // always resolves hits at "symbol" grain internally, independent of THIS
 // graph's own `config.mode`. In a file-mode graph no `symbol:` nodes exist
 // at all, so a resolved `symbol:<rel>#<name>` id would otherwise dangle.
-// Degrade to the owning file's `file:<rel>` node when it exists — the same
-// fail-safe fallback FR-007 already applies to name-ambiguity, just at a
-// different failure point (mode mismatch, not name resolution). Returns
-// `undefined` only when neither the symbol nor its owning file is a real
-// node in THIS graph (out of `include` for this build, or a stale/mismatched
-// symbol table) — mergeTraceEdges drops the pair rather than emit a
+// `resolveTraceGraphNodeId` (issue #275: moved to `src/trace/ingest.ts` and
+// re-exported from there so `filterTraceToGraph` shares the EXACT same
+// degrade-to-file-grain rule — see that function's doc for why a naive
+// `graph.nodes.has(id)` in either caller would over-filter) degrades to the
+// owning file's `file:<rel>` node when it exists — the same fail-safe
+// fallback FR-007 already applies to name-ambiguity, just at a different
+// failure point (mode mismatch, not name resolution). Returns `undefined`
+// only when neither the symbol nor its owning file is a real node in THIS
+// graph (out of `include` for this build, or a stale/mismatched symbol
+// table) — mergeTraceEdges below drops the pair rather than emit a
 // dangling-target edge.
-function resolveTraceGraphNodeId(
-  nodeId: string,
-  nodes: Map<string, GraphNode>,
-): string | undefined {
-  if (nodes.has(nodeId)) return nodeId;
-  if (nodeId.startsWith("symbol:")) {
-    const body = nodeId.slice("symbol:".length);
-    const hashIdx = body.indexOf("#");
-    const relPath = hashIdx === -1 ? body : body.slice(0, hashIdx);
-    const fileId = `file:${relPath}`;
-    if (nodes.has(fileId)) return fileId;
-  }
-  return undefined;
-}
 
 // spec 020 (T015, data-model.md §4, FR-008) — fold `IngestedTrace`'s
 // per-REQ coverage into the graph's edge list. For every (reqId, node) pair

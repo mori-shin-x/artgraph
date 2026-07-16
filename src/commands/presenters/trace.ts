@@ -14,6 +14,7 @@ export function printTraceStatusText(result: TraceStatusResult): void {
   console.log(`  skipped:       ${result.diagnostics.skipped}`);
   console.log(`  unknownSchema: ${result.diagnostics.unknownSchema}`);
   console.log(`  corrupted:     ${result.diagnostics.corrupted}`);
+  console.log(`  offGraph:      ${result.diagnostics.offGraph}`);
   console.log(`  stale:         ${result.diagnostics.stale}`);
   console.log(`Stale rate: ${(result.staleRate * 100).toFixed(1)}%`);
 }
@@ -52,5 +53,6 @@ export function printTraceReportText(result: TraceReportResult): void {
   console.log(`  skipped:       ${result.diagnostics.skipped}`);
   console.log(`  unknownSchema: ${result.diagnostics.unknownSchema}`);
   console.log(`  corrupted:     ${result.diagnostics.corrupted}`);
+  console.log(`  offGraph:      ${result.diagnostics.offGraph}`);
   console.log(`  stale:         ${result.diagnostics.stale}`);
 }

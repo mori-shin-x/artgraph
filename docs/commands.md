@@ -152,13 +152,21 @@ of `uncovered` REQ ids that already have exclusive exercises evidence
 (stale evidence is excluded only under `trace.staleness: "exclude"`; under
 the default `"warn"` stale evidence still counts, exactly as it would for
 the real `exercised` status) and would flip to `exercised` — leaving
-`uncovered` — the moment `acceptExercises` is turned on. The eligible nodes
-usually coincide with the ones `suggestedImpls` names, but the two can
-diverge: `suggestedImpls` skips a node already claimed by another REQ's
-`@impl` (it exists to reduce report noise), while the `exercised`
-counterfactual behind `exercisableUncovered` does not — a REQ can be
-`exercisableUncovered` even when its exclusive evidence node is claimed by a
-different REQ. It is purely informational: it never affects `pass`,
+`uncovered` — the moment `acceptExercises` is turned on. The eligible REQs
+largely coincide with the ones `suggestedImpls` names: `suggestedImpls`
+suppresses a REQ once **that REQ itself** already has a code-claim
+(`@impl`/`implements`) anywhere in the graph (issue #285 — REQ-scoped, not
+tied to the specific node its exclusive evidence lands on; task-sourced
+`implements` edges don't count as a claim, matching `check`'s own
+`uncovered`/`exercised` rule) — and every REQ `exercisableUncovered` lists is
+by definition already claim-free (it only ever considers `uncovered` REQs),
+so this particular suppression never removes one of them. The two can still
+diverge on `suggestedImpls`'s `contains`-hierarchy suppression: an
+ancestor/descendant node already claiming the SAME reqId holds back a
+redundant nested suggestion (e.g. a class-level `@impl` already "found" a
+method's requirement) — `exercisableUncovered`'s `exercised` counterfactual
+has no such hierarchy awareness. It is purely informational: it never
+affects `pass`,
 `newIssues`, or any gate/exit-code decision, and is always `[]` once
 `acceptExercises` is already `true` (anything it would rescue has already
 left `uncovered`). Text output (`printCheckText`) surfaces the same

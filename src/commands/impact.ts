@@ -243,7 +243,11 @@ export function registerImpactCommand(program: Command): void {
       let ingestedTrace: import("../trace/ingest.js").IngestedTrace | undefined;
       let excludeStaleExercises: Set<string> | undefined;
       if (hasTrace) {
-        ingestedTrace = ingestTrace(config, rootDir);
+        // issue #275 — same ghost-node filter `check` applies: a node
+        // `ingestTrace` produced that this graph can't resolve must never
+        // reach `--tests`'s evidence join or the staleness exclusion below.
+        const { filterTraceToGraph } = await import("../trace/ingest.js");
+        ingestedTrace = filterTraceToGraph(ingestTrace(config, rootDir), graph);
         if ((config.trace?.staleness ?? "warn") === "exclude") {
           const { computeStaleNodeIds } = await import("../trace/report.js");
           excludeStaleExercises = computeStaleNodeIds(graph, ingestedTrace);
