@@ -21,9 +21,23 @@ exclusions matches zero files.
 `include`, so it lines up with the graph — but trace evaluation
 (`buildSymbolNameTable`) only ever consults `include` when it resolves
 symbol names, never `testPatterns`. A negative pattern that only lives in
-`testPatterns` therefore drifts from what trace evaluation sees, and can
-surface a suggested `@impl` / drift candidate that points at a symbol with
-no corresponding node in the graph. See issue #275.
+`testPatterns` therefore drifts from what trace evaluation sees: the trace
+layer can resolve a hit against a file the graph itself has excluded.
+
+That drift can no longer produce a phantom finding, though (issue #275):
+**trace evidence is attributed only to nodes the current graph actually
+has.** `ingestTrace`'s output is filtered against the graph
+(`filterTraceToGraph`, using the same symbol/file-grain resolution rule
+`buildGraph` itself uses to fold trace evidence into edges) before `check`,
+`impact --tests`, or `trace report` ever see it — a node the graph can't
+resolve is dropped, never treated as real evidence, and the number dropped
+is surfaced in `trace status`/`trace report`'s `diagnostics.offGraph` (never
+a silent drop). A `testPatterns`-only exclusion therefore costs lost
+precision — a symbol/test pairing that could have been an attributed finding
+silently contributes nothing instead — not a phantom `@impl` / drift
+candidate. Putting exclusions in `include` instead avoids that precision
+loss (the symbol table and the graph agree on scope from the start), so it
+remains the recommendation.
 
 **node_modules is excluded by default (issue #287).** `artgraph init`
 generates configs whose `include` ends with `"!**/node_modules/**"` (as

@@ -118,11 +118,17 @@ export function registerCheckCommand(program: Command): void {
       // precedent): a trace-absent project must reach `check()` WITHOUT the
       // 7th argument at all, not with an empty/zero-cost `IngestedTrace`, so
       // `CheckResult` never gains the new optional keys (FR-010 byte-identical).
-      const { hasTraceShards, ingestTrace } = await import("../trace/ingest.js");
+      const { hasTraceShards, ingestTrace, filterTraceToGraph } =
+        await import("../trace/ingest.js");
       let traceOptions: import("../check.js").TraceCheckOptions | undefined;
       if (hasTraceShards(config, rootDir)) {
         const { computeStaleNodeIds } = await import("../trace/report.js");
-        const trace = ingestTrace(config, rootDir);
+        // issue #275 — drop any node `ingestTrace` produced that the CURRENT
+        // graph can't resolve (see `filterTraceToGraph`'s doc) BEFORE it
+        // reaches `classifyEvidence`/`computeCoverage`/`computeStaleNodeIds`
+        // below, so a ghost node can never surface a phantom finding, a
+        // false-green `exercised` rescue, or a false-red stale gate.
+        const trace = filterTraceToGraph(ingestTrace(config, rootDir), graph);
         traceOptions = {
           trace,
           staleNodeIds: computeStaleNodeIds(graph, trace),

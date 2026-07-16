@@ -76,7 +76,7 @@ untagged | exercised | impl-only | verified
 | 所見 | 定義(集合演算) | 前提 |
 | --- | --- | --- |
 | `unexercisedClaims` | { (req, symbol) : `implements` あり ∧ 当該 req の non-stale exercises に symbol が含まれない } | trace 存在時のみ(FR-012) |
-| `suggestedImpls` | { (req, symbol) : `implements` なし ∧ symbol の被 exercises req 数 **= 1**(排他) } | 同上(FR-013)。req 数 ≥ `sharedThreshold` は `infrastructure` 区分、2 〜 閾値−1 は silent(エッジは impact 到達に残る) |
+| `suggestedImpls` | { (req, symbol) : **req 自身**への `implements` 辺なし(task 由来辺は除外、issue #285 — `src/coverage.ts` の `buildClaimedReqIds` を `classifyEvidence` と共有し、node 単位ではなく req 単位で判定) ∧ symbol の被 exercises req 数 **= 1**(排他) } | 同上(FR-013)。req 数 ≥ `sharedThreshold` は `infrastructure` 区分、2 〜 閾値−1 は silent(エッジは impact 到達に残る) |
 | `staleEvidence` | { (req, symbols[]) : hashesAtTrace[symbol] ≠ graph.contentHash } | `staleness` 設定で扱い分岐(FR-015) |
 
 ## 8. 設定(`.artgraph.json`)

@@ -52,7 +52,7 @@ function countTaggedTests(trace: import("../trace/ingest.js").IngestedTrace): nu
 }
 
 function buildDiagnostics(
-  diagnostics: { dangling: number; corrupted: number; unknownSchema: number; skipped: number },
+  diagnostics: TraceDiagnostics,
   staleCount: number,
 ): TraceDiagnostics & { stale: number } {
   return { ...diagnostics, stale: staleCount };
@@ -68,10 +68,13 @@ async function loadTraceInputs(rootDir: string): Promise<{
 }> {
   const { loadConfig } = await import("../config.js");
   const { scan } = await import("../scan.js");
-  const { ingestTrace } = await import("../trace/ingest.js");
+  const { ingestTrace, filterTraceToGraph } = await import("../trace/ingest.js");
   const config = loadConfig(rootDir);
   const { graph, warnings } = scan(rootDir, config);
-  const trace = ingestTrace(config, rootDir);
+  // issue #275 — `status`/`report` both read `IngestedTrace` directly
+  // (no `mergeTraceEdges` step in between), so a ghost node must be dropped
+  // here before `computeStaleNodeIds`/`classifyEvidence` ever see it.
+  const trace = filterTraceToGraph(ingestTrace(config, rootDir), graph);
   return { config, graph, trace, warnings };
 }
 

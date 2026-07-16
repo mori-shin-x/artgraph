@@ -624,10 +624,19 @@ export interface ArtgraphConfig {
    * putting exclusions in `include` instead: trace evaluation
    * (`buildSymbolNameTable`) resolves symbol names against `include` only,
    * never `testPatterns`, so a `testPatterns`-only negative pattern narrows
-   * the scanned/graph file set without narrowing what trace evaluation sees
-   * — the two can disagree and surface a suggested `@impl` / drift
-   * candidate for a symbol that isn't actually a graph node (issue #275).
-   * See docs/configuration.md's `include` / `testPatterns` section.
+   * the scanned/graph file set without narrowing what trace evaluation sees.
+   * That divergence can no longer surface a phantom finding, though (issue
+   * #275): trace evidence is attributed only to nodes the CURRENT graph
+   * actually has — `src/trace/ingest.ts`'s `filterTraceToGraph` drops any
+   * node it can't resolve (via `resolveTraceGraphNodeId`, shared with
+   * `src/graph/builder.ts`'s graph-edge merge) before `check` / `impact
+   * --tests` / `trace report` ever see it, and counts what it dropped in
+   * `diagnostics.offGraph` (`trace status`/`trace report`, never a silent
+   * drop). A `testPatterns`-only exclusion therefore costs lost precision —
+   * a symbol/test pairing that could have been an attributed finding
+   * silently contributes nothing instead — not a phantom `@impl` / drift
+   * candidate. See docs/configuration.md's `include` / `testPatterns`
+   * section.
    */
   testPatterns: string[];
   lockFile: string;

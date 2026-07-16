@@ -134,7 +134,13 @@ describe("normalizeTrace", () => {
     const trace = normalizeTrace([parseShardLines("")]);
     expect(trace.tests).toEqual([]);
     expect(trace.skipped).toEqual([]);
-    expect(trace.diagnostics).toEqual({ unknownSchema: 0, corrupted: 0, skipped: 0, dangling: 0 });
+    expect(trace.diagnostics).toEqual({
+      unknownSchema: 0,
+      corrupted: 0,
+      skipped: 0,
+      dangling: 0,
+      offGraph: 0,
+    });
   });
 
   // ⑥エッジ: 同一レコード重複 → dedup
