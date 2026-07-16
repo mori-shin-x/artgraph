@@ -244,6 +244,62 @@ describe("trace-ghost-nodes (#275): filterTraceToGraph drops nodes the graph doe
     ]);
   });
 
+  it("A-T4c [F2 rekey pin, file mode]: kept evidence is rekeyed to the resolved graph id — no `symbol:` id ever surfaces from a file-mode graph, and same-file evidence merges to file-level exclusivity", async () => {
+    const fooSrc = "export function soloFn() {}\n";
+    const barSrc = ["export function fnA() {}", "", "export function fnB() {}", ""].join("\n");
+    const tmp = makeRepo(
+      {
+        "src/foo.ts": fooSrc,
+        "src/bar.ts": barSrc,
+        "specs/spec.md": [
+          "# Fixture",
+          "",
+          "- REQ-960: soloFn (exclusive, expect a FILE-id suggestion).",
+          "- REQ-961: fnA (shares src/bar.ts with REQ-962 after degrade).",
+          "- REQ-962: fnB (shares src/bar.ts with REQ-961 after degrade).",
+          "",
+        ].join("\n"),
+      },
+      { mode: "file" },
+    );
+    writeShard(tmp, "w1.jsonl", [
+      metaLine(),
+      testLine({
+        testName: "[REQ-960] exercises soloFn",
+        testFile: "tests/req960.test.ts",
+        hits: [{ file: "src/foo.ts", fn: "soloFn" }],
+      }),
+      testLine({
+        testName: "[REQ-961] exercises fnA",
+        testFile: "tests/req961.test.ts",
+        hits: [{ file: "src/bar.ts", fn: "fnA" }],
+      }),
+      testLine({
+        testName: "[REQ-962] exercises fnB",
+        testFile: "tests/req962.test.ts",
+        hits: [{ file: "src/bar.ts", fn: "fnB" }],
+      }),
+    ]);
+
+    const { stdout, exitCode } = await runAt(tmp, ["trace", "report", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    // F2 pin: a file-mode graph has zero `symbol:` nodes, so once
+    // `filterTraceToGraph` REKEYS (not just filters) kept evidence, no
+    // `symbol:` id may survive into any report field.
+    expect(stdout).not.toContain('"symbol:');
+    const result = JSON.parse(stdout);
+    // soloFn's evidence degrades to `file:src/foo.ts`, exercised exclusively
+    // by REQ-960 → suggested at the FILE id (pre-F2 this reported the
+    // graph-nonexistent `symbol:src/foo.ts#soloFn`).
+    expect(result.suggestedImpls).toEqual([{ reqId: "REQ-960", node: "file:src/foo.ts" }]);
+    // fnA/fnB merge onto `file:src/bar.ts` (degrade union): two distinct
+    // REQs now share one node, so exclusivity is judged at FILE grain and
+    // neither is suggested (2 < default sharedThreshold 3 → not
+    // infrastructure either; silent) — file-level exclusivity is the correct
+    // semantics for a file-grain graph.
+    expect(result.infrastructure).toEqual([]);
+  });
+
   it("A-T5 [diagnostics]: the ghost node dropped by filtering is counted in diagnostics.offGraph (json and text)", async () => {
     const tmp = makeGhostFixture();
     const { stdout: jsonOut, exitCode } = await runAt(tmp, ["trace", "status", "--format", "json"]);

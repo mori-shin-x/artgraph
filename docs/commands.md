@@ -303,7 +303,7 @@ Reports how much evidence is on disk and how fresh it is.
   "shardCount": 4,
   "testCount": 12,
   "skippedCount": 1,
-  "diagnostics": { "dangling": 0, "corrupted": 0, "unknownSchema": 0, "skipped": 1, "stale": 2 },
+  "diagnostics": { "dangling": 0, "corrupted": 0, "offGraph": 0, "unknownSchema": 0, "skipped": 1, "stale": 2 },
   "staleRate": 0.15
 }
 ```
@@ -319,7 +319,7 @@ touched by either an `@impl` claim or exercises evidence into four buckets:
   "unexercisedClaims": [{ "reqId": "REQ-001", "node": "symbol:src/legacy.ts#oldSignIn" }],
   "suggestedImpls":    [{ "reqId": "REQ-002", "node": "symbol:src/auth.ts#resetPassword" }],
   "infrastructure":    [{ "node": "symbol:src/util.ts#validateEmail", "reqCount": 3 }],
-  "diagnostics":       { "dangling": 0, "corrupted": 0, "unknownSchema": 0, "skipped": 1, "stale": 0 }
+  "diagnostics":       { "dangling": 0, "corrupted": 0, "offGraph": 0, "unknownSchema": 0, "skipped": 1, "stale": 0 }
 }
 ```
 

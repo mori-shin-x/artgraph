@@ -385,15 +385,14 @@ export function classifyEvidence(
       // `@impl` happened to sit on the same exclusively-exercised node.
       //
       // PR #268 review F2 (kept as-is, `hasAncestorClaim`/`hasDescendantClaim`
-      // doc above): an ancestor/descendant already claiming this SAME reqId
-      // means a class-granularity `@impl` has already "found" this
-      // requirement's code — suppress the redundant member-level nudge. In
-      // the non-task-claim case this is now subsumed by `claimedReqIds`
-      // (any ancestor/descendant claim on reqId means reqId ∈
-      // claimedReqIds already), but a TASK-sourced ancestor/descendant claim
-      // is invisible to `claimedReqIds` (task edges are excluded there,
-      // matching `check`) while still visible to `claimsByNode` here — kept
-      // so that narrower case's suppression is unchanged.
+      // doc above): in the common case this check is subsumed by
+      // `claimedReqIds` above (any ancestor/descendant claim on `reqId`
+      // already puts `reqId` in `claimedReqIds`), so the two look redundant.
+      // It stays as an independent, narrower defense: `claimedReqIds` is
+      // REQ-scoped ("does this REQ have a code-claim anywhere"), while this
+      // is node-hierarchy-scoped ("does an ancestor/descendant of THIS node
+      // claim this REQ") — a future change to `claimedReqIds`'s definition
+      // should not have to also re-derive this hierarchy suppression.
       if (
         !claimedReqIds.has(reqId!) &&
         !hasAncestorClaim(containerIndex, claimsByNode, reqId!, node) &&
