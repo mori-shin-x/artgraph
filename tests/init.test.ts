@@ -937,6 +937,12 @@ describe("skill template <-> dogfood sync", () => {
   const templateDir = resolve(REPO_ROOT, "templates", "skills");
   // Every canonical agent path, not just Claude. See AGENT_DESCRIPTORS.
   const dogfoodDirs = AGENT_DESCRIPTORS.map((d) => resolve(REPO_ROOT, d.skillsPath));
+  // Repo-internal dev-process skills (issues #301 / #302) — deliberately NOT
+  // distributed via templates/skills/; they live under .claude/skills/ only.
+  // Listed explicitly (not a prefix rule) so an accidentally undistributed
+  // public skill still fails the reverse check.
+  // See AGENTS.md "Internal dev process".
+  const INTERNAL_SKILL_DIRS = ["artgraph-graph-primitive-impact", "issue-loop", "issue-retro"];
 
   function walk(dir: string, out: string[]): void {
     for (const entry of readdirSync(dir)) {
@@ -989,6 +995,8 @@ describe("skill template <-> dogfood sync", () => {
         // Skip speckit-* directories (managed by Spec Kit under .claude/
         // specifically, not artgraph templates).
         if (rel.startsWith("speckit-")) continue;
+        // Skip repo-internal skills (see INTERNAL_SKILL_DIRS above).
+        if (INTERNAL_SKILL_DIRS.some((d) => rel.startsWith(`${d}/`))) continue;
         const tPath = join(templateDir, rel);
         expect(
           existsSync(tPath),
