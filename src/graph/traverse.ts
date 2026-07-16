@@ -83,6 +83,45 @@ import type { LockFile } from "../types.js";
 // claims the REQ via `@impl` — exactly the distinction #286 needs.
 // `--tests` (`impact --diff --tests`) is unaffected by any of this: it
 // resolves tests via `ingestedTrace.reqsByNode` directly, never via this BFS.
+//
+// issue #303 — Option 2B (above) closed the reverse-`exercises` leak but PR
+// #299's own E2E verification found the SAME user-visible symptom
+// ("unrelated REQ shows up in `impact(<symbol>)`") reproduces through a
+// DIFFERENT mechanism it doesn't touch: `verifies` and `imports` are both
+// unconditionally bidirectional, and a TEST node is a natural hub for both —
+// one test file routinely `verifies` several sibling REQs (one per `it()`
+// block) and `imports` several sibling src symbols/files it exercises. A
+// symbol-start BFS that reverse-walks INTO a test hub for REQ-A's sake (via
+// `verifies` or `imports`) and then forward-walks back OUT of that SAME hub
+// picks up REQ-A's siblings too — REQs (or files) with zero code
+// relationship to the original symbol. Two concrete paths from the repro:
+//   (1) `symbol:fnB -(fwd implements)-> REQ-902 -(rev verifies)-> test file
+//       -(fwd verifies)-> REQ-901` — REQ-901's test happens to import fnB's
+//       module for a side-assertion, so fnB's own `implements` edge to
+//       REQ-902 is enough to reach the shared test hub.
+//   (2) `symbol:fnB -(rev imports)-> test file -(fwd verifies)-> REQ-901` —
+//       even a bare `import { fnA, fnB } from "../src/sample"` (no
+//       assertion at all) makes the test file a hub for fnB.
+// This is the same "hub node bridges unrelated siblings" shape #215
+// (`contains`) and #286 (`exercises`) already fixed for their own edge
+// kinds, applied to the two kinds that survived those fixes. The mitigation
+// (applied in the BFS loop below): a node reached via a REVERSE
+// `verifies`/`imports` hop onto a `kind === "test"` node is a "restricted
+// test hub" — its OWN forward `verifies` edges only continue to REQs that
+// are evidence-only (`!reqsWithImplements.has(target)`, preserving the
+// Option 2B evidence-only guarantee so this fix cannot repeat the #286
+// gate-false-green regression), and its OWN forward `imports` edges are
+// never followed at all (closing repro path (2) — a bare import declaration
+// through a test hub has no assertion-based relationship to reach through).
+// A test node reached any OTHER way (a startId, a forward hop, e.g. the
+// test verifying/importing something that then reverse-reaches it from a
+// DIFFERENT direction) stays fully unrestricted — see the `visited`
+// two-state (`"restricted"` / `"unrestricted"`) bookkeeping below, which
+// lets a later unrestricted arrival upgrade and re-expand a node an earlier
+// restricted arrival under-explored. Every non-test node, and every
+// reverse-`verifies`/`imports` hop that does NOT land on a test node,
+// is entirely unaffected — this is strictly narrower than #215/#286's
+// direction-level blocks.
 // spec 020 (FR-017, contracts/cli-surface.md §5) — `impact()`'s optional 5th
 // argument. Kept as a trailing options object (rather than widening the
 // existing `maxDepth?: number` 4th param) so every pre-020 call site
@@ -144,13 +183,43 @@ export function impact(
     if (target?.kind === "req") reqsWithImplements.add(edge.target);
   }
 
-  const visited = new Set<string>();
-  const queue: Array<{ id: string; depth: number }> = startIds.map((id) => ({ id, depth: 0 }));
+  // issue #303 — a `visited` node now carries one of two reach states:
+  // `"restricted"` (reached ONLY via a reverse `verifies`/`imports` hop onto
+  // a `kind === "test"` node, the pass-through-hub shape below) or
+  // `"unrestricted"` (every other kind of arrival: a start id, a forward
+  // hop, a reverse hop onto a non-test node, or a reverse hop over some
+  // OTHER edge kind). `"unrestricted"` is always final. A node visited
+  // `"restricted"` may later be UPGRADED by an `"unrestricted"` arrival
+  // (e.g. the test file is also a startId, or a second, unrestricted path
+  // reaches it) — the upgrade re-enters the queue and gets fully
+  // re-expanded, since the earlier restricted visit may have skipped edges
+  // an unrestricted visit is allowed to take. This does not double-count
+  // anything: `visited`'s KEYS (not its values) are what every downstream
+  // aggregation loop (`affectedFiles`/`impactReqs`/drift/provenance) reads,
+  // and a key is only ever added once.
+  const visited = new Map<string, "restricted" | "unrestricted">();
+  const queue: Array<{ id: string; depth: number; restrictedTestHub: boolean }> = startIds.map(
+    (id) => ({ id, depth: 0, restrictedTestHub: false }),
+  );
+
+  // Is `next` new information for a node currently at `existing` (undefined
+  // = never visited)? Shared by the dequeue-time re-processing guard and
+  // every push-time dedup guard below so they can never disagree about what
+  // counts as "worth (re-)expanding".
+  const isNewReach = (
+    existing: "restricted" | "unrestricted" | undefined,
+    next: "restricted" | "unrestricted",
+  ): boolean => {
+    if (existing === "unrestricted") return false;
+    if (existing === "restricted") return next === "unrestricted";
+    return true;
+  };
 
   while (queue.length > 0) {
-    const { id, depth } = queue.shift()!;
-    if (visited.has(id)) continue;
-    visited.add(id);
+    const { id, depth, restrictedTestHub } = queue.shift()!;
+    const state: "restricted" | "unrestricted" = restrictedTestHub ? "restricted" : "unrestricted";
+    if (!isNewReach(visited.get(id), state)) continue;
+    visited.set(id, state);
 
     if (maxDepth !== undefined && depth >= maxDepth) continue;
 
@@ -160,9 +229,9 @@ export function impact(
         if (
           symNode.kind === "symbol" &&
           symNode.filePath === node.filePath &&
-          !visited.has(symId)
+          isNewReach(visited.get(symId), "unrestricted")
         ) {
-          queue.push({ id: symId, depth: depth + 1 });
+          queue.push({ id: symId, depth: depth + 1, restrictedTestHub: false });
         }
       }
     }
@@ -177,8 +246,50 @@ export function impact(
       ) {
         continue;
       }
-      if (edge.source === id && !visited.has(edge.target)) {
-        queue.push({ id: edge.target, depth: depth + 1 });
+      if (edge.source === id) {
+        // issue #303 — `restrictedTestHub` is true only when THIS dequeue
+        // instance reached a `kind === "test"` node via a reverse
+        // `verifies`/`imports` hop (see the reverse-branch comment below).
+        // That test node is a pass-through hub: a test file typically
+        // `verifies` several sibling REQs and `imports` several sibling src
+        // symbols/files that have nothing to do with each other, so
+        // treating ITS OWN forward `verifies`/`imports` edges as
+        // unconditionally bidirectional lets a BFS that arrived at the hub
+        // for REQ-A's sake walk right back out to REQ-B (or REQ-B's
+        // implementing file) — the hub-node leak class this issue reports
+        // (see the file-header comment for the two concrete repro paths).
+        // Two restrictions apply, ONLY when `restrictedTestHub` is true for
+        // this node, and ONLY to these two edge kinds:
+        //  (a) forward `verifies` (test -> req): blocked when the target
+        //      REQ has an `implements` edge somewhere in the graph
+        //      (`reqsWithImplements`) — that REQ has its own `@impl`-based
+        //      reachability and doesn't need this hub to reach it (blocking
+        //      it here is what closes the leak). Left OPEN when the target
+        //      REQ has NO `implements` edge anywhere (evidence-only,
+        //      `acceptExercises: true` workflow) — for that REQ, an
+        //      exercising test IS its only path back, so blocking it here
+        //      unconditionally would repeat the #286 gate-false-green
+        //      regression Option 2B (PR #299) fixed for reverse `exercises`.
+        //  (b) forward `imports` (test -> imported file/symbol): always
+        //      blocked. This closes the 4th leak mechanism from the issue:
+        //      reverse `imports` INTO a test (a bare import declaration,
+        //      no assertion) followed by forward `imports` back OUT of that
+        //      same test into an unrelated sibling src file, reaching that
+        //      sibling's REQ purely because both files happen to be
+        //      imported by the same test.
+        // Every other forward edge kind, and every forward edge out of a
+        // non-restricted node, keeps its pre-#303 unconditional semantics.
+        let blocked = false;
+        if (restrictedTestHub) {
+          if (edge.kind === "verifies") {
+            blocked = reqsWithImplements.has(edge.target);
+          } else if (edge.kind === "imports") {
+            blocked = true;
+          }
+        }
+        if (!blocked && isNewReach(visited.get(edge.target), "unrestricted")) {
+          queue.push({ id: edge.target, depth: depth + 1, restrictedTestHub: false });
+        }
       }
       // spec 019 (FR-001〜003) / issue #286 / PR #299 Finding 2 (Option 2B):
       // reverse traversal (target -> source) skips `contains` edges so a
@@ -196,10 +307,25 @@ export function impact(
       if (
         edge.target === id &&
         edge.kind !== "contains" &&
-        !(edge.kind === "exercises" && reqsWithImplements.has(edge.source)) &&
-        !visited.has(edge.source)
+        !(edge.kind === "exercises" && reqsWithImplements.has(edge.source))
       ) {
-        queue.push({ id: edge.source, depth: depth + 1 });
+        // issue #303 — a reverse hop that lands on a `kind === "test"` node
+        // via `verifies` or `imports` is the pass-through-hub ARRIVAL: mark
+        // it `restricted` so the forward-branch restriction above applies
+        // when this dequeue instance is later expanded. A reverse hop onto
+        // any OTHER node kind, or via any OTHER edge kind (`implements` /
+        // `depends_on` / `derives_from` / the evidence-only-allowed
+        // `exercises`), stays `unrestricted` — unchanged from pre-#303
+        // behavior; only the test-hub arrival itself is new.
+        const reachesTestHub =
+          (edge.kind === "verifies" || edge.kind === "imports") &&
+          graph.nodes.get(edge.source)?.kind === "test";
+        const nextState: "restricted" | "unrestricted" = reachesTestHub
+          ? "restricted"
+          : "unrestricted";
+        if (isNewReach(visited.get(edge.source), nextState)) {
+          queue.push({ id: edge.source, depth: depth + 1, restrictedTestHub: reachesTestHub });
+        }
       }
     }
   }
@@ -210,7 +336,7 @@ export function impact(
   const affectedTasks: string[] = [];
   const drifted: DriftEntry[] = [];
 
-  for (const id of visited) {
+  for (const id of visited.keys()) {
     const node = graph.nodes.get(id);
     if (!node) continue;
 
@@ -256,14 +382,16 @@ export function impact(
 
   // spec 019 (FR-005) — attributed docs are drift-checked exactly like any
   // other visited node; docs unioned in above are added to `visited` here
-  // (`Set.add` on an already-visited req is a no-op) purely so the shared
-  // drift loop below covers both BFS-reached and attribution-reached docs
-  // without duplicating the lock-comparison logic.
+  // (`"unrestricted"`: attribution is a declarative one-hop lookup, not a
+  // hub-arrival, so it carries none of the #303 restriction — setting on an
+  // already-visited req is a no-op either way) purely so the shared drift
+  // loop below covers both BFS-reached and attribution-reached docs without
+  // duplicating the lock-comparison logic.
   for (const id of affectedDocs) {
-    visited.add(id);
+    visited.set(id, "unrestricted");
   }
 
-  for (const id of visited) {
+  for (const id of visited.keys()) {
     const node = graph.nodes.get(id);
     if (!node || (node.kind !== "req" && node.kind !== "doc")) continue;
     if (!lock[id]) continue;
