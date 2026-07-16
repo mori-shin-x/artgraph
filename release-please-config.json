@@ -28,5 +28,5 @@
     }
   },
   "pull-request-title-pattern": "chore(release): release ${version}",
-  "separate-pull-requests": false
+  "separate-pull-requests": true
 }

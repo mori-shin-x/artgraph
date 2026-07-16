@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAt } from "./helpers.js";
 import {
+  makeRepoWithBaseBranch,
   makeRepoWithDebt,
   makeUnbornRepo,
   introduceNewOrphan,
@@ -608,6 +609,50 @@ describe("impact --diff blast radius is preserved (US4)", () => {
     expect(gate.json.newIssues.uncovered).not.toContain("REQ-200");
     expect(gate.json.uncovered).not.toContain("REQ-200");
   });
+
+  // spec 024 (T011, FR-013 / SC-002) — the same invariant lifted onto the
+  // merged diff: with `--base <ref>`, impact and check consume the SAME
+  // merged changed-file set (one `resolveMergeBase` semantics, one
+  // `getGitDiffFiles(rootDir, sha)` — agreement (i)), so a committed-only
+  // change (CI's clean-tree state) reaches the same scope in both. The
+  // superset side of the agreement (check-scope ⊇ impact-reach on a
+  // committed deletion, agreement (ii)) is pinned in
+  // tests/impact-base-ref.test.ts alongside spec 024's SC-003.
+  it("impact --diff --base and check --diff --base agree on a committed-only change: same merged file set, same scope (spec 024 FR-013)", async () => {
+    const dir = track(makeRepoWithBaseBranch("artgraph-024-us4-agree-"));
+    appendFileSync(join(dir, "src", "hub.ts"), "\n// committed harmless edit\n");
+    gitCommitAll(dir, "feature edits the hub (committed, clean tree)");
+
+    // impact's view of the merged diff: hub.ts's blast radius, REQ-100 only.
+    const impact = await runAt(dir, ["impact", "--diff", "--base", "base", "--format", "json"]);
+    expect(impact.exitCode).toBe(0);
+    const ij = JSON.parse(impact.stdout);
+    expect(ij.impactReqs).toEqual(["REQ-100"]);
+    expect(ij.impactReqs).not.toContain("REQ-200");
+
+    // check's scope over the SAME merged diff agrees: the baseline is
+    // computed (non-empty merged set — a plain --diff would have seen an
+    // empty diff and skipped), nothing outside hub.ts's reach enters scope.
+    const gate = await runAt(dir, [
+      "check",
+      "--diff",
+      "--base",
+      "base",
+      "--gate",
+      "--format",
+      "json",
+    ]);
+    expect(gate.exitCode).toBe(0);
+    const gj = JSON.parse(gate.stdout);
+    expect(gj.baselineStatus).toBe("computed");
+    expect(gj.uncovered).not.toContain("REQ-200");
+    expect(gj.newIssues.uncovered).not.toContain("REQ-200");
+
+    // Control: without --base the same repo state has NOTHING to compare —
+    // the agreement above is specifically about the merged (committed) set.
+    const noBase = await runAt(dir, ["impact", "--diff", "--format", "json"]);
+    expect(JSON.parse(noBase.stdout).message).toBe("No changes detected in git diff.");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1052,5 +1097,68 @@ describe("spec 021 (T019, issue #218) — method edit double-drift + baseline un
     // The gate still fails overall — because of the genuinely new drift.
     expect(exitCode).toBe(2);
     expect(json.pass).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #307 — a DOWNSTREAM baseline failure (here: submodules → worktree
+// path unavailable) combined with a diff whose changed files are all outside
+// the current graph used to take the "Changed files are not tracked in the
+// graph." early exit at exit 0: `baselineStartIds` was empty only because
+// there was NO baseline graph to resolve against, not because the baseline
+// side had nothing to say. Fail closed instead (spec 017 FR-010) — with
+// `--gate` the dedicated unavailable exit 1, without it the display-only
+// warning path. The classic safe case (changed files outside the graph AND
+// baseline never attempted) keeps its exit 0.
+// ---------------------------------------------------------------------------
+describe("check --diff: downstream unavailable must not hide behind the not-tracked exit (issue #307)", () => {
+  function repoWithSubmoduleAndOutOfGraphEdit(prefix: string): string {
+    const dir = repo(prefix); // makeRepoWithDebt, tracked via repos[]
+    const subSrc = track(mkdtempSync(join(tmpdir(), `${prefix}subsrc-`)));
+    gitInit(subSrc);
+    writeFileSync(join(subSrc, "lib.txt"), "lib\n");
+    gitCommitAll(subSrc, "lib init");
+    execFileSync(
+      "git",
+      ["-c", "protocol.file.allow=always", "submodule", "add", subSrc, "vendor/lib"],
+      { cwd: dir, stdio: "pipe" },
+    );
+    writeFileSync(join(dir, "README.md"), "# readme\n");
+    gitCommitAll(dir, "add submodule + tracked out-of-graph README");
+    // The unstaged edit to a TRACKED, out-of-graph file makes the diff
+    // non-empty and `anyBaselineResolvable` true (README is in HEAD's tree),
+    // so the baseline IS attempted — and fails on the submodule guard.
+    appendFileSync(join(dir, "README.md"), "\nout-of-graph edit\n");
+    return dir;
+  }
+
+  it("--gate → unavailable exit 1 (was: 'not tracked' exit 0, fail-open)", async () => {
+    const dir = repoWithSubmoduleAndOutOfGraphEdit("artgraph-307-gate-");
+    const { stdout, stderr, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("could not establish a baseline (git worktree unavailable).");
+    expect(stderr).toContain("gate result is undetermined; not treating as pass.");
+    expect(stdout).not.toContain("Changed files are not tracked in the graph.");
+  });
+
+  it("no --gate, --format json → exit 0 display-only with baselineStatus unavailable", async () => {
+    const dir = repoWithSubmoduleAndOutOfGraphEdit("artgraph-307-nogate-");
+    const { stdout, exitCode } = await runAt(dir, ["check", "--diff", "--format", "json"]);
+    expect(exitCode).toBe(0);
+    const json = JSON.parse(stdout);
+    expect(json.baselineStatus).toBe("unavailable");
+    expect(json.pass).toBe(false);
+    expect(json.baselineError).toContain("submodules are not supported");
+    expect(json.message ?? "").not.toContain("not tracked");
+  });
+
+  it("regression: healthy repo + out-of-graph edit keeps the 'not tracked' exit 0", async () => {
+    const dir = repo("artgraph-307-healthy-");
+    writeFileSync(join(dir, "README.md"), "# readme\n");
+    gitCommitAll(dir, "tracked out-of-graph README");
+    appendFileSync(join(dir, "README.md"), "\nedit\n");
+    const { stdout, exitCode } = await runAt(dir, ["check", "--diff", "--gate"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("Changed files are not tracked in the graph.");
   });
 });

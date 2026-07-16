@@ -3,7 +3,7 @@
 import { Command, Option } from "commander";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { reportGraphWarnings } from "./shared.js";
+import { DASH_PATH_HINT, nonOptionValue, reportGraphWarnings } from "./shared.js";
 
 // spec 014 (FR-013 — FR-020): plan-coverage subcommand. Reads tasks.md /
 // plan.md (and the current spec.md) to detect REQs that are *affected*
@@ -19,17 +19,44 @@ export function registerPlanCoverageCommand(program: Command): void {
     .description(
       "Detect implicit REQ impacts: REQs reached by tasks.md/plan.md `Files:` that are never mentioned in the spec trio.",
     )
-    .option(
-      "--spec <dir>",
-      "Spec directory (auto-detected via SPECIFY_FEATURE_DIRECTORY or .specify/feature.json)",
+    // issue #306 — parse-time swallow guards (see `nonOptionValue` in
+    // shared.ts): this command carries `--gate`, so a value-taking option
+    // whose CI variable expands to nothing (`--ignore $CSV --gate` →
+    // `--ignore --gate`) consumes `--gate` as its value and silently
+    // disarms the gate (verified fail-open: exit 0 with the ignore list
+    // showing "--gate"). The path/dir flags (`--spec`/`--tasks`/`--plan`)
+    // swallow `--gate` the same way but then usually fail on the bogus
+    // path (exit 1) — guarded anyway so the error names the real mistake
+    // instead of "tasks.md not found: --gate". Paths/dirs also reject the
+    // empty string (an empty override can only be an unset variable);
+    // `--ignore ""` stays legal-by-design, mirroring `check --ignore`.
+    .addOption(
+      new Option(
+        "--spec <dir>",
+        "Spec directory (auto-detected via SPECIFY_FEATURE_DIRECTORY or .specify/feature.json)",
+      ).argParser(nonOptionValue("--spec", { hint: DASH_PATH_HINT })),
     )
-    .option("--tasks <path>", "Override the tasks.md path (default: <spec-dir>/tasks.md)")
-    .option("--plan <path>", "Override the plan.md path (default: <spec-dir>/plan.md if present)")
+    .addOption(
+      new Option(
+        "--tasks <path>",
+        "Override the tasks.md path (default: <spec-dir>/tasks.md)",
+      ).argParser(nonOptionValue("--tasks", { hint: DASH_PATH_HINT })),
+    )
+    .addOption(
+      new Option(
+        "--plan <path>",
+        "Override the plan.md path (default: <spec-dir>/plan.md if present)",
+      ).argParser(nonOptionValue("--plan", { hint: DASH_PATH_HINT })),
+    )
     .addOption(
       new Option("--format <format>", "Output format").choices(["json", "text"]).default("text"),
     )
     .option("--gate", "Exit 1 when implicit impacts or diagnostics are non-empty (CI use)")
-    .option("--ignore <csv>", "Comma-separated REQ-IDs to drop from implicit list (one-shot)", "")
+    .addOption(
+      new Option("--ignore <csv>", "Comma-separated REQ-IDs to drop from implicit list (one-shot)")
+        .default("")
+        .argParser(nonOptionValue("--ignore", { allowEmpty: true })),
+    )
     .action(async (opts) => {
       const rootDir = process.cwd();
       const { resolveSpecDir } = await import("../plan-coverage/spec-resolver.js");
