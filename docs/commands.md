@@ -212,6 +212,65 @@ reached via a static path (`@impl` / `imports`) or via `exercises` evidence
 `--tests` is passed → exit `1` with the same runner-setup guidance as
 `artgraph trace report` (below).
 
+### `impact --diff --base <ref>` — commit-range selection in CI (spec 024)
+
+In CI the checked-out working tree matches the commit exactly, so plain
+`impact --diff --tests` sees an empty diff and returns "No changes detected"
+on every run — test selection silently never selects anything. `--base <ref>`
+widens the changed-file set to the merged diff:
+
+```bash
+artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format json
+```
+
+- **Merge-base semantics** — the committed range is
+  `git merge-base <ref> HEAD`..`HEAD` (the branch point), never `<ref>`'s
+  tip. The changed-file set is the working-tree union (staged + unstaged +
+  untracked) PLUS that committed range — `--base` adds the range, it never
+  shrinks the local diff. It is the same set, from the same implementation,
+  that `check --diff --base <ref>` judges (the two commands cannot disagree
+  on what changed).
+- **Requires `--diff`** — `--base` without `--diff` is a usage error
+  (exit `1`, no JSON); it is never silently ignored. `--base` is a `--diff`
+  modifier, not a start source.
+- **Fail-closed environment errors** — an unresolvable ref (typo, unfetched
+  branch) or an uncomputable merge-base (shallow clone, unrelated histories)
+  exits `1` with a `fetch-depth: 0` hint on stderr and **zero bytes of
+  stdout, even under `--format json`** — an environment failure is not a
+  verdict, and an empty-`testsToRun` payload would misread as "nothing to
+  run". There is no fallback to a working-tree-only diff.
+- **Selection limits (declared)** — startIds resolve against the *current*
+  graph only: a file **deleted** by a commit in the range, or a changed file
+  the graph does not track, contributes no start ids — silently, exactly
+  like graph-external files always have under `--diff`. `impact` takes no
+  baseline worktree and no rename map (a base-range rename is folded to its
+  new path, which is the correct current-graph input). A file **renamed**
+  in the range is in the same boat with respect to *stale evidence*: its
+  start ids resolve under the new path, but trace shards cached from the
+  base branch record evidence under the old path, so the `--tests` join
+  misses and its tests silently drop from the selection.
+- **Consumer rule** — deleted, renamed (w.r.t. stale pre-rename evidence),
+  or graph-untracked changed files contribute nothing to the selection.
+  Treat `impact --tests` as an **optimization** — fall back to
+  the full suite on exit `1` or whenever unsure. The correctness gate
+  remains `check --diff --base --gate` (which *does* resolve deletions
+  against the baseline and fails the PR on the resulting uncovered REQs).
+  Also filter the selected test files for existence before handing them to
+  the runner — a PR that deletes a test file can yield a selection of
+  nonexistent paths, and `vitest run` exits `1` on those (red CI on a
+  legitimate PR).
+- **`trace.staleness: "exclude"` interaction** — in CI the trace shards
+  necessarily predate the change (e.g. cached from the base branch), so the
+  changed code's evidence is stale *by construction* and `"exclude"` drops
+  exactly the tests most related to the change. Combining `--tests`,
+  `--base` and `staleness: "exclude"` emits a non-fatal stderr warning; use
+  `staleness: "warn"` for CI test selection, or fall back to the full suite.
+
+| exit code | meaning | CI consumer action |
+| --- | --- | --- |
+| `0` | valid selection — including the legitimate "No changes detected" empty merged diff | use `testsToRun` (treat an empty selection with suspicion — see the consumer rule) |
+| `1` | usage error, unresolvable ref / merge-base, or no changed path resolved in the graph | **fall back to the full suite** |
+
 ## `artgraph trace` <a id="artgraph-trace"></a>
 
 Coverage-derived traceability (spec 020): cross-checks `@impl` claims

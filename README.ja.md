@@ -129,6 +129,33 @@ jobs:
 
 exit code: `0` = 新規問題なし、`2` = PR がドリフト / 孤立タグ / 未カバー REQ を導入、`1` = ゲート判定不能 (shallow clone など — fail-closed であり、無言で pass することはありません)。ローカルの Stop フックは従来どおり素の `check --gate --diff` (作業ツリー diff) を使います。`--base` はコミット範囲のゲート用です。
 
+### Pull Request の CI テスト選択
+
+trace shards がある場合 (`artgraph/vitest` runner)、`impact --diff --base <ref> --tests` は PR のコミット範囲に実行証拠が到達するテストだけを選択します — 上のゲートと同じ merge-base 意味論なので、CI の clean な作業ツリーでも機能します。`impact --tests` は**最適化**であり、ゲートはあくまで `check --diff --base --gate` 側です: exit `1` (解決できない ref / shallow clone / 変更 path がグラフ未解決) のときや選択結果が疑わしいときは full suite に fallback してください。
+
+```yaml
+      - name: Select and run tests (exit 1 なら full suite に fallback)
+        run: |
+          set +e
+          out=$(pnpm exec artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format json)
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "impact exited $status — falling back to the full suite"
+            pnpm test; exit $?
+          fi
+          files=$(echo "$out" | jq -r '[.testsToRun[]?.testFile] | unique | .[]')
+          # PR が削除したテストファイルを除外 — 存在しないパスを渡すと vitest が exit 1 になる
+          files=$(for f in $files; do [ -f "$f" ] && echo "$f"; done)
+          if [ -z "$files" ]; then
+            pnpm test   # 空選択 — 安全側に倒して全部走らせる
+          else
+            echo "$files" | xargs pnpm vitest run
+          fi
+```
+
+削除された、またはグラフ未追跡の変更ファイルは選択の入力に寄与しません。また PR のコミット範囲内で rename されたファイルは、旧パスで記録された trace evidence と join しなくなるため、そのテストは選択から無言で落ちます (宣言された限界 — その正しさは `check --diff --base --gate` ステップが捕まえます)。`trace.staleness: "exclude"` では変更コードの evidence が構造的に stale になるため、CI のテスト選択では `"warn"` を使ってください (この組み合わせでは実行時警告が出ます)。
+
 ## エンドツーエンド: 仕様 → `@impl` → `check`
 
 ```bash

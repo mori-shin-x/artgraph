@@ -202,6 +202,45 @@ fail-closed, never a silent pass). The local Stop hook keeps using plain
 `check --gate --diff` (working-tree diff); `--base` is for commit-range
 gating.
 
+### CI test selection for pull requests
+
+With trace shards present (the `artgraph/vitest` runner),
+`impact --diff --base <ref> --tests` selects only the tests whose execution
+evidence reaches the PR's commit range — the same merge-base semantics as the
+gate above, so it works on CI's clean working tree. `impact --tests` is an
+**optimization**, the gate stays `check --diff --base --gate`: fall back to
+the full suite on exit `1` (unresolvable ref, shallow clone, no changed path
+in the graph) or whenever the selection looks doubtful.
+
+```yaml
+      - name: Select and run tests (full-suite fallback on exit 1)
+        run: |
+          set +e
+          out=$(pnpm exec artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format json)
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "impact exited $status — falling back to the full suite"
+            pnpm test; exit $?
+          fi
+          files=$(echo "$out" | jq -r '[.testsToRun[]?.testFile] | unique | .[]')
+          # drop files the PR itself deleted — vitest exits 1 on nonexistent paths
+          files=$(for f in $files; do [ -f "$f" ] && echo "$f"; done)
+          if [ -z "$files" ]; then
+            pnpm test   # empty selection — run everything to stay safe
+          else
+            echo "$files" | xargs pnpm vitest run
+          fi
+```
+
+Deleted or graph-untracked changed files contribute no selection input, and
+a file renamed inside the PR's commit range no longer joins trace evidence
+recorded under its old path, so its tests silently drop from the selection
+(declared limitation — their correctness is what the `check --diff --base
+--gate` step catches), and under `trace.staleness: "exclude"` the changed
+code's evidence is stale by construction, so use `"warn"` for CI selection
+(a runtime warning fires on that combination).
+
 ## End-to-end: spec → `@impl` → `check`
 
 ```bash

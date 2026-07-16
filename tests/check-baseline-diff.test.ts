@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runAt } from "./helpers.js";
 import {
+  makeRepoWithBaseBranch,
   makeRepoWithDebt,
   makeUnbornRepo,
   introduceNewOrphan,
@@ -607,6 +608,50 @@ describe("impact --diff blast radius is preserved (US4)", () => {
     expect(gate.json.baselineStatus).toBe("computed");
     expect(gate.json.newIssues.uncovered).not.toContain("REQ-200");
     expect(gate.json.uncovered).not.toContain("REQ-200");
+  });
+
+  // spec 024 (T011, FR-013 / SC-002) — the same invariant lifted onto the
+  // merged diff: with `--base <ref>`, impact and check consume the SAME
+  // merged changed-file set (one `resolveMergeBase` semantics, one
+  // `getGitDiffFiles(rootDir, sha)` — agreement (i)), so a committed-only
+  // change (CI's clean-tree state) reaches the same scope in both. The
+  // superset side of the agreement (check-scope ⊇ impact-reach on a
+  // committed deletion, agreement (ii)) is pinned in
+  // tests/impact-base-ref.test.ts alongside spec 024's SC-003.
+  it("impact --diff --base and check --diff --base agree on a committed-only change: same merged file set, same scope (spec 024 FR-013)", async () => {
+    const dir = track(makeRepoWithBaseBranch("artgraph-024-us4-agree-"));
+    appendFileSync(join(dir, "src", "hub.ts"), "\n// committed harmless edit\n");
+    gitCommitAll(dir, "feature edits the hub (committed, clean tree)");
+
+    // impact's view of the merged diff: hub.ts's blast radius, REQ-100 only.
+    const impact = await runAt(dir, ["impact", "--diff", "--base", "base", "--format", "json"]);
+    expect(impact.exitCode).toBe(0);
+    const ij = JSON.parse(impact.stdout);
+    expect(ij.impactReqs).toEqual(["REQ-100"]);
+    expect(ij.impactReqs).not.toContain("REQ-200");
+
+    // check's scope over the SAME merged diff agrees: the baseline is
+    // computed (non-empty merged set — a plain --diff would have seen an
+    // empty diff and skipped), nothing outside hub.ts's reach enters scope.
+    const gate = await runAt(dir, [
+      "check",
+      "--diff",
+      "--base",
+      "base",
+      "--gate",
+      "--format",
+      "json",
+    ]);
+    expect(gate.exitCode).toBe(0);
+    const gj = JSON.parse(gate.stdout);
+    expect(gj.baselineStatus).toBe("computed");
+    expect(gj.uncovered).not.toContain("REQ-200");
+    expect(gj.newIssues.uncovered).not.toContain("REQ-200");
+
+    // Control: without --base the same repo state has NOTHING to compare —
+    // the agreement above is specifically about the merged (committed) set.
+    const noBase = await runAt(dir, ["impact", "--diff", "--format", "json"]);
+    expect(JSON.parse(noBase.stdout).message).toBe("No changes detected in git diff.");
   });
 });
 
