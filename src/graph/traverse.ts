@@ -122,6 +122,20 @@ import type { LockFile } from "../types.js";
 // reverse-`verifies`/`imports` hop that does NOT land on a test node,
 // is entirely unaffected — this is strictly narrower than #215/#286's
 // direction-level blocks.
+//
+// Known residual limitation (tracked as issue #322, intentionally NOT fixed
+// here) — evidence-only REQs (no `implements` edge anywhere) are still
+// reachable FROM one another through a shared restricted hub: the rule (a)
+// exemption below is a per-EDGE predicate, not a per-hub one, so a hub
+// `verifies`-incident to more than one evidence-only REQ lets a BFS arriving
+// for ONE of them walk back out to its evidence-only SIBLINGS too, and the
+// same shape can daisy-chain one hop further into another hub. This mirrors
+// a structural property Option 2B (reverse `exercises`, above) already has
+// for the same reason — an evidence-only REQ's only path back is through the
+// very edges that also connect it to its siblings — so it is not specific to
+// #303's `verifies`/`imports` mechanism. See rule (a)'s comment below for the
+// mechanics and `tests/impact-test-hub-303.test.ts`'s "known limitation"
+// describe block for a pinned repro.
 // spec 020 (FR-017, contracts/cli-surface.md §5) — `impact()`'s optional 5th
 // argument. Kept as a trailing options object (rather than widening the
 // existing `maxDepth?: number` 4th param) so every pre-020 call site
@@ -266,10 +280,22 @@ export function impact(
         //      reachability and doesn't need this hub to reach it (blocking
         //      it here is what closes the leak). Left OPEN when the target
         //      REQ has NO `implements` edge anywhere (evidence-only,
-        //      `acceptExercises: true` workflow) — for that REQ, an
+        //      `acceptExercises: true` workflow) — for EVERY such REQ, an
         //      exercising test IS its only path back, so blocking it here
         //      unconditionally would repeat the #286 gate-false-green
         //      regression Option 2B (PR #299) fixed for reverse `exercises`.
+        //      Known residual limitation (issue #322, accepted/documented,
+        //      NOT fixed by this PR): this is a per-EDGE predicate, not a
+        //      per-hub one — when the SAME hub is `verifies`-incident to
+        //      MORE THAN ONE evidence-only REQ, a BFS arriving at the hub
+        //      for one of them still walks back out to its evidence-only
+        //      SIBLINGS too (a single-hop leak between evidence-only REQs
+        //      sharing a hub), and the same shape can daisy-chain one hop
+        //      further if a sibling is itself `verifies`-incident to
+        //      ANOTHER test hub. This is structurally the same tradeoff as
+        //      Option 2B's reverse-`exercises` allowance above, not a new
+        //      #303-only gap; see the file-header "Known residual
+        //      limitation" note.
         //  (b) forward `imports` (test -> imported file/symbol): always
         //      blocked. This closes the 4th leak mechanism from the issue:
         //      reverse `imports` INTO a test (a bare import declaration,

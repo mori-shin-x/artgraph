@@ -471,3 +471,59 @@ describe("impact-test-hub-303 (MEDIUM-2): reqProvenance excludes the blocked sib
     expect(byReq["REQ-902"]?.sort()).toEqual(["evidence", "static"]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Known limitation (issue #322) pin — the HIGH-1 shape above proved a
+// declared REQ is blocked while an evidence-only REQ stays reachable through
+// a shared restricted hub. This block pins the residual gap left OPEN on
+// purpose: rule (a)'s evidence-only exemption (traverse.ts) is a per-EDGE
+// predicate, not a per-hub one, so when the SAME hub is `verifies`-incident
+// to MORE THAN ONE evidence-only REQ, a BFS that legitimately needs one of
+// them still leaks its evidence-only SIBLING(s) too — even a sibling with
+// zero relationship to the start symbol. This is accepted/documented, not
+// fixed, by PR #321/#303 — see traverse.ts's file-header "Known residual
+// limitation" note and rule (a)'s comment. If this assertion ever starts
+// failing (REQ-EV2 no longer appears), it means issue #322 landed a fix and
+// this pin should be revisited/removed, not "repaired" back to green.
+// ---------------------------------------------------------------------------
+
+describe("impact-test-hub-303 (known limitation, issue #322 pin): sibling evidence-only REQs both leak through one shared hub", () => {
+  it("two evidence-only REQs (no @impl anywhere) verified by the SAME test hub: both land in impactReqs even though the start symbol has zero relationship to REQ-EV2", () => {
+    const nodes = new Map<string, GraphNode>([
+      ["REQ-EV1", node("REQ-EV1", "req", "specs/x.md")],
+      ["REQ-EV2", node("REQ-EV2", "req", "specs/x.md")],
+      ["symbol:src/y.ts#fnStart", node("symbol:src/y.ts#fnStart", "symbol", "src/y.ts")],
+      ["file:tests/y.test.ts", node("file:tests/y.test.ts", "test", "tests/y.test.ts")],
+    ]);
+    const edges: GraphEdge[] = [
+      // The ONLY route from fnStart to the hub is a bare import declaration —
+      // fnStart has no `implements` edge to either REQ-EV1 or REQ-EV2, and no
+      // relationship to REQ-EV2 at all beyond sharing this hub.
+      {
+        source: "file:tests/y.test.ts",
+        target: "symbol:src/y.ts#fnStart",
+        kind: "imports",
+        provenances: ["ts-import"],
+      },
+      // Neither REQ has an `implements` edge anywhere in this graph — both
+      // are evidence-only, so rule (a) leaves the hub's forward `verifies`
+      // OPEN for both, per-edge.
+      {
+        source: "file:tests/y.test.ts",
+        target: "REQ-EV1",
+        kind: "verifies",
+        provenances: ["code-tag"],
+      },
+      {
+        source: "file:tests/y.test.ts",
+        target: "REQ-EV2",
+        kind: "verifies",
+        provenances: ["code-tag"],
+      },
+    ];
+    const result = impact({ nodes, edges }, ["symbol:src/y.ts#fnStart"], {} as LockFile);
+    // Accepted current behavior (NOT the desired end state): both evidence-only
+    // REQs leak through, including the one (REQ-EV2) unrelated to fnStart.
+    expect(result.impactReqs.sort()).toEqual(["REQ-EV1", "REQ-EV2"]);
+  });
+});
