@@ -145,6 +145,12 @@ export interface ParsedSpec {
  * — or that want a warning/error surfaced — should check the file with
  * `node:fs` themselves before calling this, or read it and call
  * `parseMarkdownContent` directly (the pattern `buildGraph` uses).
+ *
+ * PR #334 meta-review MEDIUM-2 — note the asymmetry: this empty `ParsedSpec`
+ * carries NO doc node at all, unlike calling `parseMarkdownContent` on a
+ * readable-but-empty file, which always produces exactly one doc node (see
+ * that function — it pushes a doc node unconditionally before any content is
+ * inspected).
  */
 export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions): ParsedSpec {
   let source: string;

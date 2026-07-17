@@ -174,13 +174,21 @@ export function buildGraph(
   const edges: GraphEdge[] = [];
   const warnings: BuildWarning[] = [];
 
-  // issue #295 — `system-resource-exhausted` (EMFILE/ENFILE) is a scan-wide
-  // condition, not a per-file one: both the markdown loop below and the TS
-  // warning-conversion loop further down can independently observe it in
-  // the same `buildGraph()` call. This flag makes the two sites agree on
-  // "has this scan already reported it" so at most one warning of this
-  // type ever lands in `warnings`, regardless of how many files hit it or
-  // which loop (or how many times within a loop) got there first.
+  // issue #295 (PR #334 meta-review LOW-1 wording fix) — `system-resource-
+  // exhausted` (EMFILE/ENFILE) is a scan-wide condition, not a per-file one:
+  // the markdown loop below, the `globCodeFiles` guard, the tsconfig read
+  // guard, and the TS warning-conversion loop further down can each
+  // independently observe it in the same `buildGraph()` call. This flag
+  // makes all of those sites agree on "has this scan already reported it" so
+  // at most one warning of this type ever lands in `warnings`, regardless of
+  // how many files hit it. Which site actually sets the flag is NOT a race:
+  // `buildGraph` runs synchronously, single-threaded, and every guarded site
+  // below executes in a fixed, deterministic order (markdown loop, then the
+  // `globCodeFiles` guard, then the tsconfig read guard, then the TS
+  // warning-conversion loop, which surfaces failures from `parseTSFile`'s own
+  // guarded read) for any given call — which one reports it is fully
+  // determined by which sites this particular scan happens to hit, not by
+  // timing.
   let systemResourceExhaustedReported = false;
 
   // issue #216 — ids with an ignored prefix are excluded at assembly time (no
@@ -535,7 +543,43 @@ export function buildGraph(
   const codePatterns = [...config.include, ...config.testPatterns];
   const tsMode = config.mode ?? "file";
   const codeId = config.reqPatterns?.codeId;
-  const codeFiles = globCodeFiles(rootDir, codePatterns);
+  // Maintenance trap (PR #334 meta-review HIGH-2): this file calls TWO
+  // different glob libraries with OPPOSITE failure semantics. `fast-glob`
+  // (here, and in `globCodeFiles`/`enumerateFiles` in parsers/typescript.ts)
+  // THROWS on a read error (e.g. EMFILE) — guarded below. The markdown loop
+  // above uses the `glob` package's `globSync` (issue #216-era code, line
+  // ~216), which silently swallows read errors and returns an empty match
+  // list instead of throwing — NOT guarded, and deliberately left that way
+  // (pre-existing, tracked separately; see AGENTS.md). Do not assume the two
+  // call sites fail the same way.
+  let codeFiles: string[];
+  try {
+    codeFiles = globCodeFiles(rootDir, codePatterns);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code;
+    if (code === "EMFILE" || code === "ENFILE") {
+      if (!systemResourceExhaustedReported) {
+        systemResourceExhaustedReported = true;
+        warnings.push({
+          type: "system-resource-exhausted",
+          id: "glob:code-files",
+          files: [],
+          message:
+            `file descriptor exhaustion (${code}) while globbing code files during this scan; ` +
+            "the process ran out of open file descriptors. Consider raising the OS " +
+            "file-descriptor limit (e.g. `ulimit -n`) and re-running — other file reads " +
+            "in this scan may also be failing the same way. Shown once per scan " +
+            "regardless of how many files were affected.",
+        });
+      }
+      codeFiles = [];
+    } else {
+      // Any other glob failure (e.g. a malformed pattern) is a real problem
+      // the user needs to see, not something to silently paper over with an
+      // empty code-file set — rethrow.
+      throw e;
+    }
+  }
   const relCodeFiles = codeFiles.map((f) => relative(rootDir, f));
 
   // issue #287 — surface configs that still ingest node_modules (pre-#287
@@ -562,9 +606,57 @@ export function buildGraph(
   // change how an UNCHANGED file's import specifier resolves). Any difference
   // invalidates every TS fragment.
   const tsconfigPath = resolve(rootDir, "tsconfig.json");
-  const tsconfigHash = existsSync(tsconfigPath)
-    ? hashContent(readFileSync(tsconfigPath, "utf-8"))
-    : "no-tsconfig";
+  // PR #334 meta-review HIGH-2 — `existsSync` never throws (any error, e.g.
+  // EMFILE, just yields `false`), but the file can still become unreadable
+  // or trip EMFILE/ENFILE on the read itself, in the gap between that check
+  // and this line, or simply because the fd budget is already exhausted by
+  // the time we get here. Pre-fix, an uncaught throw here crashed the WHOLE
+  // build — worse than a missing tsconfig, which `existsSync` returning
+  // `false` already handles fine via the `"no-tsconfig"` sentinel. Fail-safe:
+  // EMFILE/ENFILE report the scan-wide `system-resource-exhausted` type
+  // (deduped via `systemResourceExhaustedReported`, same as every other
+  // guarded read in this module); any other error falls back to the
+  // `"no-tsconfig"` sentinel plus a generic `unreadable-file` warning so the
+  // user knows tsconfig-driven import resolution (jsx/allowJs/
+  // resolveJsonModule) silently did not apply this run.
+  let tsconfigHash: string;
+  if (!existsSync(tsconfigPath)) {
+    tsconfigHash = "no-tsconfig";
+  } else {
+    try {
+      tsconfigHash = hashContent(readFileSync(tsconfigPath, "utf-8"));
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException)?.code;
+      const message = e instanceof Error ? e.message : String(e);
+      if (code === "EMFILE" || code === "ENFILE") {
+        if (!systemResourceExhaustedReported) {
+          systemResourceExhaustedReported = true;
+          warnings.push({
+            type: "system-resource-exhausted",
+            id: "tsconfig.json",
+            files: ["tsconfig.json"],
+            message:
+              `file descriptor exhaustion (${code}) while reading files during this scan; ` +
+              "the process ran out of open file descriptors. Consider raising the OS " +
+              "file-descriptor limit (e.g. `ulimit -n`) and re-running — other file reads " +
+              "in this scan may also be failing the same way. Shown once per scan " +
+              "regardless of how many files were affected.",
+          });
+        }
+      } else {
+        warnings.push({
+          type: "unreadable-file",
+          id: "tsconfig.json",
+          files: ["tsconfig.json"],
+          message:
+            `could not read "tsconfig.json" (${message})${code ? ` [${code}]` : ""}; continuing ` +
+            "as if no tsconfig.json was present. TS import resolution (jsx/allowJs/" +
+            "resolveJsonModule) may differ from a run where it is readable.",
+        });
+      }
+      tsconfigHash = "no-tsconfig";
+    }
+  }
   const tsEnvKey = hashContent(
     JSON.stringify([tsconfigHash, tsMode, codeId ?? null, [...relCodeFiles].sort()]),
   );
@@ -574,6 +666,16 @@ export function buildGraph(
   const fragmentByFile = new Map<string, TsFragment>();
   const missPaths: string[] = [];
   const missHashes = new Map<string, string>();
+  // PR #334 meta-review HIGH-1 — content for every miss path whose read
+  // (below) actually succeeded, handed straight through to `parseTSFilePaths`
+  // so it never re-reads the file. See that function's doc comment for why a
+  // second, independent read here was dangerous (an asymmetric hash-succeeds
+  // / parse-fails race could poison the cache with a broken fragment under a
+  // real, correct hash). A path is deliberately ABSENT from this map when its
+  // own read (below) failed — `parseTSFile`'s guarded read is still the only
+  // thing that attempts (and diagnoses) that file's read, unchanged from
+  // before this fix.
+  const missContents = new Map<string, string>();
   for (let i = 0; i < codeFiles.length; i++) {
     // issue #264 — this read (done purely to compute a cache-validity hash)
     // can throw for exactly the same reason `parseTSFile`'s own read can
@@ -588,9 +690,9 @@ export function buildGraph(
     // `hashContent("")` if that were used as the sentinel instead. The
     // actual "can't read, warn, synthesize a bare node" handling — and the
     // ONLY place the `unreadable-file` warning is emitted from — lives in
-    // `parseTSFile`, which independently attempts (and fails) the same read
-    // for every path in `missPaths`; this catch only needs to avoid crashing
-    // and route the file there, not duplicate that diagnostic.
+    // `parseTSFile`, which independently attempts (and, for this one path,
+    // fails) the same read; this catch only needs to avoid crashing and
+    // route the file there, not duplicate that diagnostic.
     let content: string | undefined;
     try {
       content = readFileSync(codeFiles[i], "utf-8");
@@ -609,10 +711,14 @@ export function buildGraph(
     } else {
       missPaths.push(codeFiles[i]);
       missHashes.set(codeFiles[i], contentHash);
+      // This read succeeded (we're past the `content === undefined` branch
+      // above) — hand it to `parseTSFilePaths` so `parseTSFile` reuses it
+      // instead of reading `codeFiles[i]` a second time (HIGH-1).
+      missContents.set(codeFiles[i], content);
     }
   }
   if (missPaths.length > 0) {
-    const parsed = parseTSFilePaths(rootDir, missPaths, tsMode, codeId);
+    const parsed = parseTSFilePaths(rootDir, missPaths, tsMode, codeId, missContents);
     for (const [abs, frag] of parsed) {
       // Preserve the parser's `starExports` side-channel (specs/018 §3) on the
       // freshly-parsed fragment so the builder's star-expansion pass below
