@@ -125,8 +125,35 @@ export interface ParsedSpec {
   inlineLinks: InlineLinkRef[];
 }
 
+// issue #294 — `parseMarkdown` is the file-path entry point, but nothing in
+// `src/` actually calls it: `buildGraph`'s markdown loop reads the file
+// itself (with its own errno-aware `unreadable-file` / #295
+// `system-resource-exhausted` warning) and calls `parseMarkdownContent`
+// directly. `parseMarkdown` survives as a convenience entry point for tests
+// and ad hoc scripts — a dead-code path in production, per the issue's
+// investigation — so it gets the simplest possible guard rather than a new
+// error type: swallow a failed read and return an empty `ParsedSpec`.
+//
+/**
+ * Read `filePath` and parse it as an artgraph spec/task markdown file.
+ *
+ * A file that cannot be read (missing, permission error, ...) is NOT an
+ * error here: `parseMarkdown` has no warnings channel of its own to report
+ * it through, so it returns an empty `ParsedSpec` (`{ nodes: [], edges: [],
+ * warnings: [], inlineLinks: [] }`) instead of throwing. Callers that need
+ * to distinguish "file exists but is empty" from "file could not be read"
+ * — or that want a warning/error surfaced — should check the file with
+ * `node:fs` themselves before calling this, or read it and call
+ * `parseMarkdownContent` directly (the pattern `buildGraph` uses).
+ */
 export function parseMarkdown(filePath: string, options?: ParseMarkdownOptions): ParsedSpec {
-  return parseMarkdownContent(readFileSync(filePath, "utf-8"), filePath, options);
+  let source: string;
+  try {
+    source = readFileSync(filePath, "utf-8");
+  } catch {
+    return { nodes: [], edges: [], warnings: [], inlineLinks: [] };
+  }
+  return parseMarkdownContent(source, filePath, options);
 }
 
 // Content-level entry point: identical to `parseMarkdown` but takes the file

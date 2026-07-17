@@ -92,6 +92,17 @@ export function printWarnings(warnings: BuildWarning[]) {
           `WARNING: ${w.message ?? `unreadable-file "${w.id}" in ${w.files.join(", ")}`}`,
         );
         break;
+      // issue #295 — file descriptor exhaustion (EMFILE/ENFILE) hit while
+      // reading a file during the scan. Shown by default (NOT in
+      // SILENT_WARNING_TYPES): this is a system-level problem the user
+      // needs to act on (raise the ulimit), unlike the two silent types
+      // below. `graph/builder.ts` already collapses every occurrence in one
+      // scan down to a single warning, so this case only ever prints once.
+      case "system-resource-exhausted":
+        console.error(
+          `WARNING: ${w.message ?? `system-resource-exhausted "${w.id}" in ${w.files.join(", ")}`}`,
+        );
+        break;
       // issue #287 — the include/testPatterns globs matched a file under
       // node_modules. Shown by default (NOT in SILENT_WARNING_TYPES): the
       // builder-provided message already carries the count and the

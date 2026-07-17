@@ -73,6 +73,16 @@ export interface BuildWarning {
     // silent — a scan silently missing a whole file's coverage is exactly
     // the kind of thing the author needs to see.
     | "unreadable-file"
+    // issue #295 — a DIFFERENT unreadable-file failure mode than the one
+    // above: `EMFILE`/`ENFILE` (the process, or the whole system, ran out
+    // of file descriptors) rather than a per-file permission/existence
+    // problem. Unlike `unreadable-file`, this is a scan-wide condition (any
+    // subsequent read may fail the same way), so `buildGraph` emits it at
+    // most ONCE per scan even when both the TS and markdown loops observe
+    // it (see the dedup guard around `warnings.push` below and in the TS
+    // warning-conversion loop). NOT silent — the user needs to act (raise
+    // the ulimit), so it is shown by default like `unreadable-file`.
+    | "system-resource-exhausted"
     // issue #287 — fired when the `include` / `testPatterns` globs matched
     // at least one file under a node_modules directory (any depth).
     // fast-glob does not exclude node_modules by default, so pre-#287
@@ -164,6 +174,15 @@ export function buildGraph(
   const edges: GraphEdge[] = [];
   const warnings: BuildWarning[] = [];
 
+  // issue #295 — `system-resource-exhausted` (EMFILE/ENFILE) is a scan-wide
+  // condition, not a per-file one: both the markdown loop below and the TS
+  // warning-conversion loop further down can independently observe it in
+  // the same `buildGraph()` call. This flag makes the two sites agree on
+  // "has this scan already reported it" so at most one warning of this
+  // type ever lands in `warnings`, regardless of how many files hit it or
+  // which loop (or how many times within a loop) got there first.
+  let systemResourceExhaustedReported = false;
+
   // issue #216 — ids with an ignored prefix are excluded at assembly time (no
   // req node, no edges touching them). Filtering here rather than inside the
   // parsers keeps parse-cache fragments a pure memo of parser output: toggling
@@ -225,16 +244,50 @@ export function buildGraph(
           specDirName && relFile.startsWith(specDirName + "/")
             ? relFile.slice(specDirName.length + 1)
             : relFile;
-        warnings.push({
-          type: "unreadable-file",
-          id: `doc:${docRelPath}`,
-          files: [relFile],
-          message:
-            `could not read "${relFile}" (${message}); skipped req/task/edge extraction for ` +
-            "this file. A bare doc node was still created so it stays visible in the graph, " +
-            "but it carries none of its usual reqs/tasks/edges until the file becomes readable " +
-            "again.",
-        });
+        // issue #295 — same errno branching as the TS side
+        // (`parsers/typescript.ts`'s `parseTSFile`): EACCES/EISDIR/ENOENT
+        // keep the #277 behavior byte-for-byte; EMFILE/ENFILE report the
+        // scan-wide `system-resource-exhausted` type instead, deduped
+        // against the TS loop's own occurrences via
+        // `systemResourceExhaustedReported`; every other code (or none)
+        // keeps the #277 generic message, with the code appended when
+        // present.
+        const code = (e as NodeJS.ErrnoException)?.code;
+        const baseMessage =
+          `could not read "${relFile}" (${message}); skipped req/task/edge extraction for ` +
+          "this file. A bare doc node was still created so it stays visible in the graph, " +
+          "but it carries none of its usual reqs/tasks/edges until the file becomes readable " +
+          "again.";
+        if (code === "EMFILE" || code === "ENFILE") {
+          if (!systemResourceExhaustedReported) {
+            systemResourceExhaustedReported = true;
+            warnings.push({
+              type: "system-resource-exhausted",
+              id: `doc:${docRelPath}`,
+              files: [relFile],
+              message:
+                `file descriptor exhaustion (${code}) while reading files during this scan; ` +
+                "the process ran out of open file descriptors. Consider raising the OS " +
+                "file-descriptor limit (e.g. `ulimit -n`) and re-running — other file reads " +
+                "in this scan may also be failing the same way. Shown once per scan " +
+                "regardless of how many files were affected.",
+            });
+          }
+        } else if (code === "EACCES" || code === "EISDIR" || code === "ENOENT") {
+          warnings.push({
+            type: "unreadable-file",
+            id: `doc:${docRelPath}`,
+            files: [relFile],
+            message: baseMessage,
+          });
+        } else {
+          warnings.push({
+            type: "unreadable-file",
+            id: `doc:${docRelPath}`,
+            files: [relFile],
+            message: code ? `${baseMessage} [${code}]` : baseMessage,
+          });
+        }
         // meta-review (PR #293, issue #277 follow-up) — asymmetry with the
         // readable path: for a readable doc, `autoNodes: false` only
         // suppresses nodes whose id equals `expectedAutoDocId` (a doc with
@@ -598,6 +651,17 @@ export function buildGraph(
     // cross-version fragment that predates the field (SCHEMA_VERSION 6
     // normally cold-invalidates those, but conversion must never crash).
     for (const tw of frag.warnings ?? []) {
+      // issue #295 — `system-resource-exhausted` is scan-wide, not per-file
+      // (see `systemResourceExhaustedReported`'s declaration above): a warm
+      // cache hit can replay one of these per fragment, and the TS side can
+      // hit EMFILE/ENFILE on many files in the same scan, so without this
+      // guard the conversion would emit one `system-resource-exhausted`
+      // warning per affected file/fragment instead of one per scan. Every
+      // other warning type is unaffected and still converts 1:1.
+      if (tw.type === "system-resource-exhausted") {
+        if (systemResourceExhaustedReported) continue;
+        systemResourceExhaustedReported = true;
+      }
       warnings.push({ type: tw.type, id: tw.symbolId, files: [tw.filePath], message: tw.message });
     }
   }
