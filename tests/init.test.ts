@@ -1211,6 +1211,73 @@ describe("runInit — agents field persistence (#158)", () => {
   });
 });
 
+// issue #257 — artgraph-setup's "Already installed? Report the state" branch
+// now offers a hook-only remediation command (`--force --agents=<list>
+// --no-scan --no-skills --no-integrate`) when the Stop hook is missing but
+// Skills are already distributed and the config already exists. Symmetric
+// to the "skills preserved" pattern above (`--no-skills --no-agent-context`
+// preserves config.agents / leaves `.cursor/skills` untouched): here the
+// opted-out stages (scan / skills / integrate) must leave the pre-existing
+// Skills directory and lock file byte-identical while the hooks stage
+// still runs and creates `.claude/settings.json`.
+describe("runInit — hook-only remediation path (issue #257)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = makeTmpDir();
+  });
+
+  afterEach(() => {
+    cleanup(tmp);
+  });
+
+  it("--force --agents=claude --no-scan --no-skills --no-integrate installs the Stop hook without touching Skills or the lock", () => {
+    // PM detection needs a package.json for the hooks stage to resolve a PM
+    // (installHooks is a no-op `skipped-no-pm` otherwise).
+    writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "t", type: "module" }));
+    writeFileSync(join(tmp, "pnpm-lock.yaml"), "");
+    writeFileSync(join(tmp, ".artgraph.json"), JSON.stringify({ agents: ["claude"] }));
+
+    // Simulate a prior init: Skills already distributed, lock already
+    // present, but the Stop hook was never wired (e.g. `--no-hooks` on the
+    // original install).
+    mkdirSync(join(tmp, ".claude", "skills", "artgraph-setup"), { recursive: true });
+    writeFileSync(
+      join(tmp, ".claude", "skills", "artgraph-setup", "SKILL.md"),
+      "pre-existing skill content\n",
+    );
+    const lockContent = JSON.stringify({ _meta: { schemaVersion: LOCK_SCHEMA_VERSION } });
+    writeFileSync(join(tmp, ".trace.lock"), lockContent);
+    expect(existsSync(join(tmp, ".claude", "settings.json"))).toBe(false);
+
+    const result = runInit(tmp, {
+      force: true,
+      agents: ["claude"],
+      noScan: true,
+      noSkills: true,
+      noIntegrate: true,
+    });
+
+    // Hook created.
+    expect(result.hooksInstall?.action).toBe("created");
+    const settingsPath = join(tmp, ".claude", "settings.json");
+    expect(existsSync(settingsPath)).toBe(true);
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    expect(settings.hooks.Stop[0].hooks[0].command).toContain("check --gate --diff");
+
+    // Skills untouched: no skillsInstalled result, and the pre-seeded file
+    // is byte-identical to what was there before.
+    expect(result.skillsInstalled).toBeUndefined();
+    expect(
+      readFileSync(join(tmp, ".claude", "skills", "artgraph-setup", "SKILL.md"), "utf-8"),
+    ).toBe("pre-existing skill content\n");
+
+    // Lock untouched: no scanSummary result, and the file is byte-identical.
+    expect(result.scanSummary).toBeUndefined();
+    expect(readFileSync(join(tmp, ".trace.lock"), "utf-8")).toBe(lockContent);
+  });
+});
+
 // F7 (meta-review, issue #243 follow-up) — coverage gap: `init`'s initial
 // scan reconciles the lock via `reconcile(abs, config, scanResult.graph,
 // { force: options.force ?? false })` (src/init.ts), but nothing previously

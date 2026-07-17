@@ -415,3 +415,35 @@ describe("SC-007 prose<->TS rule-level sync (meta-test)", () => {
     expect(template).toContain("src/package-manager.ts");
   });
 });
+
+// issue #258 — the `## Failure handling` section previously stopped on
+// "detection fails (rule 4) OR produced a warning", which contradicted the
+// actual implemented semantics: `detectPackageManager()` (src/package-
+// manager.ts) only returns `null` (a true stop condition) on rule 4; the
+// Yarn warnings (rule 1 / rule 2) are informational `console.error(
+// "WARNING: ...")` calls that do NOT change control flow — detection still
+// returns "pnpm". `artgraph-setup/SKILL.md` Step 2 already matches this
+// ("Relay any warning to the user verbatim... On detection failure, ask
+// which PM"). This test pins the corrected wording so the two prose copies
+// cannot drift back to treating a warning as a stop condition.
+describe("Failure handling section (issue #258) — warning is not a stop condition", () => {
+  const section = extractSection(
+    readRepoFile("templates", "skills", "_shared", "package-manager.md"),
+    "## Failure handling",
+  );
+
+  it("pauses to ask the user only on detection failure (rule 4)", () => {
+    expect(section).toMatch(/detection fails? \(rule 4\)/i);
+  });
+
+  it("does not list a warning as a stop condition", () => {
+    expect(section).not.toMatch(/or produced a warning/i);
+    expect(section).not.toMatch(/warning[^.]*pause/i);
+  });
+
+  it("relays a warning verbatim and continues with the detected PM instead of pausing", () => {
+    expect(section).toMatch(/warning/i);
+    expect(section).toMatch(/verbatim/i);
+    expect(section).toMatch(/not a stop condition/i);
+  });
+});
