@@ -1028,6 +1028,21 @@ artgraph:
   });
 });
 
+// issue #294 — `parseMarkdown`'s `readFileSync` used to be unguarded: a
+// nonexistent (or otherwise unreadable) path threw straight out of the
+// function. `parseMarkdown` has no warnings channel to report the failure
+// through (unlike `buildGraph`'s markdown loop, which synthesizes a bare
+// doc node + `unreadable-file` warning — issue #277), so the fix returns an
+// empty `ParsedSpec` instead.
+describe("parseMarkdown — unreadable path (issue #294)", () => {
+  it("returns an empty ParsedSpec instead of throwing for a nonexistent path", () => {
+    const missingPath = resolve(FIXTURE_DIR, "specs/does-not-exist-294.md");
+    expect(() => parseMarkdown(missingPath)).not.toThrow();
+    const result = parseMarkdown(missingPath);
+    expect(result).toEqual({ nodes: [], edges: [], warnings: [], inlineLinks: [] });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // req→req annotation helpers (specs/010-req-req-dependency)
 // ---------------------------------------------------------------------------

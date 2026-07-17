@@ -463,6 +463,37 @@ describe("CLI: scan graph payload", () => {
       rmSync(outDir, { recursive: true, force: true });
     }
   });
+
+  // issue #274(2) — `scan --serve`/`--output` never called into
+  // `printWarnings`/`reportGraphWarnings` at all, so a build warning (here:
+  // orphan-doc, same fixture shape as "CLI: warning output" below) was
+  // silently dropped on this path even though the identical fixture through
+  // plain `scan` (no --serve/--output) surfaces it on stderr.
+  it("--output surfaces build warnings on stderr (issue #274)", async () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "artgraph-output-warn-"));
+    const outDir = mkdtempSync(join(tmpdir(), "artgraph-output-warn-out-"));
+    try {
+      mkdirSync(join(tmpRoot, "specs"), { recursive: true });
+      mkdirSync(join(tmpRoot, "src"), { recursive: true });
+      writeFileSync(join(tmpRoot, "src", "app.ts"), "export const x = 1;\n");
+      writeFileSync(
+        join(tmpRoot, ".artgraph.json"),
+        JSON.stringify({ include: ["src/**/*.ts"], specDirs: ["specs"] }),
+      );
+      writeFileSync(
+        join(tmpRoot, "specs", "orphan.md"),
+        `---\nartgraph:\n  node_id: "orphan-src"\n  derives_from:\n    - nonexistent-target\n---\n# Orphan\n`,
+      );
+
+      const proc = await runAt(tmpRoot, ["scan", "--output", outDir]);
+      expect(proc.exitCode).toBe(0);
+      expect(proc.stderr).toContain("orphan-doc");
+      expect(proc.stderr).toContain("nonexistent-target");
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+      rmSync(outDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

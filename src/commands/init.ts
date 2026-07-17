@@ -2,8 +2,12 @@
 
 import { Command } from "commander";
 import { AGENT_IDS, type AgentId } from "../agents/descriptors.js";
-import { AGENTS_REQUIRED_ERROR, loadIntegrate, parseAgentsFlag } from "./shared.js";
-import { printWarnings } from "./presenters/warnings.js";
+import {
+  AGENTS_REQUIRED_ERROR,
+  loadIntegrate,
+  parseAgentsFlag,
+  reportGraphWarnings,
+} from "./shared.js";
 import { printIntegrateText } from "./presenters/integrate.js";
 
 export function registerInitCommand(program: Command): void {
@@ -141,7 +145,7 @@ export function registerInitCommand(program: Command): void {
             console.log(
               `  req: ${result.scanSummary.reqCount}  doc: ${result.scanSummary.docCount}  file: ${result.scanSummary.fileCount}  test: ${result.scanSummary.testCount}`,
             );
-            printWarnings(result.warnings);
+            reportGraphWarnings(result.warnings);
             console.log(`\nCreated .artgraph.json`);
             console.log(`Created ${result.config.lockFile}`);
           } else {

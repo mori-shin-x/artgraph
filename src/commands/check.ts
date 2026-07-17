@@ -3,8 +3,12 @@
 import { Command, InvalidArgumentError, Option } from "commander";
 import type { ArtifactGraph, CheckResult } from "../types.js";
 import type { BaselineIssues } from "../baseline.js";
-import { nonOptionValue, pathsToEntries, resolveTestResults } from "./shared.js";
-import { printWarnings } from "./presenters/warnings.js";
+import {
+  nonOptionValue,
+  pathsToEntries,
+  resolveTestResults,
+  reportGraphWarnings,
+} from "./shared.js";
 import { printCheckText } from "./presenters/check.js";
 
 export function registerCheckCommand(program: Command): void {
@@ -476,7 +480,7 @@ export function registerCheckCommand(program: Command): void {
         console.log(JSON.stringify({ ...result, warnings }));
       } else {
         printCheckText(result, { diff: !!opts.diff, gate: !!opts.gate });
-        printWarnings(warnings);
+        reportGraphWarnings(warnings);
       }
 
       // spec 017 (contract cli-check-gate §4.4 / §4.5, §3 note) — baseline

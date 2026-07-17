@@ -2,8 +2,7 @@
 
 import { resolve } from "node:path";
 import { Command } from "commander";
-import { resolveTestResults } from "./shared.js";
-import { printWarnings } from "./presenters/warnings.js";
+import { resolveTestResults, reportGraphWarnings } from "./shared.js";
 
 export function registerScanCommand(program: Command): void {
   program
@@ -41,6 +40,18 @@ export function registerScanCommand(program: Command): void {
       }
 
       if (opts.serve || opts.output) {
+        // issue #274(1) — `--serve`/`--output` never called into
+        // `printWarnings`/`reportGraphWarnings` at all: a
+        // `pathological-bracket-nesting` or `class-member-collision` warning
+        // from this same `scan()` call was silently dropped on both of these
+        // paths. Neither branch has a JSON payload (they render HTML), so
+        // print unconditionally — same rationale as `reconcile`'s
+        // no-`--format json`-mode call. Runs before every early
+        // return/`process.exit` below so the warning is never skipped
+        // regardless of which branch (output vs. serve, success vs. error)
+        // is taken.
+        reportGraphWarnings(result.warnings);
+
         const { readLockWithMeta, warnIfNewerLockSchema } = await import("../lock.js");
         const { check } = await import("../check.js");
         const { renderGraphData } = await import("../graph/render.js");
@@ -162,7 +173,7 @@ export function registerScanCommand(program: Command): void {
             `\nTest Results: total=${testResultStats.totalTests} passed=${testResultStats.passedTests} failed=${testResultStats.failedTests}`,
           );
         }
-        printWarnings(result.warnings);
+        reportGraphWarnings(result.warnings);
       }
     });
 }

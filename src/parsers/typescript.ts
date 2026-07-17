@@ -191,8 +191,21 @@ function buildIdMatchers(codeId?: string): IdMatchers {
 // deliberately not handed to the native parser" skip. `symbolId` holds the
 // FILE id (`file:<path>`), same convention as `pathological-bracket-nesting`,
 // since there is no symbol to attribute to (no content was ever read).
+// issue #295 — `EMFILE`/`ENFILE` (process/system file-descriptor exhaustion)
+// is a DIFFERENT failure mode than the permission/existence errors
+// `unreadable-file` covers: it means the process (or the whole system) is
+// out of file descriptors, so LATER reads are likely to fail the same way
+// too, not just this one file. `type` widened here so `parseTSFile`'s catch
+// (below) can emit the dedicated `system-resource-exhausted` variant; the
+// per-scan dedup (only one such warning per `buildGraph()` call, even if
+// both the TS and markdown loops hit it) lives in `graph/builder.ts`, not
+// here — this parser has no visibility into sibling files' outcomes.
 export interface TsParseWarning {
-  type: "class-member-collision" | "pathological-bracket-nesting" | "unreadable-file";
+  type:
+    | "class-member-collision"
+    | "pathological-bracket-nesting"
+    | "unreadable-file"
+    | "system-resource-exhausted";
   // Fully-qualified id the warning is about (`symbol:<path>#<name>`, or
   // `file:<path>` for a file-level warning).
   symbolId: string;
@@ -299,17 +312,42 @@ export function globCodeFiles(rootDir: string, patterns: string[]): string[] {
 // changed files). Import resolution consults the real file system, so targets
 // outside `filePaths` still resolve the same way they do in a full scan.
 // Returns a fragment per input path.
+//
+// PR #334 meta-review HIGH-1 — `contents` lets a caller that already read (and
+// hashed) a file's text hand it straight through instead of paying a SECOND
+// `readFileSync` here. `builder.ts`'s incremental parse-cache path does
+// exactly this: it reads every code file once to compute the cache-validity
+// hash, then (on a miss) used to call this function, which called
+// `parseTSFile`, which read the SAME file again to actually parse it. Two
+// reads of one file are two independent chances to fail, and — critically —
+// they can fail ASYMMETRICALLY: the first (hashing) read succeeds, producing
+// a real content hash, while the second (parsing) read fails (EMFILE because
+// fd pressure got worse between the two reads; EACCES if permissions changed
+// mid-scan). Pre-fix, that asymmetry let a broken, empty fragment (bare file
+// node, no symbols/edges, plus an `unreadable-file`/`system-resource-
+// exhausted` warning) get persisted to the parse cache keyed under the FIRST
+// read's real, correct hash — so a later warm run, even after the
+// environment recovered, would hash-match the poisoned entry and replay the
+// broken fragment FOREVER without ever attempting to reparse (see
+// tests/ts-double-read-regression.test.ts). Passing `contents` collapses the
+// two reads into one for every file the caller already has content for, so
+// this asymmetric failure mode cannot occur at all for those files. A path
+// missing from `contents` (or when the map itself is omitted) falls back to
+// `parseTSFile`'s own guarded read — this keeps every OTHER caller (direct
+// `parseTSFilePaths` callers in tests, `createTSParser`'s per-file loop via
+// `parseTSFile` itself) working exactly as before.
 export function parseTSFilePaths(
   rootDir: string,
   filePaths: string[],
   mode: "file" | "symbol" = "file",
   codeId?: string,
+  contents?: Map<string, string>,
 ): Map<string, ParsedTS> {
   const matchers = buildIdMatchers(codeId);
   const ctx = createResolverContext(rootDir);
   const out = new Map<string, ParsedTS>();
   for (const filePath of filePaths) {
-    out.set(filePath, parseTSFile(filePath, rootDir, mode, matchers, ctx));
+    out.set(filePath, parseTSFile(filePath, rootDir, mode, matchers, ctx, contents?.get(filePath)));
   }
   return out;
 }
@@ -583,12 +621,39 @@ export function safeParseSync(filePath: string, content: string): SafeParseResul
   }
 }
 
+// issue #295 — shared wording for the `system-resource-exhausted` warning.
+// Only one of these ever survives per scan (deduped in `graph/builder.ts`),
+// so the exact site that first observed EMFILE/ENFILE doesn't matter to the
+// user — the actionable advice (raise the ulimit) is the same either way.
+// `graph/builder.ts`'s markdown loop builds its own copy of this wording
+// (importing from here would be a reverse dependency: builder.ts already
+// imports this module).
+function systemResourceExhaustedMessage(code: string): string {
+  return (
+    `file descriptor exhaustion (${code}) while reading files during this scan; the process ` +
+    "ran out of open file descriptors. Consider raising the OS file-descriptor limit " +
+    "(e.g. `ulimit -n`) and re-running — other file reads in this scan may also be failing " +
+    "the same way. Shown once per scan regardless of how many files were affected."
+  );
+}
+
 function parseTSFile(
   filePath: string,
   rootDir: string,
   mode: "file" | "symbol",
   matchers: IdMatchers,
   ctx: ResolverContext,
+  // PR #334 meta-review HIGH-1 — when the caller already read this file (the
+  // parse-cache path in `graph/builder.ts` reads every code file once to
+  // compute a cache-validity hash), it passes that exact text through here
+  // instead of letting this function read the file a SECOND time. See
+  // `parseTSFilePaths`'s doc comment for why a second, independent read is
+  // dangerous (asymmetric read failure can poison the parse cache with a
+  // broken fragment under a real, correct content hash). `undefined` (every
+  // call site that doesn't already have the content — `createTSParser`'s
+  // per-file loop, and direct `parseTSFile`/`parseTSFilePaths` callers in
+  // tests) falls through to the guarded read below exactly as before.
+  precheckedContent?: string,
 ): ParsedTS {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
@@ -613,27 +678,66 @@ function parseTSFile(
   // none of extractSymbols / extractImports / extractImplTags can run
   // without content, so this file contributes no symbols, imports, or
   // impl/verifies edges until it becomes readable again.
+  //
+  // This guarded read only runs when `precheckedContent` is undefined — see
+  // that parameter's doc comment above.
   let rawContent: string;
-  try {
-    rawContent = readFileSync(filePath, "utf-8");
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    warnings.push({
-      type: "unreadable-file",
-      symbolId: `file:${relPath}`,
-      filePath: relPath,
-      message:
+  if (precheckedContent !== undefined) {
+    rawContent = precheckedContent;
+  } else {
+    try {
+      rawContent = readFileSync(filePath, "utf-8");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      // issue #295 — branch on the errno `code` rather than treating every
+      // unreadable file identically:
+      //  - EACCES/EISDIR/ENOENT: the original #264 behavior, unchanged byte
+      //    for byte — a per-file permission/existence problem.
+      //  - EMFILE/ENFILE: the process (or system) ran out of file
+      //    descriptors — a different, scan-wide condition where later reads
+      //    are likely failing the same way. Reported as the dedicated
+      //    `system-resource-exhausted` type; `graph/builder.ts` collapses
+      //    every occurrence across this scan (TS AND markdown loops alike)
+      //    down to a single warning.
+      //  - default (any other code, including `undefined`): keeps the exact
+      //    #264 generic message, with the errno code appended when one is
+      //    present (e.g. ELOOP) so it isn't silently lost — pinned by a
+      //    dedicated test (tests/typescript.test.ts).
+      const code = (e as NodeJS.ErrnoException)?.code;
+      const baseMessage =
         `could not read "${relPath}" (${message}); skipped symbol/import/@impl extraction for ` +
         "this file. A file node was still created so it stays visible in the graph, but it " +
-        "carries none of its usual edges until the file becomes readable again.",
-    });
-    nodes.push({
-      id: `file:${relPath}`,
-      kind: isTest ? "test" : "file",
-      filePath: relPath,
-      contentHash: hash(""),
-    });
-    return { nodes, edges, warnings };
+        "carries none of its usual edges until the file becomes readable again.";
+      if (code === "EMFILE" || code === "ENFILE") {
+        warnings.push({
+          type: "system-resource-exhausted",
+          symbolId: `file:${relPath}`,
+          filePath: relPath,
+          message: systemResourceExhaustedMessage(code),
+        });
+      } else if (code === "EACCES" || code === "EISDIR" || code === "ENOENT") {
+        warnings.push({
+          type: "unreadable-file",
+          symbolId: `file:${relPath}`,
+          filePath: relPath,
+          message: baseMessage,
+        });
+      } else {
+        warnings.push({
+          type: "unreadable-file",
+          symbolId: `file:${relPath}`,
+          filePath: relPath,
+          message: code ? `${baseMessage} [${code}]` : baseMessage,
+        });
+      }
+      nodes.push({
+        id: `file:${relPath}`,
+        kind: isTest ? "test" : "file",
+        filePath: relPath,
+        contentHash: hash(""),
+      });
+      return { nodes, edges, warnings };
+    }
   }
   const content = stripBom(rawContent);
   const fileHash = hash(content);
