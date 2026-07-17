@@ -41,4 +41,6 @@ Warnings and the failure message go to the user (the TS detector writes them to 
 
 ## Failure handling
 
-If detection fails (rule 4) or produced a warning, the Skill must pause and ask the user: "Which package manager would you like to use? (npm / pnpm / bun / deno)". Use the answer as the authoritative PM for the rest of the session and skip re-running detection. Record the chosen PM in the Skill's working memory so subsequent steps (install, exec) stay consistent.
+If detection fails (rule 4), the Skill must pause and ask the user: "Which package manager would you like to use? (npm / pnpm / bun / deno)". Use the answer as the authoritative PM for the rest of the session and skip re-running detection. Record the chosen PM in the Skill's working memory so subsequent steps (install, exec) stay consistent.
+
+A warning (rule 1's Yarn fallback or rule 2's `yarn.lock` fallback) is not a stop condition: relay it to the user verbatim (see the backticked wording in the rules above) and continue with the detected PM (pnpm) for the rest of the session — do not pause to ask.
