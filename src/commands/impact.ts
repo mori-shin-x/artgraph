@@ -7,6 +7,7 @@ import {
   pathsToEntries,
   reportGraphWarnings,
   TRACE_NO_SHARDS_GUIDANCE,
+  withFatalErrors,
 } from "./shared.js";
 import { printImpactText } from "./presenters/impact.js";
 
@@ -168,7 +169,11 @@ export function registerImpactCommand(program: Command): void {
       const { readLockWithMeta, warnIfNewerLockSchema } = await import("../lock.js");
       const { entryOriginIds, impact, resolveStartIds, resolveOriginReqs } =
         await import("../graph/traverse.js");
-      const config = loadConfig(rootDir);
+      // issue #279 / issue #336 (meta-review F1) — `loadConfig()` used to run
+      // unguarded here, so a malformed `.artgraph.json` propagated uncaught
+      // to cli.ts's format-blind top-level catch (see check.ts's identical
+      // comment on `withFatalErrors` for the full rationale).
+      const config = await withFatalErrors(opts.format, () => loadConfig(rootDir));
 
       // spec 020 (FR-018, contracts/cli-surface.md §5) — `--tests` requires
       // trace evidence to exist at all; exit 1 with the SAME guidance string
@@ -230,7 +235,10 @@ export function registerImpactCommand(program: Command): void {
       // `--diff` "no changes" early-exit JSON payload below (mirrors
       // `check --diff`'s equivalent branch) and to the final output at the
       // bottom of this action.
-      const { graph, warnings } = scan(rootDir, config);
+      // issue #279 — format-aware fatal-error handling for `scan()`: this
+      // action had no catch of its own before, so the error used to
+      // propagate uncaught to cli.ts's format-blind top-level catch.
+      const { graph, warnings } = await withFatalErrors(opts.format, () => scan(rootDir, config));
       // issue #243 — read-only w.r.t. the lock: warn on a newer schema and
       // keep going (see commands/check.ts's identical comment).
       const { lock, schemaVersion } = readLockWithMeta(rootDir, config.lockFile);

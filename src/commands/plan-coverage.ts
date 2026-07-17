@@ -3,7 +3,17 @@
 import { Command, Option } from "commander";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { DASH_PATH_HINT, nonOptionValue, reportGraphWarnings } from "./shared.js";
+import {
+  DASH_PATH_HINT,
+  nonOptionValue,
+  reportGraphWarnings,
+  printFatalCatchAll,
+  printOxcLoadError,
+} from "./shared.js";
+// See commands/shared.ts's `withFatalErrors` doc comment for why this
+// static import is free (cli.ts's own top-level catch already pays it
+// unconditionally on every real CLI invocation).
+import { OxcLoadError } from "../parsers/typescript.js";
 
 // spec 014 (FR-013 — FR-020): plan-coverage subcommand. Reads tasks.md /
 // plan.md (and the current spec.md) to detect REQs that are *affected*
@@ -63,6 +73,16 @@ export function registerPlanCoverageCommand(program: Command): void {
       const { loadConfig } = await import("../config.js");
       const { runPlanCoverage } = await import("../plan-coverage/index.js");
 
+      // issue #336 (meta-review F1) — resolved BEFORE `loadConfig()` (now
+      // inside the `try` below) is ever called: a malformed `.artgraph.json`
+      // must produce a format-aware fatal error, which requires `format` to
+      // already be known by the time `loadConfig()` can throw. This is the
+      // only reordering in this action — every usage-error check below
+      // (missing spec dir, missing tasks.md/plan.md) still runs in its
+      // original place; those are plain usage errors, not part of the
+      // fatal-error contract this section guards.
+      const format: "json" | "text" = opts.format === "json" ? "json" : "text";
+
       // Resolve spec dir per the contract precedence.
       const resolved = resolveSpecDir({
         explicitFlag: opts.spec,
@@ -105,14 +125,20 @@ export function registerPlanCoverageCommand(program: Command): void {
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
 
-      // `.artgraph.json`'s planCoverage section drives requireFilesSection
-      // (default false).
-      const config = loadConfig(rootDir);
-      const requireFilesSection: boolean = config.planCoverage?.requireFilesSection ?? false;
-
-      const format: "json" | "text" = opts.format === "json" ? "json" : "text";
-
       try {
+        // issue #336 (meta-review F1) — `loadConfig()` moved INSIDE this
+        // guarded `try` (it used to run before the `try` block even
+        // started, so a malformed `.artgraph.json` threw straight past this
+        // action's catch-all to cli.ts's format-blind top-level handler — a
+        // raw Node stack trace regardless of `--format`). Mirrors
+        // rename.ts's `loadScanContext`, the reference implementation for
+        // "loadConfig inside the guarded region".
+        //
+        // `.artgraph.json`'s planCoverage section drives requireFilesSection
+        // (default false).
+        const config = loadConfig(rootDir);
+        const requireFilesSection: boolean = config.planCoverage?.requireFilesSection ?? false;
+
         const result = runPlanCoverage({
           repoRoot: rootDir,
           specDir,
@@ -136,8 +162,23 @@ export function registerPlanCoverageCommand(program: Command): void {
           process.exit(result.exitCode);
         }
       } catch (e) {
+        // issue #279 — `OxcLoadError` (issue #263: oxc-parser's native
+        // binding missing/broken) is an environment failure with its own
+        // complete diagnostic message; handled before the generic catch-all
+        // below so it never gets the generic `Error: ` prefix.
+        if (e instanceof OxcLoadError) {
+          printOxcLoadError(format, e);
+          process.exit(1);
+        }
+        // issue #279 (item 1) — this catch-all used to be plain-text-only
+        // (`console.error(\`Error: ${msg}\`)`) regardless of `--format`, so a
+        // `--format json` consumer piping this command's fatal errors to
+        // `jq` got a parse error instead of a `{"error": ...}` envelope.
+        // Mirrors `commands/rename.ts`'s original `fail()` (same envelope
+        // shape, same stderr stream — see docs/commands.md's fatal-error
+        // contract section); text mode's `Error: ${msg}` line is unchanged.
         const msg = e instanceof Error ? e.message : String(e);
-        console.error(`Error: ${msg}`);
+        printFatalCatchAll(format, msg);
         process.exit(1);
       }
     });

@@ -84,18 +84,159 @@ export interface RenameResult {
   // issue #265 — `buildGraph()`'s own warnings (pathological-bracket-nesting,
   // class-member-collision, …) from the pre-rewrite scan that resolved
   // `existingIds` below. Kept as a separate field from `warnings` above (a
-  // different, rename-specific warning type). `reconcileAfterWrite` runs a
-  // SECOND scan after files are written purely to refresh the lock, and that
-  // second scan's warnings are currently discarded outright — not deduped
-  // against these, just dropped. See issue #273 for surfacing (or properly
-  // deduping) that post-write scan's warnings.
+  // different, rename-specific warning type).
   buildWarnings: BuildWarning[];
+  // issue #273-2 ((a)-lite) — `reconcileAfterWrite`'s post-write `scan()`
+  // (which runs purely to refresh the lock) can surface a BuildWarning the
+  // pre-write scan never had — e.g. a `--merge` scaffold landing in two
+  // spec files mints a fresh `duplicate-id`. Deliberately ADDITIVE: a new
+  // OPTIONAL field, `buildWarnings` above is untouched. This is
+  // non-breaking for a consumer that reads only KNOWN fields (the common
+  // case, and the only one `docs/commands.md` documents) — it is NOT a
+  // guarantee for every possible consumer: one that validates the JSON
+  // payload against a closed/exact schema, or asserts a byte-exact
+  // snapshot of the full result object, WILL observe a diff the first time
+  // a rename actually produces a new post-write warning (this field simply
+  // did not exist before issue #273-2 at all). Contains only warnings NOT
+  // already present pre-write (set-diffed via `warningKey`, issue #336
+  // F3/F4 — type+id+sorted-files+message, except `system-resource-exhausted`
+  // which keys on type alone — against `buildWarnings`) — a warning that
+  // existed before the rename and that rename did nothing to cause or fix
+  // is not re-reported here. `undefined` (the key is present but unset, and
+  // `JSON.stringify` drops it) when no post-write scan ran at all — either
+  // `--dry-run` (which never writes or reconciles) or no `.trace.lock` file
+  // existed to reconcile against. Deliberately distinct from an empty array
+  // (`[]`, meaning the post-write scan ran and found nothing new): callers
+  // must not conflate "no post-write scan happened" with "post-write scan
+  // found nothing new" — the latter is a real, positive absence-of-warnings
+  // signal; the former is simply "no data".
+  postWriteWarnings?: BuildWarning[];
   applied: boolean;
 }
 
 // Scaffold placeholder appended for newly created requirements. Kept in English
 // to match the rest of the CLI output (M6).
 const SCAFFOLD_PLACEHOLDER = "(TODO: describe this requirement)";
+
+/**
+ * issue #273-1 — every throw AFTER `loadScanContext()` (below) has already
+ * captured this rename's pre-write `buildGraph()` warnings (`graphWarnings`
+ * — `duplicate-id`, `pathological-bracket-nesting`, …), but a bare `Error`
+ * has nowhere to carry them: `commands/rename.ts`'s catch used to keep only
+ * `e.message`, so those warnings were silently dropped on EVERY validation
+ * failure (`--from`/`--to` identical, invalid target ID, the zero-hit safety
+ * valve, a rejected `--force`-less lock-schema-version bump, …) — the exact
+ * "complete swallow" the Step 0-pre investigation confirmed. Every
+ * validation/safety-valve throw in `executeRename`/`executeSplit`/
+ * `executeMerge` below is routed through `runValidation` (also below)
+ * instead of a bare `throw new Error(...)`, so it surfaces as this type
+ * with `buildWarnings` attached. A throw that fires BEFORE
+ * `loadScanContext()` runs (there is none today) is deliberately exempt —
+ * it has no `graphWarnings` yet and stays a plain `Error`, matching the
+ * pre-#273 behavior for that (currently hypothetical) case.
+ */
+export class RenameValidationError extends Error {
+  readonly buildWarnings: BuildWarning[];
+
+  constructor(message: string, buildWarnings: BuildWarning[]) {
+    super(message);
+    this.name = "RenameValidationError";
+    this.buildWarnings = buildWarnings;
+  }
+}
+
+/**
+ * Run `fn`, converting anything it throws — a direct `throw new Error(...)`
+ * inline, or one bubbling up from a helper like `assertRenameableSource` /
+ * `assertValidTargetId` / `assertRenameLockWritable` — into a
+ * `RenameValidationError` carrying `graphWarnings`. A `RenameValidationError`
+ * thrown by a nested `runValidation` call (none today) passes through
+ * unwrapped rather than being double-wrapped.
+ */
+function runValidation(graphWarnings: BuildWarning[], fn: () => void): void {
+  try {
+    fn();
+  } catch (e) {
+    if (e instanceof RenameValidationError) throw e;
+    throw new RenameValidationError(e instanceof Error ? e.message : String(e), graphWarnings);
+  }
+}
+
+/**
+ * issue #273-2 ((a)-lite) — structural identity key for a `BuildWarning`,
+ * used to set-diff the post-write scan's warnings against the pre-write
+ * scan's. Two scans build unrelated `BuildWarning` object instances even for
+ * what is semantically "the same" warning, so object/reference identity
+ * can't be used — `type`+`id`+`files`+`message` together are what the
+ * default presenter (`printWarnings`) actually renders, so two warnings that
+ * key identically are indistinguishable to a reader regardless of which
+ * scan produced them.
+ *
+ * issue #336 (meta-review F3/F4) — two refinements on top of the original
+ * key:
+ *
+ *   F4 — `w.files` is sorted before stringifying. `BuildWarning.files`'
+ *   ORDER is a byproduct of directory-traversal / glob-enumeration order,
+ *   which is not guaranteed stable across two independent `scan()` calls
+ *   (pre-write vs. post-write) even when the underlying file SET is
+ *   identical. An unsorted key would treat that pure ordering wobble as a
+ *   different warning, spuriously promoting an unchanged
+ *   `duplicate-id`/etc. warning into `postWriteWarnings`.
+ *
+ *   F3 — `system-resource-exhausted` is keyed on `type` ALONE (id/files/
+ *   message ignored). This warning is scan-wide, not about a specific file:
+ *   `graph/builder.ts`'s EMFILE/ENFILE guards report whichever file/glob/
+ *   tsconfig read happened to be the FIRST one hit by the exhaustion in
+ *   THIS particular scan ("Shown once per scan regardless of how many files
+ *   were affected" — see the warning's own `message` text at its push
+ *   sites), so the `id`/`files` it carries are a property of scan ORDER, not
+ *   of the underlying condition. Keying on the full tuple like every other
+ *   warning type would treat "the OS is still out of file descriptors" (the
+ *   same recurring condition on both the pre-write and post-write scan) as a
+ *   brand-new warning on almost every affected rename, purely because the
+ *   first-offender id/files happened to differ between the two scans —
+ *   drowning the genuinely-new-warnings signal `postWriteWarnings` exists to
+ *   surface. This does NOT special-case away system-resource-exhaustion
+ *   from `postWriteWarnings` entirely (meta-review recommendation (ii), not
+ *   the alternative "exclude the type outright"): a scan pair where the
+ *   PRE-write scan has no `system-resource-exhausted` key at all and the
+ *   POST-write scan hits one still diffs as new (`diffPostWriteWarnings`'s
+ *   `seen` set, built from `preWrite`, has nothing to match against) — only
+ *   "recurs across both scans" is suppressed, never "newly appeared".
+ *
+ * Exported purely for direct unit testing of the F3/F4 keying rules.
+ */
+export function warningKey(w: BuildWarning): string {
+  if (w.type === "system-resource-exhausted") {
+    return JSON.stringify([w.type]);
+  }
+  return JSON.stringify([w.type, w.id, [...w.files].sort(), w.message ?? null]);
+}
+
+/**
+ * issue #273-2 ((a)-lite) — `postWrite` is `reconcileAfterWrite`'s scan
+ * result: `undefined` when no post-write scan ran at all (dry-run, or no
+ * lock file to reconcile), an array (possibly empty) otherwise. Returns
+ * `undefined` unchanged in the former case (see `RenameResult.postWriteWarnings`'s
+ * doc for why that's kept distinct from `[]`); otherwise returns only the
+ * `postWrite` warnings whose structural key (`warningKey` above — type+id+
+ * sorted-files+message, except `system-resource-exhausted` which keys on
+ * `type` alone, issue #336 F3/F4) was NOT already present in `preWrite` — a
+ * warning the pre-write scan already had, that this rename did nothing to
+ * introduce, is not re-reported as "new".
+ *
+ * Exported (alongside `warningKey`) purely for direct unit testing of the
+ * F3/F4 keying rules — every real caller reaches this only through
+ * `execute*` above.
+ */
+export function diffPostWriteWarnings(
+  postWrite: BuildWarning[] | undefined,
+  preWrite: BuildWarning[],
+): BuildWarning[] | undefined {
+  if (postWrite === undefined) return undefined;
+  const seen = new Set(preWrite.map(warningKey));
+  return postWrite.filter((w) => !seen.has(warningKey(w)));
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -176,16 +317,25 @@ function assertRenameableSource(id: string): void {
  * After files are written, rebuild the lock from a fresh scan so contentHashes,
  * cross-references and specFile entries reflect the new on-disk state. Without
  * this, `artgraph check` immediately reports drift for every rewritten node
- * (F1). Only runs when a lock file already existed.
+ * (F1). Only runs when a lock file already existed — returns `undefined` in
+ * that case (see `RenameResult.postWriteWarnings`'s doc: distinct from `[]`,
+ * "no post-write scan ran" vs. "ran and found nothing new").
+ *
+ * issue #273-2 ((a)-lite) — this second scan's `warnings` used to be
+ * discarded outright (`const { graph } = scan(...)`). Now returned as-is
+ * (undiffed); the caller (`applyWrites` → each `execute*`) diffs them
+ * against the pre-write `graphWarnings` via `diffPostWriteWarnings`.
  */
-function reconcileAfterWrite(rootDir: string, config: ArtgraphConfig, force: boolean): void {
+function reconcileAfterWrite(
+  rootDir: string,
+  config: ArtgraphConfig,
+  force: boolean,
+): BuildWarning[] | undefined {
   const lockFilePath = resolve(rootDir, config.lockFile);
-  if (!existsSync(lockFilePath)) return;
-  // This second scan's `warnings` are discarded outright (see the
-  // `buildWarnings` doc on `RenameResult` above — issue #273 tracks properly
-  // surfacing them instead of dropping them on the floor).
-  const { graph } = scan(rootDir, config);
+  if (!existsSync(lockFilePath)) return undefined;
+  const { graph, warnings } = scan(rootDir, config);
   reconcile(rootDir, config, graph, { force });
+  return warnings;
 }
 
 /**
@@ -228,18 +378,24 @@ function loadScanContext(rootDir: string): ScanContext {
   };
 }
 
+// issue #273-2 ((a)-lite) — returns `reconcileAfterWrite`'s raw (undiffed)
+// post-write scan warnings, or `undefined` on `--dry-run` (which never
+// writes or reconciles at all — same "no post-write scan ran" case as no
+// lock file existing). Each `execute*` below diffs this against its own
+// `graphWarnings` via `diffPostWriteWarnings` before putting it on the
+// result.
 function applyWrites(
   rootDir: string,
   config: ArtgraphConfig,
   filesToWrite: Map<string, string>,
   dryRun: boolean,
   force: boolean,
-): void {
-  if (dryRun) return;
+): BuildWarning[] | undefined {
+  if (dryRun) return undefined;
   for (const [absPath, content] of filesToWrite) {
     writeFileSync(absPath, content, "utf-8");
   }
-  reconcileAfterWrite(rootDir, config, force);
+  return reconcileAfterWrite(rootDir, config, force);
 }
 
 // ── executeRename ───────────────────────────────────────────────────
@@ -247,25 +403,29 @@ function applyWrites(
 export function executeRename(options: RenameOptions & { from: string; to: string }): RenameResult {
   const { rootDir, dryRun, from, to, force = false } = options;
   const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
-  if (!dryRun) assertRenameLockWritable(rootDir, config, force);
+  if (!dryRun) {
+    runValidation(graphWarnings, () => assertRenameLockWritable(rootDir, config, force));
+  }
 
   // Validate
-  if (from === to) {
-    throw new Error(`Source and target IDs are identical ("${from}"); nothing to rename.`);
-  }
-  assertRenameableSource(from);
-  assertValidTargetId(
-    to,
-    config.reqPatterns,
-    config.taskConventions,
-    config.disableBuiltinTaskConventions,
-  );
-  if (!existingIds.has(from)) {
-    throw new Error(`ID "${from}" does not exist in the project.`);
-  }
-  if (existingIds.has(to)) {
-    throw new Error(`ID "${to}" already exists in the project.`);
-  }
+  runValidation(graphWarnings, () => {
+    if (from === to) {
+      throw new Error(`Source and target IDs are identical ("${from}"); nothing to rename.`);
+    }
+    assertRenameableSource(from);
+    assertValidTargetId(
+      to,
+      config.reqPatterns,
+      config.taskConventions,
+      config.disableBuiltinTaskConventions,
+    );
+    if (!existingIds.has(from)) {
+      throw new Error(`ID "${from}" does not exist in the project.`);
+    }
+    if (existingIds.has(to)) {
+      throw new Error(`ID "${to}" already exists in the project.`);
+    }
+  });
 
   // Rewrite each file
   const allChanges: RewriteChange[] = [];
@@ -291,11 +451,13 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
   // file must carry a rewritable reference. Zero hits means the enumeration
   // and the scan disagree — report the failure loudly instead of "success".
   if (allChanges.length === 0) {
-    throw new Error(
-      `ID "${from}" was not found in any of the ${scannedFiles.length} files matched by ` +
-        `.artgraph.json include/specDirs/testPatterns — nothing was rewritten. ` +
-        `Check that the files referencing "${from}" are covered by those patterns.`,
-    );
+    runValidation(graphWarnings, () => {
+      throw new Error(
+        `ID "${from}" was not found in any of the ${scannedFiles.length} files matched by ` +
+          `.artgraph.json include/specDirs/testPatterns — nothing was rewritten. ` +
+          `Check that the files referencing "${from}" are covered by those patterns.`,
+      );
+    });
   }
 
   // Project lock changes (also the source of truth for dry-run reporting).
@@ -321,7 +483,7 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
     ),
   ];
 
-  applyWrites(rootDir, config, filesToWrite, dryRun, force);
+  const postWriteScanWarnings = applyWrites(rootDir, config, filesToWrite, dryRun, force);
 
   return {
     operation: "rename",
@@ -334,6 +496,7 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
     lockChanges,
     warnings,
     buildWarnings: graphWarnings,
+    postWriteWarnings: diffPostWriteWarnings(postWriteScanWarnings, graphWarnings),
     applied: !dryRun,
   };
 }
@@ -345,32 +508,36 @@ export function executeSplit(
 ): RenameResult {
   const { rootDir, dryRun, splitId, intoIds, force = false } = options;
   const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
-  if (!dryRun) assertRenameLockWritable(rootDir, config, force);
+  if (!dryRun) {
+    runValidation(graphWarnings, () => assertRenameLockWritable(rootDir, config, force));
+  }
 
   // Validate
-  assertRenameableSource(splitId);
-  if (!existingIds.has(splitId)) {
-    throw new Error(`ID "${splitId}" does not exist in the project.`);
-  }
-  if (intoIds.length === 0) {
-    throw new Error(`--split requires at least one target ID via --into.`);
-  }
-  const seen = new Set<string>();
-  for (const newId of intoIds) {
-    assertValidTargetId(
-      newId,
-      config.reqPatterns,
-      config.taskConventions,
-      config.disableBuiltinTaskConventions,
-    );
-    if (seen.has(newId)) {
-      throw new Error(`Duplicate target ID "${newId}" in --into.`);
+  runValidation(graphWarnings, () => {
+    assertRenameableSource(splitId);
+    if (!existingIds.has(splitId)) {
+      throw new Error(`ID "${splitId}" does not exist in the project.`);
     }
-    seen.add(newId);
-    if (newId !== splitId && existingIds.has(newId)) {
-      throw new Error(`ID "${newId}" already exists in the project.`);
+    if (intoIds.length === 0) {
+      throw new Error(`--split requires at least one target ID via --into.`);
     }
-  }
+    const seen = new Set<string>();
+    for (const newId of intoIds) {
+      assertValidTargetId(
+        newId,
+        config.reqPatterns,
+        config.taskConventions,
+        config.disableBuiltinTaskConventions,
+      );
+      if (seen.has(newId)) {
+        throw new Error(`Duplicate target ID "${newId}" in --into.`);
+      }
+      seen.add(newId);
+      if (newId !== splitId && existingIds.has(newId)) {
+        throw new Error(`ID "${newId}" already exists in the project.`);
+      }
+    }
+  });
 
   const allChanges: RewriteChange[] = [];
   const warnings: RenameWarning[] = [];
@@ -427,18 +594,20 @@ export function executeSplit(
   // neither a spec definition (change) nor a code `@impl` (warning) — the
   // split would only touch the lock and report success. Fail loudly instead.
   if (allChanges.length === 0 && warnings.length === 0) {
-    throw new Error(
-      `ID "${splitId}" was not found in any of the ${scannedFiles.length} files matched by ` +
-        `.artgraph.json include/specDirs/testPatterns — nothing was rewritten. ` +
-        `Check that the files referencing "${splitId}" are covered by those patterns.`,
-    );
+    runValidation(graphWarnings, () => {
+      throw new Error(
+        `ID "${splitId}" was not found in any of the ${scannedFiles.length} files matched by ` +
+          `.artgraph.json include/specDirs/testPatterns — nothing was rewritten. ` +
+          `Check that the files referencing "${splitId}" are covered by those patterns.`,
+      );
+    });
   }
 
   const lockChanges = projectLockChanges(rootDir, config, dryRun, (lock) =>
     splitLockKey(lock, splitId, intoIds),
   );
 
-  applyWrites(rootDir, config, filesToWrite, dryRun, force);
+  const postWriteScanWarnings = applyWrites(rootDir, config, filesToWrite, dryRun, force);
 
   return {
     operation: "split",
@@ -452,6 +621,7 @@ export function executeSplit(
     lockChanges,
     warnings,
     buildWarnings: graphWarnings,
+    postWriteWarnings: diffPostWriteWarnings(postWriteScanWarnings, graphWarnings),
     applied: !dryRun,
   };
 }
@@ -463,30 +633,34 @@ export function executeMerge(
 ): RenameResult {
   const { rootDir, dryRun, mergeIds, intoId, force = false } = options;
   const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
-  if (!dryRun) assertRenameLockWritable(rootDir, config, force);
+  if (!dryRun) {
+    runValidation(graphWarnings, () => assertRenameLockWritable(rootDir, config, force));
+  }
 
   // Validate
-  if (mergeIds.length < 1) {
-    throw new Error(`--merge requires at least one source ID.`);
-  }
-  assertValidTargetId(
-    intoId,
-    config.reqPatterns,
-    config.taskConventions,
-    config.disableBuiltinTaskConventions,
-  );
-  for (const id of mergeIds) {
-    assertRenameableSource(id);
-    if (!existingIds.has(id)) {
-      throw new Error(`ID "${id}" does not exist in the project.`);
+  runValidation(graphWarnings, () => {
+    if (mergeIds.length < 1) {
+      throw new Error(`--merge requires at least one source ID.`);
     }
-  }
-  // intoId must NOT exist UNLESS it equals one of mergeIds.
-  if (existingIds.has(intoId) && !mergeIds.includes(intoId)) {
-    throw new Error(
-      `ID "${intoId}" already exists in the project and is not one of the merge source IDs.`,
+    assertValidTargetId(
+      intoId,
+      config.reqPatterns,
+      config.taskConventions,
+      config.disableBuiltinTaskConventions,
     );
-  }
+    for (const id of mergeIds) {
+      assertRenameableSource(id);
+      if (!existingIds.has(id)) {
+        throw new Error(`ID "${id}" does not exist in the project.`);
+      }
+    }
+    // intoId must NOT exist UNLESS it equals one of mergeIds.
+    if (existingIds.has(intoId) && !mergeIds.includes(intoId)) {
+      throw new Error(
+        `ID "${intoId}" already exists in the project and is not one of the merge source IDs.`,
+      );
+    }
+  });
 
   // IDs whose references/definitions collapse into intoId.
   const idsToRewrite = mergeIds.filter((id) => id !== intoId);
@@ -544,11 +718,13 @@ export function executeMerge(
   // success. Fail loudly instead. (A degenerate `--merge X --into X` has
   // nothing to rewrite by definition and is left to the presenter.)
   if (idsToRewrite.length > 0 && allChanges.length === 0) {
-    throw new Error(
-      `None of the IDs ${idsToRewrite.map((id) => `"${id}"`).join(", ")} were found in any of ` +
-        `the ${scannedFiles.length} files matched by .artgraph.json include/specDirs/testPatterns — ` +
-        `nothing was rewritten. Check that the files referencing them are covered by those patterns.`,
-    );
+    runValidation(graphWarnings, () => {
+      throw new Error(
+        `None of the IDs ${idsToRewrite.map((id) => `"${id}"`).join(", ")} were found in any of ` +
+          `the ${scannedFiles.length} files matched by .artgraph.json include/specDirs/testPatterns — ` +
+          `nothing was rewritten. Check that the files referencing them are covered by those patterns.`,
+      );
+    });
   }
 
   const lockChanges = projectLockChanges(rootDir, config, dryRun, (lock) =>
@@ -577,7 +753,7 @@ export function executeMerge(
     ),
   ];
 
-  applyWrites(rootDir, config, filesToWrite, dryRun, force);
+  const postWriteScanWarnings = applyWrites(rootDir, config, filesToWrite, dryRun, force);
 
   return {
     operation: "merge",
@@ -591,6 +767,7 @@ export function executeMerge(
     lockChanges,
     warnings,
     buildWarnings: graphWarnings,
+    postWriteWarnings: diffPostWriteWarnings(postWriteScanWarnings, graphWarnings),
     applied: !dryRun,
   };
 }

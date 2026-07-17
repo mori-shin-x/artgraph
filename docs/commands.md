@@ -4,11 +4,59 @@ Full CLI reference. For the summary table and the agent-native workflow, see
 the top-level [README](../README.md). Run `artgraph --help` for the
 authoritative flag list.
 
+## Fatal errors: stdout/stderr contract (issue #279)
+
+This is the contract every command's **fatal** errors (a thrown exception
+that aborts the command outright — usage errors, environment failures like a
+broken oxc-parser native binding, unrecoverable validation failures) follow,
+across every command that has a `--format` option:
+
+- **text** (default, and every command with no `--format` at all, e.g.
+  `reconcile`): a human-readable message on **stderr**, exit `1`.
+- **json** (`--format json`): a `{"error": "<message>"}` envelope on
+  **stderr**, exit `1`. Never mixed into stdout — a `--format json`
+  consumer piping stdout to `jq` never has to guard against invalid JSON or
+  a truncated/partial payload, and stdout is reserved exclusively for a
+  **successful** result's structured payload.
+
+This applies uniformly to: a command's own usage/validation errors, a
+rejected `LockSchemaVersionError` (a `.trace.lock` written by a newer
+artgraph), `rename`'s validation/safety-valve failures (`RenameValidationError`,
+issue #273), a malformed `.artgraph.json` (`loadConfig()`'s `Failed to parse
+...`, issue #336), an `AgentsParseError` from `--agents=<list>` (issue #336),
+and `OxcLoadError` (oxc-parser's native binding missing/broken, issue #263) —
+every command whose action reaches `loadConfig()` and/or `scan()`/
+`buildGraph()` (`scan`, `check`, `impact`, `plan-coverage`, `reconcile`,
+`trace status`, `trace report`, `rename`, `init`, `doctor`) surfaces every
+one of these through this same stderr/exit-1 contract instead of a raw,
+format-blind stack trace (`commands/shared.ts#withFatalErrors`, issue #336 —
+a superset of the original issue #279 `OxcLoadError`-only guard).
+
+**Declared exceptions to this contract** (deliberately not touched by this
+section, or by issue #279):
+
+- **`impact --diff --base <ref>`'s environment errors** (unresolvable ref,
+  uncomputable merge-base) already have their own stricter contract — **zero
+  bytes of stdout**, even under `--format json` — documented under
+  [`impact --diff --base <ref>`](#impact---diff---base-ref--commit-range-selection-in-ci-spec-024)
+  below. That contract predates this section and is unchanged; it is
+  stricter than (a subset of) the general rule above, not a conflict with
+  it.
+- **`rename`'s text-mode success path splits its two warning kinds across
+  streams**: `RenameWarning`s (`manual-assignment-needed`,
+  `unknown-trace-schema`, `unreadable-file`) print to **stdout** as part of
+  the rename summary, while `BuildWarning`s (`buildWarnings`,
+  `postWriteWarnings`) print to **stderr** via `printWarnings`. This is an
+  existing, current-behavior split (Step 0-pre M3), documented here as-is —
+  changing it is out of this section's scope; file a separate issue if it
+  should be unified.
+
 ## `artgraph init`
 
 Full agent-native setup in one command: `.artgraph.json` config + initial scan
-+ cross-agent Skills distribution + Stop hook + `AGENTS.md` snippet +
-auto-integrate of detected SDD tools.
+
+- cross-agent Skills distribution + Stop hook + `AGENTS.md` snippet +
+  auto-integrate of detected SDD tools.
 
 ```bash
 artgraph init --agents=claude              # required for the Skills / agent-context stages
@@ -122,11 +170,11 @@ additional findings — the same "declared vs. exercised" cross-check as
 trace-absent project none of this appears; output is byte-identical to
 before the feature shipped.
 
-| Finding | Text heading | `--format json` field | Meaning |
-| --- | --- | --- | --- |
-| Unexercised claim | `UNEXERCISED CLAIM:` | `unexercisedClaims` | `@impl REQ-001` exists but REQ-001's tagged green tests never execute that symbol |
-| Suggested impl | `SUGGESTED IMPL:` | `suggestedImpls` | No `@impl`, but the symbol is exercised exclusively by one REQ's tests |
-| Stale evidence | `STALE EVIDENCE:` | `staleEvidence` | The symbol's content hash changed since its trace evidence was captured (`{ reqId, symbols[], tracedAt }`) |
+| Finding           | Text heading         | `--format json` field | Meaning                                                                                                    |
+| ----------------- | -------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Unexercised claim | `UNEXERCISED CLAIM:` | `unexercisedClaims`   | `@impl REQ-001` exists but REQ-001's tagged green tests never execute that symbol                          |
+| Suggested impl    | `SUGGESTED IMPL:`    | `suggestedImpls`      | No `@impl`, but the symbol is exercised exclusively by one REQ's tests                                     |
+| Stale evidence    | `STALE EVIDENCE:`    | `staleEvidence`       | The symbol's content hash changed since its trace evidence was captured (`{ reqId, symbols[], tracedAt }`) |
 
 `trace.staleness` (`.artgraph.json`, default `"warn"`) controls how stale
 evidence is treated: `"warn"` reports it only; `"exclude"` drops stale
@@ -207,7 +255,15 @@ artgraph impact --diff --tests --format json
 ```
 
 ```json
-{ "testsToRun": [{ "testFile": "tests/billing.test.ts", "testName": "[REQ-003] charge bills a positive amount", "reqId": "REQ-003" }] }
+{
+  "testsToRun": [
+    {
+      "testFile": "tests/billing.test.ts",
+      "testName": "[REQ-003] charge bills a positive amount",
+      "reqId": "REQ-003"
+    }
+  ]
+}
 ```
 
 When the graph has any `exercises` edges at all, `impact`'s regular JSON
@@ -220,7 +276,7 @@ reached via a static path (`@impl` / `imports`) or via `exercises` evidence
 `--tests` is passed → exit `1` with the same runner-setup guidance as
 `artgraph trace report` (below).
 
-### `impact --diff --base <ref>` — commit-range selection in CI (spec 024)
+### `impact --diff --base <ref>` — commit-range selection in CI (spec 024) <a id="impact---diff---base-ref--commit-range-selection-in-ci-spec-024"></a>
 
 In CI the checked-out working tree matches the commit exactly, so plain
 `impact --diff --tests` sees an empty diff and returns "No changes detected"
@@ -247,13 +303,13 @@ artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format j
   stdout, even under `--format json`** — an environment failure is not a
   verdict, and an empty-`testsToRun` payload would misread as "nothing to
   run". There is no fallback to a working-tree-only diff.
-- **Selection limits (declared)** — startIds resolve against the *current*
+- **Selection limits (declared)** — startIds resolve against the _current_
   graph only: a file **deleted** by a commit in the range, or a changed file
   the graph does not track, contributes no start ids — silently, exactly
   like graph-external files always have under `--diff`. `impact` takes no
   baseline worktree and no rename map (a base-range rename is folded to its
   new path, which is the correct current-graph input). A file **renamed**
-  in the range is in the same boat with respect to *stale evidence*: its
+  in the range is in the same boat with respect to _stale evidence_: its
   start ids resolve under the new path, but trace shards cached from the
   base branch record evidence under the old path, so the `--tests` join
   misses and its tests silently drop from the selection.
@@ -261,7 +317,7 @@ artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format j
   or graph-untracked changed files contribute nothing to the selection.
   Treat `impact --tests` as an **optimization** — fall back to
   the full suite on exit `1` or whenever unsure. The correctness gate
-  remains `check --diff --base --gate` (which *does* resolve deletions
+  remains `check --diff --base --gate` (which _does_ resolve deletions
   against the baseline and fails the PR on the resulting uncovered REQs).
   Also filter the selected test files for existence before handing them to
   the runner — a PR that deletes a test file can yield a selection of
@@ -269,15 +325,15 @@ artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format j
   legitimate PR).
 - **`trace.staleness: "exclude"` interaction** — in CI the trace shards
   necessarily predate the change (e.g. cached from the base branch), so the
-  changed code's evidence is stale *by construction* and `"exclude"` drops
+  changed code's evidence is stale _by construction_ and `"exclude"` drops
   exactly the tests most related to the change. Combining `--tests`,
   `--base` and `staleness: "exclude"` emits a non-fatal stderr warning; use
   `staleness: "warn"` for CI test selection, or fall back to the full suite.
 
-| exit code | meaning | CI consumer action |
-| --- | --- | --- |
-| `0` | valid selection — including the legitimate "No changes detected" empty merged diff | use `testsToRun` (treat an empty selection with suspicion — see the consumer rule) |
-| `1` | usage error, unresolvable ref / merge-base, or no changed path resolved in the graph | **fall back to the full suite** |
+| exit code | meaning                                                                              | CI consumer action                                                                 |
+| --------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| `0`       | valid selection — including the legitimate "No changes detected" empty merged diff   | use `testsToRun` (treat an empty selection with suspicion — see the consumer rule) |
+| `1`       | usage error, unresolvable ref / merge-base, or no changed path resolved in the graph | **fall back to the full suite**                                                    |
 
 ## `artgraph trace` <a id="artgraph-trace"></a>
 
@@ -303,7 +359,14 @@ Reports how much evidence is on disk and how fresh it is.
   "shardCount": 4,
   "testCount": 12,
   "skippedCount": 1,
-  "diagnostics": { "dangling": 0, "corrupted": 0, "offGraph": 0, "unknownSchema": 0, "skipped": 1, "stale": 2 },
+  "diagnostics": {
+    "dangling": 0,
+    "corrupted": 0,
+    "offGraph": 0,
+    "unknownSchema": 0,
+    "skipped": 1,
+    "stale": 2
+  },
   "staleRate": 0.15
 }
 ```
@@ -315,11 +378,18 @@ touched by either an `@impl` claim or exercises evidence into four buckets:
 
 ```json
 {
-  "corroborated":      [{ "reqId": "REQ-001", "node": "symbol:src/auth.ts#signIn" }],
+  "corroborated": [{ "reqId": "REQ-001", "node": "symbol:src/auth.ts#signIn" }],
   "unexercisedClaims": [{ "reqId": "REQ-001", "node": "symbol:src/legacy.ts#oldSignIn" }],
-  "suggestedImpls":    [{ "reqId": "REQ-002", "node": "symbol:src/auth.ts#resetPassword" }],
-  "infrastructure":    [{ "node": "symbol:src/util.ts#validateEmail", "reqCount": 3 }],
-  "diagnostics":       { "dangling": 0, "corrupted": 0, "offGraph": 0, "unknownSchema": 0, "skipped": 1, "stale": 0 }
+  "suggestedImpls": [{ "reqId": "REQ-002", "node": "symbol:src/auth.ts#resetPassword" }],
+  "infrastructure": [{ "node": "symbol:src/util.ts#validateEmail", "reqCount": 3 }],
+  "diagnostics": {
+    "dangling": 0,
+    "corrupted": 0,
+    "offGraph": 0,
+    "unknownSchema": 0,
+    "skipped": 1,
+    "stale": 0
+  }
 }
 ```
 
@@ -368,7 +438,7 @@ artgraph reconcile
 `rename` runs this automatically after a non-preview rename.
 
 **Lock schema version**: `.trace.lock` carries a `_meta.schemaVersion` stamp.
-If the on-disk lock was written by a *newer* artgraph than the one running
+If the on-disk lock was written by a _newer_ artgraph than the one running
 `reconcile` (or `rename`, or `init`'s initial scan), the write is refused with
 a clear error — rebuilding it here would silently discard information the
 newer CLI understood. `--force` overwrites it anyway (a "Downgrading lock
@@ -409,6 +479,32 @@ Notes:
   `--dry-run` also warns on a newer-schema lock (it never writes, so it isn't
   rejected) — the same "update CI's artgraph, don't `--force` it" guidance
   applies.
+- **`postWriteWarnings` (issue #273-2)**: after a non-preview run whose
+  post-write scan found a `.trace.lock` to reconcile against, the JSON result
+  carries `postWriteWarnings` — the SET DIFFERENCE of that post-write scan's
+  `buildGraph()` warnings against the pre-write scan's `buildWarnings`
+  (structurally keyed by type+id+sorted-files+message; `system-resource-exhausted`
+  keys on type alone — issue #336 F3/F4). It is therefore only ever NEW
+  warnings this specific run's post-write scan produced that the pre-write
+  scan did not already have — a pre-existing, rename-unrelated warning never
+  reappears here. `postWriteWarnings` is `undefined` (omitted from the JSON
+  payload) when no post-write scan ran at all — either `--dry-run` (which
+  never writes or reconciles) or no `.trace.lock` file existed to reconcile
+  against — versus `[]` when the post-write scan DID run and found nothing
+  new. Callers must not conflate the two: `undefined` is "no data", `[]` is a
+  real, positive "ran and found nothing new" signal. A non-empty
+  `postWriteWarnings` is a signal to INVESTIGATE, not necessarily proof the
+  rename itself is the cause — the underlying condition (e.g. an
+  environment-wide `system-resource-exhausted`) can coincide with, rather
+  than be caused by, this rename.
+- **Fatal-error envelope's optional `warnings` field**: when a non-preview
+  rename fails validation (`RenameValidationError`, issue #273) AFTER the
+  pre-write scan already ran, the `--format json` error envelope described in
+  ["Fatal errors"](#fatal-errors-stdoutstderr-contract-issue-279) above gains
+  an optional `warnings` field carrying that pre-write scan's `BuildWarning[]`
+  (e.g. `{"error": "...", "warnings": [...]}`) — omitted entirely when there
+  are none, never an empty array. Text mode prints the same warnings via
+  `printWarnings` (stderr) before the `Error: ...` line instead.
 
 ### rename does not reassign `@impl` tags <a id="rename-does-not-reassign-impl-tags"></a>
 

@@ -912,3 +912,295 @@ describe("CLI: rename rewrites trace shards (spec 020 FR-016)", () => {
     },
   );
 });
+
+// ---------------------------------------------------------------------------
+// issue #273-1 — a validation/safety-valve throw (from-and-to identical,
+// invalid target ID, ID not found, zero-hit safety valve, …) used to
+// completely swallow the pre-write scan's `buildWarnings`
+// (`RenameValidationError` didn't exist; `commands/rename.ts`'s catch only
+// ever preserved `e.message`). Now those warnings survive onto the error
+// path: text mode prints them (stderr, via `printWarnings`) BEFORE the
+// `Error: ...` line, and json mode folds them into the `{"error": ...}`
+// envelope's `warnings` field.
+// ---------------------------------------------------------------------------
+describe("CLI: rename validation failures surface pre-write buildWarnings (#273-1)", () => {
+  /** Add a second spec file that redefines REQ-001 — a genuine `duplicate-id`
+   *  BuildWarning from the pre-write scan, independent of whatever
+   *  validation failure the test triggers afterward. */
+  function addDuplicateIdWarning(tmp: string): void {
+    writeFileSync(
+      resolve(tmp, "specs/dup.md"),
+      ["# Dup", "", "- REQ-001: duplicate definition", ""].join("\n"),
+      "utf-8",
+    );
+  }
+
+  // `files` order on a `duplicate-id` warning reflects scan/glob traversal
+  // order, not a sorted/write order — assert membership, not array identity.
+  function expectSingleDuplicateIdWarning(
+    warnings: Array<{ type: string; id: string; files: string[] }>,
+    id: string,
+    files: string[],
+  ): void {
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].type).toBe("duplicate-id");
+    expect(warnings[0].id).toBe(id);
+    expect(warnings[0].files.slice().sort()).toEqual(files.slice().sort());
+  }
+
+  it("text mode: prints the duplicate-id WARNING before the validation Error line", async () => {
+    const tmp = await prepareTempDir();
+    addDuplicateIdWarning(tmp);
+    await runAt(tmp, ["reconcile"]);
+
+    // REQ-002 already exists → "already exists" validation throw, unrelated
+    // to the duplicate-id warning on REQ-001.
+    const { exitCode, stderr } = await runCli(
+      ["rename", "--from", "REQ-001", "--to", "REQ-002"],
+      tmp,
+    );
+    expect(exitCode).not.toBe(0);
+    expect(stderr).toMatch(/WARNING: duplicate ID "REQ-001"/);
+    expect(stderr).toMatch(/Error: ID "REQ-002" already exists/);
+    // The warning must print BEFORE the Error line (fail()'s contract: warn
+    // first, then fail).
+    expect(stderr.indexOf("WARNING:")).toBeLessThan(stderr.indexOf("Error:"));
+  });
+
+  it("json mode: folds buildWarnings into the error envelope's `warnings` field", async () => {
+    const tmp = await prepareTempDir();
+    addDuplicateIdWarning(tmp);
+    await runAt(tmp, ["reconcile"]);
+
+    const { exitCode, stderr } = await runCli(
+      ["rename", "--from", "REQ-001", "--to", "REQ-002", "--format", "json"],
+      tmp,
+    );
+    expect(exitCode).not.toBe(0);
+    const envelope = JSON.parse(stderr);
+    expect(envelope.error).toContain('ID "REQ-002" already exists');
+    expectSingleDuplicateIdWarning(envelope.warnings, "REQ-001", [
+      "specs/feature.md",
+      "specs/dup.md",
+    ]);
+  });
+
+  it("a validation failure with NO pre-write buildWarnings omits the `warnings` field in json (no shape regression)", async () => {
+    const tmp = await prepareTempDir();
+    const { exitCode, stderr } = await runCli(
+      ["rename", "--from", "REQ-001", "--to", "REQ-002", "--format", "json"],
+      tmp,
+    );
+    expect(exitCode).not.toBe(0);
+    const envelope = JSON.parse(stderr);
+    expect(envelope.error).toContain('ID "REQ-002" already exists');
+    expect(envelope.warnings).toBeUndefined();
+  });
+
+  it("also surfaces buildWarnings on the split/merge validation paths", async () => {
+    const tmp = await prepareTempDir();
+    addDuplicateIdWarning(tmp);
+    await runAt(tmp, ["reconcile"]);
+
+    // --into REQ-101 twice → "Duplicate target ID" validation throw on split.
+    const split = await runCli(
+      ["rename", "--split", "REQ-001", "--into", "REQ-101", "REQ-101", "--format", "json"],
+      tmp,
+    );
+    expect(split.exitCode).not.toBe(0);
+    const splitEnvelope = JSON.parse(split.stderr);
+    expectSingleDuplicateIdWarning(splitEnvelope.warnings, "REQ-001", [
+      "specs/feature.md",
+      "specs/dup.md",
+    ]);
+
+    // --merge with an invalid --into target → assertValidTargetId throw on merge.
+    const merge = await runCli(
+      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-COMBINED", "--format", "json"],
+      tmp,
+    );
+    expect(merge.exitCode).not.toBe(0);
+    const mergeEnvelope = JSON.parse(merge.stderr);
+    expectSingleDuplicateIdWarning(mergeEnvelope.warnings, "REQ-001", [
+      "specs/feature.md",
+      "specs/dup.md",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #273-2 ((a)-lite) — `reconcileAfterWrite`'s post-write scan used to
+// discard its `BuildWarning[]` outright. `RenameResult.postWriteWarnings`
+// now carries the ones NOT already present pre-write (set-diffed by
+// type+id+files+message), distinguishing "no post-write scan ran"
+// (`undefined`) from "ran and found nothing new" (`[]`).
+// ---------------------------------------------------------------------------
+describe("CLI: rename surfaces NEW post-write buildWarnings (#273-2, (a)-lite)", () => {
+  /** Real-harm case from the issue: a REQ defined in TWO spec files, merged
+   *  into a brand-new target ID — `mergeMarkdown`'s scaffold appends the new
+   *  ID's definition to EVERY file that hosted a merged-away definition, so
+   *  the post-write rescan discovers the merge target duplicated across both
+   *  files — a `duplicate-id` warning that did not exist before the merge. */
+  async function prepareTwoSpecMergeFixture(): Promise<string> {
+    const tmp = mkdtempSync(resolve(tmpdir(), "artgraph-rename-postwrite-"));
+    tempDirs.push(tmp);
+    writeFileSync(
+      resolve(tmp, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        testPatterns: ["tests/**/*.test.ts"],
+        lockFile: ".trace.lock",
+      }),
+    );
+    mkdirSync(resolve(tmp, "specs"), { recursive: true });
+    mkdirSync(resolve(tmp, "src"), { recursive: true });
+    mkdirSync(resolve(tmp, "tests"), { recursive: true });
+    writeFileSync(resolve(tmp, "specs/a.md"), "# Spec A\n\n- REQ-001: alpha\n");
+    writeFileSync(resolve(tmp, "specs/b.md"), "# Spec B\n\n- REQ-002: beta\n");
+    writeFileSync(
+      resolve(tmp, "src/feature.ts"),
+      "// @impl REQ-001\n// @impl REQ-002\nexport const x = 1;\n",
+    );
+    writeFileSync(
+      resolve(tmp, "tests/feature.test.ts"),
+      "// [REQ-001]\n// [REQ-002]\nexport {};\n",
+    );
+    execFileSync("git", ["init"], { cwd: tmp, stdio: "pipe" });
+    gitCommit(tmp, "init");
+    await runAt(tmp, ["reconcile"]);
+    gitCommit(tmp, "add lock");
+    return tmp;
+  }
+
+  it("pins the real-harm case: a --merge scaffold duplicated across two spec files surfaces as a NEW postWriteWarnings entry", async () => {
+    const tmp = await prepareTwoSpecMergeFixture();
+
+    const { exitCode, stdout } = await runCli(
+      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100", "--format", "json"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+
+    // Pre-write scan had no duplicate — this is genuinely NEW.
+    expect(result.buildWarnings).toEqual([]);
+    expect(result.postWriteWarnings).toBeDefined();
+    expect(result.postWriteWarnings).toHaveLength(1);
+    expect(result.postWriteWarnings[0]).toMatchObject({ type: "duplicate-id", id: "REQ-100" });
+    expect(result.postWriteWarnings[0].files.sort()).toEqual(["specs/a.md", "specs/b.md"]);
+  });
+
+  it("prints the postWriteWarnings block (with heading) in text mode", async () => {
+    const tmp = await prepareTwoSpecMergeFixture();
+
+    const { exitCode, stderr } = await runCli(
+      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    expect(stderr).toMatch(/new warnings detected by the post-rename re-scan/);
+    expect(stderr).toMatch(/WARNING: duplicate ID "REQ-100"/);
+  });
+
+  it("a warning already present BEFORE the rename (unaffected by it) is NOT re-reported in postWriteWarnings (diff logic)", async () => {
+    const tmp = await prepareTwoSpecMergeFixture();
+    // A SEPARATE, pre-existing duplicate-id warning on REQ-999 that the
+    // merge below never touches — same two files, same id, before AND
+    // after the merge. Only the merge's OWN new REQ-100 duplicate should
+    // show up in postWriteWarnings; this pre-existing one must not.
+    writeFileSync(resolve(tmp, "specs/e.md"), "# Spec E\n\n- REQ-999: pre-existing dup\n", "utf-8");
+    writeFileSync(
+      resolve(tmp, "specs/f.md"),
+      "# Spec F\n\n- REQ-999: also pre-existing\n",
+      "utf-8",
+    );
+    gitCommit(tmp, "seed unrelated pre-existing REQ-999 duplicate");
+    await runAt(tmp, ["reconcile"]);
+    gitCommit(tmp, "reconcile pre-existing duplicate");
+
+    const { exitCode, stdout } = await runCli(
+      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100", "--format", "json"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+
+    // Pre-write: only the unrelated REQ-999 duplicate exists.
+    expect(result.buildWarnings).toHaveLength(1);
+    expect(result.buildWarnings[0].type).toBe("duplicate-id");
+    expect(result.buildWarnings[0].id).toBe("REQ-999");
+    expect(result.buildWarnings[0].files.sort()).toEqual(["specs/e.md", "specs/f.md"]);
+    // Post-write: the merge minted a NEW REQ-100 duplicate, and REQ-999's
+    // duplicate is untouched (same key) — so it must be excluded, leaving
+    // only REQ-100's.
+    expect(result.postWriteWarnings).toHaveLength(1);
+    expect(result.postWriteWarnings[0].id).toBe("REQ-100");
+    expect(result.postWriteWarnings.some((w: { id: string }) => w.id === "REQ-999")).toBe(false);
+  });
+
+  it("postWriteWarnings is undefined (omitted from JSON) when --dry-run skips the post-write scan", async () => {
+    const tmp = await prepareTwoSpecMergeFixture();
+
+    const { exitCode, stdout } = await runCli(
+      [
+        "rename",
+        "--merge",
+        "REQ-001",
+        "REQ-002",
+        "--into",
+        "REQ-100",
+        "--dry-run",
+        "--format",
+        "json",
+      ],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.applied).toBe(false);
+    expect("postWriteWarnings" in result).toBe(false);
+  });
+
+  it("postWriteWarnings is undefined (omitted from JSON) when no .trace.lock exists to reconcile against", async () => {
+    const tmp = mkdtempSync(resolve(tmpdir(), "artgraph-rename-nolock-"));
+    tempDirs.push(tmp);
+    writeFileSync(
+      resolve(tmp, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        testPatterns: ["tests/**/*.test.ts"],
+        lockFile: ".trace.lock",
+      }),
+    );
+    mkdirSync(resolve(tmp, "specs"), { recursive: true });
+    mkdirSync(resolve(tmp, "src"), { recursive: true });
+    writeFileSync(resolve(tmp, "specs/feature.md"), "# Feature\n\n- REQ-001: alpha\n");
+    writeFileSync(resolve(tmp, "src/feature.ts"), "// @impl REQ-001\nexport const x = 1;\n");
+    // No `.trace.lock` written, no reconcile ever run — applyWrites still
+    // writes source files but reconcileAfterWrite short-circuits.
+
+    const { exitCode, stdout } = await runCli(
+      ["rename", "--from", "REQ-001", "--to", "REQ-100", "--format", "json"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    expect(result.applied).toBe(true);
+    expect("postWriteWarnings" in result).toBe(false);
+  });
+
+  it("printRenameJson's full-result shape stays byte-compatible for a rename with no new post-write warnings", async () => {
+    const tmp = await prepareTempDir();
+    const { exitCode, stdout } = await runCli(
+      ["rename", "--from", "REQ-001", "--to", "REQ-100", "--format", "json"],
+      tmp,
+    );
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout);
+    // Ran with a lock present, non-dry-run → postWriteWarnings is a defined
+    // (possibly empty) array, not omitted.
+    expect(result.postWriteWarnings).toEqual([]);
+  });
+});

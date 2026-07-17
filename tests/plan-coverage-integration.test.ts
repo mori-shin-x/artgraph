@@ -1228,3 +1228,56 @@ describe("plan-coverage E2E — build warnings surfaced (meta-review F2)", () =>
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// issue #279 (item 1) — the generic catch-all in commands/plan-coverage.ts
+// (an error thrown from inside `runPlanCoverage`/`scan`, distinct from the
+// `--spec`/`--tasks`/`--plan` early exits above which are pre-existing and
+// unaffected) used to be plain-text-only regardless of `--format`. It now
+// mirrors `rename`'s original `fail()`: json → `{"error": ...}` on stderr,
+// text → the pre-existing `Error: <msg>` line on stderr — both exit 1, both
+// with an EMPTY stdout (a fatal error is not a verdict payload).
+//
+// A malformed `.trace.lock` (a JSON array, not an object) reliably reaches
+// this catch: `readLockWithMeta` → `validateLockSchema` throws
+// `LockSchemaError` from deep inside `runPlanCoverage`, uncaught until this
+// command's own catch-all.
+// ---------------------------------------------------------------------------
+describe("CLI: plan-coverage's generic catch-all is format-aware (issue #279 item 1)", () => {
+  function makeFixtureWithCorruptLock(): Fixture {
+    const fx = setupFixture();
+    writeFileSync(join(fx.root, ".trace.lock"), "[]");
+    return fx;
+  }
+
+  it('--format json: {"error": ...} envelope on stderr, empty stdout, exit 1', async () => {
+    const fx = makeFixtureWithCorruptLock();
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        ["plan-coverage", "--spec", fx.specDirAbsolute, "--format", "json"],
+        { cwd: fx.root },
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(() => JSON.parse(stderr)).not.toThrow();
+      expect(JSON.parse(stderr).error).toMatch(/JSON object at the top level/i);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("text mode: `Error: <msg>` on stderr, empty stdout, exit 1 (pre-existing text behavior unchanged)", async () => {
+    const fx = makeFixtureWithCorruptLock();
+    try {
+      const { stdout, stderr, exitCode } = await runCli(
+        ["plan-coverage", "--spec", fx.specDirAbsolute],
+        { cwd: fx.root },
+      );
+      expect(exitCode).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toMatch(/^Error: .*JSON object at the top level/i);
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
+    }
+  });
+});

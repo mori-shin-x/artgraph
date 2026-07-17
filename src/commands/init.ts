@@ -6,9 +6,14 @@ import {
   AGENTS_REQUIRED_ERROR,
   loadIntegrate,
   parseAgentsFlag,
+  printOxcLoadError,
   reportGraphWarnings,
 } from "./shared.js";
 import { printIntegrateText } from "./presenters/integrate.js";
+// See commands/shared.ts's `withFatalErrors` doc comment for why this static
+// import is free (cli.ts's own top-level catch already pays it
+// unconditionally on every real CLI invocation).
+import { OxcLoadError } from "../parsers/typescript.js";
 
 export function registerInitCommand(program: Command): void {
   program
@@ -55,9 +60,14 @@ export function registerInitCommand(program: Command): void {
       // hint before we even look at the other gates. The parser throws
       // `AgentsParseError` with the full stderr-ready message; we surface it
       // verbatim and exit 1.
+      // issue #336 (meta-review F1) — `opts.format` threaded through so an
+      // `AgentsParseError` here gets the same format-aware treatment (json
+      // envelope / unchanged text) as every other fatal error in this
+      // action, instead of always printing bare text regardless of
+      // `--format json`.
       let parsedAgents: AgentId[] | undefined;
       if (opts.agents !== undefined) {
-        parsedAgents = parseAgentsFlag(String(opts.agents));
+        parsedAgents = parseAgentsFlag(String(opts.agents), opts.format);
       }
 
       // @impl 013-cross-agent-extensions/FR-013
@@ -298,8 +308,16 @@ export function registerInitCommand(program: Command): void {
           process.exitCode = 1;
         }
       } catch (e) {
+        // issue #336 (meta-review F1) — `OxcLoadError` (issue #263: oxc-
+        // parser's native binding missing/broken, reachable here via the
+        // scan stage — see `runInit`) gets its own dedicated bare-message
+        // printer, same as every other command, rather than falling into
+        // the generic `Error: <msg>`-prefixed catch-all below.
+        if (e instanceof OxcLoadError) {
+          printOxcLoadError(opts.format, e);
+          process.exit(1);
+        }
         const msg = e instanceof Error ? e.message : String(e);
-        console.error(`Error: ${msg}`);
         // B6: `DistributionError.partiallyWritten` lists paths whose rollback
         // step itself failed (e.g. Windows AV / IDE holding a file open, or a
         // cross-agent survivor whose unlink hit EACCES). Silently dropping
@@ -307,10 +325,29 @@ export function registerInitCommand(program: Command): void {
         // which paths still needed manual cleanup. Surfacing them here means
         // the "manual cleanup required" hint arrives together with the error
         // that necessitates it.
-        if (e instanceof DistributionError && e.partiallyWritten && e.partiallyWritten.length > 0) {
-          console.error("");
-          console.error("Partial writes could not be rolled back. Manual cleanup required:");
-          for (const p of e.partiallyWritten) console.error(`  ${p}`);
+        const partiallyWritten =
+          e instanceof DistributionError && e.partiallyWritten && e.partiallyWritten.length > 0
+            ? e.partiallyWritten
+            : undefined;
+        // issue #336 (meta-review F1) — this catch-all used to be plain-
+        // text-only (`console.error(\`Error: ${msg}\`)`) regardless of
+        // `--format`, so a `--format json` consumer piping init's fatal
+        // errors to `jq` got a parse error instead of a `{"error": ...}`
+        // envelope (e.g. a malformed `.artgraph.json` on `init --force`).
+        // Text mode's wording (including the `AgentsParseError` /
+        // `DistributionError` cases above/below) is byte-identical to the
+        // pre-#336 behavior — only json mode's shape is new.
+        if (opts.format === "json") {
+          const envelope: { error: string; partiallyWritten?: string[] } = { error: msg };
+          if (partiallyWritten) envelope.partiallyWritten = partiallyWritten;
+          console.error(JSON.stringify(envelope));
+        } else {
+          console.error(`Error: ${msg}`);
+          if (partiallyWritten) {
+            console.error("");
+            console.error("Partial writes could not be rolled back. Manual cleanup required:");
+            for (const p of partiallyWritten) console.error(`  ${p}`);
+          }
         }
         process.exit(1);
       }

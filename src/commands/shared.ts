@@ -9,6 +9,14 @@ import { parseAgentsList, AgentsParseError } from "../agents/parse-agents.js";
 import { AGENT_IDS, type AgentId } from "../agents/descriptors.js";
 import type { BuildWarning } from "../graph/builder.js";
 import { printWarnings } from "./presenters/warnings.js";
+// issue #279 — statically imported, same as `cli.ts`'s own top-level catch
+// (issue #263) already does unconditionally: this module's import cost is
+// cheap (no native binding load at import time — see the doc comment on
+// `OxcLoadError` in parsers/typescript.ts), and `cli.ts` already pays it on
+// EVERY real CLI invocation regardless of which command runs, so importing
+// it again here (this file is itself statically imported by every
+// `commands/*.ts` module) adds no new cost.
+import { OxcLoadError } from "../parsers/typescript.js";
 
 // issue #306 (PR #304 review F6/F7) — commander's required option-args are
 // greedy: a value-taking `--flag` immediately followed by ANOTHER flag
@@ -107,13 +115,24 @@ export async function loadIntegrate(): Promise<typeof import("../integrate/index
  * to the error-to-exit behavior only has to land once.
  *
  * Both `init` and `doctor` route --agents parsing through this helper.
+ *
+ * issue #336 (PR #336 meta-review) — `parseAgentsFlag` used to take no
+ * `format` parameter and always print `e.message` bare to stderr, ignoring
+ * `--format json` entirely (both call sites resolve their own `opts.format`
+ * before this runs — see `init.ts` / `doctor.ts`). `AgentsParseError.message`
+ * is already a complete, pre-formatted diagnostic (starts with `ERROR: `),
+ * exactly like `OxcLoadError.message` — so it goes through the same
+ * `printBareFatalMessage` a plain `printFatalCatchAll` would double-prefix
+ * (`Error: ERROR: Unknown agent...`). Text mode stays byte-identical to the
+ * pre-#336 behavior (bare message, no added prefix); json mode now wraps it
+ * in the same `{"error": ...}` envelope every other fatal error here uses.
  */
-export function parseAgentsFlag(raw: string): AgentId[] {
+export function parseAgentsFlag(raw: string, format?: string): AgentId[] {
   try {
     return parseAgentsList(raw);
   } catch (e) {
     if (e instanceof AgentsParseError) {
-      console.error(e.message);
+      printBareFatalMessage(format, e.message);
       process.exit(1);
     }
     throw e;
@@ -140,6 +159,104 @@ export function parseAgentsFlag(raw: string): AgentId[] {
 export function reportGraphWarnings(warnings: BuildWarning[], format?: string): void {
   if (format === "json") return;
   printWarnings(warnings);
+}
+
+// issue #279 / issue #336 (PR #336 meta-review F1) — `OxcLoadError` (oxc-
+// parser's native binding missing/broken, issue #263) is a specifically-
+// anticipated, actionable environment failure. Before issue #279, the ONLY
+// place that caught it was `cli.ts`'s top-level `program.parseAsync()` catch
+// — a layer that has no idea what `--format` the just-parsed command
+// requested, so it always printed plain text to stderr regardless of
+// `--format json`.
+//
+// issue #279's original helper (`withOxcLoadErrorFatal`) only narrowed on
+// `OxcLoadError` and rethrew everything else — which meant a call site whose
+// wrapped region also covers `loadConfig()` (e.g. `trace.ts#loadTraceInputs`,
+// `rename-executor.ts#loadScanContext`, the reference implementation) still
+// let a malformed `.artgraph.json`'s plain `Error` (`config.ts`'s
+// `Failed to parse ...`) escape uncaught to `cli.ts`'s format-blind
+// top-level catch — a full raw Node stack trace with internal `dist/`/`src/`
+// file paths, exactly like `OxcLoadError` before #279, just for a different
+// (much more commonly hit) error type. `withFatalErrors` widens the catch:
+// `OxcLoadError` still gets its own dedicated bare-message printer
+// (`printOxcLoadError`), and now EVERY other `Error` gets the generic
+// `{"error": ...}` / `Error: <msg>` envelope via `printFatalCatchAll`
+// instead of rethrowing. Each command action that can reach
+// `loadConfig()`/`scan()`/`buildGraph()` (directly, or via a helper like
+// `plan-coverage/index.ts#runPlanCoverage` or `trace.ts#loadTraceInputs`)
+// wraps that call (and, per the #336 fix, `loadConfig()` alongside it — see
+// check/scan/impact/reconcile.ts) in this helper instead of wrapping its
+// entire body — `format` is a normal command-local variable at every call
+// site, so this runs at a layer that DOES know it, without a broader
+// restructure. A `RenameValidationError` / `LockSchemaVersionError` /
+// command-specific validation error thrown from INSIDE a `withFatalErrors`-
+// wrapped call is caught here too (there is no more special-casing to
+// rethrow it unwrapped) — its `.message` is exactly what the pre-#336
+// dedicated catch for it would have printed, so this is not a behavior
+// change for any error type that already had its own catch layered around
+// `withOxcLoadErrorFatal`'s old call sites; it only closes the gap for
+// errors that previously had NO catch at all. See docs/commands.md's "Fatal
+// errors" section for the resulting stdout/stderr contract this implements.
+export async function withFatalErrors<T>(
+  format: string | undefined,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof OxcLoadError) {
+      printOxcLoadError(format, e);
+      process.exit(1);
+    }
+    const msg = e instanceof Error ? e.message : String(e);
+    printFatalCatchAll(format, msg);
+    process.exit(1);
+  }
+}
+
+// issue #279 — shared bare-message printer: json wraps in `{"error": ...}`,
+// text prints the message with no added prefix. Used for errors whose
+// `.message` is ALREADY a complete, self-formatted diagnostic (starts with
+// its own `ERROR:`/similar lead-in, or is meant to stand alone) — as opposed
+// to `printFatalCatchAll` below, which prefixes a bare exception message
+// with `Error: ` in text mode. `OxcLoadError` (parsers/typescript.ts) and
+// `AgentsParseError` (agents/parse-agents.ts, via `parseAgentsFlag` above)
+// are both this shape.
+export function printBareFatalMessage(format: string | undefined, msg: string): void {
+  if (format === "json") {
+    console.error(JSON.stringify({ error: msg }));
+  } else {
+    console.error(msg);
+  }
+}
+
+// issue #279 — shared with `withFatalErrors` above AND with the handful of
+// commands (`rename`, `plan-coverage`) that already had their own catch-all
+// before issue #279 and just needed an extra `instanceof OxcLoadError`
+// branch spliced in rather than a full call-site wrap. `OxcLoadError.message`
+// is already a complete, formatted diagnostic (see parsers/typescript.ts),
+// so this delegates to `printBareFatalMessage` — bare in text mode (no
+// "Error:" prefix, matching `cli.ts`'s own pre-existing handling of this
+// exact error), envelope in json mode.
+export function printOxcLoadError(format: string | undefined, e: OxcLoadError): void {
+  printBareFatalMessage(format, e.message);
+}
+
+// issue #279 — the generic `{"error": ...}` stderr envelope every fatal
+// catch-all in this CLI converges on (`commands/rename.ts`'s original
+// `fail()` is the reference implementation this was extracted from
+// verbatim): text mode keeps the pre-existing plain `Error: <msg>` line,
+// json mode gets a parseable envelope instead of nothing/plain-text noise.
+// Both write to STDERR — this repo's existing convention (verified against
+// `rename.ts`'s `fail()`) is that stdout carries ONLY a successful result
+// payload; every diagnostic, `--format json` fatal errors included, goes to
+// stderr. See docs/commands.md's "Fatal errors" section.
+export function printFatalCatchAll(format: string | undefined, msg: string): void {
+  if (format === "json") {
+    console.error(JSON.stringify({ error: msg }));
+  } else {
+    console.error(`Error: ${msg}`);
+  }
 }
 
 // spec 020 (contracts/cli-surface.md §2 / §5, FR-018) — verbatim error UX

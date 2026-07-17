@@ -8,6 +8,7 @@ import {
   pathsToEntries,
   resolveTestResults,
   reportGraphWarnings,
+  withFatalErrors,
 } from "./shared.js";
 import { printCheckText } from "./presenters/check.js";
 
@@ -107,8 +108,22 @@ export function registerCheckCommand(program: Command): void {
       const { scan } = await import("../scan.js");
       const { readLockWithMeta, warnIfNewerLockSchema } = await import("../lock.js");
       const { check } = await import("../check.js");
-      const config = loadConfig(rootDir);
-      const { graph, warnings } = scan(rootDir, config);
+      // issue #279 / issue #336 (meta-review F1) — format-aware fatal-error
+      // handling for both `loadConfig()` and `scan()`: pre-#336, only the
+      // `scan()` call was guarded (against `OxcLoadError` only), so a
+      // malformed `.artgraph.json` (`loadConfig()`'s `Failed to parse ...`)
+      // propagated uncaught to cli.ts's format-blind top-level catch — a raw
+      // Node stack trace regardless of `--format`. Both calls now route
+      // through `withFatalErrors`, which also catches every OTHER thrown
+      // `Error`, not just `OxcLoadError` (mirrors rename.ts's
+      // `loadScanContext`, the reference implementation for "loadConfig
+      // inside the guarded region"). The baseline-worktree scan for
+      // `--diff --base` (further below) is a DIFFERENT code path —
+      // `baseline.ts` already contains its own scan failures into a
+      // display-only "unavailable" baseline status, so a fatal error there
+      // never reaches this catch or cli.ts's.
+      const config = await withFatalErrors(opts.format, () => loadConfig(rootDir));
+      const { graph, warnings } = await withFatalErrors(opts.format, () => scan(rootDir, config));
       // issue #243 — `check` is read-only w.r.t. the lock: a newer-schema
       // lock is still readable (unknown fields are simply invisible), so
       // warn and keep going rather than fail like the write paths do.
