@@ -2,7 +2,19 @@
 
 import { Command, Option } from "commander";
 import type { RenameResult } from "../rename-executor.js";
+// `OxcLoadError` is ALSO statically imported, unconditionally, by cli.ts's
+// own top-level catch (issue #263) — every real CLI invocation already pays
+// this module's (cheap, native-binding-free at import time — see
+// parsers/typescript.ts's own doc comment) load cost regardless of which
+// command runs, so importing it here too adds no new cost. `rename-executor.js`
+// stays a LAZY (`await import`) dependency below, unlike this — it pulls in
+// the whole scan/graph-builder stack, which the lazy-import refactor
+// (issue #162) deliberately keeps out of every command module's static
+// imports so `artgraph --help` doesn't pay for it.
+import { OxcLoadError } from "../parsers/typescript.js";
+import type { BuildWarning } from "../graph/builder.js";
 import { printRenameJson, printRenameText } from "./presenters/rename.js";
+import { printWarnings } from "./presenters/warnings.js";
 
 export function registerRenameCommand(program: Command): void {
   program
@@ -23,16 +35,28 @@ export function registerRenameCommand(program: Command): void {
     )
     .action(async (opts) => {
       const rootDir = process.cwd();
-      const { executeRename, executeSplit, executeMerge } = await import("../rename-executor.js");
+      const { executeRename, executeSplit, executeMerge, RenameValidationError } =
+        await import("../rename-executor.js");
       const format: "json" | "text" = opts.format;
       const baseOpts = { dryRun: !!opts.dryRun, format, rootDir, force: !!opts.force };
 
-      const fail = (msg: string): never => {
+      // issue #273-1 — `warnings` is the pre-write scan's `BuildWarning[]`
+      // carried by a `RenameValidationError` (undefined on every other error
+      // path — there's nothing to attach). json: folded into the SAME
+      // `{"error": ...}` envelope as a `warnings` field (F7's original
+      // contract stays byte-identical when there are none — the field is
+      // simply omitted, not `[]`). text: printed via `printWarnings` (stderr)
+      // BEFORE the `Error: ...` line, mirroring `printRenameText`'s existing
+      // success-path convention of always surfacing `buildWarnings`.
+      const fail = (msg: string, warnings?: BuildWarning[]): never => {
         // Honour --format json even on the error path so JSON consumers never
         // have to parse a plain-text line (F7).
         if (format === "json") {
-          console.error(JSON.stringify({ error: msg }));
+          const envelope: { error: string; warnings?: BuildWarning[] } = { error: msg };
+          if (warnings && warnings.length > 0) envelope.warnings = warnings;
+          console.error(JSON.stringify(envelope));
         } else {
+          if (warnings && warnings.length > 0) printWarnings(warnings);
           console.error(`Error: ${msg}`);
         }
         process.exit(1);
@@ -64,6 +88,29 @@ export function registerRenameCommand(program: Command): void {
           printRenameText(result);
         }
       } catch (e) {
+        // issue #279 — `OxcLoadError` (oxc-parser's native binding missing/
+        // broken, issue #263) is an environment failure, not a
+        // validation/IO problem about THIS rename. `.message` is already a
+        // complete, formatted diagnostic (see parsers/typescript.ts), so
+        // it's printed bare in text mode (no "Error:" prefix — matches
+        // cli.ts's own pre-existing top-level handling of the same error)
+        // and wrapped in the same envelope shape as every other fatal error
+        // here in json mode. See docs/commands.md's fatal-error contract.
+        if (e instanceof OxcLoadError) {
+          if (format === "json") {
+            console.error(JSON.stringify({ error: e.message }));
+          } else {
+            console.error(e.message);
+          }
+          process.exit(1);
+        }
+        // issue #273-1 — a validation/safety-valve throw from
+        // rename-executor.ts now carries the pre-write scan's
+        // buildWarnings; surface them via `fail` instead of the pre-fix
+        // behavior of extracting only `e.message` and discarding the rest.
+        if (e instanceof RenameValidationError) {
+          fail(e.message, e.buildWarnings);
+        }
         const msg = e instanceof Error ? e.message : String(e);
         fail(msg);
       }
