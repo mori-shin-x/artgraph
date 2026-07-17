@@ -2,7 +2,7 @@
 
 import { resolve } from "node:path";
 import { Command } from "commander";
-import { resolveTestResults, reportGraphWarnings } from "./shared.js";
+import { resolveTestResults, reportGraphWarnings, withOxcLoadErrorFatal } from "./shared.js";
 
 export function registerScanCommand(program: Command): void {
   program
@@ -22,7 +22,10 @@ export function registerScanCommand(program: Command): void {
       const { loadConfig } = await import("../config.js");
       const { scan } = await import("../scan.js");
       const config = loadConfig(rootDir);
-      const result = scan(rootDir, config);
+      // issue #279 — format-aware `OxcLoadError` handling (issue #263): this
+      // was the only path in the command that can hit it, and previously it
+      // propagated uncaught to cli.ts's format-blind top-level catch.
+      const result = await withOxcLoadErrorFatal(opts.format, () => scan(rootDir, config));
 
       // --serve / --output render the same scan graph as an interactive HTML
       // page (issue #125). The dedicated `graph` command was folded into

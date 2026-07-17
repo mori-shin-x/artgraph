@@ -8,6 +8,7 @@ import {
   pathsToEntries,
   resolveTestResults,
   reportGraphWarnings,
+  withOxcLoadErrorFatal,
 } from "./shared.js";
 import { printCheckText } from "./presenters/check.js";
 
@@ -108,7 +109,16 @@ export function registerCheckCommand(program: Command): void {
       const { readLockWithMeta, warnIfNewerLockSchema } = await import("../lock.js");
       const { check } = await import("../check.js");
       const config = loadConfig(rootDir);
-      const { graph, warnings } = scan(rootDir, config);
+      // issue #279 — format-aware `OxcLoadError` handling (issue #263): this
+      // action had no catch of its own before, so the error used to
+      // propagate uncaught to cli.ts's format-blind top-level catch. The
+      // baseline-worktree scan for `--diff --base` (further below) is a
+      // DIFFERENT code path — `baseline.ts` already contains its own scan
+      // failures into a display-only "unavailable" baseline status, so an
+      // OxcLoadError there never reaches this catch or cli.ts's.
+      const { graph, warnings } = await withOxcLoadErrorFatal(opts.format, () =>
+        scan(rootDir, config),
+      );
       // issue #243 — `check` is read-only w.r.t. the lock: a newer-schema
       // lock is still readable (unknown fields are simply invisible), so
       // warn and keep going rather than fail like the write paths do.

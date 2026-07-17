@@ -9,6 +9,14 @@ import { parseAgentsList, AgentsParseError } from "../agents/parse-agents.js";
 import { AGENT_IDS, type AgentId } from "../agents/descriptors.js";
 import type { BuildWarning } from "../graph/builder.js";
 import { printWarnings } from "./presenters/warnings.js";
+// issue #279 — statically imported, same as `cli.ts`'s own top-level catch
+// (issue #263) already does unconditionally: this module's import cost is
+// cheap (no native binding load at import time — see the doc comment on
+// `OxcLoadError` in parsers/typescript.ts), and `cli.ts` already pays it on
+// EVERY real CLI invocation regardless of which command runs, so importing
+// it again here (this file is itself statically imported by every
+// `commands/*.ts` module) adds no new cost.
+import { OxcLoadError } from "../parsers/typescript.js";
 
 // issue #306 (PR #304 review F6/F7) — commander's required option-args are
 // greedy: a value-taking `--flag` immediately followed by ANOTHER flag
@@ -140,6 +148,70 @@ export function parseAgentsFlag(raw: string): AgentId[] {
 export function reportGraphWarnings(warnings: BuildWarning[], format?: string): void {
   if (format === "json") return;
   printWarnings(warnings);
+}
+
+// issue #279 — `OxcLoadError` (oxc-parser's native binding missing/broken,
+// issue #263) is a specifically-anticipated, actionable environment failure.
+// Before this helper, the ONLY place that caught it was `cli.ts`'s top-level
+// `program.parseAsync()` catch — a layer that has no idea what `--format`
+// the just-parsed command requested, so it always printed plain text to
+// stderr regardless of `--format json`. Each command action that can reach
+// `scan()`/`buildGraph()` (directly, or via a helper like
+// `plan-coverage/index.ts#runPlanCoverage` or `trace.ts#loadTraceInputs`)
+// wraps JUST that call in this helper instead of wrapping its entire body —
+// `format` is a normal command-local variable at every call site, so this
+// runs at a layer that DOES know it, without a broader restructure. Every
+// OTHER thrown error (including `RenameValidationError`, `LockSchemaVersionError`,
+// plain usage errors, …) passes through `fn`'s rethrow unchanged — this
+// helper only narrows on `OxcLoadError`. See docs/commands.md's "Fatal
+// errors" section for the resulting stdout/stderr contract this implements.
+export async function withOxcLoadErrorFatal<T>(
+  format: string | undefined,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof OxcLoadError) {
+      printOxcLoadError(format, e);
+      process.exit(1);
+    }
+    throw e;
+  }
+}
+
+// issue #279 — shared with `withOxcLoadErrorFatal` above AND with the
+// handful of commands (`rename`, `plan-coverage`) that already had their own
+// catch-all before this issue and just needed an extra `instanceof
+// OxcLoadError` branch spliced in rather than a full call-site wrap.
+// `OxcLoadError.message` is already a complete, formatted diagnostic (see
+// parsers/typescript.ts) — printed bare in text mode (no "Error:" prefix,
+// matching `cli.ts`'s own pre-existing handling of this exact error) and
+// wrapped in the same `{"error": ...}` envelope every OTHER fatal error here
+// uses in json mode.
+export function printOxcLoadError(format: string | undefined, e: OxcLoadError): void {
+  if (format === "json") {
+    console.error(JSON.stringify({ error: e.message }));
+  } else {
+    console.error(e.message);
+  }
+}
+
+// issue #279 — the generic `{"error": ...}` stderr envelope every fatal
+// catch-all in this CLI converges on (`commands/rename.ts`'s original
+// `fail()` is the reference implementation this was extracted from
+// verbatim): text mode keeps the pre-existing plain `Error: <msg>` line,
+// json mode gets a parseable envelope instead of nothing/plain-text noise.
+// Both write to STDERR — this repo's existing convention (verified against
+// `rename.ts`'s `fail()`) is that stdout carries ONLY a successful result
+// payload; every diagnostic, `--format json` fatal errors included, goes to
+// stderr. See docs/commands.md's "Fatal errors" section.
+export function printFatalCatchAll(format: string | undefined, msg: string): void {
+  if (format === "json") {
+    console.error(JSON.stringify({ error: msg }));
+  } else {
+    console.error(`Error: ${msg}`);
+  }
 }
 
 // spec 020 (contracts/cli-surface.md §2 / §5, FR-018) — verbatim error UX

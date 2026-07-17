@@ -1,7 +1,7 @@
 // `artgraph reconcile` — extracted verbatim from `src/cli.ts` (issue #162).
 
 import { Command } from "commander";
-import { reportGraphWarnings } from "./shared.js";
+import { reportGraphWarnings, withOxcLoadErrorFatal } from "./shared.js";
 
 export function registerReconcileCommand(program: Command): void {
   program
@@ -22,7 +22,14 @@ export function registerReconcileCommand(program: Command): void {
       // warning was invisible via `artgraph reconcile`. `reconcile` has no
       // `--format json` mode, so this always prints (mirrors scan/init/check's
       // text-mode behavior).
-      const { graph, warnings } = scan(rootDir, config);
+      //
+      // issue #279 — format-aware `OxcLoadError` handling (issue #263):
+      // `reconcile` has no `--format` at all, so `format` is `undefined`
+      // (text-mode diagnostic) — this action had no catch of its own before,
+      // so the error used to propagate uncaught to cli.ts's top-level catch.
+      const { graph, warnings } = await withOxcLoadErrorFatal(undefined, () =>
+        scan(rootDir, config),
+      );
       // issue #243 — a lock schema newer than this CLI understands is a hard
       // stop (not a silent coarse rebuild): print a clear, actionable error
       // and exit non-zero instead of letting the exception's raw stack

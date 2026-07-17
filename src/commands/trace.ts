@@ -9,7 +9,7 @@ import { Command } from "commander";
 import type { ArtifactGraph } from "../types.js";
 import type { TraceDiagnostics } from "../trace/schema.js";
 import type { BuildWarning } from "../graph/builder.js";
-import { reportGraphWarnings, TRACE_NO_SHARDS_GUIDANCE } from "./shared.js";
+import { reportGraphWarnings, TRACE_NO_SHARDS_GUIDANCE, withOxcLoadErrorFatal } from "./shared.js";
 import { printTraceReportText, printTraceStatusText } from "./presenters/trace.js";
 
 export interface TraceStatusResult {
@@ -89,7 +89,14 @@ export function registerTraceCommand(program: Command): void {
     .option("--format <format>", "Output format: json | text", "text")
     .action(async (opts) => {
       const rootDir = process.cwd();
-      const { graph, trace: ingested, warnings } = await loadTraceInputs(rootDir);
+      // issue #279 — format-aware `OxcLoadError` handling (issue #263):
+      // `loadTraceInputs` had no catch of its own before, so the error
+      // used to propagate uncaught to cli.ts's format-blind top-level catch.
+      const {
+        graph,
+        trace: ingested,
+        warnings,
+      } = await withOxcLoadErrorFatal(opts.format, () => loadTraceInputs(rootDir));
       const { computeStaleNodeIds } = await import("../trace/report.js");
 
       const staleNodeIds = computeStaleNodeIds(graph, ingested);
@@ -119,7 +126,13 @@ export function registerTraceCommand(program: Command): void {
     .option("--format <format>", "Output format: json | text", "text")
     .action(async (opts) => {
       const rootDir = process.cwd();
-      const { config, graph, trace: ingested, warnings } = await loadTraceInputs(rootDir);
+      // issue #279 — see the identical comment on `trace status` above.
+      const {
+        config,
+        graph,
+        trace: ingested,
+        warnings,
+      } = await withOxcLoadErrorFatal(opts.format, () => loadTraceInputs(rootDir));
 
       // contracts/cli-surface.md §2 — zero shards is a hard error, not an
       // empty report: the report's entire premise (evidence exists to

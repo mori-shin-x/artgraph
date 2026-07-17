@@ -7,6 +7,7 @@ import {
   pathsToEntries,
   reportGraphWarnings,
   TRACE_NO_SHARDS_GUIDANCE,
+  withOxcLoadErrorFatal,
 } from "./shared.js";
 import { printImpactText } from "./presenters/impact.js";
 
@@ -230,7 +231,12 @@ export function registerImpactCommand(program: Command): void {
       // `--diff` "no changes" early-exit JSON payload below (mirrors
       // `check --diff`'s equivalent branch) and to the final output at the
       // bottom of this action.
-      const { graph, warnings } = scan(rootDir, config);
+      // issue #279 — format-aware `OxcLoadError` handling (issue #263): this
+      // action had no catch of its own before, so the error used to
+      // propagate uncaught to cli.ts's format-blind top-level catch.
+      const { graph, warnings } = await withOxcLoadErrorFatal(opts.format, () =>
+        scan(rootDir, config),
+      );
       // issue #243 — read-only w.r.t. the lock: warn on a newer schema and
       // keep going (see commands/check.ts's identical comment).
       const { lock, schemaVersion } = readLockWithMeta(rootDir, config.lockFile);

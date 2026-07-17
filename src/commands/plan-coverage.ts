@@ -3,7 +3,17 @@
 import { Command, Option } from "commander";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { DASH_PATH_HINT, nonOptionValue, reportGraphWarnings } from "./shared.js";
+import {
+  DASH_PATH_HINT,
+  nonOptionValue,
+  reportGraphWarnings,
+  printFatalCatchAll,
+  printOxcLoadError,
+} from "./shared.js";
+// See commands/shared.ts's `withOxcLoadErrorFatal` doc comment for why this
+// static import is free (cli.ts's own top-level catch already pays it
+// unconditionally on every real CLI invocation).
+import { OxcLoadError } from "../parsers/typescript.js";
 
 // spec 014 (FR-013 — FR-020): plan-coverage subcommand. Reads tasks.md /
 // plan.md (and the current spec.md) to detect REQs that are *affected*
@@ -136,8 +146,23 @@ export function registerPlanCoverageCommand(program: Command): void {
           process.exit(result.exitCode);
         }
       } catch (e) {
+        // issue #279 — `OxcLoadError` (issue #263: oxc-parser's native
+        // binding missing/broken) is an environment failure with its own
+        // complete diagnostic message; handled before the generic catch-all
+        // below so it never gets the generic `Error: ` prefix.
+        if (e instanceof OxcLoadError) {
+          printOxcLoadError(format, e);
+          process.exit(1);
+        }
+        // issue #279 (item 1) — this catch-all used to be plain-text-only
+        // (`console.error(\`Error: ${msg}\`)`) regardless of `--format`, so a
+        // `--format json` consumer piping this command's fatal errors to
+        // `jq` got a parse error instead of a `{"error": ...}` envelope.
+        // Mirrors `commands/rename.ts`'s original `fail()` (same envelope
+        // shape, same stderr stream — see docs/commands.md's fatal-error
+        // contract section); text mode's `Error: ${msg}` line is unchanged.
         const msg = e instanceof Error ? e.message : String(e);
-        console.error(`Error: ${msg}`);
+        printFatalCatchAll(format, msg);
         process.exit(1);
       }
     });
