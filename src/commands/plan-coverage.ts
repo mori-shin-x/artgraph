@@ -10,7 +10,7 @@ import {
   printFatalCatchAll,
   printOxcLoadError,
 } from "./shared.js";
-// See commands/shared.ts's `withOxcLoadErrorFatal` doc comment for why this
+// See commands/shared.ts's `withFatalErrors` doc comment for why this
 // static import is free (cli.ts's own top-level catch already pays it
 // unconditionally on every real CLI invocation).
 import { OxcLoadError } from "../parsers/typescript.js";
@@ -73,6 +73,16 @@ export function registerPlanCoverageCommand(program: Command): void {
       const { loadConfig } = await import("../config.js");
       const { runPlanCoverage } = await import("../plan-coverage/index.js");
 
+      // issue #336 (meta-review F1) — resolved BEFORE `loadConfig()` (now
+      // inside the `try` below) is ever called: a malformed `.artgraph.json`
+      // must produce a format-aware fatal error, which requires `format` to
+      // already be known by the time `loadConfig()` can throw. This is the
+      // only reordering in this action — every usage-error check below
+      // (missing spec dir, missing tasks.md/plan.md) still runs in its
+      // original place; those are plain usage errors, not part of the
+      // fatal-error contract this section guards.
+      const format: "json" | "text" = opts.format === "json" ? "json" : "text";
+
       // Resolve spec dir per the contract precedence.
       const resolved = resolveSpecDir({
         explicitFlag: opts.spec,
@@ -115,14 +125,20 @@ export function registerPlanCoverageCommand(program: Command): void {
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
 
-      // `.artgraph.json`'s planCoverage section drives requireFilesSection
-      // (default false).
-      const config = loadConfig(rootDir);
-      const requireFilesSection: boolean = config.planCoverage?.requireFilesSection ?? false;
-
-      const format: "json" | "text" = opts.format === "json" ? "json" : "text";
-
       try {
+        // issue #336 (meta-review F1) — `loadConfig()` moved INSIDE this
+        // guarded `try` (it used to run before the `try` block even
+        // started, so a malformed `.artgraph.json` threw straight past this
+        // action's catch-all to cli.ts's format-blind top-level handler — a
+        // raw Node stack trace regardless of `--format`). Mirrors
+        // rename.ts's `loadScanContext`, the reference implementation for
+        // "loadConfig inside the guarded region".
+        //
+        // `.artgraph.json`'s planCoverage section drives requireFilesSection
+        // (default false).
+        const config = loadConfig(rootDir);
+        const requireFilesSection: boolean = config.planCoverage?.requireFilesSection ?? false;
+
         const result = runPlanCoverage({
           repoRoot: rootDir,
           specDir,

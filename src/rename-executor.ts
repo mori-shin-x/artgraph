@@ -89,13 +89,20 @@ export interface RenameResult {
   // issue #273-2 ((a)-lite) — `reconcileAfterWrite`'s post-write `scan()`
   // (which runs purely to refresh the lock) can surface a BuildWarning the
   // pre-write scan never had — e.g. a `--merge` scaffold landing in two
-  // spec files mints a fresh `duplicate-id`. Deliberately ADDITIVE: `.trace`
-  // lock — `buildWarnings` above is untouched, so existing `--format json`
-  // consumers that assert the full result shape are unaffected. Contains
-  // only warnings NOT already present pre-write (set-diffed by
-  // type+id+files+message against `buildWarnings`) — a warning that existed
-  // before the rename and that rename did nothing to cause or fix is not
-  // re-reported here. `undefined` (the key is present but unset, and
+  // spec files mints a fresh `duplicate-id`. Deliberately ADDITIVE: a new
+  // OPTIONAL field, `buildWarnings` above is untouched. This is
+  // non-breaking for a consumer that reads only KNOWN fields (the common
+  // case, and the only one `docs/commands.md` documents) — it is NOT a
+  // guarantee for every possible consumer: one that validates the JSON
+  // payload against a closed/exact schema, or asserts a byte-exact
+  // snapshot of the full result object, WILL observe a diff the first time
+  // a rename actually produces a new post-write warning (this field simply
+  // did not exist before issue #273-2 at all). Contains only warnings NOT
+  // already present pre-write (set-diffed via `warningKey`, issue #336
+  // F3/F4 — type+id+sorted-files+message, except `system-resource-exhausted`
+  // which keys on type alone — against `buildWarnings`) — a warning that
+  // existed before the rename and that rename did nothing to cause or fix
+  // is not re-reported here. `undefined` (the key is present but unset, and
   // `JSON.stringify` drops it) when no post-write scan ran at all — either
   // `--dry-run` (which never writes or reconciles) or no `.trace.lock` file
   // existed to reconcile against. Deliberately distinct from an empty array
@@ -164,9 +171,46 @@ function runValidation(graphWarnings: BuildWarning[], fn: () => void): void {
  * default presenter (`printWarnings`) actually renders, so two warnings that
  * key identically are indistinguishable to a reader regardless of which
  * scan produced them.
+ *
+ * issue #336 (meta-review F3/F4) — two refinements on top of the original
+ * key:
+ *
+ *   F4 — `w.files` is sorted before stringifying. `BuildWarning.files`'
+ *   ORDER is a byproduct of directory-traversal / glob-enumeration order,
+ *   which is not guaranteed stable across two independent `scan()` calls
+ *   (pre-write vs. post-write) even when the underlying file SET is
+ *   identical. An unsorted key would treat that pure ordering wobble as a
+ *   different warning, spuriously promoting an unchanged
+ *   `duplicate-id`/etc. warning into `postWriteWarnings`.
+ *
+ *   F3 — `system-resource-exhausted` is keyed on `type` ALONE (id/files/
+ *   message ignored). This warning is scan-wide, not about a specific file:
+ *   `graph/builder.ts`'s EMFILE/ENFILE guards report whichever file/glob/
+ *   tsconfig read happened to be the FIRST one hit by the exhaustion in
+ *   THIS particular scan ("Shown once per scan regardless of how many files
+ *   were affected" — see the warning's own `message` text at its push
+ *   sites), so the `id`/`files` it carries are a property of scan ORDER, not
+ *   of the underlying condition. Keying on the full tuple like every other
+ *   warning type would treat "the OS is still out of file descriptors" (the
+ *   same recurring condition on both the pre-write and post-write scan) as a
+ *   brand-new warning on almost every affected rename, purely because the
+ *   first-offender id/files happened to differ between the two scans —
+ *   drowning the genuinely-new-warnings signal `postWriteWarnings` exists to
+ *   surface. This does NOT special-case away system-resource-exhaustion
+ *   from `postWriteWarnings` entirely (meta-review recommendation (ii), not
+ *   the alternative "exclude the type outright"): a scan pair where the
+ *   PRE-write scan has no `system-resource-exhausted` key at all and the
+ *   POST-write scan hits one still diffs as new (`diffPostWriteWarnings`'s
+ *   `seen` set, built from `preWrite`, has nothing to match against) — only
+ *   "recurs across both scans" is suppressed, never "newly appeared".
+ *
+ * Exported purely for direct unit testing of the F3/F4 keying rules.
  */
-function warningKey(w: BuildWarning): string {
-  return JSON.stringify([w.type, w.id, w.files, w.message ?? null]);
+export function warningKey(w: BuildWarning): string {
+  if (w.type === "system-resource-exhausted") {
+    return JSON.stringify([w.type]);
+  }
+  return JSON.stringify([w.type, w.id, [...w.files].sort(), w.message ?? null]);
 }
 
 /**
@@ -175,11 +219,17 @@ function warningKey(w: BuildWarning): string {
  * lock file to reconcile), an array (possibly empty) otherwise. Returns
  * `undefined` unchanged in the former case (see `RenameResult.postWriteWarnings`'s
  * doc for why that's kept distinct from `[]`); otherwise returns only the
- * `postWrite` warnings whose structural key was NOT already present in
- * `preWrite` — a warning the pre-write scan already had, that this rename
- * did nothing to introduce, is not re-reported as "new".
+ * `postWrite` warnings whose structural key (`warningKey` above — type+id+
+ * sorted-files+message, except `system-resource-exhausted` which keys on
+ * `type` alone, issue #336 F3/F4) was NOT already present in `preWrite` — a
+ * warning the pre-write scan already had, that this rename did nothing to
+ * introduce, is not re-reported as "new".
+ *
+ * Exported (alongside `warningKey`) purely for direct unit testing of the
+ * F3/F4 keying rules — every real caller reaches this only through
+ * `execute*` above.
  */
-function diffPostWriteWarnings(
+export function diffPostWriteWarnings(
   postWrite: BuildWarning[] | undefined,
   preWrite: BuildWarning[],
 ): BuildWarning[] | undefined {

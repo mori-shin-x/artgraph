@@ -2,7 +2,7 @@
 
 import { resolve } from "node:path";
 import { Command } from "commander";
-import { resolveTestResults, reportGraphWarnings, withOxcLoadErrorFatal } from "./shared.js";
+import { resolveTestResults, reportGraphWarnings, withFatalErrors } from "./shared.js";
 
 export function registerScanCommand(program: Command): void {
   program
@@ -21,11 +21,13 @@ export function registerScanCommand(program: Command): void {
       const rootDir = process.cwd();
       const { loadConfig } = await import("../config.js");
       const { scan } = await import("../scan.js");
-      const config = loadConfig(rootDir);
-      // issue #279 — format-aware `OxcLoadError` handling (issue #263): this
-      // was the only path in the command that can hit it, and previously it
-      // propagated uncaught to cli.ts's format-blind top-level catch.
-      const result = await withOxcLoadErrorFatal(opts.format, () => scan(rootDir, config));
+      // issue #279 / issue #336 (meta-review F1) — format-aware fatal-error
+      // handling for both `loadConfig()` and `scan()` (see check.ts's
+      // identical comment for the full rationale): pre-#336, `loadConfig()`
+      // ran unguarded, so a malformed `.artgraph.json` propagated uncaught
+      // to cli.ts's format-blind top-level catch.
+      const config = await withFatalErrors(opts.format, () => loadConfig(rootDir));
+      const result = await withFatalErrors(opts.format, () => scan(rootDir, config));
 
       // --serve / --output render the same scan graph as an interactive HTML
       // page (issue #125). The dedicated `graph` command was folded into

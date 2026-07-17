@@ -22,11 +22,15 @@ across every command that has a `--format` option:
 This applies uniformly to: a command's own usage/validation errors, a
 rejected `LockSchemaVersionError` (a `.trace.lock` written by a newer
 artgraph), `rename`'s validation/safety-valve failures (`RenameValidationError`,
-issue #273), and `OxcLoadError` (oxc-parser's native binding missing/broken,
-issue #263) — every command whose action reaches `scan()`/`buildGraph()`
-(`scan`, `check`, `impact`, `plan-coverage`, `reconcile`, `trace status`,
-`trace report`, `rename`) surfaces `OxcLoadError` through this same
-stderr/exit-1 contract instead of a raw, format-blind stack trace.
+issue #273), a malformed `.artgraph.json` (`loadConfig()`'s `Failed to parse
+...`, issue #336), an `AgentsParseError` from `--agents=<list>` (issue #336),
+and `OxcLoadError` (oxc-parser's native binding missing/broken, issue #263) —
+every command whose action reaches `loadConfig()` and/or `scan()`/
+`buildGraph()` (`scan`, `check`, `impact`, `plan-coverage`, `reconcile`,
+`trace status`, `trace report`, `rename`, `init`, `doctor`) surfaces every
+one of these through this same stderr/exit-1 contract instead of a raw,
+format-blind stack trace (`commands/shared.ts#withFatalErrors`, issue #336 —
+a superset of the original issue #279 `OxcLoadError`-only guard).
 
 **Declared exceptions to this contract** (deliberately not touched by this
 section, or by issue #279):
@@ -475,6 +479,32 @@ Notes:
   `--dry-run` also warns on a newer-schema lock (it never writes, so it isn't
   rejected) — the same "update CI's artgraph, don't `--force` it" guidance
   applies.
+- **`postWriteWarnings` (issue #273-2)**: after a non-preview run whose
+  post-write scan found a `.trace.lock` to reconcile against, the JSON result
+  carries `postWriteWarnings` — the SET DIFFERENCE of that post-write scan's
+  `buildGraph()` warnings against the pre-write scan's `buildWarnings`
+  (structurally keyed by type+id+sorted-files+message; `system-resource-exhausted`
+  keys on type alone — issue #336 F3/F4). It is therefore only ever NEW
+  warnings this specific run's post-write scan produced that the pre-write
+  scan did not already have — a pre-existing, rename-unrelated warning never
+  reappears here. `postWriteWarnings` is `undefined` (omitted from the JSON
+  payload) when no post-write scan ran at all — either `--dry-run` (which
+  never writes or reconciles) or no `.trace.lock` file existed to reconcile
+  against — versus `[]` when the post-write scan DID run and found nothing
+  new. Callers must not conflate the two: `undefined` is "no data", `[]` is a
+  real, positive "ran and found nothing new" signal. A non-empty
+  `postWriteWarnings` is a signal to INVESTIGATE, not necessarily proof the
+  rename itself is the cause — the underlying condition (e.g. an
+  environment-wide `system-resource-exhausted`) can coincide with, rather
+  than be caused by, this rename.
+- **Fatal-error envelope's optional `warnings` field**: when a non-preview
+  rename fails validation (`RenameValidationError`, issue #273) AFTER the
+  pre-write scan already ran, the `--format json` error envelope described in
+  ["Fatal errors"](#fatal-errors-stdoutstderr-contract-issue-279) above gains
+  an optional `warnings` field carrying that pre-write scan's `BuildWarning[]`
+  (e.g. `{"error": "...", "warnings": [...]}`) — omitted entirely when there
+  are none, never an empty array. Text mode prints the same warnings via
+  `printWarnings` (stderr) before the `Error: ...` line instead.
 
 ### rename does not reassign `@impl` tags <a id="rename-does-not-reassign-impl-tags"></a>
 
