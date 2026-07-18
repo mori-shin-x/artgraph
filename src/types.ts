@@ -265,6 +265,21 @@ export interface CheckResult {
    * separate from `pass` (spec 017's baseline-diff gate) since staleness
    * gating is not part of the new-vs-pre-existing baseline model (FR-015). */
   staleGate?: boolean;
+  /** issue #244 — lock entries whose id has no corresponding node in the
+   * CURRENT graph (rename/refactor left a stale key behind, or a
+   * `mode`/`include`/`exclude`/`ignoreIdPrefixes` config change stopped
+   * resolving it — not rename-only). Computed BEFORE `scope` filtering
+   * (unlike `drifted`/`orphans`/`uncovered`): a stale id is by definition
+   * absent from `graph.nodes`, so it can never be reached by the graph-BFS
+   * `scope` set (`buildScope`) and would always read as empty under
+   * `--diff` if scope-filtered like the other findings. Ascending-sorted,
+   * deduplicated. Present ONLY when non-empty (mirrors the spec-020
+   * optional-omit convention above, so trace-absent/no-stale output stays
+   * byte-identical). Unrelated to `staleEvidence`/`staleGate` (those track
+   * trace-evidence freshness against the graph; this tracks lock-key
+   * existence in the graph) despite the similar name. Resolved by running
+   * `artgraph reconcile`. */
+  staleLockEntries?: string[];
   /** issue #284 — counterfactual hint: `uncovered` REQ ids that have
    * exclusive `exercises` evidence (staleness-filtered the same way the real
    * `exercised` computation is) and would be rescued to `exercised` (leaving

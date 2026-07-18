@@ -295,3 +295,55 @@ describe("check", () => {
     });
   });
 });
+
+// issue #244 — a lock entry whose id has no matching node in the CURRENT
+// graph (rename/refactor left the old id behind) was previously silently
+// `continue`d past by the drift loop: invisible from drift AND orphans,
+// resolved only by an unrelated `reconcile` run. `staleLockEntries` surfaces
+// these ids directly.
+describe("check: staleLockEntries (issue #244)", () => {
+  // One real node ("REQ-100", locked, in sync) plus two lock-only ids with
+  // no corresponding graph node — simulating a rename that changed
+  // "OLD-symbol-a" -> "REQ-100" and left "OLD-symbol-a" / "OLD-symbol-b"
+  // behind in the lock.
+  function graphWithStaleLock(): { graph: ArtifactGraph; lock: LockFile } {
+    const graph: ArtifactGraph = {
+      nodes: new Map([
+        ["REQ-100", { id: "REQ-100", kind: "req", filePath: "specs/x.md", contentHash: "h1" }],
+      ]),
+      edges: [],
+    };
+    const lock: LockFile = {
+      "REQ-100": { contentHash: "h1", lastReconciled: "2025-01-01T00:00:00Z" },
+      "OLD-symbol-b": { contentHash: "hb", lastReconciled: "2025-01-01T00:00:00Z" },
+      "OLD-symbol-a": { contentHash: "ha", lastReconciled: "2025-01-01T00:00:00Z" },
+    };
+    return { graph, lock };
+  }
+
+  it("lists lock ids absent from the graph, ascending-sorted", () => {
+    const { graph, lock } = graphWithStaleLock();
+    const result = check(graph, lock);
+    expect(result.staleLockEntries).toEqual(["OLD-symbol-a", "OLD-symbol-b"]);
+  });
+
+  it("omits the key entirely (not []) when every lock id resolves to a graph node", () => {
+    const { graph, lock } = graphWithStaleLock();
+    delete lock["OLD-symbol-a"];
+    delete lock["OLD-symbol-b"];
+    const result = check(graph, lock);
+    expect(Object.prototype.hasOwnProperty.call(result, "staleLockEntries")).toBe(false);
+  });
+
+  it("is scope-independent: a scope that excludes the stale ids (and would exclude them by construction, since they aren't graph-reachable) still surfaces them", () => {
+    const { graph, lock } = graphWithStaleLock();
+    // A scope built from graph-reachable ids only, exactly as `buildScope`
+    // (impact()-derived) would produce — it can never contain a stale lock
+    // id, since that id isn't in the graph to be reached in the first place.
+    const scope = new Set(["REQ-100"]);
+    const result = check(graph, lock, scope);
+    expect(result.staleLockEntries).toEqual(["OLD-symbol-a", "OLD-symbol-b"]);
+    // Scope still applies normally to drift: REQ-100 is in sync so no drift.
+    expect(result.drifted).toEqual([]);
+  });
+});

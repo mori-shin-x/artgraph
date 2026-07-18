@@ -69,11 +69,23 @@ export function check(
   traceOptions?: TraceCheckOptions,
 ): CheckResult {
   const drifted: DriftEntry[] = [];
+  // issue #244 — lock entries whose id no longer resolves to a graph node
+  // (rename/refactor, or a mode/include/exclude/ignoreIdPrefixes config
+  // change). Collected BEFORE the `scope` filter below and from the FULL
+  // lock (not `scope`-gated): a stale id is by construction absent from
+  // `graph.nodes`, so it can never be a member of `scope` (`buildScope`'s
+  // graph-BFS reachable set, `check.ts` CLI caller) — scope-filtering here
+  // would make this always empty under `--diff`. Previously such entries
+  // were silently `continue`d past with no visibility until `reconcile`.
+  const staleLockEntriesSet = new Set<string>();
 
   for (const [id, entry] of Object.entries(lock)) {
-    if (scope && !scope.has(id)) continue;
     const node = graph.nodes.get(id);
-    if (!node) continue;
+    if (!node) {
+      staleLockEntriesSet.add(id);
+      continue;
+    }
+    if (scope && !scope.has(id)) continue;
     if (node.contentHash !== entry.contentHash) {
       drifted.push({
         nodeId: id,
@@ -83,6 +95,7 @@ export function check(
       });
     }
   }
+  const staleLockEntries = [...staleLockEntriesSet].sort();
 
   // spec 017 (FR-006, R5) — strict source matching. An orphan is in scope only
   // when its `source` node is itself in the diff scope; the old substring
@@ -253,6 +266,12 @@ export function check(
   // undetermined instead of a bare "unavailable" string.
   if (baselineStatus === "unavailable" && baseline?.error) {
     result.baselineError = baseline.error;
+  }
+  // issue #244 — optional-omit: only present when non-empty, so a project
+  // with no stale lock entries round-trips byte-identical to pre-#244
+  // output (mirrors `staleEvidence`/`unexercisedClaims`'s convention below).
+  if (staleLockEntries.length > 0) {
+    result.staleLockEntries = staleLockEntries;
   }
   // spec 020 (FR-010) — only set when a trace was actually ingested. Setting
   // these keys on `result` unconditionally (even to `[]`/`false`) would grow

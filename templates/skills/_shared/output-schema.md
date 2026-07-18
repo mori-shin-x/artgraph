@@ -55,7 +55,10 @@ The CLI prints `JSON.stringify({ ...CheckResult, warnings })` (see `src/cli.ts`)
     { "reqId": "REQ-003", "symbols": ["symbol:src/billing.ts#charge"] }
   ],
   "staleGate": false,                                  // true only under trace.staleness:"gate" AND staleEvidence non-empty AND --gate
-  "exercisableUncovered": ["REQ-004"]                  // string[] — uncovered REQs whose exclusive evidence would flip them to `exercised` if trace.acceptExercises were on; display-only, always [] once the flag is on (issue #284)
+  "exercisableUncovered": ["REQ-004"],                 // string[] — uncovered REQs whose exclusive evidence would flip them to `exercised` if trace.acceptExercises were on; display-only, always [] once the flag is on (issue #284)
+  // ── issue #244: present ONLY when at least one lock key has no matching
+  // graph node; omitted entirely (not `[]`) otherwise ──
+  "staleLockEntries": ["symbol:src/old.ts#oldFn"]      // string[], sorted — lock keys with no node in the CURRENT graph (rename/refactor, or a mode/include/exclude/ignoreIdPrefixes config change — not rename-only). Unrelated to staleEvidence/staleGate above (those track trace-evidence freshness; this tracks lock-key existence in the graph). Display-only, never affects pass/newIssues/gate. Resolve with `artgraph reconcile`.
 }
 ```
 
