@@ -128,6 +128,12 @@ artgraph scan --serve --port 4000 --host 0.0.0.0
 artgraph scan --output ./graph-out                      # static HTML export
 ```
 
+Binding to `0.0.0.0` (or an equivalent IPv6 "all interfaces" address, e.g.
+`::`) is an intentional opt-in to expose the server beyond localhost to your
+LAN; `artgraph` prints a `warning: binding to 0.0.0.0 exposes the graph to
+your network` line on stderr when it does, since the server has no
+authentication.
+
 `--serve` and `--output` are mutually exclusive. Both read `.trace.lock` when
 present to color drift/orphan/uncovered nodes; a missing lock just renders
 without that extra state.

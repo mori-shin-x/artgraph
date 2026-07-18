@@ -29,6 +29,31 @@ function parsePort(value: string): number {
   return port;
 }
 
+// PR #346 review (H1) — `--host ""` reaches `server.listen()` as the empty
+// string, which Node binds the same as `0.0.0.0` (all interfaces) — but
+// silently: it matched neither the exact-string C6 network-exposure warning
+// nor the C7 display substitution in `graph/serve.ts` (both keyed on exact
+// "0.0.0.0"/"::" at the time), and the printed URL came out as the malformed
+// `http://:PORT` (empty authority host) — confirmed empirically. A value
+// with leading/trailing whitespace is equally malformed input `--host` was
+// never meant to accept. Reject both at parse time, mirroring `parsePort`'s
+// shape above (InvalidArgumentError naming the offending value). This
+// validates SHAPE only (non-empty, no surrounding whitespace) — it does NOT
+// check DNS resolvability or any other semantic validity of the host; a bad
+// but well-formed value still surfaces as a `server.listen()` error at bind
+// time, same as before this change.
+function parseHost(value: string): string {
+  if (value.trim() === "") {
+    throw new InvalidArgumentError(`--host must not be empty (got "${value}").`);
+  }
+  if (value !== value.trim()) {
+    throw new InvalidArgumentError(
+      `--host must not have leading/trailing whitespace (got "${value}").`,
+    );
+  }
+  return value;
+}
+
 export function registerScanCommand(program: Command): void {
   program
     .command("scan")
@@ -36,7 +61,7 @@ export function registerScanCommand(program: Command): void {
     .option("--format <format>", "Output format: json | text", "text")
     .option("--serve", "Start a local HTTP server rendering the graph interactively")
     .option("--port <n>", "Port for --serve (default 3737)", parsePort)
-    .option("--host <h>", "Host for --serve (default 127.0.0.1)")
+    .option("--host <h>", "Host for --serve (default 127.0.0.1)", parseHost)
     .option("--output <dir>", "Emit a static HTML export into <dir>")
     .option(
       "--force",

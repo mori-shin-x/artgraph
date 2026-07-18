@@ -38,6 +38,19 @@ describe("formatServeUrl (issue #172 C4/C5/C7)", () => {
     expect(formatServeUrl("::", 3737)).toBe("http://[::1]:3737");
   });
 
+  // PR #346 review (M1) — `isUnspecifiedHost` (used by both this function's
+  // C7 substitution and `startServer`'s C6 warning) recognizes every
+  // spelling of the IPv6 unspecified address, not just the exact string
+  // "::" — these two are equivalent binds that used to slip past both
+  // string-equality checks.
+  it("M1: displays ::0 (equivalent IPv6 unspecified spelling) as [::1], bracketed", () => {
+    expect(formatServeUrl("::0", 3737)).toBe("http://[::1]:3737");
+  });
+
+  it("M1: displays 0:0:0:0:0:0:0:0 (fully expanded IPv6 unspecified) as [::1], bracketed", () => {
+    expect(formatServeUrl("0:0:0:0:0:0:0:0", 3737)).toBe("http://[::1]:3737");
+  });
+
   it("passes the port through unchanged, including 0 (caller's responsibility to pass the actual bound port)", () => {
     expect(formatServeUrl("127.0.0.1", 0)).toBe("http://127.0.0.1:0");
   });

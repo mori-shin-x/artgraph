@@ -522,6 +522,23 @@ describe("CLI: scan graph payload", () => {
     // can't drive that — see that file's own top-of-file comment).
   });
 
+  // PR #346 review (H1) — `--host ""` used to reach `server.listen()`
+  // unvalidated, binding all interfaces (like `0.0.0.0`) while skipping the
+  // C6 warning and C7 display substitution (both keyed on exact-string
+  // matches at the time) and printing the malformed `http://:PORT`. A value
+  // with surrounding whitespace is equally malformed. Both are now rejected
+  // at PARSE time by `parseHost`, mirroring `--port`'s validator shape.
+  describe("--host validation (PR #346 review H1)", () => {
+    it.each([
+      ["", /must not be empty/],
+      [" 127.0.0.1", /leading\/trailing whitespace/],
+    ])("rejects --host %j", async (value, messagePattern) => {
+      const { exitCode, stderr } = await run(["scan", "--serve", "--host", value]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toMatch(messagePattern);
+    });
+  });
+
   // issue #172 (C1/C8) — flags that are silently ignored on this path now
   // get a heads-up warning instead (behavior is otherwise unchanged).
   describe("scan: silently-ignored flag combinations now warn (issue #172 C1/C8)", () => {
@@ -559,15 +576,16 @@ describe("CLI: scan graph payload", () => {
       expect(stderr).toContain("--port/--host are ignored without --serve");
     });
 
-    it("C8: --port/--host alongside --serve does not warn", async () => {
-      // Validated via the e2e suite's real --serve invocations (which always
-      // pass --port); this just checks the warning doesn't ALSO fire on the
-      // parse-error path (a bad port here would exit 1 before reaching the
-      // warning check, which would be a false negative for this assertion).
-      const { exitCode, stderr } = await run(["scan", "--serve", "--port", "abc"]);
-      expect(exitCode).toBe(1);
-      expect(stderr).not.toContain("--port/--host are ignored without --serve");
-    });
+    // PR #346 review (M2) — the prior "C8: --port/--host alongside --serve
+    // does not warn" test here passed `--serve --port abc`, which
+    // `parsePort` rejects at PARSE time (commander exits 1 before the
+    // action — and thus the C8 warning check — ever runs). It could not
+    // fail no matter what the C8 logic did, so it had zero discriminating
+    // power. Replaced by the e2e test
+    // "C8: --serve --port 0 --host 127.0.0.1 does not warn that --port/--host
+    // are ignored" in tests/e2e/graph-serve.e2e.test.ts, which drives a real
+    // `--serve` startup (valid flags, so the action actually runs) and
+    // asserts the warning is absent from stderr up to the "serving at" line.
   });
 });
 

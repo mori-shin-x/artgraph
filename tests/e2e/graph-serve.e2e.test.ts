@@ -268,4 +268,55 @@ describe("e2e: scan --serve", () => {
       expect(code).toBe(0);
     },
   );
+
+  // PR #346 review (M2) — replaces a unit test in tests/cli.test.ts that
+  // paired `--serve` with a deliberately-invalid `--port abc`: `parsePort`
+  // rejects that at PARSE time, so the process exits before the action (and
+  // the C8 "--port/--host are ignored without --serve" check) ever runs —
+  // the old test had no discriminating power, since it could not fail
+  // regardless of what the C8 logic did. This drives a real `--serve`
+  // startup with VALID `--port`/`--host` (so the action, and the C8 check,
+  // actually execute) and asserts the ignored-without-`--serve` warning
+  // never fires — same spawn pattern as the C6 test above, using the
+  // "serving at" line as the startup-complete signal and inspecting stderr
+  // accumulated up to that point.
+  it(
+    "C8: --serve --port 0 --host 127.0.0.1 does not warn that --port/--host are ignored",
+    { timeout: 15000 },
+    async () => {
+      let stderrBuf = "";
+      const proc = spawn("node", [CLI, "scan", "--serve", "--port", "0", "--host", "127.0.0.1"], {
+        cwd: FIXTURE_DIR,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      proc.stdout.on("data", () => {});
+      proc.stderr.on("data", (d: Buffer) => {
+        stderrBuf += d.toString("utf-8");
+      });
+
+      const earlyExit = new Promise<never>((_, reject) => {
+        proc.once("exit", (code) => {
+          reject(new Error(`server exited early with code ${code}; stderr so far: ${stderrBuf}`));
+        });
+      });
+
+      const waitForServing = (async (): Promise<void> => {
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+          if (/serving at/.test(stderrBuf)) return;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        throw new Error(
+          `did not see a "serving at" line within budget; stderr so far: ${stderrBuf}`,
+        );
+      })();
+      await Promise.race([waitForServing, earlyExit]);
+
+      expect(stderrBuf).not.toContain("ignored");
+
+      proc.kill("SIGINT");
+      const code = await waitExit(proc, 3000);
+      expect(code).toBe(0);
+    },
+  );
 });

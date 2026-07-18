@@ -83,6 +83,14 @@ let oxcModule: typeof import("oxc-parser") | undefined;
 // (slow, and — a native dlopen failure being an environment property —
 // certain to fail again) require. Mirrors `src/parsers/typescript.ts`'s
 // identical `oxcLoadError` memo.
+// PR #346 review (M3, recorded) — in a long-lived process (`vitest --watch`,
+// which keeps this module instance alive across reruns), fixing the
+// underlying environment (reinstalling node_modules, matching the
+// platform-specific binding, …) does NOT un-poison this cache — there is no
+// retry path once `oxcLoadFailure` is set, by design (see `loadOxc` below).
+// A process restart is the recovery step; a watch-mode user who fixes their
+// environment still needs to stop and re-run `vitest --watch` for it to take
+// effect.
 let oxcLoadFailure: PluginOxcLoadError | undefined;
 // issue #278 — dedup flag for the dedicated load-failure warning emitted
 // from `transform()`'s catch block below. Module-scope `let`/boolean (NOT
@@ -468,7 +476,23 @@ export default function artgraphTracePlugin(): ArtgraphTracePlugin {
           warnedParseFailures.add(relPath);
           process.stderr.write(
             `[artgraph] trace instrumentation: could not parse ${relPath} — passing through ` +
-              `un-instrumented (contracts/instrumentation-runtime.md §変換のスキップ).\n`,
+              `un-instrumented (contracts/instrumentation-runtime.md §変換のスキップ).\n` +
+              // PR #346 review (H2, minimal) — a single genuinely-broken file
+              // is expected and this per-file warning is the right amount of
+              // signal for that. But this same warning also fires for EVERY
+              // file when the real cause is a partially-broken oxc native
+              // binding that still loads but mis-parses everything (unlike
+              // `PluginOxcLoadError` above, which only covers the binding
+              // failing to LOAD at all) — a failure mode this per-file
+              // warning alone doesn't distinguish from ordinary broken
+              // syntax. Point at the same escape hatch
+              // `PluginOxcLoadError` already documents, so a user staring at
+              // a wall of these has a next step without having to guess.
+              // Deliberately NOT deduped/escalated based on volume (e.g.
+              // "warn once if this fires for every file") — that's a
+              // separate, harder problem (issue #347) left for its own fix.
+              "If this happens for EVERY file, the oxc native binding may be partially broken — " +
+              "try ARTGRAPH_TRACE_ENGINE=cdp as an alternative engine.\n",
           );
         }
         return undefined;
