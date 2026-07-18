@@ -278,6 +278,11 @@ key itself still exists in the graph at all. It is purely informational: it
 never affects `pass`, `newIssues`, or any gate/exit-code decision. Resolve
 it by running `artgraph reconcile`.
 
+Caveat: under `--diff`, an early-return path (no changed files, or changed
+files outside the graph) skips `check()` entirely, so `staleLockEntries` is
+not emitted on that run either. To reliably see the full lock/graph
+reconciliation state, run `artgraph check --format json` without `--diff`.
+
 ## `artgraph impact`
 
 Forward impact analysis: files/symbols → REQs / docs / tests.

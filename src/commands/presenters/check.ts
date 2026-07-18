@@ -156,6 +156,14 @@ function printScopedIssues(result: CheckResult): void {
     console.log("STALE EVIDENCE:");
     for (const s of result.staleEvidence) console.log(`  ${s.reqId}: ${s.symbols.join(", ")}`);
   }
+  // issue #244 — display-only: never affects `pass` (see src/check.ts's
+  // staleLockEntriesSet comment for why it's not scope-filtered).
+  if (result.staleLockEntries && result.staleLockEntries.length > 0) {
+    console.log(
+      "STALE LOCK ENTRIES (in .trace.lock but no longer in the graph — run `artgraph reconcile`):",
+    );
+    for (const id of result.staleLockEntries) console.log(`  ${id}`);
+  }
   if (result.pass) {
     console.log("All checks passed.");
   }

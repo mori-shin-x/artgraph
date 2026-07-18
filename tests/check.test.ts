@@ -5,6 +5,7 @@ import { buildGraph } from "../src/graph/builder.js";
 import { buildLockFromGraph } from "../src/lock.js";
 import { check } from "../src/check.js";
 import { uncoveredKey } from "../src/baseline.js";
+import { printCheckText } from "../src/commands/presenters/check.js";
 import type { ArtgraphConfig, LockFile, TestResultMap, ArtifactGraph } from "../src/types.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
@@ -335,15 +336,45 @@ describe("check: staleLockEntries (issue #244)", () => {
     expect(Object.prototype.hasOwnProperty.call(result, "staleLockEntries")).toBe(false);
   });
 
-  it("is scope-independent: a scope that excludes the stale ids (and would exclude them by construction, since they aren't graph-reachable) still surfaces them", () => {
+  it("is scope-independent: staleLockEntries ignores `scope` entirely and always surfaces every stale id", () => {
     const { graph, lock } = graphWithStaleLock();
-    // A scope built from graph-reachable ids only, exactly as `buildScope`
-    // (impact()-derived) would produce — it can never contain a stale lock
-    // id, since that id isn't in the graph to be reached in the first place.
+    // `scope` here is built from CURRENT-graph-reachable ids only, exactly
+    // as `buildScope` on the current graph would produce. Note that the
+    // real CLI caller (`src/commands/check.ts`) unions this with a BASELINE-
+    // graph BFS, so in practice `scope` CAN contain a renamed-away old id —
+    // staleLockEntries deliberately never consults `scope` at all (see the
+    // comment on `staleLockEntriesSet` above), so this test's narrower scope
+    // still exercises the intended behavior: the full lock is scanned
+    // regardless of what `scope` does or doesn't contain.
     const scope = new Set(["REQ-100"]);
     const result = check(graph, lock, scope);
     expect(result.staleLockEntries).toEqual(["OLD-symbol-a", "OLD-symbol-b"]);
     // Scope still applies normally to drift: REQ-100 is in sync so no drift.
     expect(result.drifted).toEqual([]);
+  });
+
+  // --format text: STALE LOCK ENTRIES: heading (H3 review fix) — mirrors
+  // check-evidence.test.ts's "--format text: ... STALE EVIDENCE: headings"
+  // pattern, but at the printCheckText unit level since this file already
+  // exercises `check()` directly rather than through the CLI.
+  it("--format text: STALE LOCK ENTRIES: heading lists the stale ids", () => {
+    const { graph, lock } = graphWithStaleLock();
+    const result = check(graph, lock);
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.join(" "));
+    };
+    try {
+      printCheckText(result);
+    } finally {
+      console.log = origLog;
+    }
+    const output = lines.join("\n");
+    expect(output).toContain(
+      "STALE LOCK ENTRIES (in .trace.lock but no longer in the graph — run `artgraph reconcile`):",
+    );
+    expect(output).toContain("OLD-symbol-a");
+    expect(output).toContain("OLD-symbol-b");
   });
 });

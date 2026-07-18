@@ -404,7 +404,7 @@ export function writeWrapper(rootDir: string, agentId: "claude" | "copilot"): Wr
  * otherwise translate LF → CRLF on checkout, and the LF-hashed doctor check
  * would silently `skill-file-drift` FAIL every SKILL.md.
  */
-const GITATTRIBUTES_CONTENT = "** text eol=lf\n";
+export const GITATTRIBUTES_CONTENT = "** text eol=lf\n";
 
 /**
  * Write (or refresh) `<rootDir>/<descriptor.skillsPath>/.gitattributes` with

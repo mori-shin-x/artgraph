@@ -23,6 +23,7 @@ import { DistributionError } from "../src/agents/distribute.js";
 import { LOCK_SCHEMA_VERSION } from "../src/lock.js";
 import { readSkillSource } from "../src/agents/source.js";
 import { AGENT_DESCRIPTORS } from "../src/agents/descriptors.js";
+import { GITATTRIBUTES_CONTENT } from "../src/agents/agent-context.js";
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), "artgraph-init-"));
@@ -600,6 +601,19 @@ describe("runInit Skills installation (directory format)", () => {
       expect(existsSync(attrPath), `missing ${attrPath}`).toBe(true);
       expect(readFileSync(attrPath, "utf-8")).toBe("** text eol=lf\n");
     }
+  });
+
+  // L1 review fix — assert against the exported constant (not a copy-pasted
+  // literal) so this test can't drift silently from what writeGitAttributes
+  // actually writes if GITATTRIBUTES_CONTENT ever changes.
+  it("written .gitattributes content matches the exported GITATTRIBUTES_CONTENT constant", () => {
+    runInit(tmp, {
+      noScan: true,
+      agents: ["claude"],
+    });
+
+    const attrPath = join(tmp, ".claude", "skills", ".gitattributes");
+    expect(readFileSync(attrPath, "utf-8")).toBe(GITATTRIBUTES_CONTENT);
   });
 });
 

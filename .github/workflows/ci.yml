@@ -192,7 +192,16 @@ jobs:
       - name: SC-007 scope-out regression guard
         run: |
           FORBIDDEN='(mcp[-_]server|\.claude-plugin|\.codex-plugin|\.cursor-plugin|\.codex/hooks|\.cursor/hooks|kiro.*hook)'
-          MATCHES=$(git ls-files ':!specs/013-cross-agent-extensions/**' | grep -E "$FORBIDDEN" || true)
+          # Review H1: split the `git ls-files` call from the `grep` so a
+          # `ls-files` failure isn't swallowed by grep's `|| true` (which is
+          # only meant to tolerate grep's own "no match" exit code 1) — with
+          # `set -e` (the default for `run:` steps), a failing assignment
+          # line now fails the job instead of silently treating "ls-files
+          # broke" the same as "no forbidden files found".
+          FILES=$(git ls-files ':!specs/013-cross-agent-extensions/**')
+          # Review H2: case-insensitive, so e.g. `MCP-Server`/`Kiro...Hook`
+          # can't slip past the guard on casing alone.
+          MATCHES=$(printf '%s\n' "$FILES" | grep -iE "$FORBIDDEN" || true)
           if [ -n "$MATCHES" ]; then
             echo "::error::SC-007 violation — files matching MCP / plugin-manifest / non-Claude hook patterns:"
             echo "$MATCHES"
