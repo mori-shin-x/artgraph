@@ -5,6 +5,7 @@ import { dirname, resolve, relative } from "node:path";
 import fastGlob from "fast-glob";
 import type { GraphNode, GraphEdge } from "../types.js";
 import { NAMESPACED_ID_TOKEN } from "../grammar/tokens.js";
+import { listFilesOrThrow } from "../glob-utils.js";
 
 // oxc-parser based TypeScript extraction layer (issue #159).
 //
@@ -249,6 +250,12 @@ export function createTSParser(
       const nodes: GraphNode[] = [];
       const edges: GraphEdge[] = [];
       const warnings: TsParseWarning[] = [];
+      // issue #335 (Step 0-pre HIGH-2) — see `takeResolverResourceExhaustedWarning`'s
+      // doc comment: drained immediately (before any per-file parsing) so a
+      // resolver-context-level EMFILE/ENFILE never leaks into a later,
+      // unrelated `createResolverContext` call.
+      const resolverWarning = takeResolverResourceExhaustedWarning();
+      if (resolverWarning) warnings.push(resolverWarning);
       for (const filePath of enumerateFiles(rootDir, patterns)) {
         const parsed = parseTSFile(filePath, rootDir, mode, matchers, ctx);
         nodes.push(...parsed.nodes);
@@ -302,10 +309,21 @@ function splitIncludePatterns(
 // that throws) — this early return isn't working around a throw, it's just
 // making the "nothing to match" intent explicit rather than leaning on
 // fast-glob's incidental empty-array behavior.
+//
+// issue #335 (Step 0-pre HIGH-1) — routed through `../glob-utils.js`'s
+// `listFilesOrThrow` so this call site shares its fixed fast-glob option set
+// and its deterministic `.sort()` with the markdown-side enumeration
+// (`graph/builder.ts`). `listFilesOrThrow` preserves the EXACT external
+// contract this function already had (throws on EMFILE/ENFILE — the one
+// call site that matters, `graph/builder.ts`, already guards that itself;
+// see its own HIGH-2 comment) — the only observable change is the added
+// sort, which was already the case for every OTHER pre-existing caller
+// (`rename-executor.ts`, `trace/symbol-table.ts`) since none of them
+// depended on raw readdir order.
 export function globCodeFiles(rootDir: string, patterns: string[]): string[] {
   const { include, ignore } = splitIncludePatterns(rootDir, patterns);
   if (include.length === 0) return [];
-  return fastGlob.sync(include, { cwd: resolve(), absolute: true, ignore });
+  return listFilesOrThrow(include, { ignore });
 }
 
 // Parse exactly the given files (used by the parse-cache path to reparse only
@@ -2054,10 +2072,52 @@ interface ResolverContext {
   moduleCheckCache: Map<string, boolean>;
 }
 
+// issue #335 (Step 0-pre HIGH-2) — transient, single-call side channel for a
+// resolver-context-level warning: `readTsconfigResolveOptions`'s tsconfig
+// (and "extends" chain) read hitting EMFILE/ENFILE. This condition belongs
+// to the WHOLE `.parse()` / `parseTSFilePaths()` call, not to any one file,
+// so it cannot travel through `ParsedTS.warnings` the way a per-file warning
+// does: `graph/builder.ts` persists every file's `ParsedTS.warnings` verbatim
+// into that file's `TsFragment.warnings` in the parse cache, so a warning
+// attached to some arbitrary file there would get replayed FOREVER on every
+// future warm cache hit for that file — long after the FD-exhaustion
+// condition that caused it has cleared (the same class of cache-poisoning
+// hazard PR #334 meta-review HIGH-1 fixed for asymmetric double-reads).
+//
+// Mirrors `oxcLoadError` a few hundred lines up in spirit (module-level state
+// for a condition that isn't per-file), but is deliberately TRANSIENT —
+// overwritten (never accumulated) on every `createResolverContext` call, and
+// always synchronously drained by the very next statement in the same
+// caller that triggered it (`createTSParser().parse()` and
+// `graph/builder.ts`'s `parseTSFilePaths` call site both do this
+// immediately) via `takeResolverResourceExhaustedWarning` below. Safe under
+// this module's already-documented single-threaded, synchronous execution
+// model (see `isModuleFile`'s parallelization caveat) — there is never a
+// window where an unrelated `createResolverContext` call could observe a
+// stale value, because every legitimate caller drains it before doing
+// anything else observable.
+let lastResolverResourceExhaustedWarning: TsParseWarning | undefined;
+
+export function takeResolverResourceExhaustedWarning(): TsParseWarning | undefined {
+  const w = lastResolverResourceExhaustedWarning;
+  lastResolverResourceExhaustedWarning = undefined;
+  return w;
+}
+
 function createResolverContext(rootDir: string): ResolverContext {
   // Only <rootDir>/tsconfig.json is consulted (no upward walk); without it,
   // compiler defaults apply (all three off).
-  const options = readTsconfigResolveOptions(resolve(rootDir, "tsconfig.json"));
+  const { options, resourceExhaustedCode } = readTsconfigResolveOptions(
+    resolve(rootDir, "tsconfig.json"),
+  );
+  lastResolverResourceExhaustedWarning = resourceExhaustedCode
+    ? {
+        type: "system-resource-exhausted",
+        symbolId: "tsconfig.json",
+        filePath: "tsconfig.json",
+        message: systemResourceExhaustedMessage(resourceExhaustedCode),
+      }
+    : undefined;
   return { ...options, moduleCheckCache: new Map() };
 }
 
@@ -2231,7 +2291,25 @@ interface ResolveOptions {
   resolveJsonModule: boolean;
 }
 
-function readTsconfigResolveOptions(tsconfigPath: string): ResolveOptions {
+interface ReadTsconfigResult {
+  options: ResolveOptions;
+  /** issue #335 (Step 0-pre HIGH-2) — set when a `readFileSync` in the
+   * extends-chain walk below hit EMFILE/ENFILE. Every OTHER errno (missing
+   * file, EACCES, a broken "extends" target, …) falls back to "tsconfig
+   * absent" defaults SILENTLY, same as a genuinely missing file — this
+   * function already has several other best-effort fallbacks (a broken
+   * `extends` target, a JSON parse failure) that behave the same way, and
+   * `graph/builder.ts`'s OWN, separate, cache-hash-only tsconfig read
+   * already reports a generic `unreadable-file` for those. Only EMFILE/
+   * ENFILE gets a dedicated signal here: it's the one failure mode that
+   * builder.ts's guard cannot see (this read can fail independently,
+   * deeper in the parser's own resolution path — e.g. on the second or
+   * later hop of an "extends" chain, or because FD pressure worsened
+   * between the two reads). */
+  resourceExhaustedCode?: "EMFILE" | "ENFILE";
+}
+
+function readTsconfigResolveOptions(tsconfigPath: string): ReadTsconfigResult {
   // Collect the extends chain leaf-first, then apply base-to-leaf so nearer
   // configs override. Known limit: "extends" is resolved best-effort
   // (relative paths and a node_modules walk for package-style values);
@@ -2240,9 +2318,24 @@ function readTsconfigResolveOptions(tsconfigPath: string): ResolveOptions {
   const chain: Array<Record<string, unknown>> = [];
   const visited = new Set<string>();
   let current: string | undefined = tsconfigPath;
+  let resourceExhaustedCode: "EMFILE" | "ENFILE" | undefined;
   while (current !== undefined && !visited.has(current) && isFile(current)) {
     visited.add(current);
-    const parsed = parseJsonc(readFileSync(current, "utf-8"));
+    let raw: string;
+    try {
+      raw = readFileSync(current, "utf-8");
+    } catch (e) {
+      // issue #335 (Step 0-pre HIGH-2) — before this fix, ANY errno here
+      // (EMFILE/ENFILE included) crashed the whole `.parse()` /
+      // `parseTSFilePaths()` call — worse than simply falling back to
+      // "no tsconfig" defaults, which is already how a genuinely MISSING
+      // tsconfig.json (the `isFile` check above) or a broken "extends" hop
+      // is handled a few lines below.
+      const code = (e as NodeJS.ErrnoException)?.code;
+      if (code === "EMFILE" || code === "ENFILE") resourceExhaustedCode = code;
+      break;
+    }
+    const parsed = parseJsonc(raw);
     if (!parsed || typeof parsed !== "object") break;
     const config = parsed as Record<string, unknown>;
     chain.push(config);
@@ -2265,7 +2358,7 @@ function readTsconfigResolveOptions(tsconfigPath: string): ResolveOptions {
       options.resolveJsonModule = co.resolveJsonModule === true;
     }
   }
-  return options;
+  return { options, resourceExhaustedCode };
 }
 
 function resolveExtendsPath(fromDir: string, extendsValue: string): string | undefined {

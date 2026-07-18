@@ -498,6 +498,33 @@ export function registerCheckCommand(program: Command): void {
         reportGraphWarnings(warnings);
       }
 
+      // issue #335 — `system-resource-exhausted` in `warnings` means this
+      // scan hit file-descriptor exhaustion and the graph it built may be
+      // missing entire spec/code trees (see `graph/builder.ts`'s EMFILE/
+      // ENFILE guard sites): `result` above was computed from that
+      // incomplete graph, so neither a pass NOR a fail verdict can be
+      // trusted. Mirrors the existing baseline-undeterminable pattern
+      // immediately below (spec 017 FR-010): a THIRD `--gate` outcome, exit
+      // 1 ("undeterminable"), distinct from exit 0 (pass) and exit 2 (gate
+      // fail — a genuine NEW issue). `--format json` already carries this
+      // scan's `warnings[]` in the payload printed above (same signal a
+      // json consumer already uses for `baselineStatus`), so — matching
+      // that block's own convention — only the stderr detail is
+      // format-conditional here; a plain `check` (no `--gate`) keeps its
+      // existing behavior: the warning is already visible (via
+      // `reportGraphWarnings` / the json `warnings[]` field above) and the
+      // command exits 0/2 on `result.pass` exactly as it always has.
+      if (opts.gate && warnings.some((w) => w.type === "system-resource-exhausted")) {
+        console.error(
+          "ERROR: scan hit file-descriptor exhaustion (system-resource-exhausted) — the graph " +
+            "may be missing entire spec/code trees, so pass/fail cannot be determined reliably.",
+        );
+        console.error(
+          "       gate result is undetermined; not treating as pass. Retry once your environment has recovered.",
+        );
+        process.exit(1);
+      }
+
       // spec 017 (contract cli-check-gate §4.4 / §4.5, §3 note) — baseline
       // undeterminable. Never silently pass (FR-010): with `--gate` this is a
       // dedicated exit 1 (distinct from a gate fail's exit 2); without `--gate`

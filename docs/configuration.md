@@ -65,6 +65,42 @@ Degenerate patterns behave as inert rather than as errors: a doubled
 negation (`"!!foo/**"`), a bare `"!"`, and an empty string (`""`) are all
 accepted without complaint and simply do not produce a working exclusion.
 
+## `specDirs` — spec/doc file enumeration
+
+Every markdown file under a configured `specDirs` entry is enumerated with
+`<specDir>/**/*.md`. As of this version that enumeration is done with the
+same [fast-glob](https://github.com/mrmlnc/fast-glob)-based wrapper
+`include`/`testPatterns` use (previously it went through a different glob
+library) — matches are `onlyFiles`, `dot: false`, `followSymbolicLinks:
+true`, and sorted before the graph is built. This closed a gap where a
+scan that ran out of file descriptors (EMFILE/ENFILE) while listing a
+specDir could silently produce an empty match list with no warning at all —
+every REQ/task/doc that directory defines would vanish from the graph
+without a trace. It now surfaces a `system-resource-exhausted` warning
+(same as an `include`/`testPatterns` glob hitting the same condition) and
+continues scanning every other specDir.
+
+Three intentional, backward-incompatible behavior changes come with this:
+
+- **Symlinks are now followed.** A symlinked spec subdirectory (or a
+  symlinked `.md` file) under `specDirs` is descended into and its files are
+  ingested. Previously the underlying glob library defaulted to not
+  following symlinked directories, so a symlinked spec subtree was silently
+  invisible to a scan.
+- **A directory literally named `something.md/` is now silently excluded**
+  (`onlyFiles: true` never matches it). Previously it would match the glob
+  pattern and then fail at read time with `EISDIR`, surfacing an
+  `unreadable-file` warning; now it is simply not enumerated in the first
+  place, with no warning.
+- **Enumeration order is deterministic (sorted)**, not OS-`readdir`-order-
+  dependent. In the rare case of a genuine spec collision this sorted order
+  is now what decides tie-breaks that used to depend on filesystem/platform
+  traversal order — e.g. which of two same-id definitions "wins" a
+  `duplicate-id` collision, or which file a convention-inferred edge's
+  stem-collision resolves against (see `docGraph.autoConventions` below).
+  The outcome for any *specific* collision may differ from a pre-upgrade
+  scan, but it is now the same on every machine and every run.
+
 ## `reqPatterns` — requirement ID grammar
 
 By default artgraph recognizes `REQ-001`, `auth/FR-2`, and `Requirement-3`.

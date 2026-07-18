@@ -17,7 +17,7 @@ import {
 import { renameLockKey, splitLockKey, mergeLockKeys } from "./rename-lock.js";
 import type { LockChange } from "./rename-lock.js";
 import { readLockWithMeta, assertLockSchemaWritable, warnIfNewerLockSchema } from "./lock.js";
-import { scan, reconcile } from "./scan.js";
+import { scan, reconcile, ReconcileResourceExhaustedError } from "./scan.js";
 import { loadConfig } from "./config.js";
 import { globCodeFiles } from "./parsers/typescript.js";
 import type { BuildWarning } from "./graph/builder.js";
@@ -325,6 +325,25 @@ function assertRenameableSource(id: string): void {
  * discarded outright (`const { graph } = scan(...)`). Now returned as-is
  * (undiffed); the caller (`applyWrites` → each `execute*`) diffs them
  * against the pre-write `graphWarnings` via `diffPostWriteWarnings`.
+ *
+ * issue #335 — `reconcile()` now refuses to write the lock (throwing
+ * `ReconcileResourceExhaustedError`) when `warnings` carries a
+ * `system-resource-exhausted` entry. By the time this function runs, the
+ * caller (`applyWrites`) has ALREADY rewritten every source file to disk —
+ * letting that throw escape uncaught would abort the whole rename/split/
+ * merge command at that point, silently hiding from the caller that its
+ * file rewrites succeeded even though the lock did not get updated. Caught
+ * here instead: `warnings` already carries the underlying
+ * `system-resource-exhausted` BuildWarning `scan()` produced (the exact
+ * condition `reconcile()` is rejecting on) — one more entry is appended
+ * with rename-specific recovery guidance ("files were rewritten, lock was
+ * not") and the combined array is returned exactly like the success path,
+ * so it flows through the SAME `postWriteWarnings` channel
+ * (`diffPostWriteWarnings` → `RenameResult.postWriteWarnings` →
+ * `presenters/rename.ts`'s `printPostWriteWarnings`) unchanged. The
+ * pre-existing "lock file doesn't exist → no-op, return undefined" branch
+ * above is unaffected (this only guards the write this function itself
+ * performs).
  */
 function reconcileAfterWrite(
   rootDir: string,
@@ -334,7 +353,25 @@ function reconcileAfterWrite(
   const lockFilePath = resolve(rootDir, config.lockFile);
   if (!existsSync(lockFilePath)) return undefined;
   const { graph, warnings } = scan(rootDir, config);
-  reconcile(rootDir, config, graph, { force });
+  try {
+    reconcile(rootDir, config, graph, warnings, { force });
+  } catch (e) {
+    if (e instanceof ReconcileResourceExhaustedError) {
+      return [
+        ...warnings,
+        {
+          type: "system-resource-exhausted",
+          id: "reconcile",
+          files: [],
+          message:
+            "Files were rewritten, but the lock file was NOT updated: reconcile() refused the " +
+            "write because this scan hit file-descriptor exhaustion (see the warning above). " +
+            "Once your environment has recovered, run `artgraph reconcile`.",
+        },
+      ];
+    }
+    throw e;
+  }
   return warnings;
 }
 

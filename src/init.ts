@@ -21,7 +21,7 @@ import {
   type InitOptions,
 } from "./types.js";
 import { type AgentId, type AgentDescriptor, findDescriptor } from "./agents/descriptors.js";
-import { scan, reconcile } from "./scan.js";
+import { scan, reconcile, ReconcileResourceExhaustedError } from "./scan.js";
 import type { BuildWarning } from "./graph/builder.js";
 import { getProviderStatuses, runIntegrate } from "./integrate/index.js";
 import { detectPackageManager, execPrefix } from "./package-manager.js";
@@ -74,6 +74,15 @@ export interface InitResult {
   scanSummary?: ScanSummary;
   warnings: BuildWarning[];
   lockPath?: string;
+  /**
+   * issue #335 — set (and `lockPath` left `undefined`) when the scan stage
+   * ran but `reconcile()` refused to write the lock because the scan hit
+   * file-descriptor exhaustion (`system-resource-exhausted` in `warnings`
+   * above). Every other init stage still completed — this only reports the
+   * one skipped write. Presenter-facing message text lives here (not in the
+   * CLI layer) so text and json output reuse the exact same wording.
+   */
+  reconcileResourceExhausted?: string;
   /**
    * Backward-compat field: relative POSIX paths of every Skill file written
    * into `.claude/skills/` when `claude` is one of the selected agents. The
@@ -653,14 +662,10 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
   let scanSummary: ScanSummary | undefined;
   let warnings: BuildWarning[] = [];
   let lockPath: string | undefined;
+  let reconcileResourceExhausted: string | undefined;
 
   if (stages.scan) {
     const scanResult = scan(abs, config);
-    // issue #243 — `init --force` already means "overwrite existing
-    // conflicting state" (config / Skills / integration files); extending it
-    // to a newer-schema lock keeps that meaning consistent instead of
-    // requiring a second, redundant force flag just for this one stage.
-    reconcile(abs, config, scanResult.graph, { force: options.force ?? false });
     scanSummary = {
       nodeCount: scanResult.nodeCount,
       edgeCount: scanResult.edgeCount,
@@ -672,7 +677,37 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
       hasDanglingCodeTag: graphHasDanglingCodeTag(scanResult.graph),
     };
     warnings = scanResult.warnings;
-    lockPath = resolve(abs, config.lockFile);
+    try {
+      // issue #243 — `init --force` already means "overwrite existing
+      // conflicting state" (config / Skills / integration files); extending it
+      // to a newer-schema lock keeps that meaning consistent instead of
+      // requiring a second, redundant force flag just for this one stage.
+      reconcile(abs, config, scanResult.graph, warnings, { force: options.force ?? false });
+      lockPath = resolve(abs, config.lockFile);
+    } catch (e) {
+      // issue #335 — this ONE reconcile failure mode is deliberately NOT
+      // fatal to the rest of `init`: `scanResult.warnings` (surfaced above
+      // via `reportGraphWarnings`) already tells the user WHY, and every
+      // other stage below (Skills / integrate / hooks / agent-context /
+      // the final `.artgraph.json` write) is independent of whether the
+      // lock got written — refusing to run them too would turn one
+      // transient, environment-recoverable condition (FD exhaustion) into a
+      // fully-aborted init, which is strictly worse for the user than "init
+      // mostly succeeded; re-run reconcile once your environment recovers".
+      // Every OTHER error `reconcile()` can throw (e.g.
+      // `LockSchemaVersionError`) is UNCHANGED — still uncaught here, still
+      // aborts the whole `init` exactly like before this fix (see the
+      // "Partial-state guard" doc comment above `runInit`'s call sequence).
+      if (e instanceof ReconcileResourceExhaustedError) {
+        reconcileResourceExhausted =
+          "Lock file was not created: this scan hit file-descriptor exhaustion " +
+          "(system-resource-exhausted — see the warning above) and reconcile() refused to " +
+          "write a lock from a possibly-incomplete graph. Every other init stage still ran. " +
+          "Once your environment has recovered, run `artgraph reconcile`.";
+      } else {
+        throw e;
+      }
+    }
   }
 
   const integration = stages.integrate
@@ -762,6 +797,7 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
     scanSummary,
     warnings,
     lockPath,
+    reconcileResourceExhausted,
     skillsInstalled,
     agentDistributions,
     agentContextWritten,

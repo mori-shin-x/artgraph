@@ -37,8 +37,14 @@ export function registerReconcileCommand(program: Command): void {
       // just one fewer special case to maintain.
       const config = await withFatalErrors(undefined, () => loadConfig(rootDir));
       const { graph, warnings } = await withFatalErrors(undefined, () => scan(rootDir, config));
+      // issue #335 — `reconcile()` now refuses to write the lock (throwing
+      // `ReconcileResourceExhaustedError`) when `warnings` carries a
+      // `system-resource-exhausted` entry. No special-casing needed here:
+      // `withFatalErrors` already gives every thrown error (this one
+      // included) the same format-aware "clean message on stderr, exit 1"
+      // treatment `LockSchemaVersionError` already relies on above.
       await withFatalErrors(undefined, () =>
-        reconcile(rootDir, config, graph, { force: Boolean(opts.force) }),
+        reconcile(rootDir, config, graph, warnings, { force: Boolean(opts.force) }),
       );
       console.log(`Lock file updated: ${config.lockFile}`);
       reportGraphWarnings(warnings);

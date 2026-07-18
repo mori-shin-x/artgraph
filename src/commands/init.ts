@@ -126,6 +126,7 @@ export function registerInitCommand(program: Command): void {
               scanSummary: result.scanSummary ?? null,
               warnings: result.warnings,
               lockPath: result.lockPath ?? null,
+              reconcileResourceExhausted: result.reconcileResourceExhausted ?? null,
               // H6: split SKILL.md installs from shared fragments / references
               // so the JSON consumer can count Skills accurately.
               skillsInstalled: result.skillsInstalled
@@ -157,7 +158,15 @@ export function registerInitCommand(program: Command): void {
             );
             reportGraphWarnings(result.warnings);
             console.log(`\nCreated .artgraph.json`);
-            console.log(`Created ${result.config.lockFile}`);
+            // issue #335 — `lockPath` is `undefined` when `reconcile()`
+            // refused to write the lock (scan-wide FD exhaustion); print the
+            // recovery guidance instead of falsely claiming the lock file
+            // was created.
+            if (result.lockPath) {
+              console.log(`Created ${result.config.lockFile}`);
+            } else if (result.reconcileResourceExhausted) {
+              console.log(`\nWARNING: ${result.reconcileResourceExhausted}`);
+            }
           } else {
             console.log(`Created .artgraph.json (scan skipped)`);
             console.log(`\nTo scan later, run: artgraph scan && artgraph reconcile`);
