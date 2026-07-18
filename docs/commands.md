@@ -21,10 +21,14 @@ across every command that has a `--format` option:
 
 This applies uniformly to: a command's own usage/validation errors, a
 rejected `LockSchemaVersionError` (a `.trace.lock` written by a newer
-artgraph), `rename`'s validation/safety-valve failures (`RenameValidationError`,
-issue #273), a malformed `.artgraph.json` (`loadConfig()`'s `Failed to parse
-...`, issue #336), an `AgentsParseError` from `--agents=<list>` (issue #336),
-and `OxcLoadError` (oxc-parser's native binding missing/broken, issue #263) —
+artgraph), a rejected `ReconcileResourceExhaustedError` (`reconcile()`
+refusing to write the lock because the scan hit file-descriptor exhaustion —
+issue #335; see [`artgraph reconcile`](#artgraph-reconcile) below —
+`.trace.lock` is left completely untouched), `rename`'s validation/safety-valve
+failures (`RenameValidationError`, issue #273), a malformed `.artgraph.json`
+(`loadConfig()`'s `Failed to parse ...`, issue #336), an `AgentsParseError`
+from `--agents=<list>` (issue #336), and `OxcLoadError` (oxc-parser's native
+binding missing/broken, issue #263) —
 every command whose action reaches `loadConfig()` and/or `scan()`/
 `buildGraph()` (`scan`, `check`, `impact`, `plan-coverage`, `reconcile`,
 `trace status`, `trace report`, `rename`, `init`, `doctor`) surfaces every
@@ -80,6 +84,17 @@ The generated Stop hook `command` string is package-manager-specific
 team members use different package managers, standardize on one or add
 `.claude/settings.json` to `.gitignore` so each developer runs `artgraph init`
 locally.
+
+**Resource exhaustion during the initial scan (issue #335).** If the scan
+stage hits file-descriptor exhaustion, `reconcile()` refuses to write
+`.trace.lock` from what may be an incomplete graph — but `init` does NOT
+abort: every other stage (Skills distribution, SDD-tool auto-integration,
+the Stop hook, `AGENTS.md`/wrapper injection, and the final `.artgraph.json`
+write) still runs to completion. Text/json output reports the skipped lock
+write and points at `artgraph reconcile` as the follow-up once your
+environment has recovered. Every OTHER reason `reconcile()` can refuse a
+write (e.g. a `.trace.lock` written by a newer artgraph) is unchanged —
+still aborts the whole `init`.
 
 ## `artgraph scan`
 
@@ -138,6 +153,25 @@ artgraph check --diff                      # only report items changed since the
 artgraph check --format json               # per-requirement rows + counts
 artgraph check --diff --base origin/main --gate   # CI: gate the PR's commit range
 ```
+
+### `--gate` exit codes: pass / undeterminable / fail
+
+`check --gate` distinguishes three outcomes, never collapsing "we couldn't
+tell" into either a pass or a fail:
+
+- **`0`** — pass. No new issue (or, without `--diff`, no issue at all).
+- **`1`** — **undeterminable**. The verdict cannot be trusted either way, so
+  it is never reported as a pass. Two causes land here:
+  - the `--diff --base <ref>` baseline could not be established
+    (unresolvable ref, shallow clone with no merge-base, worktree failure —
+    spec 017 FR-010 / spec 023);
+  - this scan hit file-descriptor exhaustion (`system-resource-exhausted` —
+    EMFILE/ENFILE while enumerating spec or code files) and the graph it
+    built may be missing entire spec/code trees (issue #335). Retry once the
+    environment has recovered (e.g. a higher `ulimit -n`). A plain `check`
+    (no `--gate`) does not exit `1` for this — the warning is still shown,
+    but the command otherwise behaves exactly as before.
+- **`2`** — fail. A genuine new (or, without `--diff`, any) issue was found.
 
 ### `--base <ref>` — commit-range gating for CI (spec 023)
 
@@ -447,6 +481,18 @@ happens because **CI is pinned to an older artgraph version**, update CI's
 artgraph instead of reaching for `--force` there — `--force` on every CI run
 just repeatedly discards whatever the newer local CLI wrote.
 
+**Resource exhaustion (issue #335)**: if this scan hit file-descriptor
+exhaustion (`system-resource-exhausted` — EMFILE/ENFILE while enumerating
+spec or code files), `reconcile` refuses to write the lock — the graph it
+built may be missing entire spec/code trees, and writing it would silently
+coarsen or drop real entries. `.trace.lock` is left completely untouched
+(existing content, if any, is unmodified). Exits `1` with a clear message on
+stderr (same [Fatal errors](#fatal-errors-stdoutstderr-contract-issue-279)
+contract as every other rejected write here). There is no `--force` escape
+hatch for this one — unlike a lock-schema-version mismatch, there is nothing
+principled to force past; retry once your environment has recovered (e.g. a
+higher `ulimit -n`).
+
 ## `artgraph rename`
 
 Renames, splits or merges a requirement ID and rewrites **every** reference to it
@@ -497,6 +543,14 @@ Notes:
   rename itself is the cause — the underlying condition (e.g. an
   environment-wide `system-resource-exhausted`) can coincide with, rather
   than be caused by, this rename.
+- **Resource exhaustion on the post-write scan (issue #335)**: if THAT
+  post-write scan (not the pre-write one) hits file-descriptor exhaustion,
+  `reconcile()` refuses to update the lock — but the file rewrites
+  themselves are NOT rolled back; they already happened. This surfaces
+  through `postWriteWarnings` as a `system-resource-exhausted` entry whose
+  message explicitly says the files were rewritten but the lock was not,
+  and points at `artgraph reconcile` as the follow-up once the environment
+  has recovered.
 - **Fatal-error envelope's optional `warnings` field**: when a non-preview
   rename fails validation (`RenameValidationError`, issue #273) AFTER the
   pre-write scan already ran, the `--format json` error envelope described in

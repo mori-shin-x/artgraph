@@ -145,7 +145,7 @@ describe("writeLock — `_meta` reserved-key collision guard (F1)", () => {
       testPatterns: [],
       lockFile: ".trace.lock",
     };
-    expect(() => reconcile(dir, config, graph([node("_meta", "req")]))).toThrow(
+    expect(() => reconcile(dir, config, graph([node("_meta", "req")]), [])).toThrow(
       /reserved "_meta" key/,
     );
   });
@@ -186,7 +186,7 @@ describe("legacy lock (no _meta key) — schemaVersion 0", () => {
       testPatterns: [],
       lockFile: ".trace.lock",
     };
-    expect(() => reconcile(dir, config, graph([node("REQ-1", "req")]))).not.toThrow();
+    expect(() => reconcile(dir, config, graph([node("REQ-1", "req")]), [])).not.toThrow();
     const raw = JSON.parse(readFileSync(resolve(dir, ".trace.lock"), "utf-8"));
     expect(raw._meta).toEqual({ schemaVersion: LOCK_SCHEMA_VERSION });
   });
@@ -343,7 +343,7 @@ describe("reconcile() write-path guard", () => {
 
   it("rejects with LockSchemaVersionError when the on-disk lock is newer and force is not given", () => {
     const dir = futureLockDir();
-    expect(() => reconcile(dir, config, graph([node("REQ-1", "req")]))).toThrow(
+    expect(() => reconcile(dir, config, graph([node("REQ-1", "req")]), [])).toThrow(
       LockSchemaVersionError,
     );
     // Refusing to write means the on-disk lock is untouched.
@@ -354,7 +354,7 @@ describe("reconcile() write-path guard", () => {
   it("--force (opts.force) overwrites the newer lock, downgrading _meta to this build's version", () => {
     const dir = futureLockDir();
     expect(() =>
-      reconcile(dir, config, graph([node("REQ-1", "req")]), { force: true }),
+      reconcile(dir, config, graph([node("REQ-1", "req")]), [], { force: true }),
     ).not.toThrow();
     const raw = JSON.parse(readFileSync(resolve(dir, ".trace.lock"), "utf-8"));
     expect(raw._meta.schemaVersion).toBe(LOCK_SCHEMA_VERSION);

@@ -87,6 +87,26 @@ export function registerRenameCommand(program: Command): void {
         } else {
           printRenameText(result);
         }
+
+        // PR #339 meta-review (F2) — `postWriteWarnings` carrying
+        // `system-resource-exhausted` means the post-write re-scan
+        // (`reconcileAfterWrite`) refused to update the lock (see
+        // `ReconcileResourceExhaustedError` in `../scan.js`): the rewrite
+        // itself succeeded (files on disk already reflect the rename), but
+        // the lock — which `artgraph check` immediately compares against —
+        // was left stale, pointing at the OLD id. Updating the lock is a
+        // core part of `rename`'s contract (unlike `init`, where the FIRST
+        // lock write is a nice-to-have bootstrap step, not something anything
+        // downstream already depends on being current — see the contrasting
+        // comment in `../init.ts` near its own `ReconcileResourceExhaustedError`
+        // handling), so this is a genuine partial success: `process.exitCode`
+        // (not an immediate `process.exit`) is set to 1 so both `--format
+        // json` and `--format text` still finish printing their full,
+        // unchanged output (the JSON shape is untouched — this only affects
+        // the process exit code) before the process exits non-zero.
+        if (result.postWriteWarnings?.some((w) => w.type === "system-resource-exhausted")) {
+          process.exitCode = 1;
+        }
       } catch (e) {
         // issue #279 — `OxcLoadError` (oxc-parser's native binding missing/
         // broken, issue #263) is an environment failure, not a

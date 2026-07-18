@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { relative, resolve } from "node:path";
-import { globSync } from "glob";
+import { listFilesOrThrow } from "./glob-utils.js";
 import {
   rewriteFile,
   rewriteImplTags,
@@ -17,7 +17,7 @@ import {
 import { renameLockKey, splitLockKey, mergeLockKeys } from "./rename-lock.js";
 import type { LockChange } from "./rename-lock.js";
 import { readLockWithMeta, assertLockSchemaWritable, warnIfNewerLockSchema } from "./lock.js";
-import { scan, reconcile } from "./scan.js";
+import { scan, reconcile, ReconcileResourceExhaustedError } from "./scan.js";
 import { loadConfig } from "./config.js";
 import { globCodeFiles } from "./parsers/typescript.js";
 import type { BuildWarning } from "./graph/builder.js";
@@ -255,11 +255,35 @@ function filterRelevantFiles(files: string[]): string[] {
  * the configured scan scope such as `.claude/` skills or `.specify/` templates
  * (issue #213). Returned paths are root-relative and sorted for deterministic
  * change ordering.
+ *
+ * PR #339 meta-review (F1) — the markdown half of this enumeration used to
+ * call the `glob` package's `globSync` directly; now routed through
+ * `../glob-utils.js`'s `listFilesOrThrow` (the SAME throw-on-EMFILE/ENFILE
+ * contract `globCodeFiles` below already has), not `listFilesGuarded`
+ * (`graph/builder.ts`'s fail-safe, swallow-and-continue variant). This is a
+ * deliberate divergence from `buildGraph`'s markdown loop, not an
+ * inconsistency: `buildGraph` degrades gracefully because a partial graph is
+ * still useful for `check`/`impact` to report against. This function runs
+ * BEFORE any file is rewritten — if it silently returned a truncated file
+ * list (a whole specDir's worth of files missing because a readdir hit
+ * EMFILE), `executeRename`/`executeSplit`/`executeMerge` would rewrite only
+ * the files that DID get listed, leaving the rest referencing the OLD id: a
+ * partially-applied rename with no warning, and the existing
+ * `allChanges.length === 0` safety valve (below) does NOT catch this — it
+ * only fires when NO file changed, not when some subset silently didn't.
+ * Throwing here aborts the whole rename before any write happens, which
+ * `commands/rename.ts`'s catch-all reports as a normal fatal error (not a
+ * `RenameValidationError` — this throw happens outside `runValidation`,
+ * matching `RenameValidationError`'s own doc: only throws AFTER
+ * `loadScanContext()` that go through `runValidation` get wrapped). That
+ * generic `{"error": ...}` / `Error: ...` envelope is the same shape
+ * `withFatalErrors` produces for every other command's fatal error, so no
+ * dedicated formatting branch is needed here.
  */
 function enumerateRewriteFiles(rootDir: string, config: ArtgraphConfig): string[] {
   const absPaths = new Set<string>();
   for (const specDirName of config.specDirs) {
-    for (const file of globSync(resolve(rootDir, specDirName, "**/*.md"))) {
+    for (const file of listFilesOrThrow(resolve(rootDir, specDirName, "**/*.md"))) {
       absPaths.add(resolve(file));
     }
   }
@@ -325,6 +349,25 @@ function assertRenameableSource(id: string): void {
  * discarded outright (`const { graph } = scan(...)`). Now returned as-is
  * (undiffed); the caller (`applyWrites` → each `execute*`) diffs them
  * against the pre-write `graphWarnings` via `diffPostWriteWarnings`.
+ *
+ * issue #335 — `reconcile()` now refuses to write the lock (throwing
+ * `ReconcileResourceExhaustedError`) when `warnings` carries a
+ * `system-resource-exhausted` entry. By the time this function runs, the
+ * caller (`applyWrites`) has ALREADY rewritten every source file to disk —
+ * letting that throw escape uncaught would abort the whole rename/split/
+ * merge command at that point, silently hiding from the caller that its
+ * file rewrites succeeded even though the lock did not get updated. Caught
+ * here instead: `warnings` already carries the underlying
+ * `system-resource-exhausted` BuildWarning `scan()` produced (the exact
+ * condition `reconcile()` is rejecting on) — one more entry is appended
+ * with rename-specific recovery guidance ("files were rewritten, lock was
+ * not") and the combined array is returned exactly like the success path,
+ * so it flows through the SAME `postWriteWarnings` channel
+ * (`diffPostWriteWarnings` → `RenameResult.postWriteWarnings` →
+ * `presenters/rename.ts`'s `printPostWriteWarnings`) unchanged. The
+ * pre-existing "lock file doesn't exist → no-op, return undefined" branch
+ * above is unaffected (this only guards the write this function itself
+ * performs).
  */
 function reconcileAfterWrite(
   rootDir: string,
@@ -334,7 +377,25 @@ function reconcileAfterWrite(
   const lockFilePath = resolve(rootDir, config.lockFile);
   if (!existsSync(lockFilePath)) return undefined;
   const { graph, warnings } = scan(rootDir, config);
-  reconcile(rootDir, config, graph, { force });
+  try {
+    reconcile(rootDir, config, graph, warnings, { force });
+  } catch (e) {
+    if (e instanceof ReconcileResourceExhaustedError) {
+      return [
+        ...warnings,
+        {
+          type: "system-resource-exhausted",
+          id: "reconcile",
+          files: [],
+          message:
+            "Files were rewritten, but the lock file was NOT updated: reconcile() refused the " +
+            "write because this scan hit file-descriptor exhaustion (see the warning above). " +
+            "Once your environment has recovered, run `artgraph reconcile`.",
+        },
+      ];
+    }
+    throw e;
+  }
   return warnings;
 }
 

@@ -102,8 +102,8 @@ describe("computeBaselineIssues", () => {
     const dir = track(makeRepoWithDebt("artgraph-debt-noside-"));
     const config = loadConfig(dir);
     // Reconcile so a real .trace.lock exists to compare byte-for-byte.
-    const { graph } = scan(dir, config);
-    reconcile(dir, config, graph);
+    const { graph, warnings } = scan(dir, config);
+    reconcile(dir, config, graph, warnings);
     const lock = readLock(dir, config.lockFile);
 
     const statusBefore = execFileSync("git", ["status", "--porcelain"], {

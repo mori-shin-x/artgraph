@@ -1,12 +1,16 @@
 import { resolve, relative, basename, dirname } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { globSync } from "glob";
 import {
   parseMarkdownContent,
   type ParseWarning,
   type InlineLinkRef,
 } from "../parsers/markdown.js";
-import { globCodeFiles, parseTSFilePaths } from "../parsers/typescript.js";
+import {
+  globCodeFiles,
+  parseTSFilePaths,
+  takeResolverResourceExhaustedWarning,
+} from "../parsers/typescript.js";
+import { listFilesGuarded } from "../glob-utils.js";
 import {
   computeCacheFingerprint,
   hashContent,
@@ -221,7 +225,36 @@ export function buildGraph(
   const allInlineLinks: InlineLinkRef[] = [];
 
   for (const specDirName of config.specDirs) {
-    const specFiles = globSync(resolve(rootDir, specDirName, "**/*.md"));
+    // issue #335 (Step 0-pre HIGH-1) — this used to call the `glob` package's
+    // `globSync` directly, which silently swallows an EMFILE/ENFILE readdir
+    // failure (via path-scurry's `#readdirFail` falling into its `else`
+    // branch) and returns an EMPTY match list with NO warning — an entire
+    // specDir's REQ/task/doc nodes could vanish from the graph without a
+    // trace. Routed through `listFilesGuarded` (`../glob-utils.js`, shared
+    // with the TS side's `globCodeFiles`) so this loop gets the SAME
+    // EMFILE/ENFILE fail-safe treatment (warn once per scan via
+    // `systemResourceExhaustedReported`, continue with an empty file list)
+    // every other guarded read site in this function already has. Also picks
+    // up fast-glob's `followSymbolicLinks: true` default (the `glob` package
+    // defaulted to `follow: false`) and a deterministic `.sort()` — both
+    // intentional, documented behavior changes (see docs/commands.md).
+    const { files: specFiles, resourceExhaustedCode } = listFilesGuarded(
+      resolve(rootDir, specDirName, "**/*.md"),
+    );
+    if (resourceExhaustedCode && !systemResourceExhaustedReported) {
+      systemResourceExhaustedReported = true;
+      warnings.push({
+        type: "system-resource-exhausted",
+        id: `glob:${specDirName}`,
+        files: [],
+        message:
+          `file descriptor exhaustion (${resourceExhaustedCode}) while enumerating spec files ` +
+          `under "${specDirName}" during this scan; the process ran out of open file ` +
+          "descriptors. Consider raising the OS file-descriptor limit (e.g. `ulimit -n`) and " +
+          "re-running — other file reads in this scan may also be failing the same way. Shown " +
+          "once per scan regardless of how many files were affected.",
+      });
+    }
     for (const file of specFiles) {
       const relFile = relative(rootDir, file);
 
@@ -543,15 +576,17 @@ export function buildGraph(
   const codePatterns = [...config.include, ...config.testPatterns];
   const tsMode = config.mode ?? "file";
   const codeId = config.reqPatterns?.codeId;
-  // Maintenance trap (PR #334 meta-review HIGH-2): this file calls TWO
-  // different glob libraries with OPPOSITE failure semantics. `fast-glob`
-  // (here, and in `globCodeFiles`/`enumerateFiles` in parsers/typescript.ts)
-  // THROWS on a read error (e.g. EMFILE) — guarded below. The markdown loop
-  // above uses the `glob` package's `globSync` (issue #216-era code, line
-  // ~216), which silently swallows read errors and returns an empty match
-  // list instead of throwing — NOT guarded, and deliberately left that way
-  // (pre-existing, tracked separately; see AGENTS.md). Do not assume the two
-  // call sites fail the same way.
+  // issue #335 (Step 0-pre HIGH-1) — both this file's markdown loop above
+  // and `globCodeFiles` below now route through `../glob-utils.js`, so both
+  // enumeration passes share one fixed fast-glob option set and one
+  // deterministic sort. They still have DIFFERENT external failure
+  // contracts on EMFILE/ENFILE, by design: the markdown loop calls
+  // `listFilesGuarded` (swallow + `resourceExhaustedCode`, matching the
+  // fail-safe behavior a scan-wide degradation needs there — see that
+  // call site's own comment), while `globCodeFiles` still calls
+  // `listFilesOrThrow` (throws, exactly like the raw `fast-glob` call it
+  // replaced) so this try/catch below keeps working unchanged. Do not
+  // assume the two call sites fail the same way.
   let codeFiles: string[];
   try {
     codeFiles = globCodeFiles(rootDir, codePatterns);
@@ -719,6 +754,26 @@ export function buildGraph(
   }
   if (missPaths.length > 0) {
     const parsed = parseTSFilePaths(rootDir, missPaths, tsMode, codeId, missContents);
+    // issue #335 (Step 0-pre HIGH-2) — `parseTSFilePaths` internally calls
+    // `createResolverContext`, which reads tsconfig.json (and its "extends"
+    // chain) a SECOND, independent time from the cache-hash read a few lines
+    // above. A resolver-context-level EMFILE/ENFILE is deliberately NOT
+    // folded into any file's `ParsedTS.warnings` (see
+    // `takeResolverResourceExhaustedWarning`'s doc comment in
+    // parsers/typescript.ts for why that would poison the parse cache) —
+    // drained here instead and pushed straight into this scan's `warnings`,
+    // subject to the same `systemResourceExhaustedReported` per-scan dedup
+    // every other guarded site in this function uses.
+    const resolverWarning = takeResolverResourceExhaustedWarning();
+    if (resolverWarning && !systemResourceExhaustedReported) {
+      systemResourceExhaustedReported = true;
+      warnings.push({
+        type: "system-resource-exhausted",
+        id: resolverWarning.symbolId,
+        files: [resolverWarning.filePath],
+        message: resolverWarning.message,
+      });
+    }
     for (const [abs, frag] of parsed) {
       // Preserve the parser's `starExports` side-channel (specs/018 §3) on the
       // freshly-parsed fragment so the builder's star-expansion pass below
