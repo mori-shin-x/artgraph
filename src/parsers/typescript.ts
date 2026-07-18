@@ -442,6 +442,16 @@ export function parseTSFilePaths(
 // paths, matching the convention `enumerateFiles`/`globCodeFiles` already use
 // so a direct `Set.has(absolutePath)` lookup against `filePaths` works
 // without any path normalization step.
+//
+// PR #349 (L2) — this (via `globCodeFiles` -> `listFilesOrThrow`) and
+// `enumerateFiles` below (via a direct `fastGlob.sync` call) are two
+// INDEPENDENTLY WRITTEN glob-enumeration implementations that happen to
+// agree today only because both route negative-pattern handling through the
+// shared `splitIncludePatterns` helper. They are not the same code path
+// otherwise (one goes through `../glob-utils.js`'s guarded/sorted wrapper,
+// the other calls fast-glob directly), so they CAN drift. If you change
+// either function's glob semantics (option set, sort order, negative-
+// pattern handling), check the other one too.
 export function computeTestFileSet(rootDir: string, testPatterns: string[]): Set<string> {
   if (testPatterns.length === 0) return new Set();
   return new Set(globCodeFiles(rootDir, testPatterns));
@@ -459,6 +469,14 @@ export function computeTestFileSet(rootDir: string, testPatterns: string[]): Set
 // `buildSymbolNameTable`) never disagrees with it on which files a negative
 // pattern excludes. An include list with no positive pattern degenerates to
 // zero files, same as `globCodeFiles`.
+//
+// PR #349 (L2) — this function's file-discovery role (used by `createTSParser`,
+// consulted by `computeTestFileSet`'s caller for isTest classification) is an
+// INDEPENDENTLY WRITTEN duplicate of `computeTestFileSet`/`globCodeFiles`'s
+// enumeration above — see that function's own cross-reference comment. They
+// agree today because both share `splitIncludePatterns`, not because they
+// are the same code path. Check `computeTestFileSet` too before changing
+// this function's glob semantics.
 function enumerateFiles(rootDir: string, patterns: string[]): string[] {
   const seen = new Set<string>();
   const files: string[] = [];

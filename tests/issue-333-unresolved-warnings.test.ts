@@ -131,16 +131,22 @@ describe("issue #333 (AC d) — warm cache replays the same warnings (INV-L4)", 
   it("a second (warm) build emits byte-identical unresolved-* warnings to the first (cold) build", () => {
     const root = makeRepo(FILES);
     const first = buildGraph(root, config);
-    const firstRelevant = first.warnings
-      .filter((w) => w.type === "unresolved-reexport" || w.type === "unresolved-import")
-      .sort((a, b) => a.id.localeCompare(b.id));
+    const firstRelevant = first.warnings.filter(
+      (w) => w.type === "unresolved-reexport" || w.type === "unresolved-import",
+    );
     expect(firstRelevant.length).toBeGreaterThanOrEqual(4);
 
     const second = buildGraph(root, config); // warm — should reuse cached fragments
-    const secondRelevant = second.warnings
-      .filter((w) => w.type === "unresolved-reexport" || w.type === "unresolved-import")
-      .sort((a, b) => a.id.localeCompare(b.id));
+    const secondRelevant = second.warnings.filter(
+      (w) => w.type === "unresolved-reexport" || w.type === "unresolved-import",
+    );
 
+    // M2 (PR #349 review) — compare in OUTPUT ORDER, not sorted: a warm run
+    // reusing cached fragments can silently reorder warnings relative to a
+    // cold run even when the SET of warnings is identical, and a sorted
+    // comparison would hide that regression (INV-L4). If this ever fails,
+    // that is a real order divergence between cold and warm — not a flaky
+    // test to re-sort away.
     expect(JSON.stringify(secondRelevant)).toBe(JSON.stringify(firstRelevant));
   });
 });

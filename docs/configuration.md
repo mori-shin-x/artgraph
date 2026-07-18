@@ -27,11 +27,15 @@ follows from that one answer. Narrowing `testPatterns` therefore narrows
 (as intended) not just which files are discovered, but also which files'
 `verifies` edges and test-node coverage show up in the graph — a file that
 falls out of `testPatterns` stops being treated as a test even if its
-filename still looks like one (e.g. `foo.test.ts`).
+filename still looks like one (e.g. `foo.test.ts`). See "Put exclusions in
+`include`, not `testPatterns`" just below for another reason a negative
+pattern here is best avoided even though it technically works.
 
 **Put exclusions in `include`, not `testPatterns`.** A negative pattern on
 `testPatterns` narrows the scanned file set the same way it does on
-`include`, so it lines up with the graph — but trace evaluation
+`include`, so it lines up with the graph (see "`testPatterns` is not just a
+discovery glob" above for how that same narrowing also reaches isTest
+classification and `verifies` edges) — but trace evaluation
 (`buildSymbolNameTable`) only ever consults `include` when it resolves
 symbol names, never `testPatterns`. A negative pattern that only lives in
 `testPatterns` therefore drifts from what trace evaluation sees: the trace

@@ -114,7 +114,21 @@ export interface BuildWarning {
     // issue #333 — same silent-skip bug, scoped to an ordinary (non
     // re-export) `import ... from "./missing"` statement. SILENT, same
     // rationale as `unresolved-reexport` above.
-    | "unresolved-import";
+    | "unresolved-import"
+    // PR #349 (H1 mitigation, issue #350 tracks the real fix) — the
+    // integrated discovery glob below (`codePatterns = [...include,
+    // ...testPatterns]`, fed to `globCodeFiles`) merges `include`'s and
+    // `testPatterns`' negative patterns into ONE shared `ignore` list. A
+    // `!`-prefixed entry in `testPatterns` therefore does not merely narrow
+    // test *classification* — it excludes matching files from the WHOLE
+    // scan/graph, exactly as if it had been written under `include`.
+    // Reproduced twice independently against this exact shape. Root cause is
+    // that discovery uses one shared pool instead of two (tracked as its own
+    // fix in issue #350); until that lands, this warning makes the surprise
+    // visible instead of a silent file drop. Fires at most once per scan.
+    // NOT silent — shown by default (not in SILENT_WARNING_TYPES), unlike
+    // the two `unresolved-reexport` / `unresolved-import` types above.
+    | "testpatterns-negative-pattern";
   id: string;
   files: string[];
   message?: string;
@@ -598,6 +612,27 @@ export function buildGraph(
   // unconditional oxc dlopen probe on every command just to fail fast
   // earlier.
   const codePatterns = [...config.include, ...config.testPatterns];
+  // PR #349 (H1 mitigation) — `codePatterns` above is the ONE integrated
+  // glob discovery uses (`globCodeFiles` below), and it folds `include`'s
+  // and `testPatterns`' negative patterns into a single shared `ignore`
+  // list. A `!`-prefixed `testPatterns` entry therefore excludes matching
+  // files from the whole scan, not just from test classification — see the
+  // `BuildWarning["type"]`'s own `"testpatterns-negative-pattern"` doc
+  // comment above for the full rationale (issue #350 tracks the real pool-
+  // separation fix). Warn once per scan whenever `testPatterns` carries at
+  // least one negative pattern, regardless of how many.
+  if (config.testPatterns.some((p) => p.startsWith("!"))) {
+    warnings.push({
+      type: "testpatterns-negative-pattern",
+      id: "testPatterns",
+      files: [],
+      message:
+        'testPatterns contains a negative ("!") pattern; discovery merges include and ' +
+        "testPatterns into one shared ignore list, so this excludes matching files from " +
+        "the whole graph, not just from test classification. Put the exclusion in " +
+        '"include" instead (issue #350 tracks separating the two glob pools).',
+    });
+  }
   const tsMode = config.mode ?? "file";
   const codeId = config.reqPatterns?.codeId;
   // issue #335 (Step 0-pre HIGH-1) — both this file's markdown loop above

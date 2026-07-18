@@ -235,11 +235,17 @@ export function fragmentTestKindMatches(
   isTest: boolean,
 ): boolean {
   const fileNode = fragment.nodes.find((n) => n.id === `file:${relPath}`);
-  // No file-kind node found (should not happen for a well-formed fragment —
-  // `parseTSFile` always emits exactly one) — fail open (treat as matching)
-  // rather than force every such fragment cold; `importTargetsExist` and the
-  // content-hash check remain the primary validity gates.
-  if (!fileNode) return true;
+  // PR #349 (L1) — a missing file-kind node violates `parseTSFile`'s own
+  // invariant that it ALWAYS emits exactly one `file:<relPath>` node per
+  // fragment (every code path — successful parse, unreadable file,
+  // pathological-bracket-nesting skip — still pushes one). A fragment that
+  // fails this invariant is evidence of fragment corruption (a hand-built
+  // test fixture, a cross-schema-version leak, a future bug), not a case to
+  // paper over: fail CLOSED (force a cold reparse) rather than silently
+  // trust a possibly-broken fragment's kind. Currently unreachable with the
+  // parser as written — every path pushes a file node — this guard exists
+  // for when that invariant breaks, not because it is expected to fire.
+  if (!fileNode) return false;
   return (fileNode.kind === "test") === isTest;
 }
 
