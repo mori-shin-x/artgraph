@@ -4,6 +4,7 @@ import { readFileSync, statSync } from "node:fs";
 import { dirname, resolve, relative } from "node:path";
 import fastGlob from "fast-glob";
 import type { GraphNode, GraphEdge } from "../types.js";
+import { DEFAULT_CONFIG } from "../types.js";
 import { NAMESPACED_ID_TOKEN } from "../grammar/tokens.js";
 import { listFilesOrThrow } from "../glob-utils.js";
 
@@ -206,7 +207,23 @@ export interface TsParseWarning {
     | "class-member-collision"
     | "pathological-bracket-nesting"
     | "unreadable-file"
-    | "system-resource-exhausted";
+    | "system-resource-exhausted"
+    // issue #333 — a re-export (`export { x } from`, `export * from`,
+    // `export * as ns from`, the source-null S3-C3/S3-C4 forms) whose
+    // specifier did not resolve to a file on disk. Previously a silent
+    // `continue` (docs/architecture.md §11 known-limitation (g),
+    // specs/018-reexport-symbol-precision/spec.md's "Out of scope" list) —
+    // the re-export was dropped from the graph with no diagnostic at all.
+    // `symbolId` is the barrel's own `file:<path>` id for the two
+    // statement-level forms, or the synthesized `symbol:<path>#<name>` id
+    // for the S3-C3/S3-C4 source-null forms (more precise — that id is
+    // already computed at the point the specifier fails to resolve).
+    | "unresolved-reexport"
+    // issue #333 — a plain `import ... from "./missing"` whose specifier did
+    // not resolve to a file on disk. Same silent-`continue` bug as
+    // `unresolved-reexport` above, scoped to ordinary (non re-export) import
+    // statements. `symbolId` is the importing file's own `file:<path>` id.
+    | "unresolved-import";
   // Fully-qualified id the warning is about (`symbol:<path>#<name>`, or
   // `file:<path>` for a file-level warning).
   symbolId: string;
@@ -237,11 +254,22 @@ interface SymbolRange {
   endLine: number;
 }
 
+// issue #323 — `testPatterns` defaults to `DEFAULT_CONFIG.testPatterns` (the
+// same default `.artgraph.json` falls back to when it omits the field) so a
+// caller that has no project-specific config — most of this module's own
+// tests, `symbol-table.ts`'s two direct `safeParseSync` walks notwithstanding
+// — still gets the conventional `*.test.ts` / `*.spec.ts` / `*.test.tsx` /
+// `*.spec.tsx` classification. A real scan (`graph/builder.ts`,
+// `buildSymbolNameTable`) always passes the project's ACTUAL configured
+// `config.testPatterns` explicitly — this default is never silently
+// substituted for a real project's config, only for call sites that never
+// had one to begin with.
 export function createTSParser(
   rootDir: string,
   patterns: string[],
   mode: "file" | "symbol" = "file",
   codeId?: string,
+  testPatterns: string[] = DEFAULT_CONFIG.testPatterns,
 ) {
   const matchers = buildIdMatchers(codeId);
   return {
@@ -256,8 +284,21 @@ export function createTSParser(
       // unrelated `createResolverContext` call.
       const resolverWarning = takeResolverResourceExhaustedWarning();
       if (resolverWarning) warnings.push(resolverWarning);
+      // issue #323 — one integrated glob call over `testPatterns`, then Set
+      // membership per file — the same "one glob call + Set" pattern
+      // `enumerateFiles`/`globCodeFiles` already use for file discovery,
+      // rather than adding a new per-file glob-matching dependency.
+      const testFiles = computeTestFileSet(rootDir, testPatterns);
       for (const filePath of enumerateFiles(rootDir, patterns)) {
-        const parsed = parseTSFile(filePath, rootDir, mode, matchers, ctx);
+        const parsed = parseTSFile(
+          filePath,
+          rootDir,
+          mode,
+          matchers,
+          ctx,
+          undefined,
+          testFiles.has(filePath),
+        );
         nodes.push(...parsed.nodes);
         edges.push(...parsed.edges);
         warnings.push(...parsed.warnings);
@@ -354,20 +395,56 @@ export function globCodeFiles(rootDir: string, patterns: string[]): string[] {
 // `parseTSFile`'s own guarded read — this keeps every OTHER caller (direct
 // `parseTSFilePaths` callers in tests, `createTSParser`'s per-file loop via
 // `parseTSFile` itself) working exactly as before.
+// issue #323 — `testFiles` is a PRECOMPUTED Set of absolute paths matching
+// `testPatterns` (see `computeTestFileSet`), not a raw pattern list: the
+// primary caller (`graph/builder.ts`) already globs `config.testPatterns`
+// once of its own accord (it needs the same Set for the parse-cache
+// kind-mismatch guard — see `fragmentTestKindMatches` in `parse-cache.ts`),
+// so accepting the Set here avoids a second, redundant glob call over the
+// same patterns. A caller with no Set of its own (most direct test callers)
+// falls back to computing one from `DEFAULT_CONFIG.testPatterns` — see
+// `createTSParser`'s doc comment above for why that default is safe.
 export function parseTSFilePaths(
   rootDir: string,
   filePaths: string[],
   mode: "file" | "symbol" = "file",
   codeId?: string,
   contents?: Map<string, string>,
+  testFiles?: Set<string>,
 ): Map<string, ParsedTS> {
   const matchers = buildIdMatchers(codeId);
   const ctx = createResolverContext(rootDir);
+  const resolvedTestFiles = testFiles ?? computeTestFileSet(rootDir, DEFAULT_CONFIG.testPatterns);
   const out = new Map<string, ParsedTS>();
   for (const filePath of filePaths) {
-    out.set(filePath, parseTSFile(filePath, rootDir, mode, matchers, ctx, contents?.get(filePath)));
+    out.set(
+      filePath,
+      parseTSFile(
+        filePath,
+        rootDir,
+        mode,
+        matchers,
+        ctx,
+        contents?.get(filePath),
+        resolvedTestFiles.has(filePath),
+      ),
+    );
   }
   return out;
+}
+
+// issue #323 — single source of truth for "is this file a test file",
+// derived from `testPatterns` (never a hardcoded filename regex). One
+// integrated `globCodeFiles` call (itself one fast-glob call per pattern,
+// deduped) turned into a Set for O(1) per-file membership checks — the same
+// "one glob call + Set" shape file discovery already uses, so no per-file
+// glob-matching dependency (e.g. micromatch) is introduced. Returns absolute
+// paths, matching the convention `enumerateFiles`/`globCodeFiles` already use
+// so a direct `Set.has(absolutePath)` lookup against `filePaths` works
+// without any path normalization step.
+export function computeTestFileSet(rootDir: string, testPatterns: string[]): Set<string> {
+  if (testPatterns.length === 0) return new Set();
+  return new Set(globCodeFiles(rootDir, testPatterns));
 }
 
 // One glob per pattern, deduped, then ordered the way the previous ts-morph
@@ -671,14 +748,24 @@ function parseTSFile(
   // call site that doesn't already have the content — `createTSParser`'s
   // per-file loop, and direct `parseTSFile`/`parseTSFilePaths` callers in
   // tests) falls through to the guarded read below exactly as before.
-  precheckedContent?: string,
+  precheckedContent: string | undefined,
+  // issue #323 — whether `filePath` matched `testPatterns` (Set membership
+  // computed once by the caller via `computeTestFileSet` — see that
+  // function's doc comment). This is now the ONLY source of `isTest`: it
+  // used to be re-derived here from a hardcoded `/\.(test|spec)\.(ts|tsx)$/`
+  // regex, which meant a project's configured `testPatterns` only ever
+  // controlled file DISCOVERY (`graph/builder.ts`'s `codePatterns`), never
+  // the node kind ("test" vs "file") or the `[REQ-x]` test-title tag
+  // extraction gate below — so e.g. `__tests__/foo.ts` matched by a custom
+  // `testPatterns` entry was discovered but silently never got a `verifies`
+  // edge. `testPatterns` is now the single source of truth for both.
+  isTest: boolean,
 ): ParsedTS {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
   const warnings: TsParseWarning[] = [];
 
   const relPath = relative(rootDir, filePath);
-  const isTest = /\.(test|spec)\.(ts|tsx)$/.test(filePath);
 
   // issue #264 — `readFileSync` throws on a file that exists (so the earlier
   // glob enumerated it) but cannot be READ (chmod 000 / other permission
@@ -829,6 +916,7 @@ function parseTSFile(
       mode,
       isTest,
       ctx,
+      warnings,
     );
     if (result.starExports.length > 0) starExports = result.starExports;
   }
@@ -1588,6 +1676,11 @@ function extractImports(
   mode: "file" | "symbol",
   isTest: boolean,
   ctx: ResolverContext,
+  // issue #333 — an unresolved import/re-export specifier used to be a
+  // silent `continue` with no diagnostic anywhere. `warnings` lets each of
+  // the four `if (!resolved) continue;` sites below push a structured
+  // `unresolved-import` / `unresolved-reexport` warning before skipping.
+  warnings: TsParseWarning[],
 ): { starExports: string[] } {
   const importRefs: ImportRef[] = [];
   const reexportRefs: ReexportRef[] = [];
@@ -1798,7 +1891,18 @@ function extractImports(
   for (const ref of importRefs) {
     if (!ref.specifier.startsWith(".")) continue;
     const resolved = resolveRelativeImport(filePath, ref.specifier, ctx);
-    if (!resolved) continue;
+    if (!resolved) {
+      // issue #333 — a relative import specifier that did not resolve to a
+      // file on disk (deleted/renamed/mistyped target). This import edge is
+      // dropped from the graph; previously nothing recorded that at all.
+      warnings.push({
+        type: "unresolved-import",
+        symbolId: sourceId,
+        filePath: relPath,
+        message: `import specifier "${ref.specifier}" in "${relPath}" did not resolve to a file on disk; this import edge was skipped.`,
+      });
+      continue;
+    }
     const targetRel = relative(rootDir, resolved);
 
     if (useSymbol) {
@@ -1865,7 +1969,24 @@ function extractImports(
   for (const rex of reexportRefs) {
     if (!rex.specifier.startsWith(".")) continue;
     const resolved = resolveRelativeImport(filePath, rex.specifier, ctx);
-    if (!resolved) continue;
+    if (!resolved) {
+      // issue #333 — a re-export specifier that did not resolve to a file on
+      // disk. Distinguish the statement-level form for the message: named
+      // (`export { x } from`), `export * as ns from`, or plain `export *`.
+      const form =
+        rex.nsName !== undefined
+          ? "export * as ns"
+          : rex.named.length > 0
+            ? "named re-export"
+            : "export *";
+      warnings.push({
+        type: "unresolved-reexport",
+        symbolId: sourceId,
+        filePath: relPath,
+        message: `${form} specifier "${rex.specifier}" in "${relPath}" did not resolve to a file on disk; this re-export was skipped.`,
+      });
+      continue;
+    }
     const targetRel = relative(rootDir, resolved);
 
     if (useSymbol && rex.named.length > 0) {
@@ -1978,7 +2099,19 @@ function extractImports(
         // the same specifier are today.
         if (!binding.specifier.startsWith(".")) continue;
         const resolved = resolveRelativeImport(filePath, binding.specifier, ctx);
-        if (!resolved) continue;
+        if (!resolved) {
+          // issue #333 — S3-C4 source-null named re-export (`import { x }
+          // from "./m"; export { x };`) whose origin specifier did not
+          // resolve. `symbolId` is the barrel's own synthesized symbol id —
+          // more precise than the file id, and already computed above.
+          warnings.push({
+            type: "unresolved-reexport",
+            symbolId: barrelSymId,
+            filePath: relPath,
+            message: `source-null named re-export "${exportedName}" (local "${localName}") in "${relPath}" imports via unresolved specifier "${binding.specifier}"; this re-export was skipped.`,
+          });
+          continue;
+        }
         const targetRel = relative(rootDir, resolved);
         const { originBinding, edgeTarget } = mapS3OriginBinding(binding, targetRel);
         nodes.push({
@@ -2008,7 +2141,17 @@ function extractImports(
       if (!binding) continue;
       if (!binding.specifier.startsWith(".")) continue;
       const resolved = resolveRelativeImport(filePath, binding.specifier, ctx);
-      if (!resolved) continue;
+      if (!resolved) {
+        // issue #333 — S3-C3 source-null default re-export (`import X from
+        // "./a"; export default X;`) whose origin specifier did not resolve.
+        warnings.push({
+          type: "unresolved-reexport",
+          symbolId: barrelSymId,
+          filePath: relPath,
+          message: `source-null default re-export (local "${localName}") in "${relPath}" imports via unresolved specifier "${binding.specifier}"; this re-export was skipped.`,
+        });
+        continue;
+      }
       const targetRel = relative(rootDir, resolved);
       const { originBinding, edgeTarget } = mapS3OriginBinding(binding, targetRel);
       nodes.push({

@@ -38,6 +38,7 @@
 import { readFileSync } from "node:fs";
 import { relative } from "node:path";
 import { createTSParser, globCodeFiles, safeParseSync } from "../parsers/typescript.js";
+import { DEFAULT_CONFIG } from "../types.js";
 
 type OxcProgram = import("oxc-parser").ParseResult["program"];
 type OxcStatement = OxcProgram["body"][number];
@@ -99,7 +100,20 @@ function exportedClassName(stmt: OxcStatement, decl: ClassLikeDecl): string | un
   return decl.id?.name;
 }
 
-export function buildSymbolNameTable(rootDir: string, includePatterns: string[]): SymbolNameTable {
+// issue #323 — `testPatterns` defaults to `DEFAULT_CONFIG.testPatterns`
+// (same rationale as `createTSParser`'s own default): `buildSymbolNameTable`
+// discovers its file set from `includePatterns` ONLY (never `testPatterns` —
+// see `ArtgraphConfig.testPatterns`'s doc comment for why), but a discovered
+// file can still coincidentally match `testPatterns` (e.g. a project that
+// also lists `*.test.ts` under `include`), and `createTSParser`'s symbol-mode
+// extraction gate (`!isTest`) needs the SAME testPatterns-derived answer for
+// that file the rest of the codebase would give it — never a hardcoded
+// filename regex.
+export function buildSymbolNameTable(
+  rootDir: string,
+  includePatterns: string[],
+  testPatterns: string[] = DEFAULT_CONFIG.testPatterns,
+): SymbolNameTable {
   const files = globCodeFiles(rootDir, includePatterns);
   const relPaths = new Set(files.map((f) => relative(rootDir, f)));
 
@@ -127,7 +141,13 @@ export function buildSymbolNameTable(rootDir: string, includePatterns: string[])
   // actually get its own symbol node" existence check for Source 2, instead
   // of re-deriving `extractClassMembers`'s inclusion rules a second time.
   const symbolIds = new Set<string>();
-  const { nodes } = createTSParser(rootDir, includePatterns, "symbol").parse();
+  const { nodes } = createTSParser(
+    rootDir,
+    includePatterns,
+    "symbol",
+    undefined,
+    testPatterns,
+  ).parse();
   for (const node of nodes) {
     if (node.kind !== "symbol") continue;
     const hashIdx = node.id.indexOf("#");

@@ -115,6 +115,10 @@ export function printWarnings(warnings: BuildWarning[]) {
       // cases so the exhaustiveness check below stays happy.
       case "phantom-import-repaired":
       case "dangling-import":
+      // issue #333 — silent, same rationale as the two types above (see
+      // `BuildWarning["type"]`'s doc comment in graph/builder.ts).
+      case "unresolved-reexport":
+      case "unresolved-import":
         break;
       default: {
         // Exhaustiveness check: if `BuildWarning.type` gains a new variant
