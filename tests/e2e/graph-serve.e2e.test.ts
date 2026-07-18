@@ -168,4 +168,155 @@ describe("e2e: scan --serve", () => {
       expect(code).toBe(0);
     },
   );
+
+  // issue #172 (C4) — before this fix, `--port 0` (ask the OS for a free
+  // ephemeral port) printed the literal requested port back
+  // ("serving at http://127.0.0.1:0"), which is not a URL anyone can visit.
+  // `startServer` now reads the ACTUAL bound port from `server.address()`.
+  // This needs a real listening socket (the in-process `runCli` harness
+  // can't drive `--serve` — see this file's own top-of-file comment), so
+  // it's covered here rather than in the unit suite.
+  it(
+    "T-graph-serve-172-C4: --port 0 prints the real bound port, and that port is reachable",
+    { timeout: 15000 },
+    async () => {
+      let stderrBuf = "";
+      const proc = spawn("node", [CLI, "scan", "--serve", "--port", "0"], {
+        cwd: FIXTURE_DIR,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      proc.stdout.on("data", () => {});
+      proc.stderr.on("data", (d: Buffer) => {
+        stderrBuf += d.toString("utf-8");
+      });
+
+      const earlyExit = new Promise<never>((_, reject) => {
+        proc.once("exit", (code) => {
+          reject(new Error(`server exited early with code ${code}; stderr so far: ${stderrBuf}`));
+        });
+      });
+
+      const waitForServingLine = (async (): Promise<RegExpMatchArray> => {
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+          const match = stderrBuf.match(/serving at http:\/\/127\.0\.0\.1:(\d+)/);
+          if (match) return match;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        throw new Error(
+          `did not see a "serving at" line within budget; stderr so far: ${stderrBuf}`,
+        );
+      })();
+
+      const match = await Promise.race([waitForServingLine, earlyExit]);
+      const boundPort = Number(match[1]);
+      // The whole point of C4: the OS-assigned port must not be the literal
+      // requested `0` — it must be a real, distinct ephemeral port.
+      expect(boundPort).toBeGreaterThan(0);
+
+      const res = await fetchOnce(`http://127.0.0.1:${boundPort}/`);
+      expect(res.status).toBe(200);
+      expect(res.contentType).toMatch(/text\/html/);
+
+      proc.kill("SIGINT");
+      const code = await waitExit(proc, 3000);
+      expect(code).toBe(0);
+    },
+  );
+
+  // issue #172 (C6) — `--host 0.0.0.0` binds every interface, not just
+  // localhost, exposing the (unauthenticated) graph server to the whole
+  // LAN. `startServer` now prints a one-line heads-up warning when it does.
+  it(
+    "T-graph-serve-172-C6: --host 0.0.0.0 warns about network exposure on stderr",
+    { timeout: 15000 },
+    async () => {
+      let stderrBuf = "";
+      // --port 0: avoids any risk of colliding with the fixed-port test
+      // above under the single-fork e2e config (fileParallelism:false).
+      const proc = spawn("node", [CLI, "scan", "--serve", "--host", "0.0.0.0", "--port", "0"], {
+        cwd: FIXTURE_DIR,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      proc.stdout.on("data", () => {});
+      proc.stderr.on("data", (d: Buffer) => {
+        stderrBuf += d.toString("utf-8");
+      });
+
+      const earlyExit = new Promise<never>((_, reject) => {
+        proc.once("exit", (code) => {
+          reject(new Error(`server exited early with code ${code}; stderr so far: ${stderrBuf}`));
+        });
+      });
+
+      const waitForServing = (async (): Promise<void> => {
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+          if (/serving at/.test(stderrBuf)) return;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        throw new Error(
+          `did not see a "serving at" line within budget; stderr so far: ${stderrBuf}`,
+        );
+      })();
+      await Promise.race([waitForServing, earlyExit]);
+
+      expect(stderrBuf).toContain("warning: binding to 0.0.0.0 exposes the graph to your network");
+
+      proc.kill("SIGINT");
+      const code = await waitExit(proc, 3000);
+      expect(code).toBe(0);
+    },
+  );
+
+  // PR #346 review (M2) — replaces a unit test in tests/cli.test.ts that
+  // paired `--serve` with a deliberately-invalid `--port abc`: `parsePort`
+  // rejects that at PARSE time, so the process exits before the action (and
+  // the C8 "--port/--host are ignored without --serve" check) ever runs —
+  // the old test had no discriminating power, since it could not fail
+  // regardless of what the C8 logic did. This drives a real `--serve`
+  // startup with VALID `--port`/`--host` (so the action, and the C8 check,
+  // actually execute) and asserts the ignored-without-`--serve` warning
+  // never fires — same spawn pattern as the C6 test above, using the
+  // "serving at" line as the startup-complete signal and inspecting stderr
+  // accumulated up to that point.
+  it(
+    "C8: --serve --port 0 --host 127.0.0.1 does not warn that --port/--host are ignored",
+    { timeout: 15000 },
+    async () => {
+      let stderrBuf = "";
+      const proc = spawn("node", [CLI, "scan", "--serve", "--port", "0", "--host", "127.0.0.1"], {
+        cwd: FIXTURE_DIR,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      proc.stdout.on("data", () => {});
+      proc.stderr.on("data", (d: Buffer) => {
+        stderrBuf += d.toString("utf-8");
+      });
+
+      const earlyExit = new Promise<never>((_, reject) => {
+        proc.once("exit", (code) => {
+          reject(new Error(`server exited early with code ${code}; stderr so far: ${stderrBuf}`));
+        });
+      });
+
+      const waitForServing = (async (): Promise<void> => {
+        const deadline = Date.now() + 5000;
+        while (Date.now() < deadline) {
+          if (/serving at/.test(stderrBuf)) return;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        throw new Error(
+          `did not see a "serving at" line within budget; stderr so far: ${stderrBuf}`,
+        );
+      })();
+      await Promise.race([waitForServing, earlyExit]);
+
+      expect(stderrBuf).not.toContain("ignored");
+
+      proc.kill("SIGINT");
+      const code = await waitExit(proc, 3000);
+      expect(code).toBe(0);
+    },
+  );
 });

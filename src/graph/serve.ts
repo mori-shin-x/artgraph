@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { isIPv6 } from "node:net";
 import {
   copyFileSync,
   existsSync,
@@ -37,6 +38,59 @@ export interface ExportOptions {
 
 const DEFAULT_PORT = 3737;
 const DEFAULT_HOST = "127.0.0.1";
+
+// issue #172 (C4/C5/C7) — the URL printed by `scan --serve` used to be a
+// bare `http://${host}:${port}` string built from the REQUESTED host/port,
+// which was wrong in three ways this helper fixes:
+//   (C5) an IPv6 host (`::1`, a literal address, …) needs `[...]` bracketing
+//        in a URL — `http://::1:3737` is not a valid authority, the colons
+//        collide with the port separator.
+//   (C7) `0.0.0.0` (IPv4 "all interfaces") and `::` (and its equivalent
+//        spellings — see `isUnspecifiedHost` below) (IPv6 "all interfaces")
+//        are valid BIND addresses but not valid addresses to actually
+//        connect back to from the machine that just started the server —
+//        display the loopback equivalent instead. This is a DISPLAY-ONLY
+//        substitution: the caller still binds to the literal host it was
+//        given (see `startServer` below) — only the printed/returned URL
+//        text is adjusted.
+//   (C4) `port` here must be the ACTUALLY bound port, not the requested one
+//        — the caller is responsible for passing `server.address()`'s port
+//        (relevant for `--port 0`, where the OS picks a free port).
+
+// PR #346 review (M1) — the C6 network-exposure warning below and this
+// function's C7 display substitution used to key on an exact-string match
+// against `"0.0.0.0"` / `"::"` only, so equivalent IPv6 "all interfaces"
+// spellings (`::0`, `0:0:0:0:0:0:0:0`,
+// `0000:0000:0000:0000:0000:0000:0000:0000`, …) — which bind identically to
+// `::` — silently skipped both the warning and the display fix. `net.isIPv6`
+// accepts every one of these spellings; this helper additionally checks that
+// every colon-separated segment is either empty (the `::` zero-run
+// shorthand) or parses as the literal number 0, which holds for every
+// spelling of the IPv6 unspecified address.
+//
+// IPv4-mapped IPv6 forms (`::ffff:0.0.0.0`) are deliberately NOT covered:
+// they're a rare spelling, and it isn't confirmed that `server.listen()`
+// binds them the same all-interfaces way as literal `::`/`0.0.0.0` — folding
+// them in risks a wrong warning/substitution rather than a merely missing
+// one, so they're left as a known gap rather than guessed at. (As a side
+// effect, the last segment of an IPv4-mapped address is dotted-decimal, e.g.
+// `0.0.0.0`, which `Number(...)` doesn't parse as `0` — so this check
+// naturally falls through to `false` for those forms without special-casing
+// them.)
+export function isUnspecifiedHost(host: string): boolean {
+  if (host === "0.0.0.0") return true;
+  if (!isIPv6(host)) return false;
+  return host.split(":").every((segment) => segment === "" || Number(segment) === 0);
+}
+
+export function formatServeUrl(host: string, port: number): string {
+  let displayHost = host;
+  if (isUnspecifiedHost(host)) {
+    displayHost = host === "0.0.0.0" ? "127.0.0.1" : "::1";
+  }
+  const authorityHost = isIPv6(displayHost) ? `[${displayHost}]` : displayHost;
+  return `http://${authorityHost}:${port}`;
+}
 
 // `dist/graph/serve.js` → `dist/graph/../../templates/graph` = `<root>/templates/graph`.
 // At dev time (vitest reads src directly), `src/graph/serve.ts` → same relative
@@ -103,6 +157,14 @@ function readStaticAsset(path: string, name: string): Buffer {
 export async function startServer(opts: ServeOptions): Promise<ServeHandle> {
   const port = opts.port ?? DEFAULT_PORT;
   const host = opts.host ?? DEFAULT_HOST;
+
+  // issue #172 (C6) — binding to every interface (`0.0.0.0`/`::` and their
+  // equivalent spellings, see `isUnspecifiedHost` above) exposes this server
+  // (no auth, arbitrary graph data) to the whole LAN, not just localhost.
+  // `--host` is opt-in, so this is a heads-up, not a refusal.
+  if (isUnspecifiedHost(host)) {
+    console.error(`warning: binding to ${host} exposes the graph to your network`);
+  }
 
   // Read and cache all three static payloads at startup:
   //   - fail-fast: a missing template kills startup with a clear message
@@ -213,7 +275,25 @@ export async function startServer(opts: ServeOptions): Promise<ServeHandle> {
 
     server.listen(port, host, () => {
       phase = "listening";
-      const url = `http://${host}:${port}`;
+      // issue #172 (C4) — read back the ACTUALLY bound port from the OS
+      // rather than echoing the requested `port` value: with `--port 0` the
+      // OS assigns a free ephemeral port, and the pre-fix code printed
+      // "serving at http://host:0", which is not a URL anyone can visit.
+      const address = server.address();
+      // PR #346 review (L1) — the `: port` half of this fallback is
+      // unreachable in practice: inside `server.listen()`'s own callback,
+      // `server.address()` always returns a populated `AddressInfo` (never
+      // `null`/a string), so `typeof address === "object"` is always true
+      // here. This is defensive-for-the-type-checker code, not a live
+      // branch — TypeScript's declared return type for `address()` is wider
+      // than what's actually possible at this specific call site. If it were
+      // ever somehow reached, it would display the REQUESTED port (`0` for
+      // `--port 0`) rather than the actual bound port — silently
+      // reintroducing the exact C4 bug this fallback's sibling branch
+      // exists to fix. Known, accepted limitation of an unreachable path,
+      // not something worth guarding further.
+      const actualPort = address && typeof address === "object" ? address.port : port;
+      const url = formatServeUrl(host, actualPort);
       resolvePromise({
         url,
         close(): Promise<void> {

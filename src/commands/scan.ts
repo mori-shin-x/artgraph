@@ -1,8 +1,58 @@
 // `artgraph scan` — extracted verbatim from `src/cli.ts` (issue #162).
 
 import { resolve } from "node:path";
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import { resolveTestResults, reportGraphWarnings, withFatalErrors } from "./shared.js";
+
+// issue #172 (C3) — `Number.parseInt` alone silently accepts trailing
+// garbage (`--port 3737abc` -> 3737), truncates fractions (`--port 3.14` ->
+// 3), and never validates range, so an out-of-range value (negative, or
+// >=65536) only surfaced as a raw Node `RangeError` from deep inside
+// `server.listen()`, far from the flag that caused it. Mirrors
+// `src/commands/check.ts`'s `--base` validator's shape (InvalidArgumentError
+// + a message naming the offending value) — `/^\d+$/` requires the ENTIRE
+// value to be decimal digits (no sign, no fraction, no trailing text), so
+// only a clean whole number ever reaches `Number.parseInt`. `--port 0` is a
+// legal value (OS auto-assigns a free port — see graph/serve.ts's
+// `formatServeUrl`/`server.address()` handling for how the actual bound
+// port is surfaced).
+function parsePort(value: string): number {
+  if (!/^\d+$/.test(value)) {
+    throw new InvalidArgumentError(
+      `--port must be a whole number with no extra characters (got "${value}").`,
+    );
+  }
+  const port = Number.parseInt(value, 10);
+  if (port > 65535) {
+    throw new InvalidArgumentError(`--port must be between 0 and 65535 (got ${port}).`);
+  }
+  return port;
+}
+
+// PR #346 review (H1) — `--host ""` reaches `server.listen()` as the empty
+// string, which Node binds the same as `0.0.0.0` (all interfaces) — but
+// silently: it matched neither the exact-string C6 network-exposure warning
+// nor the C7 display substitution in `graph/serve.ts` (both keyed on exact
+// "0.0.0.0"/"::" at the time), and the printed URL came out as the malformed
+// `http://:PORT` (empty authority host) — confirmed empirically. A value
+// with leading/trailing whitespace is equally malformed input `--host` was
+// never meant to accept. Reject both at parse time, mirroring `parsePort`'s
+// shape above (InvalidArgumentError naming the offending value). This
+// validates SHAPE only (non-empty, no surrounding whitespace) — it does NOT
+// check DNS resolvability or any other semantic validity of the host; a bad
+// but well-formed value still surfaces as a `server.listen()` error at bind
+// time, same as before this change.
+function parseHost(value: string): string {
+  if (value.trim() === "") {
+    throw new InvalidArgumentError(`--host must not be empty (got "${value}").`);
+  }
+  if (value !== value.trim()) {
+    throw new InvalidArgumentError(
+      `--host must not have leading/trailing whitespace (got "${value}").`,
+    );
+  }
+  return value;
+}
 
 export function registerScanCommand(program: Command): void {
   program
@@ -10,8 +60,8 @@ export function registerScanCommand(program: Command): void {
     .description("Build the artifact graph and show summary (JSON output includes the full graph)")
     .option("--format <format>", "Output format: json | text", "text")
     .option("--serve", "Start a local HTTP server rendering the graph interactively")
-    .option("--port <n>", "Port for --serve (default 3737)", (v) => Number.parseInt(v, 10))
-    .option("--host <h>", "Host for --serve (default 127.0.0.1)")
+    .option("--port <n>", "Port for --serve (default 3737)", parsePort)
+    .option("--host <h>", "Host for --serve (default 127.0.0.1)", parseHost)
     .option("--output <dir>", "Emit a static HTML export into <dir>")
     .option(
       "--force",
@@ -19,6 +69,22 @@ export function registerScanCommand(program: Command): void {
     )
     .action(async (opts) => {
       const rootDir = process.cwd();
+
+      // issue #172 (C1) — `--format` only affects the plain `scan` summary
+      // printed at the bottom of this action; `--serve`/`--output` render
+      // HTML instead and silently ignored an explicit `--format json`
+      // before this warning. The default is "text", so `opts.format ===
+      // "json"` can only be true here if the user passed it explicitly.
+      if (opts.format === "json" && (opts.serve || opts.output)) {
+        console.error("warning: --format is ignored with --serve/--output.");
+      }
+      // issue #172 (C8) — `--port`/`--host` only matter for `--serve`
+      // (`--output` doesn't start a server); passing either without
+      // `--serve` was silently a no-op. Warn instead.
+      if ((opts.port !== undefined || typeof opts.host === "string") && !opts.serve) {
+        console.error("warning: --port/--host are ignored without --serve.");
+      }
+
       const { loadConfig } = await import("../config.js");
       const { scan } = await import("../scan.js");
       // issue #279 / issue #336 (meta-review F1) — format-aware fatal-error
@@ -99,7 +165,10 @@ export function registerScanCommand(program: Command): void {
         // --serve: keep the process alive on the http.Server. SIGINT/SIGTERM
         // trigger a graceful shutdown; without the handler Ctrl+C would still
         // work but skip the server.close() drain.
-        const port = typeof opts.port === "number" && !Number.isNaN(opts.port) ? opts.port : 3737;
+        // `opts.port` is either `undefined` (flag not passed) or a
+        // validated non-NaN integer in [0, 65535] — `parsePort` above never
+        // lets a malformed or out-of-range value reach here.
+        const port = opts.port ?? 3737;
         const host = typeof opts.host === "string" ? opts.host : "127.0.0.1";
         try {
           const handle = await startServer({ data, port, host });
