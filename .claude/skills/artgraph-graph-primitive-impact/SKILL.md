@@ -175,6 +175,9 @@ grep -rn "<primitive 名 / 保証している挙動のキーワード>" docs/
 | (b) 影響 CLI | チェック 3 のマトリクスから該当コマンドを列挙 |
 | (c) テスト | この経路を守るテストが存在するか (ファイル名 / なし) |
 | (d) 推奨 | 本 PR で fix / 別 issue に切り出し / accept (理由付き) |
+| (e) 根拠 | **実測** (fixture で differential probe 済み) / **文書・ソース読解のみ (未実測)**。ライブラリのデフォルト値・オプション挙動に関する断定は特にこの区別を明記する |
+
+**「未実測」のまま breaking change の説明・regression guard テスト・正当化コメントの根拠に使ってはならない。Step 0 (設計) に進む前に fixture による実測へ格上げすること。**
 
 ランクの目安: gate の fail 見逃し = HIGH、非 gate 出力の誤り = MEDIUM、メッセージ/ヒントの劣化 = LOW。
 
