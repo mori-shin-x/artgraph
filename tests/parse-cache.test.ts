@@ -249,7 +249,7 @@ describe("parse cache", () => {
     expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp, symbolCfg));
   });
 
-  it("rejects a cache file with a stale schemaVersion (SCHEMA_VERSION was bumped 6→7 in PR #261)", () => {
+  it("rejects a cache file with a stale schemaVersion (SCHEMA_VERSION was bumped 7→8 in issues #323/#333)", () => {
     // spec 021 (T016, issue #218) bumped 4→5 for class-method-grain symbols;
     // PR #242 review A bumped 5→6 when `TsFragment` gained the `warnings`
     // field (a v5 fragment has no `warnings` key at all, so a warm hit on it
@@ -257,7 +257,12 @@ describe("parse cache", () => {
     // 6→7 for the pathological-bracket-nesting depth guard (a pre-guard
     // fragment for a pathological file was written by a successful parse —
     // reusing it warm would silently diverge from a guarded cold rebuild of
-    // the same content). Populate the cache normally, then hand-edit its
+    // the same content); issues #323/#333 bumped 7→8 together — (a) `isTest`
+    // (node kind) is now testPatterns-derived instead of a hardcoded regex,
+    // so a pre-fix fragment's `kind` may not match what the new logic would
+    // produce, and (b) the parser now emits `unresolved-reexport` /
+    // `unresolved-import` warnings a pre-fix fragment's `warnings` field
+    // never recorded. Populate the cache normally, then hand-edit its
     // schemaVersion down to the previous value. `readParseCache` must reject
     // it and force a cold path — otherwise a warm build could serve a
     // fragment that predates the current parser output, silently diverging
@@ -265,17 +270,17 @@ describe("parse cache", () => {
     buildGraph(tmp, config); // populate cache
     const rawPath = join(tmp, CACHE_REL);
     const cache = JSON.parse(readFileSync(rawPath, "utf-8"));
-    expect(cache.schemaVersion).toBe(7);
-    cache.schemaVersion = 6;
+    expect(cache.schemaVersion).toBe(8);
+    cache.schemaVersion = 7;
     writeFileSync(rawPath, JSON.stringify(cache));
 
     // The next build sees a schema-mismatched cache and must fall back to
     // a cold parse. Behaviorally identical to a cache-disabled build.
     const { graph } = buildGraph(tmp, config);
     expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp));
-    // The rewritten cache carries the current schemaVersion (=7).
+    // The rewritten cache carries the current schemaVersion (=8).
     const rewritten = JSON.parse(readFileSync(rawPath, "utf-8"));
-    expect(rewritten.schemaVersion).toBe(7);
+    expect(rewritten.schemaVersion).toBe(8);
   });
 
   // PR #242 review A — the headline fix: the class-member collision warning

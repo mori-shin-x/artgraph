@@ -16,9 +16,26 @@ negative-pattern convention; excluded files are dropped from both scanning
 and `artgraph rename`'s rewrite scope. A list made up entirely of
 exclusions matches zero files.
 
+**`testPatterns` is not just a discovery glob — it is the sole source of
+truth for whether a file is a "test" (issue #323).** Beyond widening/
+narrowing which files are scanned, `testPatterns` also determines: (1) a
+matched file's graph node kind (`"test"` vs `"file"`), and (2) whether
+`[REQ-x]`-style tags in that file's test titles are extracted into
+`verifies` edges at all. There is no separate hardcoded filename heuristic —
+a file matches `testPatterns` or it does not, and every downstream decision
+follows from that one answer. Narrowing `testPatterns` therefore narrows
+(as intended) not just which files are discovered, but also which files'
+`verifies` edges and test-node coverage show up in the graph — a file that
+falls out of `testPatterns` stops being treated as a test even if its
+filename still looks like one (e.g. `foo.test.ts`). See "Put exclusions in
+`include`, not `testPatterns`" just below for another reason a negative
+pattern here is best avoided even though it technically works.
+
 **Put exclusions in `include`, not `testPatterns`.** A negative pattern on
 `testPatterns` narrows the scanned file set the same way it does on
-`include`, so it lines up with the graph — but trace evaluation
+`include`, so it lines up with the graph (see "`testPatterns` is not just a
+discovery glob" above for how that same narrowing also reaches isTest
+classification and `verifies` edges) — but trace evaluation
 (`buildSymbolNameTable`) only ever consults `include` when it resolves
 symbol names, never `testPatterns`. A negative pattern that only lives in
 `testPatterns` therefore drifts from what trace evaluation sees: the trace

@@ -116,7 +116,25 @@ export interface ParseCacheData {
 // content) — exactly the warm ≡ cold invariant (INV-L4) this version bump
 // exists to protect. Bumping forces one cold reparse per pathological
 // fragment so warm and cold agree again.
-const SCHEMA_VERSION = 7;
+// v8 — two independent reasons, bumped together:
+//   (a) issue #323: `isTest` (node kind "test"/"file", and the `[REQ-x]`
+//       test-title extraction gate) is now derived from `testPatterns`
+//       instead of a hardcoded filename regex. A pre-fix fragment's `kind`
+//       reflects the OLD regex's answer, which can differ from what the new
+//       testPatterns-derived logic would produce for the same file — the
+//       per-file `fragmentTestKindMatches` guard (below) catches this going
+//       forward for a testPatterns-only edit AFTER this migration, but the
+//       one-time migration itself (pre-#323 cache -> post-#323 code) still
+//       needs the blanket cold-invalidate a schema bump gives, since an old
+//       fragment carries no record of which testPatterns produced it.
+//   (b) issue #333: the parser now emits `unresolved-reexport` /
+//       `unresolved-import` warnings for specifiers that fail to resolve
+//       (previously a silent `continue`, no warning at all). A pre-fix
+//       fragment for such a file has none of these warnings recorded in its
+//       `warnings` field — reusing it on a warm hit would silently keep
+//       hiding the same unresolved specifier forever, diverging from a cold
+//       rebuild on the new code (INV-L4), exactly like v7's rationale above.
+const SCHEMA_VERSION = 8;
 const CACHE_RELDIR = join("node_modules", ".cache", "artgraph");
 const CACHE_FILENAME = "parse-cache.json";
 
@@ -196,6 +214,39 @@ export function writeParseCache(
   } catch {
     // Cache persistence is best-effort; a failed write must not fail the scan.
   }
+}
+
+// issue #323 — `isTest` (and therefore a TS fragment's own `file:<relPath>`
+// node `kind`, "test" vs "file") is now DERIVED from `testPatterns`, a
+// config value, rather than a property of the file's own bytes (see
+// `src/parsers/typescript.ts`'s `computeTestFileSet` / `parseTSFile`). A
+// warm fragment is keyed only by content hash, so changing `testPatterns`
+// ALONE (file content unchanged) would otherwise replay the OLD `kind`
+// forever — a new staleness path SCHEMA_VERSION bumps do not catch, since
+// they only guard the initial migration, not every later `testPatterns`
+// edit. Checked per-file (alongside `importTargetsExist`, at each fragment's
+// reuse decision in `graph/builder.ts`) rather than folding `testPatterns`
+// into `tsEnvKey` and invalidating every TS fragment on any edit — this is
+// the narrower, more targeted fix: only files whose testPatterns membership
+// actually flips need a cold reparse.
+export function fragmentTestKindMatches(
+  fragment: TsFragment,
+  relPath: string,
+  isTest: boolean,
+): boolean {
+  const fileNode = fragment.nodes.find((n) => n.id === `file:${relPath}`);
+  // PR #349 (L1) — a missing file-kind node violates `parseTSFile`'s own
+  // invariant that it ALWAYS emits exactly one `file:<relPath>` node per
+  // fragment (every code path — successful parse, unreadable file,
+  // pathological-bracket-nesting skip — still pushes one). A fragment that
+  // fails this invariant is evidence of fragment corruption (a hand-built
+  // test fixture, a cross-schema-version leak, a future bug), not a case to
+  // paper over: fail CLOSED (force a cold reparse) rather than silently
+  // trust a possibly-broken fragment's kind. Currently unreachable with the
+  // parser as written — every path pushes a file node — this guard exists
+  // for when that invariant breaks, not because it is expected to fire.
+  if (!fileNode) return false;
+  return (fileNode.kind === "test") === isTest;
 }
 
 // Validate a cached TS fragment's import edges against the file system: a

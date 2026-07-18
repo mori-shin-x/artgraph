@@ -656,6 +656,15 @@ export interface ArtgraphConfig {
    * silently contributes nothing instead — not a phantom `@impl` / drift
    * candidate. See docs/configuration.md's `include` / `testPatterns`
    * section.
+   *
+   * issue #323 — this is also the SOLE source of truth for whether a file is
+   * a "test" (node kind `"test"` vs `"file"`, and whether `[REQ-x]` test-title
+   * tags are extracted from it): `src/parsers/typescript.ts`'s
+   * `computeTestFileSet` glob-matches this list once per scan and every
+   * `isTest` decision derives from Set membership in the result — there is no
+   * separate hardcoded filename heuristic. Narrowing `testPatterns` therefore
+   * also narrows (as intended) which files contribute `verifies` edges and
+   * test-node coverage, on top of the discovery effect described above.
    */
   testPatterns: string[];
   lockFile: string;
@@ -720,6 +729,14 @@ export const DEFAULT_CONFIG: ArtgraphConfig = {
   // comment above for why.
   include: ["src/**/*.ts", "src/**/*.tsx", "!**/node_modules/**"],
   specDirs: ["specs", "docs"],
-  testPatterns: ["**/*.test.ts", "**/*.spec.ts", "**/*.test.tsx"],
+  // issue #323 — `**/*.spec.tsx` was missing here even though the other
+  // three test/spec x ts/tsx combinations are all present; this default was
+  // simply asymmetric with itself. Now that `isTest` (node kind, `[REQ-x]`
+  // tag extraction gating) is DERIVED from `testPatterns` rather than a
+  // hardcoded regex (see `computeTestFileSet` / `parseTSFile` in
+  // `src/parsers/typescript.ts`), this default doubles as the fallback used
+  // whenever a caller does not supply its own `testPatterns` — so the
+  // asymmetry would otherwise have silently widened beyond file discovery.
+  testPatterns: ["**/*.test.ts", "**/*.spec.ts", "**/*.test.tsx", "**/*.spec.tsx"],
   lockFile: ".trace.lock",
 };
