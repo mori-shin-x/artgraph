@@ -494,6 +494,81 @@ describe("CLI: scan graph payload", () => {
       rmSync(outDir, { recursive: true, force: true });
     }
   });
+
+  // issue #172 (C3) — `--port` used to be a bare `Number.parseInt`, so
+  // `--port abc` silently fell back to the default (NaN), `--port 3.14`
+  // silently started on port 3, and `--port 3737abc` silently started on
+  // port 3737. All of these are now rejected at PARSE time with a clear
+  // `InvalidArgumentError` message (commander exits 1 before the action
+  // ever runs, so `--serve` never gets a chance to bind).
+  describe("--port validation (issue #172 C3)", () => {
+    it.each([
+      ["abc", /whole number/],
+      ["3.14", /whole number/],
+      ["3737abc", /whole number/],
+      ["70000", /between 0 and 65535/],
+      ["-1", /whole number/],
+    ])("rejects --port %s", async (value, messagePattern) => {
+      const { exitCode, stderr } = await run(["scan", "--serve", "--port", value]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toMatch(messagePattern);
+    });
+
+    // `--port 0` is a legal value (OS auto-assigns a free port, C4) — this
+    // only checks it's ACCEPTED at parse time (not that a server actually
+    // starts and binds; that's the e2e test in
+    // tests/e2e/graph-serve.e2e.test.ts, since --serve keeps the process
+    // alive on the http.Server socket and the in-process runCli harness
+    // can't drive that — see that file's own top-of-file comment).
+  });
+
+  // issue #172 (C1/C8) — flags that are silently ignored on this path now
+  // get a heads-up warning instead (behavior is otherwise unchanged).
+  describe("scan: silently-ignored flag combinations now warn (issue #172 C1/C8)", () => {
+    it("C1: --format json is ignored with --output — warns on stderr", async () => {
+      const outDir = mkdtempSync(join(tmpdir(), "artgraph-c1-output-"));
+      try {
+        const { exitCode, stderr } = await run(["scan", "--format", "json", "--output", outDir]);
+        expect(exitCode).toBe(0);
+        expect(stderr).toContain("--format is ignored with --serve/--output");
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
+    });
+
+    it("C1: --format json is not warned about for plain scan (no --serve/--output)", async () => {
+      const { exitCode, stderr } = await run(["scan", "--format", "json"]);
+      expect(exitCode).toBe(0);
+      expect(stderr).not.toContain("--format is ignored");
+    });
+
+    it("C8: --port without --serve warns on stderr (and --output still runs normally)", async () => {
+      const outDir = mkdtempSync(join(tmpdir(), "artgraph-c8-port-"));
+      try {
+        const { exitCode, stderr } = await run(["scan", "--output", outDir, "--port", "4000"]);
+        expect(exitCode).toBe(0);
+        expect(stderr).toContain("--port/--host are ignored without --serve");
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
+    });
+
+    it("C8: --host without --serve warns on stderr", async () => {
+      const { exitCode, stderr } = await run(["scan", "--format", "json", "--host", "0.0.0.0"]);
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain("--port/--host are ignored without --serve");
+    });
+
+    it("C8: --port/--host alongside --serve does not warn", async () => {
+      // Validated via the e2e suite's real --serve invocations (which always
+      // pass --port); this just checks the warning doesn't ALSO fire on the
+      // parse-error path (a bad port here would exit 1 before reaching the
+      // warning check, which would be a false negative for this assertion).
+      const { exitCode, stderr } = await run(["scan", "--serve", "--port", "abc"]);
+      expect(exitCode).toBe(1);
+      expect(stderr).not.toContain("--port/--host are ignored without --serve");
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

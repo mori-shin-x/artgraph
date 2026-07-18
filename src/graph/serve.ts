@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { isIPv6 } from "node:net";
 import {
   copyFileSync,
   existsSync,
@@ -37,6 +38,33 @@ export interface ExportOptions {
 
 const DEFAULT_PORT = 3737;
 const DEFAULT_HOST = "127.0.0.1";
+
+// issue #172 (C4/C5/C7) — the URL printed by `scan --serve` used to be a
+// bare `http://${host}:${port}` string built from the REQUESTED host/port,
+// which was wrong in three ways this helper fixes:
+//   (C5) an IPv6 host (`::1`, a literal address, …) needs `[...]` bracketing
+//        in a URL — `http://::1:3737` is not a valid authority, the colons
+//        collide with the port separator.
+//   (C7) `0.0.0.0` (IPv4 "all interfaces") and `::` (IPv6 "all interfaces")
+//        are valid BIND addresses but not valid addresses to actually
+//        connect back to from the machine that just started the server —
+//        display the loopback equivalent instead. This is a DISPLAY-ONLY
+//        substitution: the caller still binds to the literal host it was
+//        given (see `startServer` below) — only the printed/returned URL
+//        text is adjusted.
+//   (C4) `port` here must be the ACTUALLY bound port, not the requested one
+//        — the caller is responsible for passing `server.address()`'s port
+//        (relevant for `--port 0`, where the OS picks a free port).
+export function formatServeUrl(host: string, port: number): string {
+  let displayHost = host;
+  if (host === "0.0.0.0") {
+    displayHost = "127.0.0.1";
+  } else if (host === "::") {
+    displayHost = "::1";
+  }
+  const authorityHost = isIPv6(displayHost) ? `[${displayHost}]` : displayHost;
+  return `http://${authorityHost}:${port}`;
+}
 
 // `dist/graph/serve.js` → `dist/graph/../../templates/graph` = `<root>/templates/graph`.
 // At dev time (vitest reads src directly), `src/graph/serve.ts` → same relative
@@ -103,6 +131,13 @@ function readStaticAsset(path: string, name: string): Buffer {
 export async function startServer(opts: ServeOptions): Promise<ServeHandle> {
   const port = opts.port ?? DEFAULT_PORT;
   const host = opts.host ?? DEFAULT_HOST;
+
+  // issue #172 (C6) — binding to every interface (`0.0.0.0`/`::`) exposes
+  // this server (no auth, arbitrary graph data) to the whole LAN, not just
+  // localhost. `--host` is opt-in, so this is a heads-up, not a refusal.
+  if (host === "0.0.0.0" || host === "::") {
+    console.error(`warning: binding to ${host} exposes the graph to your network`);
+  }
 
   // Read and cache all three static payloads at startup:
   //   - fail-fast: a missing template kills startup with a clear message
@@ -213,7 +248,13 @@ export async function startServer(opts: ServeOptions): Promise<ServeHandle> {
 
     server.listen(port, host, () => {
       phase = "listening";
-      const url = `http://${host}:${port}`;
+      // issue #172 (C4) — read back the ACTUALLY bound port from the OS
+      // rather than echoing the requested `port` value: with `--port 0` the
+      // OS assigns a free ephemeral port, and the pre-fix code printed
+      // "serving at http://host:0", which is not a URL anyone can visit.
+      const address = server.address();
+      const actualPort = address && typeof address === "object" ? address.port : port;
+      const url = formatServeUrl(host, actualPort);
       resolvePromise({
         url,
         close(): Promise<void> {

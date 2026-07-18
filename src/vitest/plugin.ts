@@ -31,9 +31,81 @@ import { REGISTRY_KEY, REGISTRY_VERSION, hashContent, isExcludedRelPath } from "
 // module never needs to touch that file — see the dependency-boundary
 // comment above).
 const requireCjs = createRequire(import.meta.url);
+
+// issue #278 — LOCAL duplicate of `src/parsers/typescript.ts`'s
+// `OxcLoadError` diagnostic text/shape. This file's own top-of-file
+// dependency-boundary comment forbids importing any `src/` module besides
+// `trace/schema.ts` (the two v2-engine halves must share nothing but the
+// `globalThis` registry shape this file writes and the runner reads), so
+// the class and its message are duplicated here — by hand, not by import —
+// rather than reused from `src/parsers/typescript.ts`'s `OxcLoadError`.
+// Keep the cause list / recovery steps in sync with that class's wording if
+// either one changes.
+class PluginOxcLoadError extends Error {
+  constructor(cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(
+      [
+        "[artgraph] trace instrumentation: failed to load the oxc-parser native binding.",
+        'This is DIFFERENT from the per-file "could not parse" warning below — no file can',
+        "be instrumented until the binding loads, so every module transformed by this",
+        "plugin for the rest of THIS PROCESS will pass through un-instrumented (tests still",
+        "run, but no trace evidence is captured for them).",
+        "",
+        `Underlying error: ${detail}`,
+        "",
+        "Likely causes:",
+        "  - oxc-parser's optional platform-specific package was not installed",
+        "  - node_modules is corrupted or only partially installed",
+        "  - the installed native binary does not match this machine's OS/CPU",
+        "    architecture (e.g. a lockfile/install from a different platform, or a",
+        "    Docker image built for a different target)",
+        "",
+        "To resolve, try:",
+        "  1. Reinstall dependencies from scratch (e.g. `rm -rf node_modules` then",
+        "     reinstall with your package manager)",
+        "  2. Confirm oxc-parser's platform-specific optional dependency is present",
+        "     for THIS OS/architecture (check node_modules/@oxc-parser/binding-*)",
+        "  3. If this happens in CI/Docker, make sure the image architecture matches",
+        "     what was used to install/lock dependencies",
+        "",
+        "Alternative: re-run with ARTGRAPH_TRACE_ENGINE=cdp to use the legacy",
+        "inspector-based engine instead, which does not depend on this binding.",
+      ].join("\n"),
+    );
+    this.name = "PluginOxcLoadError";
+  }
+}
+
 let oxcModule: typeof import("oxc-parser") | undefined;
+// issue #278 — negative cache: once `requireCjs("oxc-parser")` has failed,
+// every LATER call re-throws this SAME error instead of re-attempting the
+// (slow, and — a native dlopen failure being an environment property —
+// certain to fail again) require. Mirrors `src/parsers/typescript.ts`'s
+// identical `oxcLoadError` memo.
+let oxcLoadFailure: PluginOxcLoadError | undefined;
+// issue #278 — dedup flag for the dedicated load-failure warning emitted
+// from `transform()`'s catch block below. Module-scope `let`/boolean (NOT
+// a `Set` like `warnedParseFailures` below, and not per-plugin-instance
+// state): the decided design is "warn once per PROCESS", and this file's
+// top-of-file dependency-boundary comment already establishes that
+// `transform()` runs once per module in the MAIN-PROCESS vite-node
+// pipeline, shared across worker forks/threads — a per-relPath `Set` would
+// track the wrong axis (it would re-warn once per DISTINCT file, which
+// silently violates "once per process" the moment more than one file is
+// transformed after the binding breaks). Exactly like
+// `src/parsers/typescript.ts`'s `oxcLoadError` memoization unit.
+let warnedOxcLoadFailure = false;
 function loadOxc(): typeof import("oxc-parser") {
-  return (oxcModule ??= requireCjs("oxc-parser") as typeof import("oxc-parser"));
+  if (oxcLoadFailure) throw oxcLoadFailure;
+  if (oxcModule) return oxcModule;
+  try {
+    oxcModule = requireCjs("oxc-parser") as typeof import("oxc-parser");
+  } catch (e) {
+    oxcLoadFailure = new PluginOxcLoadError(e);
+    throw oxcLoadFailure;
+  }
+  return oxcModule;
 }
 
 // oxc's real AST node union (`@oxc-project/types`) is large and this module
@@ -366,7 +438,29 @@ export default function artgraphTracePlugin(): ArtgraphTracePlugin {
         if (parsed.errors.length > 0) throw new Error("oxc reported parse errors");
         program = parsed.program as unknown as AnyNode;
         visitorKeys = oxc.visitorKeys as unknown as Record<string, readonly string[]>;
-      } catch {
+      } catch (e) {
+        // issue #278: a `PluginOxcLoadError` (the native binding itself
+        // never loaded) is a DIFFERENT failure from an ordinary per-file
+        // parse failure below — no file will ever parse successfully in
+        // this process, so warn ONCE (module-scope `warnedOxcLoadFailure`,
+        // see its doc comment) with the dedicated diagnostic instead of
+        // repeating the misleading "could not parse <file>" warning (the
+        // file was never even handed to the parser) for every subsequent
+        // module.
+        //
+        // `src/vitest/runner.ts` also has a per-WORKER
+        // `warnedNoRegistration` warning ("no module was ever registered by
+        // this worker …") that fires alongside this one when oxc is broken
+        // for the whole run — that's intentional, not redundant: this
+        // warning names the specific cause, runner.ts's is a generic
+        // safety net for ANY reason zero modules got registered.
+        if (e instanceof PluginOxcLoadError) {
+          if (!warnedOxcLoadFailure) {
+            warnedOxcLoadFailure = true;
+            process.stderr.write(`${e.message}\n`);
+          }
+          return undefined;
+        }
         // contract §変換のスキップ: unparseable — pass through un-instrumented
         // rather than fail the build (FR-008, silent skip is what's
         // forbidden, not the skip itself).
