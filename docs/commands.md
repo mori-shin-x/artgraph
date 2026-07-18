@@ -260,6 +260,29 @@ Skill's test-tag path (test-title `[REQ-NNN]` tags only, no code-side
 `@impl`) — those REQs are `verifies`-only and stay `untagged`/`uncovered`
 forever without this flag.
 
+### `staleLockEntries` — lock keys with no graph node (issue #244)
+
+`.trace.lock` can end up with keys that no longer resolve to any node in the
+current graph — most commonly a rename/refactor that changed a symbol's id,
+but the same thing can happen with no rename at all: a `.artgraph.json`
+`mode`/`include`/`exclude`/`ignoreIdPrefixes` change can stop a previously
+tracked id from resolving. Because such an id is by definition absent from
+the graph, the normal drift/orphan/uncovered checks can never see it — it
+was previously invisible until `artgraph reconcile` silently dropped it.
+`--format json` now reports these ids directly as `staleLockEntries`, a
+sorted `string[]`, present ONLY when non-empty (omitted entirely otherwise,
+same optional-omit convention as the spec 020 fields above). This is
+unrelated to `staleEvidence`/`staleGate` above — those track trace-evidence
+freshness against the graph, while `staleLockEntries` tracks whether a lock
+key itself still exists in the graph at all. It is purely informational: it
+never affects `pass`, `newIssues`, or any gate/exit-code decision. Resolve
+it by running `artgraph reconcile`.
+
+Caveat: under `--diff`, an early-return path (no changed files, or changed
+files outside the graph) skips `check()` entirely, so `staleLockEntries` is
+not emitted on that run either. To reliably see the full lock/graph
+reconciliation state, run `artgraph check --format json` without `--diff`.
+
 ## `artgraph impact`
 
 Forward impact analysis: files/symbols → REQs / docs / tests.
@@ -459,6 +482,12 @@ artgraph plan-coverage --format json
 Typically fired by the `artgraph-plan-coverage` Skill after `/speckit-tasks`
 or after editing `.kiro/specs/<name>/tasks.md`. Manual invocation is fine
 during troubleshooting.
+
+Mentioning a REQ-ID anywhere in `tasks.md` / `plan.md` / `spec.md` drops it
+from `implicitImpacts` — but the match is a literal per-ID word-boundary
+match, not a range parser: `REQ-001 through REQ-032` (or `..`-style
+equivalents) only mentions the two endpoint IDs, leaving the IDs in between
+still implicit. Spell out each ID individually to cover a range.
 
 ## `artgraph reconcile` <a id="artgraph-reconcile"></a>
 

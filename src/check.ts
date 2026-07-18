@@ -69,11 +69,27 @@ export function check(
   traceOptions?: TraceCheckOptions,
 ): CheckResult {
   const drifted: DriftEntry[] = [];
+  // issue #244 — lock entries whose id no longer resolves to a graph node
+  // (rename/refactor, or a mode/include/exclude/ignoreIdPrefixes config
+  // change). Collected BEFORE the `scope` filter below and from the FULL
+  // lock (not `scope`-gated) — deliberately, not merely incidentally:
+  // `scope` (`src/commands/check.ts`) is `new Set([...currentScope,
+  // ...baselineScope])`, where `baselineScope` is a BFS over the BASELINE
+  // graph (pre-rename), so a renamed-away old id CAN land in `scope`. Were
+  // this filtered by `scope`, only the subset of stale ids that happen to
+  // have been reachable in the baseline would show up, hiding the rest —
+  // a half-broken filter that defeats the point of a full lock/graph
+  // reconciliation view. Previously such entries were silently `continue`d
+  // past with no visibility until `reconcile`.
+  const staleLockEntriesSet = new Set<string>();
 
   for (const [id, entry] of Object.entries(lock)) {
-    if (scope && !scope.has(id)) continue;
     const node = graph.nodes.get(id);
-    if (!node) continue;
+    if (!node) {
+      staleLockEntriesSet.add(id);
+      continue;
+    }
+    if (scope && !scope.has(id)) continue;
     if (node.contentHash !== entry.contentHash) {
       drifted.push({
         nodeId: id,
@@ -83,6 +99,7 @@ export function check(
       });
     }
   }
+  const staleLockEntries = [...staleLockEntriesSet].sort();
 
   // spec 017 (FR-006, R5) — strict source matching. An orphan is in scope only
   // when its `source` node is itself in the diff scope; the old substring
@@ -253,6 +270,12 @@ export function check(
   // undetermined instead of a bare "unavailable" string.
   if (baselineStatus === "unavailable" && baseline?.error) {
     result.baselineError = baseline.error;
+  }
+  // issue #244 — optional-omit: only present when non-empty, so a project
+  // with no stale lock entries round-trips byte-identical to pre-#244
+  // output (mirrors `staleEvidence`/`unexercisedClaims`'s convention below).
+  if (staleLockEntries.length > 0) {
+    result.staleLockEntries = staleLockEntries;
   }
   // spec 020 (FR-010) — only set when a trace was actually ingested. Setting
   // these keys on `result` unconditionally (even to `[]`/`false`) would grow

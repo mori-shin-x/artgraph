@@ -5,6 +5,7 @@ import { buildGraph } from "../src/graph/builder.js";
 import { buildLockFromGraph } from "../src/lock.js";
 import { check } from "../src/check.js";
 import { uncoveredKey } from "../src/baseline.js";
+import { printCheckText } from "../src/commands/presenters/check.js";
 import type { ArtgraphConfig, LockFile, TestResultMap, ArtifactGraph } from "../src/types.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");
@@ -293,5 +294,87 @@ describe("check", () => {
       const reqDrift = result.drifted.filter((d) => d.kind === "req");
       expect(reqDrift).toEqual([]);
     });
+  });
+});
+
+// issue #244 — a lock entry whose id has no matching node in the CURRENT
+// graph (rename/refactor left the old id behind) was previously silently
+// `continue`d past by the drift loop: invisible from drift AND orphans,
+// resolved only by an unrelated `reconcile` run. `staleLockEntries` surfaces
+// these ids directly.
+describe("check: staleLockEntries (issue #244)", () => {
+  // One real node ("REQ-100", locked, in sync) plus two lock-only ids with
+  // no corresponding graph node — simulating a rename that changed
+  // "OLD-symbol-a" -> "REQ-100" and left "OLD-symbol-a" / "OLD-symbol-b"
+  // behind in the lock.
+  function graphWithStaleLock(): { graph: ArtifactGraph; lock: LockFile } {
+    const graph: ArtifactGraph = {
+      nodes: new Map([
+        ["REQ-100", { id: "REQ-100", kind: "req", filePath: "specs/x.md", contentHash: "h1" }],
+      ]),
+      edges: [],
+    };
+    const lock: LockFile = {
+      "REQ-100": { contentHash: "h1", lastReconciled: "2025-01-01T00:00:00Z" },
+      "OLD-symbol-b": { contentHash: "hb", lastReconciled: "2025-01-01T00:00:00Z" },
+      "OLD-symbol-a": { contentHash: "ha", lastReconciled: "2025-01-01T00:00:00Z" },
+    };
+    return { graph, lock };
+  }
+
+  it("lists lock ids absent from the graph, ascending-sorted", () => {
+    const { graph, lock } = graphWithStaleLock();
+    const result = check(graph, lock);
+    expect(result.staleLockEntries).toEqual(["OLD-symbol-a", "OLD-symbol-b"]);
+  });
+
+  it("omits the key entirely (not []) when every lock id resolves to a graph node", () => {
+    const { graph, lock } = graphWithStaleLock();
+    delete lock["OLD-symbol-a"];
+    delete lock["OLD-symbol-b"];
+    const result = check(graph, lock);
+    expect(Object.prototype.hasOwnProperty.call(result, "staleLockEntries")).toBe(false);
+  });
+
+  it("is scope-independent: staleLockEntries ignores `scope` entirely and always surfaces every stale id", () => {
+    const { graph, lock } = graphWithStaleLock();
+    // `scope` here is built from CURRENT-graph-reachable ids only, exactly
+    // as `buildScope` on the current graph would produce. Note that the
+    // real CLI caller (`src/commands/check.ts`) unions this with a BASELINE-
+    // graph BFS, so in practice `scope` CAN contain a renamed-away old id —
+    // staleLockEntries deliberately never consults `scope` at all (see the
+    // comment on `staleLockEntriesSet` above), so this test's narrower scope
+    // still exercises the intended behavior: the full lock is scanned
+    // regardless of what `scope` does or doesn't contain.
+    const scope = new Set(["REQ-100"]);
+    const result = check(graph, lock, scope);
+    expect(result.staleLockEntries).toEqual(["OLD-symbol-a", "OLD-symbol-b"]);
+    // Scope still applies normally to drift: REQ-100 is in sync so no drift.
+    expect(result.drifted).toEqual([]);
+  });
+
+  // --format text: STALE LOCK ENTRIES: heading (H3 review fix) — mirrors
+  // check-evidence.test.ts's "--format text: ... STALE EVIDENCE: headings"
+  // pattern, but at the printCheckText unit level since this file already
+  // exercises `check()` directly rather than through the CLI.
+  it("--format text: STALE LOCK ENTRIES: heading lists the stale ids", () => {
+    const { graph, lock } = graphWithStaleLock();
+    const result = check(graph, lock);
+    const lines: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.join(" "));
+    };
+    try {
+      printCheckText(result);
+    } finally {
+      console.log = origLog;
+    }
+    const output = lines.join("\n");
+    expect(output).toContain(
+      "STALE LOCK ENTRIES (in .trace.lock but no longer in the graph — run `artgraph reconcile`):",
+    );
+    expect(output).toContain("OLD-symbol-a");
+    expect(output).toContain("OLD-symbol-b");
   });
 });

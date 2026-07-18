@@ -23,6 +23,7 @@ import { DistributionError } from "../src/agents/distribute.js";
 import { LOCK_SCHEMA_VERSION } from "../src/lock.js";
 import { readSkillSource } from "../src/agents/source.js";
 import { AGENT_DESCRIPTORS } from "../src/agents/descriptors.js";
+import { GITATTRIBUTES_CONTENT } from "../src/agents/agent-context.js";
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), "artgraph-init-"));
@@ -601,6 +602,19 @@ describe("runInit Skills installation (directory format)", () => {
       expect(readFileSync(attrPath, "utf-8")).toBe("** text eol=lf\n");
     }
   });
+
+  // L1 review fix — assert against the exported constant (not a copy-pasted
+  // literal) so this test can't drift silently from what writeGitAttributes
+  // actually writes if GITATTRIBUTES_CONTENT ever changes.
+  it("written .gitattributes content matches the exported GITATTRIBUTES_CONTENT constant", () => {
+    runInit(tmp, {
+      noScan: true,
+      agents: ["claude"],
+    });
+
+    const attrPath = join(tmp, ".claude", "skills", ".gitattributes");
+    expect(readFileSync(attrPath, "utf-8")).toBe(GITATTRIBUTES_CONTENT);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -944,6 +958,12 @@ describe("skill template <-> dogfood sync", () => {
   // See AGENTS.md "Internal dev process".
   const INTERNAL_SKILL_DIRS = ["artgraph-graph-primitive-impact", "issue-loop", "issue-retro"];
 
+  // Files generated per-agent by the CLI (not byte-copied from
+  // templates/skills/ — readSkillSource deliberately skips dotfiles).
+  // Committed in this repo so the dogfood tree matches what `artgraph init`
+  // produces (#152). Single generator: writeGitAttributes (agent-context.ts).
+  const GENERATED_DOGFOOD_FILES = [".gitattributes"];
+
   function walk(dir: string, out: string[]): void {
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry);
@@ -997,12 +1017,26 @@ describe("skill template <-> dogfood sync", () => {
         if (rel.startsWith("speckit-")) continue;
         // Skip repo-internal skills (see INTERNAL_SKILL_DIRS above).
         if (INTERNAL_SKILL_DIRS.some((d) => rel.startsWith(`${d}/`))) continue;
+        // Skip CLI-generated files (see GENERATED_DOGFOOD_FILES above).
+        if (GENERATED_DOGFOOD_FILES.includes(rel)) continue;
         const tPath = join(templateDir, rel);
         expect(
           existsSync(tPath),
           `stale dogfood file (no template): ${dogfoodDir.substring(REPO_ROOT.length + 1)}/${rel}`,
         ).toBe(true);
       }
+    }
+  });
+
+  it("every dogfood skillsPath has a committed .gitattributes matching the writeGitAttributes output (#152)", () => {
+    // The content here must stay in sync with GITATTRIBUTES_CONTENT in
+    // src/agents/agent-context.ts (writeGitAttributes) — that function is
+    // the single generator; this asserts the dogfood-committed copies
+    // haven't drifted from what it would (re-)write.
+    for (const dogfoodDir of dogfoodDirs) {
+      const gaPath = join(dogfoodDir, ".gitattributes");
+      expect(existsSync(gaPath), `missing dogfood .gitattributes: ${gaPath}`).toBe(true);
+      expect(readFileSync(gaPath, "utf-8")).toBe("** text eol=lf\n");
     }
   });
 });
