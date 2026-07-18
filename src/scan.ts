@@ -6,11 +6,24 @@ import {
   readLockWithMeta,
   assertLockSchemaWritable,
 } from "./lock.js";
+import type { IngestedTrace } from "./trace/ingest.js";
 import type { ArtifactGraph, ArtgraphConfig } from "./types.js";
 
 export interface ScanResult {
   graph: ArtifactGraph;
   warnings: BuildWarning[];
+  // issue #351 ("Window B" elimination) — the SAME `IngestedTrace`
+  // `buildGraph()` already ingested to build `exercises`/`implements`
+  // (coverage) edges, threaded through so `src/commands/check.ts` /
+  // `src/commands/impact.ts` / `src/commands/trace.ts` can reuse it instead
+  // of each calling `ingestTrace()` a second, independent time (the
+  // structural fix for the "Window B" raw-crash class the Step 0-pre
+  // investigation found — see `src/graph/builder.ts`'s own doc comment on
+  // this field). `undefined` on a trace-absent project (`hasTraceShards`
+  // false), mirroring `buildGraph`'s own FR-010 byte-identical-output
+  // contract — this key is omitted from a trace-absent scan's result
+  // entirely, not merely `undefined`-valued.
+  trace?: IngestedTrace;
   nodeCount: number;
   edgeCount: number;
   reqCount: number;
@@ -23,7 +36,7 @@ export interface ScanResult {
 
 export function scan(rootDir: string, config: ArtgraphConfig): ScanResult {
   const absRoot = resolve(rootDir);
-  const { graph, warnings } = buildGraph(absRoot, config);
+  const { graph, warnings, trace } = buildGraph(absRoot, config);
 
   let reqCount = 0;
   let docCount = 0;
@@ -55,7 +68,7 @@ export function scan(rootDir: string, config: ArtgraphConfig): ScanResult {
     }
   }
 
-  return {
+  const result: ScanResult = {
     graph,
     warnings,
     nodeCount: graph.nodes.size,
@@ -67,6 +80,8 @@ export function scan(rootDir: string, config: ArtgraphConfig): ScanResult {
     testCount,
     taskCount,
   };
+  if (trace) result.trace = trace;
+  return result;
 }
 
 export interface ReconcileOptions {

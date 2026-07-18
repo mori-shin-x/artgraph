@@ -73,7 +73,11 @@ function writeShard(tmp: string, name: string, lines: string[]): void {
 
 function ingest(tmp: string): IngestedTrace {
   const config = loadConfig(tmp);
-  return ingestTrace(config, tmp);
+  // issue #351 — `ingestTrace` now returns `{ trace, warnings }` (its own
+  // `system-resource-exhausted` warnings, previously unreported). This
+  // suite's fixtures never trigger EMFILE/ENFILE, so unwrapping `.trace`
+  // keeps every existing call site (`ingest(tmp)`) unchanged.
+  return ingestTrace(config, tmp).trace;
 }
 
 // ---------------------------------------------------------------------------

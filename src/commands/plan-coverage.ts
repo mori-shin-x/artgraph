@@ -158,6 +158,34 @@ export function registerPlanCoverageCommand(program: Command): void {
           process.stdout.write(result.text);
           reportGraphWarnings(result.warnings, format);
         }
+
+        // issue #351 — `runPlanCoverage`'s `tripGate` now also fires on
+        // `system-resource-exhausted` (the graph may be missing entire
+        // spec/code trees, so an empty implicit-impacts report is
+        // undeterminable, not necessarily clean). Mirrors `check.ts`'s
+        // dedicated `--gate` diagnostic: only printed under `--gate` (a
+        // non-gate run already surfaces the warning via `reportGraphWarnings`
+        // above and stays exit 0). plan-coverage has no separate
+        // "undeterminable" exit code the way `check` does (exit 1 vs. exit
+        // 2) — a resource-exhausted gate trip and a genuine gate-fail are
+        // BOTH exit 1 here, so this message (plus `warnings[]` in
+        // `--format json`) is how a reader tells them apart.
+        const resourceExhausted = result.warnings.some(
+          (w) => w.type === "system-resource-exhausted",
+        );
+        if (opts.gate === true && resourceExhausted) {
+          console.error(
+            "ERROR: scan hit file-descriptor exhaustion (system-resource-exhausted) — the graph " +
+              "may be missing entire spec/code trees, so this plan-coverage result cannot be " +
+              "trusted.",
+          );
+          console.error(
+            "       gate result is undetermined (same exit code as a genuine gate failure — see " +
+              "warnings[] / --format json to tell them apart). Retry once your environment has " +
+              "recovered (e.g. raise the OS file-descriptor limit via `ulimit -n`).",
+          );
+        }
+
         if (result.exitCode !== 0) {
           process.exit(result.exitCode);
         }

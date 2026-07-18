@@ -73,7 +73,7 @@ describe("buildSymbolNameTable survives a pathologically deep-bracket-nesting fi
   });
 
   it("still resolves a normal file's class-member name to the member's own symbol id", () => {
-    const table = buildSymbolNameTable(root, ["src/**/*.ts"]);
+    const { table } = buildSymbolNameTable(root, ["src/**/*.ts"]);
     expect(table.hasFile("src/normal.ts")).toBe(true);
     expect(table.resolve("src/normal.ts", "add")).toEqual({
       kind: "symbol",
@@ -82,7 +82,7 @@ describe("buildSymbolNameTable survives a pathologically deep-bracket-nesting fi
   });
 
   it("fails safe (file-fallback, never a crash) resolving a name inside the pathological file — its class member was never symbolized", () => {
-    const table = buildSymbolNameTable(root, ["src/**/*.ts"]);
+    const { table } = buildSymbolNameTable(root, ["src/**/*.ts"]);
     expect(table.hasFile("src/pathological.ts")).toBe(true);
     expect(table.resolve("src/pathological.ts", "compute")).toEqual({
       kind: "file-fallback",

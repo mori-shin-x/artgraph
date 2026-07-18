@@ -123,7 +123,11 @@ export function registerCheckCommand(program: Command): void {
       // display-only "unavailable" baseline status, so a fatal error there
       // never reaches this catch or cli.ts's.
       const config = await withFatalErrors(opts.format, () => loadConfig(rootDir));
-      const { graph, warnings } = await withFatalErrors(opts.format, () => scan(rootDir, config));
+      const {
+        graph,
+        warnings,
+        trace: scanTrace,
+      } = await withFatalErrors(opts.format, () => scan(rootDir, config));
       // issue #243 — `check` is read-only w.r.t. the lock: a newer-schema
       // lock is still readable (unknown fields are simply invisible), so
       // warn and keep going rather than fail like the write paths do.
@@ -132,22 +136,33 @@ export function registerCheckCommand(program: Command): void {
 
       const testResults = await resolveTestResults(config, rootDir);
 
-      // spec 020 (contracts/cli-surface.md §4, FR-010〜015) — cheap glob-only
-      // existence probe first (mirrors `src/commands/trace.ts`'s Phase A
-      // precedent): a trace-absent project must reach `check()` WITHOUT the
-      // 7th argument at all, not with an empty/zero-cost `IngestedTrace`, so
-      // `CheckResult` never gains the new optional keys (FR-010 byte-identical).
-      const { hasTraceShards, ingestTrace, filterTraceToGraph } =
-        await import("../trace/ingest.js");
+      // spec 020 (contracts/cli-surface.md §4, FR-010〜015) — a trace-absent
+      // project must reach `check()` WITHOUT the 7th argument at all, not
+      // with an empty/zero-cost `IngestedTrace`, so `CheckResult` never gains
+      // the new optional keys (FR-010 byte-identical).
+      //
+      // issue #351 ("Window B" elimination) — this used to call its own,
+      // independent `ingestTrace(config, rootDir)` (gated by a separate
+      // `hasTraceShards` probe), a SECOND ingest of the same trace shards
+      // `scan()` above already ingested to build `exercises`/`implements`
+      // edges — and, before this fix, this second call site had no
+      // EMFILE/ENFILE guard at all (a real, uncaught crash — see
+      // `src/trace/ingest.ts`'s `ingestTrace` doc comment). Now reuses
+      // `scan()`'s own `trace` field: `scanTrace !== undefined` is
+      // equivalent to `hasTraceShards(config, rootDir)` (both derive from the
+      // same glob probe, and nothing writes to the file system between the
+      // two checks), and `ingestTrace` itself now runs at most once per
+      // process for this scan.
+      const { filterTraceToGraph } = await import("../trace/ingest.js");
       let traceOptions: import("../check.js").TraceCheckOptions | undefined;
-      if (hasTraceShards(config, rootDir)) {
+      if (scanTrace !== undefined) {
         const { computeStaleNodeIds } = await import("../trace/report.js");
         // issue #275 — drop any node `ingestTrace` produced that the CURRENT
         // graph can't resolve (see `filterTraceToGraph`'s doc) BEFORE it
         // reaches `classifyEvidence`/`computeCoverage`/`computeStaleNodeIds`
         // below, so a ghost node can never surface a phantom finding, a
         // false-green `exercised` rescue, or a false-red stale gate.
-        const trace = filterTraceToGraph(ingestTrace(config, rootDir), graph);
+        const trace = filterTraceToGraph(scanTrace, graph);
         traceOptions = {
           trace,
           staleNodeIds: computeStaleNodeIds(graph, trace),

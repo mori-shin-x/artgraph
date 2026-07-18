@@ -398,6 +398,26 @@ artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format j
 | `0`       | valid selection — including the legitimate "No changes detected" empty merged diff   | use `testsToRun` (treat an empty selection with suspicion — see the consumer rule) |
 | `1`       | usage error, unresolvable ref / merge-base, or no changed path resolved in the graph | **fall back to the full suite**                                                    |
 
+### Resource exhaustion (issue #351)
+
+Unlike `check --gate` (which distinguishes pass / undeterminable / fail
+across three exit codes), `impact` has always had a simple pass/fail exit
+contract — so a scan that hit file-descriptor exhaustion
+(`system-resource-exhausted` — EMFILE/ENFILE while enumerating spec or code
+files, or while re-parsing the trace-shard symbol table for `--tests`) is
+folded into the same **exit `1`** every other undeterminable/fail-closed
+condition in this section already uses, with a dedicated stderr message
+explaining why. This applies **unconditionally, in every mode** (explicit
+targets, `--diff`, `--tests`) and to every early-exit path (including the
+legitimate "No changes detected" empty-diff case) — the graph this scan built
+may be missing entire spec/code trees, so no result from it can be trusted,
+regardless of which path produced it. The JSON/text payload each path already
+produces is always fully preserved; the resource-exhaustion check only adds
+the stderr diagnostic and forces the exit code. Retry once the environment
+has recovered (e.g. a higher `ulimit -n`) — this is exactly the "fall back to
+the full suite" signal the table above already documents for exit `1`, it
+just has one more cause now.
+
 ## `artgraph trace` <a id="artgraph-trace"></a>
 
 Coverage-derived traceability (spec 020): cross-checks `@impl` claims
@@ -475,6 +495,20 @@ a trace-absent project gets an error with runner-setup guidance instead of
 four silently-empty arrays. Same guidance text as `impact --diff --tests`
 above.
 
+### Resource exhaustion (issue #351)
+
+Both `status` and `report` build their graph (and, when shards exist,
+re-parse the trace-shard symbol table) the same way every other command
+does — a scan that hits file-descriptor exhaustion
+(`system-resource-exhausted`) no longer crashes either subcommand. `warnings`
+in the `--format json` payload carries the usual `system-resource-exhausted`
+entry, and a dedicated one-line notice is also printed to stderr (in every
+`--format`) pointing out that the shard counts / classification above may be
+incomplete. **Exit codes are unchanged**: `status` still always exits `0`
+(it is a diagnostic read, not a hard requirement), and `report` keeps its
+existing `0` / `1` (zero-shards) contract — resource exhaustion does not add
+a new exit path to either subcommand.
+
 ## `artgraph plan-coverage`
 
 Reverse audit: REQs reachable from `tasks.md` `Files:` blocks that are not
@@ -494,6 +528,24 @@ from `implicitImpacts` — but the match is a literal per-ID word-boundary
 match, not a range parser: `REQ-001 through REQ-032` (or `..`-style
 equivalents) only mentions the two endpoint IDs, leaving the IDs in between
 still implicit. Spell out each ID individually to cover a range.
+
+### Resource exhaustion (issue #351)
+
+`--gate`'s exit condition now also trips on `system-resource-exhausted` in
+the scan's `warnings`, in addition to a non-empty `implicitImpacts` /
+`diagnostics`: a scan that hit file-descriptor exhaustion (e.g. one
+`specDirs` entry failed to enumerate) can leave `implicitImpacts` /
+`diagnostics` genuinely empty even though the scan was demonstrably
+incomplete — an entire spec directory's REQs may simply never have existed
+in the graph to be flagged. Without this, `--gate` reported a false-green
+`exit 0` in exactly that case. **Known asymmetry**: unlike `check --gate`
+(which has a separate exit `1` for "undeterminable" vs. exit `2` for a
+genuine gate failure), `plan-coverage` has only one non-zero exit code, so a
+resource-exhausted run and a genuine gate-fail run are **both exit `1`**
+here. Tell them apart via the dedicated stderr message (`--gate` only) or
+via `warnings[]` in `--format json`. A non-`--gate` run is unaffected:
+`warnings` is already printed via the normal warning path and the command
+stays exit `0`.
 
 ## `artgraph reconcile` <a id="artgraph-reconcile"></a>
 
@@ -594,6 +646,21 @@ Notes:
   (e.g. `{"error": "...", "warnings": [...]}`) — omitted entirely when there
   are none, never an empty array. Text mode prints the same warnings via
   `printWarnings` (stderr) before the `Error: ...` line instead.
+- **Pre-write resource-exhaustion gate (issue #351)**: `rename` / `split` /
+  `merge` all refuse outright — exit `1`, via the same `RenameValidationError`
+  envelope as any other pre-write validation failure — when the pre-write
+  scan's `warnings` carries `system-resource-exhausted`. The scan that
+  resolves "does this ID already exist" (`existingIds`) may be missing an
+  entire spec/code subtree, so a real ID collision could go undetected and
+  get written as a silent duplicate. **This applies to `--dry-run` too** —
+  fail-closed by design, since a preview built from a degraded scan would be
+  actively misleading. There is no `--force` escape hatch for this one (same
+  reasoning as `reconcile`'s equivalent refusal above); retry once the
+  environment has recovered (e.g. a higher `ulimit -n`). The post-write
+  `ReconcileResourceExhaustedError` protection (documented above, under
+  `postWriteWarnings`) is unchanged and unrelated — that one guards the LOCK
+  write after files are already rewritten; this one guards the file rewrites
+  themselves from ever starting.
 
 ### rename does not reassign `@impl` tags <a id="rename-does-not-reassign-impl-tags"></a>
 

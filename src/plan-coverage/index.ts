@@ -680,7 +680,23 @@ export function runPlanCoverage(options: PlanCoverageOptions): PlanCoverageRunRe
 
   // Exit code: --gate flips a noisy report into a hard failure. Empty
   // implicit + empty diagnostics = clean even with --gate.
-  const tripGate = gate && (implicitImpacts.length > 0 || diagnostics.length > 0);
+  //
+  // issue #351 — `system-resource-exhausted` in `warnings` (from `scan()`
+  // above) means the graph may be missing entire spec/code trees, so an
+  // empty `implicitImpacts`/`diagnostics` here could just as easily mean
+  // "the scan couldn't see the REQs that would have tripped this" as
+  // "genuinely clean" — trips the gate the same way a real finding would.
+  // Known, accepted asymmetry (documented in docs/commands.md): unlike
+  // `check --gate` (exit 2 gate-fail vs. exit 1 undeterminable),
+  // plan-coverage has only one non-zero exit code, so a resource-exhausted
+  // run and a genuine gate-fail run are BOTH exit 1 here — distinguished by
+  // the dedicated stderr message `src/commands/plan-coverage.ts` prints (see
+  // its own comment) and by `warnings[]` in `--format json`, not by exit
+  // code. Non-gate runs are unaffected: `warnings` is already threaded
+  // through every return path and printed via `reportGraphWarnings`.
+  const resourceExhausted = warnings.some((w) => w.type === "system-resource-exhausted");
+  const tripGate =
+    gate && (implicitImpacts.length > 0 || diagnostics.length > 0 || resourceExhausted);
   const exitCode: 0 | 1 = tripGate ? 1 : 0;
 
   const text =

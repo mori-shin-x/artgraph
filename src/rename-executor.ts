@@ -415,6 +415,41 @@ function assertRenameLockWritable(rootDir: string, config: ArtgraphConfig, force
   assertLockSchemaWritable(schemaVersion, config.lockFile, force);
 }
 
+/**
+ * issue #351 (Step 0-pre HIGH-3) — pre-write gate: refuse rename/split/merge
+ * outright when the pre-rewrite scan (`loadScanContext`) hit file-descriptor
+ * exhaustion. The Step 0-pre investigation confirmed this concretely: with a
+ * transient EMFILE that clears before the NEXT ordinary `scan`/`check` runs,
+ * a degraded `existingIds` set (missing entire spec/code trees) can let
+ * `executeRename`'s "ID already exists" check silently miss a real
+ * collision, WRITE a duplicate ID to disk, and — if no `.trace.lock` existed
+ * yet (so `postWriteWarnings` never runs at all, per that field's own doc) —
+ * leave the corruption completely invisible until whatever later run
+ * happens to scan the affected files. Fail-closed for BOTH dry-run and a
+ * real write (`--dry-run` is NOT exempt): a preview built from a degraded
+ * scan is actively misleading (it can claim "safe to rename" over an ID that
+ * only LOOKS absent because the scan couldn't see it), so there is no safe
+ * "just show me what would happen" mode here — unlike a lock-schema-version
+ * mismatch, which `--force` can knowingly override, this has no principled
+ * override (mirrors `src/scan.ts`'s `ReconcileResourceExhaustedError`, which
+ * makes the same no-override call for the POST-write reconcile step). Called
+ * through `runValidation` so the failure surfaces as a `RenameValidationError`
+ * carrying `graphWarnings` exactly like every other pre-write validation
+ * failure — `commands/rename.ts`'s existing catch already knows how to
+ * report that shape.
+ */
+function assertScanNotResourceExhausted(graphWarnings: BuildWarning[]): void {
+  if (!graphWarnings.some((w) => w.type === "system-resource-exhausted")) return;
+  throw new Error(
+    "Refusing to rename/split/merge: this scan hit file-descriptor exhaustion " +
+      "(system-resource-exhausted — see the warning above) and existing-ID validation " +
+      "(source/target collision checks) cannot be trusted against a graph that may be missing " +
+      "entire spec/code trees. This applies to --dry-run too — a preview built from a degraded " +
+      "scan would be misleading. Once your environment has recovered (e.g. raise the OS " +
+      "file-descriptor limit via `ulimit -n`), re-run this command.",
+  );
+}
+
 interface ScanContext {
   config: ArtgraphConfig;
   existingIds: Set<string>;
@@ -464,6 +499,9 @@ function applyWrites(
 export function executeRename(options: RenameOptions & { from: string; to: string }): RenameResult {
   const { rootDir, dryRun, from, to, force = false } = options;
   const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
+  // issue #351 (Step 0-pre HIGH-3) — pre-write gate, dry-run included; see
+  // `assertScanNotResourceExhausted`'s own doc comment.
+  runValidation(graphWarnings, () => assertScanNotResourceExhausted(graphWarnings));
   if (!dryRun) {
     runValidation(graphWarnings, () => assertRenameLockWritable(rootDir, config, force));
   }
@@ -569,6 +607,9 @@ export function executeSplit(
 ): RenameResult {
   const { rootDir, dryRun, splitId, intoIds, force = false } = options;
   const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
+  // issue #351 (Step 0-pre HIGH-3) — pre-write gate, dry-run included; see
+  // `assertScanNotResourceExhausted`'s own doc comment.
+  runValidation(graphWarnings, () => assertScanNotResourceExhausted(graphWarnings));
   if (!dryRun) {
     runValidation(graphWarnings, () => assertRenameLockWritable(rootDir, config, force));
   }
@@ -694,6 +735,9 @@ export function executeMerge(
 ): RenameResult {
   const { rootDir, dryRun, mergeIds, intoId, force = false } = options;
   const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
+  // issue #351 (Step 0-pre HIGH-3) — pre-write gate, dry-run included; see
+  // `assertScanNotResourceExhausted`'s own doc comment.
+  runValidation(graphWarnings, () => assertScanNotResourceExhausted(graphWarnings));
   if (!dryRun) {
     runValidation(graphWarnings, () => assertRenameLockWritable(rootDir, config, force));
   }
