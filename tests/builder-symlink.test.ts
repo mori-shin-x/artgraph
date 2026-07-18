@@ -1,13 +1,25 @@
 // issue #335 (Step 0-pre HIGH-1, implementation 1 point 3) — intentional,
 // documented behavior change: the markdown spec-file loop used to call the
-// `glob` package's `globSync` directly, which defaults to `follow: false`
-// (symlinked directories are NOT descended into for `**` matching). Now
-// routed through `src/glob-utils.ts`'s `listFilesGuarded`, which pins fast-
-// glob's own default `followSymbolicLinks: true` — a symlinked spec
-// subdirectory (and the .md files inside it) is now picked up by a scan.
-// This is a deliberate, CHANGELOG-relevant behavior change (see
-// docs/commands.md), not a bug — pinned here so a future regression back to
-// `follow: false` semantics is caught.
+// `glob` package's `globSync` directly. Now routed through
+// `src/glob-utils.ts`'s `listFilesGuarded`, which pins fast-glob's own
+// `followSymbolicLinks: true` default.
+//
+// PR #339 meta-review (F4) — corrects an earlier, too-broad claim here: the
+// `glob` package was NOT blind to symlinked directories before this change.
+// A SINGLE-HOP symlinked spec subdirectory was already descended into under
+// `glob`'s own `follow: false` default — `**` expansion's bash-mimicking
+// spec unconditionally allows the first symlink hop regardless of `follow`.
+// The real, narrower behavior change is: (a) a symlink CHAIN of two or more
+// hops — `glob` stopped descending after the first hop, fast-glob's
+// `followSymbolicLinks: true` tracks every hop, and (b) a symlink LOOP —
+// `glob` converged after one hop, fast-glob descends until the OS's own
+// loop boundary (Linux `ELOOP`, `MAXSYMLINKS` = 40; measured ~17ms for a
+// looped fixture, no hang), producing more `duplicate-id` warning noise
+// than before. See docs/configuration.md for the CHANGELOG-relevant note.
+// Pinned here so a future regression back to `glob`'s single-hop-only
+// semantics is caught — which is why the first test below uses a two-hop
+// chain: a single-hop fixture would still pass under the OLD code too and
+// would not actually guard against this regression.
 import { describe, expect, it, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,7 +46,7 @@ describe.skipIf(IS_WIN)("buildGraph: markdown-side glob follows symlinks (issue 
     if (root) rmSync(root, { recursive: true, force: true });
   });
 
-  it("a symlinked spec SUBDIRECTORY is descended into and its .md files are ingested", () => {
+  it("a symlink CHAIN of two hops under specDir is fully tracked and its .md files are ingested (PR #339 meta-review F4)", () => {
     root = mkdtempSync(join(tmpdir(), "artgraph-symlink-specdir-"));
     // The real files live OUTSIDE the specDir the glob pattern targets...
     mkdirSync(join(root, "real-specs"), { recursive: true });
@@ -42,9 +54,16 @@ describe.skipIf(IS_WIN)("buildGraph: markdown-side glob follows symlinks (issue 
       join(root, "real-specs", "linked.md"),
       "# Linked spec\n\n- REQSYM-501: needs coverage\n",
     );
-    // ...and are reachable ONLY via a symlinked subdirectory under `specs/`.
+    // ...reachable via a TWO-HOP symlink chain: `specs/linked` -> `mid` ->
+    // `real-specs`. A single-hop-only glob (the pre-#339-doc-fix understanding
+    // of the old `glob` package's behavior) would resolve the first hop
+    // (`specs/linked` -> `mid`) but never follow `mid`'s OWN symlink onward to
+    // `real-specs`, so it would never reach `linked.md`. A single-hop fixture
+    // would pass under BOTH the old and new code and would not be a real
+    // regression guard — this two-hop chain is.
+    symlinkSync(join(root, "real-specs"), join(root, "mid"), "dir");
     mkdirSync(join(root, "specs"), { recursive: true });
-    symlinkSync(join(root, "real-specs"), join(root, "specs", "linked"), "dir");
+    symlinkSync(join(root, "mid"), join(root, "specs", "linked"), "dir");
 
     const { graph, warnings } = buildGraph(root, cfg);
 

@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { relative, resolve } from "node:path";
-import { globSync } from "glob";
+import { listFilesOrThrow } from "./glob-utils.js";
 import {
   rewriteFile,
   rewriteImplTags,
@@ -255,11 +255,35 @@ function filterRelevantFiles(files: string[]): string[] {
  * the configured scan scope such as `.claude/` skills or `.specify/` templates
  * (issue #213). Returned paths are root-relative and sorted for deterministic
  * change ordering.
+ *
+ * PR #339 meta-review (F1) — the markdown half of this enumeration used to
+ * call the `glob` package's `globSync` directly; now routed through
+ * `../glob-utils.js`'s `listFilesOrThrow` (the SAME throw-on-EMFILE/ENFILE
+ * contract `globCodeFiles` below already has), not `listFilesGuarded`
+ * (`graph/builder.ts`'s fail-safe, swallow-and-continue variant). This is a
+ * deliberate divergence from `buildGraph`'s markdown loop, not an
+ * inconsistency: `buildGraph` degrades gracefully because a partial graph is
+ * still useful for `check`/`impact` to report against. This function runs
+ * BEFORE any file is rewritten — if it silently returned a truncated file
+ * list (a whole specDir's worth of files missing because a readdir hit
+ * EMFILE), `executeRename`/`executeSplit`/`executeMerge` would rewrite only
+ * the files that DID get listed, leaving the rest referencing the OLD id: a
+ * partially-applied rename with no warning, and the existing
+ * `allChanges.length === 0` safety valve (below) does NOT catch this — it
+ * only fires when NO file changed, not when some subset silently didn't.
+ * Throwing here aborts the whole rename before any write happens, which
+ * `commands/rename.ts`'s catch-all reports as a normal fatal error (not a
+ * `RenameValidationError` — this throw happens outside `runValidation`,
+ * matching `RenameValidationError`'s own doc: only throws AFTER
+ * `loadScanContext()` that go through `runValidation` get wrapped). That
+ * generic `{"error": ...}` / `Error: ...` envelope is the same shape
+ * `withFatalErrors` produces for every other command's fatal error, so no
+ * dedicated formatting branch is needed here.
  */
 function enumerateRewriteFiles(rootDir: string, config: ArtgraphConfig): string[] {
   const absPaths = new Set<string>();
   for (const specDirName of config.specDirs) {
-    for (const file of globSync(resolve(rootDir, specDirName, "**/*.md"))) {
+    for (const file of listFilesOrThrow(resolve(rootDir, specDirName, "**/*.md"))) {
       absPaths.add(resolve(file));
     }
   }

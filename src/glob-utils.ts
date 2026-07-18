@@ -37,10 +37,19 @@ export interface ListFilesOptions {
 //
 //   - onlyFiles: true            — directories never appear in the match set
 //   - followSymbolicLinks: true  — a symlinked spec/code file (or a symlinked
-//     DIRECTORY containing spec/code files) IS followed and ingested. This is
-//     a deliberate, documented behavior change for the markdown side (the
-//     `glob` package it used to call defaults to `follow: false`, so a
-//     symlinked spec subdirectory was previously invisible to a scan) — see
+//     DIRECTORY containing spec/code files) IS followed and ingested. PR #339
+//     meta-review — corrects an earlier, too-broad claim here: the `glob`
+//     package the markdown side used to call was NOT blind to symlinks
+//     before this change. A SINGLE-HOP symlinked directory was already
+//     followed under `glob`'s own `follow: false` default — `**` expansion's
+//     bash-mimicking spec unconditionally allows the first hop regardless of
+//     `follow`. The actual, narrower behavior change is twofold: (a) a
+//     symlink CHAIN of two or more hops — `glob`'s `follow: false` stopped
+//     descending after the first hop; fast-glob's `followSymbolicLinks: true`
+//     tracks every hop — and (b) a symlink LOOP — `glob` converged after one
+//     hop, fast-glob descends until the OS's own `ELOOP` boundary (Linux
+//     `MAXSYMLINKS` = 40), which surfaces as more `duplicate-id` warning
+//     noise, not a hang (measured ~17ms for a looped fixture). See
 //     docs/commands.md / docs/configuration.md for the CHANGELOG-relevant
 //     note. The TS side already had this exact default via fast-glob, so
 //     this is a no-op for `globCodeFiles`.

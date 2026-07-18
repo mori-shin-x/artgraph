@@ -514,7 +514,19 @@ export function registerCheckCommand(program: Command): void {
       // existing behavior: the warning is already visible (via
       // `reportGraphWarnings` / the json `warnings[]` field above) and the
       // command exits 0/2 on `result.pass` exactly as it always has.
-      if (opts.gate && warnings.some((w) => w.type === "system-resource-exhausted")) {
+      //
+      // PR #339 meta-review (F3) — this used to `process.exit(1)`
+      // immediately, which meant that on a run where BOTH this condition
+      // AND the baseline-unavailable condition below held (an EMFILE-
+      // degraded scan that also failed to establish a baseline), only this
+      // block's message ever reached stderr — the baseline-unavailable
+      // block never even ran. Both conditions are now only computed /
+      // PRINTED here; the actual exit-1 decision is consolidated into one
+      // check right after the baseline-unavailable block below, so a reader
+      // diagnosing a bad `--gate` run always sees every reason it failed,
+      // not just whichever one happened to be checked first.
+      const resourceExhausted = warnings.some((w) => w.type === "system-resource-exhausted");
+      if (opts.gate && resourceExhausted) {
         console.error(
           "ERROR: scan hit file-descriptor exhaustion (system-resource-exhausted) — the graph " +
             "may be missing entire spec/code trees, so pass/fail cannot be determined reliably.",
@@ -522,7 +534,6 @@ export function registerCheckCommand(program: Command): void {
         console.error(
           "       gate result is undetermined; not treating as pass. Retry once your environment has recovered.",
         );
-        process.exit(1);
       }
 
       // spec 017 (contract cli-check-gate §4.4 / §4.5, §3 note) — baseline
@@ -530,7 +541,8 @@ export function registerCheckCommand(program: Command): void {
       // dedicated exit 1 (distinct from a gate fail's exit 2); without `--gate`
       // it is display-only, so warn on stderr and exit 0.
       // @impl 017-check-gate-baseline-diff/FR-010
-      if (result.baselineStatus === "unavailable") {
+      const baselineUnavailable = result.baselineStatus === "unavailable";
+      if (baselineUnavailable) {
         // spec 023 / PR #304 review (F3, F4) — with `--base`, surface the
         // cause on stderr in EVERY mode (`baselineError` carries the git
         // diagnostic, plus FETCH_DEPTH_HINT when the ref/merge-base stage
@@ -555,15 +567,28 @@ export function registerCheckCommand(program: Command): void {
             );
             printBaseDetail();
             console.error("       gate result is undetermined; not treating as pass.");
-            process.exit(1);
+          } else {
+            console.error("ERROR: could not establish a baseline (git worktree unavailable).");
+            console.error("       gate result is undetermined; not treating as pass.");
           }
-          console.error("ERROR: could not establish a baseline (git worktree unavailable).");
-          console.error("       gate result is undetermined; not treating as pass.");
-          process.exit(1);
+        } else {
+          console.error("WARNING: could not establish a baseline; showing all issues without");
+          console.error("         new/pre-existing distinction.");
+          if (opts.base) printBaseDetail();
         }
-        console.error("WARNING: could not establish a baseline; showing all issues without");
-        console.error("         new/pre-existing distinction.");
-        if (opts.base) printBaseDetail();
+      }
+
+      // PR #339 meta-review (F3) — single consolidated exit-1 point for
+      // BOTH "undeterminable" conditions above (resource exhaustion and
+      // baseline unavailability), reached only after both blocks have had
+      // the chance to print their diagnostic. Either condition alone is
+      // already a dedicated exit 1, distinct from exit 0 (pass) and exit 2
+      // (gate fail — a genuine NEW issue); when both hold at once this is
+      // still exit 1, not some new combined code — there is nothing a
+      // caller would do differently for "two reasons it's undetermined"
+      // versus "one".
+      if (opts.gate && (resourceExhausted || baselineUnavailable)) {
+        process.exit(1);
       }
 
       // Exit code 2 (contract §2): `--gate` and a NEW issue was introduced.

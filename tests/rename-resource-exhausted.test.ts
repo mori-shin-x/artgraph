@@ -113,7 +113,13 @@ describe("rename: post-write reconcile() resource-exhaustion rejection (issue #3
         "json",
       ]);
 
-      expect(exitCode).toBe(0);
+      // PR #339 meta-review (F2) — intentionally flipped from `toBe(0)`:
+      // the lock was NOT updated (asserted below), which is a genuine
+      // partial success for `rename` (unlike `init`'s equivalent bootstrap
+      // case — see `src/init.ts`'s contrasting comment), so the command now
+      // sets `process.exitCode = 1` while still printing the full,
+      // unchanged JSON result (checked below).
+      expect(exitCode).toBe(1);
       const result = JSON.parse(stdout);
 
       // The rewrite itself succeeded — this is the crucial "not rolled
@@ -161,7 +167,10 @@ describe("rename: post-write reconcile() resource-exhaustion rejection (issue #3
         "REQ-100",
       ]);
 
-      expect(exitCode).toBe(0);
+      // PR #339 meta-review (F2) — intentionally flipped from `toBe(0)`,
+      // same reasoning as the json-mode test above: exit 1 signals the
+      // lock update failed even though text output still printed in full.
+      expect(exitCode).toBe(1);
       expect(stderr).toMatch(/new warnings detected by the post-rename re-scan/);
       expect(stderr).toMatch(/rewritten/i);
       expect(stderr).toMatch(/artgraph reconcile/);
@@ -184,6 +193,12 @@ describe("rename: post-write reconcile() resource-exhaustion rejection (issue #3
         "json",
       ]);
 
+      // PR #339 meta-review (F2) — deliberately NOT flipped: this test
+      // never arms the simulated failure (`control.armed` stays false, see
+      // above), so `postWriteWarnings` never carries `system-resource-
+      // exhausted` and the new `process.exitCode = 1` branch in
+      // `commands/rename.ts` never triggers. Exit 0 here is the actual
+      // regression guard the test name promises.
       expect(exitCode).toBe(0);
       const result = JSON.parse(stdout);
       expect(

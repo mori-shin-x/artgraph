@@ -212,9 +212,24 @@ artgraph:
 
     try {
       const tmpConfig: ArtgraphConfig = { ...config, include: [], testPatterns: [] };
-      const { warnings } = buildGraph(tmpRoot, tmpConfig);
+      const { graph, warnings } = buildGraph(tmpRoot, tmpConfig);
       const dupWarnings = warnings.filter((w) => w.type === "duplicate-id" && w.id === "shared-id");
       expect(dupWarnings.length).toBeGreaterThanOrEqual(1);
+
+      // PR #339 meta-review (F7) — pin WHICH file wins the collision, not
+      // just that a warning fired. `src/glob-utils.ts` sorts file
+      // enumeration deterministically (a.md before b.md), and
+      // `addNodeWithDupCheck`'s `nodes.set(finalId, node)` is a plain
+      // overwrite, so the file processed LAST (b.md, sort-order-later) is
+      // the one left in the map — "last write wins". This is a silent
+      // behavior: nothing about the `duplicate-id` warning itself says who
+      // won. Pinned here so a future change to the enumeration comparator
+      // (or to `addNodeWithDupCheck`'s overwrite-vs-first-write-wins
+      // semantics) that silently flips the winner gets caught instead of
+      // shipping unnoticed.
+      const winner = graph.nodes.get("shared-id");
+      expect(winner).toBeDefined();
+      expect(winner?.filePath.replace(/\\/g, "/")).toBe("specs/b.md");
     } finally {
       rmSync(tmpRoot, { recursive: true });
     }

@@ -698,6 +698,16 @@ export function runInit(rootDir: string, options: InitOptions = {}): InitResult 
       // `LockSchemaVersionError`) is UNCHANGED — still uncaught here, still
       // aborts the whole `init` exactly like before this fix (see the
       // "Partial-state guard" doc comment above `runInit`'s call sequence).
+      //
+      // PR #339 meta-review (F2) — contrast with `commands/rename.ts`,
+      // whose action sets `process.exitCode = 1` on this same
+      // `ReconcileResourceExhaustedError` condition: there, the lock write
+      // IS the core contract (a stale post-rename lock makes `check` report
+      // immediate drift), so a degraded lock is exit 1. Here, `init`'s FIRST
+      // lock write is a bootstrap convenience, not something any prior state
+      // depends on — every other init stage still ran, and `init` staying
+      // exit 0 (this is caught, not rethrown) is intentional, not an
+      // oversight mirrored from a stale pre-#339 default.
       if (e instanceof ReconcileResourceExhaustedError) {
         reconcileResourceExhausted =
           "Lock file was not created: this scan hit file-descriptor exhaustion " +

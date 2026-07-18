@@ -1,7 +1,15 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { mkdtempSync, mkdirSync, cpSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  cpSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  chmodSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { runAt, type RunResult } from "./helpers.js";
 
@@ -378,95 +386,120 @@ describe("CLI: rename --merge/--into", () => {
 
 // ---------------------------------------------------------------------------
 // meta-review (PR #293, issue #277 follow-up) — an unreadable file scanned by
-// enumerateRewriteFiles (a directory named `*.md` under `specDirs` passes
-// `existsSync` but throws EISDIR on `readFileSync`) must not crash rename/
-// split/merge outright. It should be skipped with an `unreadable-file`
-// warning while every OTHER scanned file is still rewritten normally.
+// enumerateRewriteFiles (a `.md` file under `specDirs` that passes
+// `existsSync` but throws on `readFileSync`) must not crash rename/split/
+// merge outright. It should be skipped with an `unreadable-file` warning
+// while every OTHER scanned file is still rewritten normally.
+//
+// PR #339 meta-review (F1) — the original fixture used a DIRECTORY named
+// `broken.md` (EISDIR on read, chosen specifically to be root-safe with no
+// chmod needed) because the old `glob` package's `globSync` call here had no
+// `nodir` option and matched directories too. `enumerateRewriteFiles` now
+// routes through `../src/glob-utils.js`'s `listFilesOrThrow`, which pins
+// fast-glob's `onlyFiles: true` (the SAME option `globCodeFiles` and
+// `graph/builder.ts`'s markdown loop already used — see docs/configuration.md's
+// "directory literally named `something.md/`" note) — a directory can no
+// longer be glob-matched at all, so the old fixture is silently excluded
+// from enumeration instead of reaching `tryReadFile` and warning. Switched to
+// a real `.md` FILE with its permission bits stripped (`chmod 0o000`),
+// matching the chmod-based pattern `tests/builder.test.ts`'s own unreadable-
+// file tests already use — which is why this describe block now also needs
+// the same `skipIf(IS_ROOT)` guard: root ignores permission bits entirely
+// (verified — `chmod 000` does not stop root from reading), so this
+// simulation only works as a non-root user.
 // ---------------------------------------------------------------------------
-describe("CLI: rename/split/merge skip unreadable files (#277 follow-up)", () => {
-  /** Create a directory named `broken.md` under `specs/` — EISDIR on read,
-   *  root-safe (no chmod required), and still glob-matched by `specs/**\/*.md`
-   *  since `enumerateRewriteFiles` doesn't pass `nodir` to `globSync`. */
-  function makeUnreadableSpecFile(tmp: string): string {
-    const dirAsFile = resolve(tmp, "specs/broken.md");
-    mkdirSync(dirAsFile);
-    return dirAsFile;
-  }
+const IS_WIN_RENAME_CLI = process.platform === "win32";
+const IS_ROOT_RENAME_CLI = typeof process.getuid === "function" && process.getuid() === 0;
 
-  it("rename: skips the unreadable file, warns, and still rewrites REQ-001 elsewhere", async () => {
-    const tmp = await prepareTempDir();
-    makeUnreadableSpecFile(tmp);
+describe.skipIf(IS_WIN_RENAME_CLI || IS_ROOT_RENAME_CLI)(
+  "CLI: rename/split/merge skip unreadable files (#277 follow-up)",
+  () => {
+    /** Create a real `.md` file under `specs/` with its permission bits
+     *  stripped — EACCES on read (non-root only, see the describe-level
+     *  comment above). Still glob-matched (`onlyFiles: true` only excludes
+     *  directories, not unreadable regular files). */
+    function makeUnreadableSpecFile(tmp: string): string {
+      const filePath = resolve(tmp, "specs/broken.md");
+      writeFileSync(filePath, "- REQ-9999: unreadable\n");
+      chmodSync(filePath, 0o000);
+      return filePath;
+    }
 
-    const { exitCode, stdout } = await runCli(
-      ["rename", "--from", "REQ-001", "--to", "REQ-100", "--format", "json"],
-      tmp,
-    );
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout);
+    it("rename: skips the unreadable file, warns, and still rewrites REQ-001 elsewhere", async () => {
+      const tmp = await prepareTempDir();
+      makeUnreadableSpecFile(tmp);
 
-    expect(
-      result.warnings.some(
-        (w: { type: string; filePath: string }) =>
-          w.type === "unreadable-file" && w.filePath === "specs/broken.md",
-      ),
-    ).toBe(true);
+      const { exitCode, stdout } = await runCli(
+        ["rename", "--from", "REQ-001", "--to", "REQ-100", "--format", "json"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(stdout);
 
-    // Normal rewrites on the OTHER scanned files still happened.
-    const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
-    expect(spec).toContain("REQ-100: ユーザー認証");
-    const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
-    expect(src).toContain("@impl REQ-100");
-  });
+      expect(
+        result.warnings.some(
+          (w: { type: string; filePath: string }) =>
+            w.type === "unreadable-file" && w.filePath === "specs/broken.md",
+        ),
+      ).toBe(true);
 
-  it("split: skips the unreadable file, warns, and still splits REQ-001 elsewhere", async () => {
-    const tmp = await prepareTempDir();
-    makeUnreadableSpecFile(tmp);
+      // Normal rewrites on the OTHER scanned files still happened.
+      const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
+      expect(spec).toContain("REQ-100: ユーザー認証");
+      const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
+      expect(src).toContain("@impl REQ-100");
+    });
 
-    const { exitCode, stdout } = await runCli(
-      ["rename", "--split", "REQ-001", "--into", "REQ-101", "REQ-102", "--format", "json"],
-      tmp,
-    );
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout);
+    it("split: skips the unreadable file, warns, and still splits REQ-001 elsewhere", async () => {
+      const tmp = await prepareTempDir();
+      makeUnreadableSpecFile(tmp);
 
-    expect(
-      result.warnings.some(
-        (w: { type: string; filePath: string }) =>
-          w.type === "unreadable-file" && w.filePath === "specs/broken.md",
-      ),
-    ).toBe(true);
+      const { exitCode, stdout } = await runCli(
+        ["rename", "--split", "REQ-001", "--into", "REQ-101", "REQ-102", "--format", "json"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(stdout);
 
-    const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
-    expect(spec).not.toMatch(/^- REQ-001:/m);
-    expect(spec).toContain("REQ-101");
-    expect(spec).toContain("REQ-102");
-  });
+      expect(
+        result.warnings.some(
+          (w: { type: string; filePath: string }) =>
+            w.type === "unreadable-file" && w.filePath === "specs/broken.md",
+        ),
+      ).toBe(true);
 
-  it("merge: skips the unreadable file, warns, and still merges REQ-001/REQ-002 elsewhere", async () => {
-    const tmp = await prepareTempDir();
-    makeUnreadableSpecFile(tmp);
+      const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
+      expect(spec).not.toMatch(/^- REQ-001:/m);
+      expect(spec).toContain("REQ-101");
+      expect(spec).toContain("REQ-102");
+    });
 
-    const { exitCode, stdout } = await runCli(
-      ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100", "--format", "json"],
-      tmp,
-    );
-    expect(exitCode).toBe(0);
-    const result = JSON.parse(stdout);
+    it("merge: skips the unreadable file, warns, and still merges REQ-001/REQ-002 elsewhere", async () => {
+      const tmp = await prepareTempDir();
+      makeUnreadableSpecFile(tmp);
 
-    expect(
-      result.warnings.some(
-        (w: { type: string; filePath: string }) =>
-          w.type === "unreadable-file" && w.filePath === "specs/broken.md",
-      ),
-    ).toBe(true);
+      const { exitCode, stdout } = await runCli(
+        ["rename", "--merge", "REQ-001", "REQ-002", "--into", "REQ-100", "--format", "json"],
+        tmp,
+      );
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(stdout);
 
-    const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
-    expect(src).toContain("@impl REQ-100");
-    const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
-    const defLines = spec.split("\n").filter((l) => /^- REQ-100:/.test(l));
-    expect(defLines).toHaveLength(1);
-  });
-});
+      expect(
+        result.warnings.some(
+          (w: { type: string; filePath: string }) =>
+            w.type === "unreadable-file" && w.filePath === "specs/broken.md",
+        ),
+      ).toBe(true);
+
+      const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
+      expect(src).toContain("@impl REQ-100");
+      const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
+      const defLines = spec.split("\n").filter((l) => /^- REQ-100:/.test(l));
+      expect(defLines).toHaveLength(1);
+    });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // issue #212 — file enumeration is `.artgraph.json`-pattern based, not

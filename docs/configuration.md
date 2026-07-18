@@ -82,24 +82,37 @@ continues scanning every other specDir.
 
 Three intentional, backward-incompatible behavior changes come with this:
 
-- **Symlinks are now followed.** A symlinked spec subdirectory (or a
-  symlinked `.md` file) under `specDirs` is descended into and its files are
-  ingested. Previously the underlying glob library defaulted to not
-  following symlinked directories, so a symlinked spec subtree was silently
-  invisible to a scan.
+- **Multi-hop symlink chains and symlink loops are now followed further.**
+  PR #339 meta-review — corrects an earlier, too-broad claim on this page:
+  the previous glob library was NOT blind to symlinks. A single-hop
+  symlinked spec subdirectory (or a symlinked `.md` file) was already
+  descended into — `**` expansion's bash-mimicking spec unconditionally
+  allows the first symlink hop regardless of the library's `follow` default.
+  What actually changed is narrower: (a) a symlink **chain of two or more
+  hops** — previously enumeration stopped descending after the first hop;
+  now every hop is tracked, so a spec subtree reachable only through a
+  multi-hop chain is ingested where it previously was not, and (b) a
+  symlink **loop** — previously enumeration converged after one hop; now it
+  descends until the OS's own loop boundary (Linux `ELOOP`, `MAXSYMLINKS` =
+  40), which does not hang (measured ~17ms for a looped fixture) but does
+  produce more `duplicate-id` warning noise than before, since the same
+  files are revisited through more of the loop before the OS cuts it off.
 - **A directory literally named `something.md/` is now silently excluded**
   (`onlyFiles: true` never matches it). Previously it would match the glob
   pattern and then fail at read time with `EISDIR`, surfacing an
   `unreadable-file` warning; now it is simply not enumerated in the first
   place, with no warning.
 - **Enumeration order is deterministic (sorted)**, not OS-`readdir`-order-
-  dependent. In the rare case of a genuine spec collision this sorted order
-  is now what decides tie-breaks that used to depend on filesystem/platform
-  traversal order — e.g. which of two same-id definitions "wins" a
-  `duplicate-id` collision, or which file a convention-inferred edge's
-  stem-collision resolves against (see `docGraph.autoConventions` below).
-  The outcome for any *specific* collision may differ from a pre-upgrade
-  scan, but it is now the same on every machine and every run.
+  dependent. This applies to `specDirs`' markdown enumeration AND to
+  `include`/`testPatterns`' code/test-file enumeration alike — both route
+  through the same shared, sorted wrapper (`src/glob-utils.ts`). In the rare
+  case of a genuine spec collision this sorted order is now what decides
+  tie-breaks that used to depend on filesystem/platform traversal order —
+  e.g. which of two same-id definitions "wins" a `duplicate-id` collision,
+  or which file a convention-inferred edge's stem-collision resolves against
+  (see `docGraph.autoConventions` below). The outcome for any *specific*
+  collision may differ from a pre-upgrade scan, but it is now the same on
+  every machine and every run.
 
 ## `reqPatterns` — requirement ID grammar
 

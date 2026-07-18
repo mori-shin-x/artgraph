@@ -35,6 +35,7 @@ vi.mock("fast-glob", async (importOriginal) => {
 });
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,6 +50,21 @@ function makeFixture(prefix: string): string {
   writeFileSync(
     join(root, ".artgraph.json"),
     JSON.stringify({ include: ["src/**/*.ts"], specDirs: ["specs"] }),
+  );
+  return root;
+}
+
+// PR #339 meta-review (F3) — same fixture, but a real git repo (committed) so
+// `check --diff --base <ref>` can actually attempt ref resolution instead of
+// failing for an unrelated reason (not a git repo at all).
+function makeGitFixture(prefix: string): string {
+  const root = makeFixture(prefix);
+  execFileSync("git", ["init"], { cwd: root, stdio: "pipe" });
+  execFileSync("git", ["add", "-A"], { cwd: root, stdio: "pipe" });
+  execFileSync(
+    "git",
+    ["-c", "user.name=test", "-c", "user.email=test@test.com", "commit", "-m", "init"],
+    { cwd: root, stdio: "pipe" },
   );
   return root;
 }
@@ -114,6 +130,48 @@ describe("artgraph check --gate: exit 1 (undeterminable) on system-resource-exha
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).not.toMatch(/system-resource-exhausted/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// PR #339 meta-review (F3) — resource-exhaustion (this scan's own `warnings`)
+// and baseline-unavailability (a `--base <ref>` that doesn't resolve) are
+// INDEPENDENT undeterminable conditions and can fire on the SAME run (an
+// EMFILE-degraded scan that also fails to establish a baseline). Pre-fix,
+// the resource-exhausted block's immediate `process.exit(1)` meant the
+// baseline-unavailable block below it never even ran, so only ONE of the
+// two diagnoses ever reached stderr — whichever check happened to run
+// first — even though both were true. Both blocks now only print (the
+// exit-1 decision is consolidated after both), so this pins that BOTH
+// messages are visible, not just the first one detected.
+describe("artgraph check --gate: resource-exhaustion AND baseline-unavailable together (PR #339 meta-review F3)", () => {
+  it("both conditions hold → both diagnostic messages on stderr, exit 1 (not silently picking one)", async () => {
+    const root = makeGitFixture("artgraph-check-gate-resx-baseline-both-");
+    try {
+      globControl.failCode = "EMFILE";
+
+      // "nosuchref" never resolves in this repo → baselineStatus:
+      // "unavailable". The scan itself (independent of git) hits the
+      // globally-mocked EMFILE → warnings carries system-resource-exhausted.
+      const result = await runCli(
+        ["check", "--diff", "--gate", "--base", "nosuchref", "--format", "json"],
+        { cwd: root },
+      );
+
+      expect(result.exitCode).toBe(1);
+      // Resource-exhaustion diagnostic.
+      expect(result.stderr).toMatch(/system-resource-exhausted/);
+      // Baseline-unavailable diagnostic (spec 023 ref-resolution wording).
+      expect(result.stderr).toMatch(/could not establish a baseline/);
+      expect(result.stderr).toMatch(/base ref "nosuchref" does not resolve/);
+
+      const payload = JSON.parse(result.stdout);
+      expect(payload.baselineStatus).toBe("unavailable");
+      expect(
+        payload.warnings.some((w: { type: string }) => w.type === "system-resource-exhausted"),
+      ).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
