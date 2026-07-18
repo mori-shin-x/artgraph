@@ -1,6 +1,6 @@
 ---
 name: "artgraph-graph-primitive-impact"
-description: "artgraph コントリビュータ向け内部 skill。グラフ基本操作 (src/graph/traverse.ts / src/graph/builder.ts の BFS・エッジ意味論・ID 解決) や graph-core 関数 (impact() / check() / buildGraph()) を変更する issue/PR に着手する前 (Step 0-pre) に、14 チェックの shift-left インパクト調査を実行し「silent に破壊される経路」のランク付きリストを報告する。Use when starting a PR that touches src/graph/, edge semantics, or graph-core function signatures/return values."
+description: "artgraph コントリビュータ向け内部 skill。グラフ基本操作 (src/graph/traverse.ts / src/graph/builder.ts の BFS・エッジ意味論・ID 解決) や graph-core 関数 (impact() / check() / buildGraph()) を変更する issue/PR に着手する前 (Step 0-pre) に、15 チェックの shift-left インパクト調査を実行し「silent に破壊される経路」のランク付きリストを報告する。Use when starting a PR that touches src/graph/, edge semantics, or graph-core function signatures/return values."
 allowed-tools:
   - "Read"
   - "Grep"
@@ -17,7 +17,7 @@ disable-model-invocation: false
 
 **artgraph リポジトリ内部専用の dev process skill**(`templates/skills/` の一般配布ツリーには含まれない。canonical コピーは `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` のみ)。
 
-グラフ基本操作 (BFS / エッジ意味論 / ID 解決) は多数の CLI コマンドと gate 経路から間接消費されており、意味論を狭める・広げる変更は**直接の呼び出し元 grep では見えない経路を silent に壊す**。本 skill は issue 対応ループの **Step 0-pre**(設計より前)で、その経路を事前に列挙するための 14 チェック調査を定義する。
+グラフ基本操作 (BFS / エッジ意味論 / ID 解決) は多数の CLI コマンドと gate 経路から間接消費されており、意味論を狭める・広げる変更は**直接の呼び出し元 grep では見えない経路を silent に壊す**。本 skill は issue 対応ループの **Step 0-pre**(設計より前)で、その経路を事前に列挙するための 15 チェック調査を定義する。
 
 ## トリガー条件
 
@@ -34,9 +34,9 @@ disable-model-invocation: false
 サブエージェント brief テンプレ:
 
 > あなたは artgraph リポジトリの調査担当です。これから `<変更対象の primitive / 関数 / エッジ kind>` を `<変更の一行要約>` する変更を検討しています。実装はまだ存在しません。
-> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 14 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
+> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 15 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
 
-## 14 チェック
+## 15 チェック
 
 ### 1. 直接呼び出し元
 
@@ -164,6 +164,16 @@ grep -rn "<primitive 名 / 保証している挙動のキーワード>" docs/
 1. **多重取得の整合**: 同一ファイル/リソースを複数回 (例: hash 算出用と実処理用) 読み取る設計がないか `grep -n "readFileSync\|globSync" <対象ファイル>` で洗い出す。ある場合、2 回の取得が非対称に (片方だけ) 失敗しうるか、また片方の取得結果 (hash 等) を「真」としてもう片方の失敗結果を紐付けて永続化 (cache 等) していないかを確認する。
 2. **ガード網羅性**: PR の目的が特定の失敗モード (EMFILE/ENFILE 等) への耐性追加である場合、対象ファイル内の全 raw I/O 呼び出しについて、意図したガードが適用されているかを一つずつ判定する (issue が名指しした箇所だけでなく)。
 3. **ライブラリ間の失敗セマンティクス対称性**: 同一目的で複数の外部ライブラリを併用している場合 (例: 別々の glob 実装)、それぞれの errno / 失敗時セマンティクスが対称か (一方は throw、他方は握りつぶし、等) を比較する。
+
+### 15. 不可能性主張の構成ソース網羅検証
+
+調査報告の中で「X はこの集合に入り得ない」「この経路は原理的に到達不能」型の**不可能性主張**を根拠として使う場合、その集合/経路が**複数ソースの合成 (union / merge / fallback)** で構成されていないかを先に確認する:
+
+1. 集合の構築箇所を grep (`new Set([...a, ...b])` / spread merge / `.concat` 等) し、全構成ソースを列挙する
+2. 主張を各構成ソースに対して**個別に**検証する。特に current グラフ vs baseline グラフのように同名概念が別時点・別オブジェクトの複数インスタンスを持つ場合、「現在のグラフに存在しない」は「baseline 側にも存在しない」を意味しない
+3. 一つでも反例ソースがあれば主張を撤回し、(e) 欄の根拠から除去する。撤回後も設計が成立するか (その主張に依存しない理由付けに置き換えられるか) を再判定する
+
+前例: PR #341 M2 — 「stale lock id は scope に入り得ない (graph.nodes に無いから)」は current グラフのみを見た主張で、実際の CLI scope は current ∪ baseline の union であり baseline 側に rename 前の旧 id が入る反例があった。誤った主張が brief の逐語引用経由でコードコメント 3 箇所まで伝播した。
 
 ## 出力フォーマット
 
