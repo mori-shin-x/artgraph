@@ -177,3 +177,25 @@ jobs:
       - run: pnpm build
 
       - run: bash scripts/pm-smoke.sh ${{ matrix.pm }}
+
+  # spec 013 SC-007 scope-out regression guard (#144): the cross-agent
+  # extensions spec promises NO MCP server implementation, NO plugin
+  # marketplace manifests, NO non-Claude agent hooks. PR #114 T034 ran this
+  # as a one-off grep; this job makes it a standing tree-wide guard.
+  # specs/013-cross-agent-extensions/ is excluded — its research/spec docs
+  # legitimately quote the forbidden terms.
+  scope-guard:
+    name: scope-guard (SC-007)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: SC-007 scope-out regression guard
+        run: |
+          FORBIDDEN='(mcp[-_]server|\.claude-plugin|\.codex-plugin|\.cursor-plugin|\.codex/hooks|\.cursor/hooks|kiro.*hook)'
+          MATCHES=$(git ls-files ':!specs/013-cross-agent-extensions/**' | grep -E "$FORBIDDEN" || true)
+          if [ -n "$MATCHES" ]; then
+            echo "::error::SC-007 violation — files matching MCP / plugin-manifest / non-Claude hook patterns:"
+            echo "$MATCHES"
+            exit 1
+          fi
+          echo "SC-007 OK"

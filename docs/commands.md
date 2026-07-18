@@ -460,6 +460,12 @@ Typically fired by the `artgraph-plan-coverage` Skill after `/speckit-tasks`
 or after editing `.kiro/specs/<name>/tasks.md`. Manual invocation is fine
 during troubleshooting.
 
+Mentioning a REQ-ID anywhere in `tasks.md` / `plan.md` / `spec.md` drops it
+from `implicitImpacts` — but the match is a literal per-ID word-boundary
+match, not a range parser: `REQ-001 through REQ-032` (or `..`-style
+equivalents) only mentions the two endpoint IDs, leaving the IDs in between
+still implicit. Spell out each ID individually to cover a range.
+
 ## `artgraph reconcile` <a id="artgraph-reconcile"></a>
 
 Rebuild `.trace.lock` from the current graph. Run after intentional spec/code/

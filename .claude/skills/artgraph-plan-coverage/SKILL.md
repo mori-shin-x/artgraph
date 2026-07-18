@@ -83,6 +83,7 @@ If `implicitImpacts` is empty and no warnings fire, report "No implicit impacts.
 For every `reqId` in `implicitImpactsByReq`, help the user choose one of:
 
 1. **Mention it.** Add a reference to the REQ-ID anywhere in `tasks.md`, `plan.md`, or `spec.md` — any label works (e.g. `Considered: REQ-003 — investigated, no impact`, `Affected: REQ-003`, `[REQ-003]`, a heading). The next run drops the REQ from `implicitImpacts`.
+   > Mention matching is a literal per-ID word-boundary match — range expressions (`REQ-001 through REQ-032`, `REQ-001..REQ-032`) only mention the two literal endpoint tokens, leaving every ID in between still implicit. Write out each ID individually to cover a range.
 2. **`--ignore` (one-shot).** For CI-only suppression: `<PM-exec> plan-coverage --gate --ignore REQ-003,REQ-007`. Not persisted; exists only for the current command. Use sparingly; prefer (1).
 3. **Future: `--require-ack-keyword` (strict mode).** Out of scope for this Skill.
 
