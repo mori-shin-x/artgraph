@@ -119,14 +119,18 @@ export function writeJsonEventArrayHook(
     return { action: "invalid-json", reason: msg, failure: true };
   }
 
-  // H9: an ARRAY `hooks` field would otherwise slip past the object check
-  // (`typeof [] === "object"`) — its `.<event>` is undefined, so Case D
-  // would not fire and Case B/C would overwrite the array wholesale,
+  // H9: a NON-EMPTY ARRAY `hooks` field would otherwise slip past the object
+  // check (`typeof [] === "object"`) — its `.<event>` is undefined, so Case
+  // D would not fire and Case B/C would overwrite the array wholesale,
   // silently destroying whatever the user had encoded. Reject it up front.
-  if (Array.isArray(existing.hooks)) {
+  // MEDIUM-2 (Step 0-pre): an EMPTY array (`hooks: []`) carries no data to
+  // lose — it is syntactically valid JSON and behaviorally equivalent to
+  // Case A/B's "no hooks yet", so it falls through to the merge path below
+  // instead of being misdiagnosed as invalid JSON.
+  if (Array.isArray(existing.hooks) && existing.hooks.length > 0) {
     return {
       action: "invalid-json",
-      reason: `${hookConfig.configPath} 'hooks' field must be an object, not an array`,
+      reason: `${hookConfig.configPath} 'hooks' field is a non-empty array, expected an object — refusing to modify`,
       failure: true,
     };
   }

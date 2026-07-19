@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { installHooks } from "../../src/hooks/index.js";
+import { runCli } from "../../src/cli.js";
 
 // Dispatch-layer coverage (`src/hooks/index.ts`, issue #366 scope A) —
 // exercised directly rather than through `runInit`, since these are unit
@@ -105,5 +106,53 @@ describe("installHooks dispatch", () => {
 
     expect(result.perAgent.every((o) => o.failure !== true)).toBe(true);
     expect(result.anyFailure).toBe(false);
+  });
+});
+
+// MEDIUM-3 (Step 0-pre) — CLI × multiple-agents integration coverage. The
+// tests above call `installHooks()` directly (data layer only); the
+// `json-event-array.test.ts` runCli test exercises a single agent. Neither
+// covers `commands/init.ts`'s per-agent `for` loop + `process.exitCode`
+// aggregation end-to-end through `runCli`, so a regression there (e.g. a
+// stray `break`/`continue`, or the exit-code check landing before the loop
+// finishes) would not be caught. Style follows the runCli test in
+// `tests/hooks/json-event-array.test.ts` (Case D via CLI --force).
+describe("runCli init — multiple agents (MEDIUM-3)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = mkdtempSync(join(tmpdir(), "artgraph-hooks-cli-multi-"));
+  });
+
+  afterEach(() => {
+    cleanup(tmp);
+  });
+
+  it("claude conflict + codex created: exitCode 1, per-agent stdout/stderr both surface", async () => {
+    writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "t", type: "module" }));
+    writeFileSync(join(tmp, "pnpm-lock.yaml"), "");
+    // claude: pre-seed an existing Stop hook so its install is a Case D conflict.
+    mkdirSync(join(tmp, ".claude"), { recursive: true });
+    writeFileSync(
+      join(tmp, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "echo x" }] }] } }),
+    );
+    // codex: no existing .codex/hooks.json — install should succeed (created).
+    expect(existsSync(join(tmp, ".codex", "hooks.json"))).toBe(false);
+
+    const r = await runCli(["init", "--force", "--agents=claude,codex", "--no-scan"], {
+      cwd: tmp,
+    });
+
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain("[WARN] [claude]");
+    expect(r.stdout).toContain("[codex] Created");
+    // claude's file must be untouched by the conflict (never overwritten,
+    // even with --force); codex's file must now exist.
+    expect(
+      JSON.parse(readFileSync(join(tmp, ".claude", "settings.json"), "utf-8")).hooks.Stop[0]
+        .hooks[0].command,
+    ).toBe("echo x");
+    expect(existsSync(join(tmp, ".codex", "hooks.json"))).toBe(true);
   });
 });

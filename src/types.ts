@@ -648,7 +648,6 @@ export type HookOutcome = {
     | "invalid-json"
     | "io-error"
     | "skipped-no-pm"
-    | "skipped-not-selected"
     | "skipped-no-hook-config";
   /** Detail for conflict/error outcomes: rendered command or parse/IO error message. */
   reason?: string;

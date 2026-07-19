@@ -299,7 +299,7 @@ export function registerInitCommand(program: Command): void {
                   const remediation =
                     hook?.format === "json-event-array"
                       ? `To add artgraph's gate, manually merge this into your existing hook config:\n\n  ${outcome.reason}\n\n`
-                      : `${outcome.reason ?? `${configPath} already exists`}. Move or remove it, then re-run with --force to let artgraph write its own.\n\n`;
+                      : `${outcome.reason ?? `${configPath} already exists`}. Move or remove it, then re-run — artgraph never overwrites an existing hook file, even with --force.\n\n`;
                   console.error(
                     `\n[WARN] [${outcome.agentId}] ${configPath} already has a Stop hook configured.\nartgraph did NOT modify this file to avoid clobbering your setup.\n\n${remediation}(artgraph's config and Skills were installed successfully; only this agent's Stop hook was skipped.)\n\nAfter you have resolved the conflict, re-run \`artgraph init --force\` to\ncomplete setup (or run with \`--no-hooks\` if you prefer to keep the current\nhook and skip artgraph's gate for this agent).\n`,
                   );
@@ -321,9 +321,10 @@ export function registerInitCommand(program: Command): void {
                   );
                   break;
                 case "skipped-no-hook-config":
-                case "skipped-not-selected":
                   // Nothing to report — this agent has no hook mechanism
-                  // (yet) or was not part of this install run.
+                  // (yet). Agents not part of this install run are simply
+                  // absent from `perAgent` (src/hooks/index.ts) rather than
+                  // reported here.
                   break;
                 default: {
                   // E3: exhaustiveness guard — a new `HookOutcome.action`

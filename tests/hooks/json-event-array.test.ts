@@ -253,6 +253,26 @@ describe.each(AGENT_FIXTURES)("json-event-array hook writer ($agentId)", ({ agen
     expect(readFileSync(configPath(tmp), "utf-8")).toBe(before);
   });
 
+  // -- MEDIUM-2: empty-array `hooks` field ----------------------------------------
+
+  it("hooks field is an EMPTY array → falls through to Case A/B merge, not invalid-json (MEDIUM-2)", () => {
+    // Unlike a non-empty array (H9, which encodes real data that would be
+    // silently destroyed by a wholesale overwrite), `hooks: []` carries no
+    // data — it's syntactically valid JSON and behaviorally equivalent to
+    // "no hooks yet" (Case A/B). Before MEDIUM-2 this was misdiagnosed as
+    // invalid-json even though nothing would have been lost by merging.
+    seedPm(tmp, "pnpm");
+    mkdirSync(join(tmp, relPath[0]), { recursive: true });
+    writeFileSync(configPath(tmp), JSON.stringify({ hooks: [] }));
+
+    const result = runInit(tmp, { noScan: true, force: true, agents: [agentId] });
+
+    expect(outcomeFor(result, agentId)?.action).toBe("merged-b");
+    expect(outcomeFor(result, agentId)?.failure).toBe(false);
+    const parsed = JSON.parse(readFileSync(configPath(tmp), "utf-8"));
+    expect(parsed.hooks.Stop[0].hooks[0].command).toBe(`${execPrefix("pnpm")} check --gate --diff`);
+  });
+
   // -- BOM ------------------------------------------------------------------------
 
   it("BOM-prefixed existing config parses OK (Case B result)", () => {
