@@ -441,6 +441,7 @@ spec impact set introduced after spec 014 was merged.
 - Considered: 013-cross-agent-extensions/FR-012 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
 - Considered: 013-cross-agent-extensions/FR-013 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
 - Considered: 013-cross-agent-extensions/FR-014 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
+- Considered: 013-cross-agent-extensions/FR-015 — added post-merge by spec 013 (cross-agent extensions, issue #356), no spec 014 behaviour change
 - Considered: 013-cross-agent-extensions/SC-001 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
 - Considered: 013-cross-agent-extensions/SC-002 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change
 - Considered: 013-cross-agent-extensions/SC-003 — added post-merge by spec 013 (cross-agent extensions), no spec 014 behaviour change

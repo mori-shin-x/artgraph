@@ -99,7 +99,16 @@ function makeFixture(prefix: string): string {
   );
   writeFileSync(
     join(root, ".artgraph.json"),
-    JSON.stringify({ include: ["src/**/*.ts"], specDirs: ["specs-a", "specs-b"] }),
+    JSON.stringify({
+      // issue #356 — `include` needs its own node_modules negation to stay
+      // symmetric with the (implicit, DEFAULT_CONFIG-derived) `testPatterns`
+      // pool here, or the new `config-pool-protection-asymmetry` silent
+      // warning fires and pollutes this fixture's "genuinely clean" baseline
+      // — unrelated to what this file is actually regression-testing
+      // (EMFILE-driven false-greens).
+      include: ["src/**/*.ts", "!**/node_modules/**"],
+      specDirs: ["specs-a", "specs-b"],
+    }),
   );
   return root;
 }
