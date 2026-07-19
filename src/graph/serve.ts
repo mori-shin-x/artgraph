@@ -100,6 +100,9 @@ const TEMPLATE_DIR = resolve(import.meta.dirname, "../../templates/graph");
 const INDEX_HTML_PATH = resolve(TEMPLATE_DIR, "index.html");
 const APP_JS_PATH = resolve(TEMPLATE_DIR, "app.js");
 const VENDOR_JS_PATH = resolve(TEMPLATE_DIR, "vendor/cytoscape.min.js");
+// Cytoscape's MIT notice must accompany every redistributed copy of the
+// bundle, so static exports copy it alongside cytoscape.min.js.
+const VENDOR_LICENSE_PATH = resolve(TEMPLATE_DIR, "vendor/cytoscape.LICENSE");
 
 // The JSON payload is embedded verbatim inside `<script type="application/json">`.
 // A literal `</script>` in the data (e.g. a filePath containing `</`, or any
@@ -356,6 +359,14 @@ export async function writeStaticExport(opts: ExportOptions): Promise<void> {
   }
 
   const html = readIndexHtml(data);
+  // Fail before any writes (same fail-fast contract as readIndexHtml's vendor
+  // check) so a half-written export never lands on disk.
+  if (!existsSync(VENDOR_LICENSE_PATH)) {
+    throw new Error(
+      `artgraph graph: cytoscape license notice missing at ${VENDOR_LICENSE_PATH}. ` +
+        "Run `pnpm build` (the prebuild step copies it into templates/graph/vendor/).",
+    );
+  }
   mkdirSync(outputDir, { recursive: true });
 
   // D2 (issue #170): once we get here, vendor/ is entirely artgraph-owned —
@@ -372,4 +383,5 @@ export async function writeStaticExport(opts: ExportOptions): Promise<void> {
   writeFileSync(resolve(outputDir, "index.html"), html, "utf-8");
   copyFileSync(APP_JS_PATH, resolve(outputDir, "app.js"));
   copyFileSync(VENDOR_JS_PATH, resolve(vendorDir, "cytoscape.min.js"));
+  copyFileSync(VENDOR_LICENSE_PATH, resolve(vendorDir, "cytoscape.LICENSE"));
 }

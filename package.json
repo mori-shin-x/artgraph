@@ -14,7 +14,8 @@
   },
   "files": [
     "dist",
-    "templates"
+    "templates",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "scripts": {
     "copy-vendor": "node scripts/copy-vendor.mjs",
