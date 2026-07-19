@@ -283,13 +283,57 @@ export function createTSParser(
       // resolver-context-level EMFILE/ENFILE never leaks into a later,
       // unrelated `createResolverContext` call.
       const resolverWarning = takeResolverResourceExhaustedWarning();
-      if (resolverWarning) warnings.push(resolverWarning);
+      // issue #351 — this call's only caller (`buildSymbolNameTable`) has no
+      // guard of its own, so an EMFILE/ENFILE from EITHER `computeTestFileSet`
+      // below or `enumerateFiles` must degrade rather than throw (Step 0-pre
+      // HIGH-1b/HIGH-2). At most ONE `system-resource-exhausted` warning is
+      // pushed per `parse()` call — shared with `resolverWarning` above via
+      // this flag — so a caller never sees more than one entry for what is
+      // really one underlying scan-wide condition (the resolver-context read,
+      // the test-pattern glob, and the include-pattern glob can each
+      // independently observe EMFILE/ENFILE in the same call).
+      let resourceExhaustedWarned = false;
+      if (resolverWarning) {
+        warnings.push(resolverWarning);
+        resourceExhaustedWarned = true;
+      }
+      const pushEnumerationResourceExhausted = (
+        symbolId: string,
+        code: "EMFILE" | "ENFILE",
+      ): void => {
+        if (resourceExhaustedWarned) return;
+        resourceExhaustedWarned = true;
+        warnings.push({
+          type: "system-resource-exhausted",
+          symbolId,
+          filePath: symbolId,
+          message: systemResourceExhaustedMessage(code),
+        });
+      };
       // issue #323 — one integrated glob call over `testPatterns`, then Set
       // membership per file — the same "one glob call + Set" pattern
       // `enumerateFiles`/`globCodeFiles` already use for file discovery,
       // rather than adding a new per-file glob-matching dependency.
-      const testFiles = computeTestFileSet(rootDir, testPatterns);
-      for (const filePath of enumerateFiles(rootDir, patterns)) {
+      //
+      // issue #351 (Step 0-pre HIGH-1b) — `computeTestFileSet` routes through
+      // `globCodeFiles` -> `listFilesOrThrow`, which THROWS on EMFILE/ENFILE.
+      // Degraded fail-safe here: an empty test-file Set (every file is then
+      // classified as non-test for THIS parse) rather than letting the throw
+      // escape uncaught through `buildSymbolNameTable`.
+      let testFiles: Set<string>;
+      try {
+        testFiles = computeTestFileSet(rootDir, testPatterns);
+      } catch (e) {
+        const code = (e as NodeJS.ErrnoException)?.code;
+        if (code !== "EMFILE" && code !== "ENFILE") throw e;
+        testFiles = new Set();
+        pushEnumerationResourceExhausted("glob:test-patterns", code);
+      }
+      const enumerated = enumerateFiles(rootDir, patterns);
+      if (enumerated.resourceExhaustedCode) {
+        pushEnumerationResourceExhausted("glob:include-patterns", enumerated.resourceExhaustedCode);
+      }
+      for (const filePath of enumerated.files) {
         const parsed = parseTSFile(
           filePath,
           rootDir,
@@ -477,16 +521,48 @@ export function computeTestFileSet(rootDir: string, testPatterns: string[]): Set
 // agree today because both share `splitIncludePatterns`, not because they
 // are the same code path. Check `computeTestFileSet` too before changing
 // this function's glob semantics.
-function enumerateFiles(rootDir: string, patterns: string[]): string[] {
+//
+// issue #351 (Step 0-pre HIGH-1b) — unlike `globCodeFiles` (routed through
+// `../glob-utils.js`'s `listFilesOrThrow`, which THROWS on EMFILE/ENFILE),
+// this is an independent, raw `fastGlob.sync` call site that was completely
+// unguarded: `createTSParser().parse()`'s only caller is
+// `src/trace/symbol-table.ts`'s `buildSymbolNameTable`, which has NO
+// try/catch of its own around this — an EMFILE/ENFILE here used to escape
+// uncaught all the way out of `runCli` (a real crash, confirmed via stack
+// trace during the Step 0-pre investigation; the throw site was HERE, not
+// `globCodeFiles`). Each per-pattern `fastGlob.sync` call below is now
+// individually guarded: EMFILE/ENFILE degrades THAT pattern to zero matches
+// (the loop continues with the remaining patterns) and the failure is
+// reported back via `resourceExhaustedCode` rather than thrown — the loop
+// structure, per-pattern iteration, and `orderByDirectoryDepth` call are all
+// unchanged (issue #350 owns any future change to enumeration semantics
+// itself). Any OTHER glob failure (e.g. a malformed pattern) still throws —
+// that is a real bug, not something to paper over.
+function enumerateFiles(
+  rootDir: string,
+  patterns: string[],
+): { files: string[]; resourceExhaustedCode?: "EMFILE" | "ENFILE" } {
   const seen = new Set<string>();
   const files: string[] = [];
   const { include, ignore } = splitIncludePatterns(rootDir, patterns);
+  let resourceExhaustedCode: "EMFILE" | "ENFILE" | undefined;
   for (const pattern of include) {
-    const matches = fastGlob.sync(pattern, {
-      cwd: resolve(),
-      absolute: true,
-      ignore,
-    });
+    let matches: string[];
+    try {
+      matches = fastGlob.sync(pattern, {
+        cwd: resolve(),
+        absolute: true,
+        ignore,
+      });
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException)?.code;
+      if (code === "EMFILE" || code === "ENFILE") {
+        resourceExhaustedCode = code;
+        matches = [];
+      } else {
+        throw e;
+      }
+    }
     for (const filePath of matches) {
       if (!seen.has(filePath)) {
         seen.add(filePath);
@@ -494,7 +570,7 @@ function enumerateFiles(rootDir: string, patterns: string[]): string[] {
       }
     }
   }
-  return orderByDirectoryDepth(files);
+  return { files: orderByDirectoryDepth(files), resourceExhaustedCode };
 }
 
 // Sibling directory / file comparator (ts-morph's LocaleStringComparer).
@@ -741,7 +817,13 @@ export function safeParseSync(filePath: string, content: string): SafeParseResul
 // `graph/builder.ts`'s markdown loop builds its own copy of this wording
 // (importing from here would be a reverse dependency: builder.ts already
 // imports this module).
-function systemResourceExhaustedMessage(code: string): string {
+//
+// issue #351 — exported so `src/trace/symbol-table.ts` (which already
+// value-imports `createTSParser`/`globCodeFiles`/`safeParseSync` from this
+// module — a one-directional dependency, not a cycle) can reuse this EXACT
+// wording for its own EMFILE/ENFILE guards instead of drifting with a second
+// hand-copied string.
+export function systemResourceExhaustedMessage(code: string): string {
   return (
     `file descriptor exhaustion (${code}) while reading files during this scan; the process ` +
     "ran out of open file descriptors. Consider raising the OS file-descriptor limit " +

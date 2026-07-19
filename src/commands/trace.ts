@@ -68,13 +68,24 @@ async function loadTraceInputs(rootDir: string): Promise<{
 }> {
   const { loadConfig } = await import("../config.js");
   const { scan } = await import("../scan.js");
-  const { ingestTrace, filterTraceToGraph } = await import("../trace/ingest.js");
+  const { filterTraceToGraph, emptyIngestedTrace } = await import("../trace/ingest.js");
   const config = loadConfig(rootDir);
-  const { graph, warnings } = scan(rootDir, config);
+  // issue #351 ("Window B" elimination + "trace status must work with zero
+  // shards") — this used to call its own, independent `ingestTrace(config,
+  // rootDir)` unconditionally (a SECOND ingest of the same shards `scan()`
+  // below already ingests when any exist, with NO EMFILE/ENFILE guard of its
+  // own — see `check.ts`'s identical comment for the full rationale, and
+  // `src/trace/ingest.ts`'s `ingestTrace` doc for the crash class this
+  // fixes). `scan()`'s `trace` field is `undefined` on a trace-absent
+  // project (`hasTraceShards` false); `emptyIngestedTrace()` substitutes a
+  // zero-value `IngestedTrace` for it — `trace status`'s own contract
+  // requires this command to keep working (shardCount 0, not a crash) with
+  // zero shards.
+  const { graph, warnings, trace: scanTrace } = scan(rootDir, config);
   // issue #275 — `status`/`report` both read `IngestedTrace` directly
   // (no `mergeTraceEdges` step in between), so a ghost node must be dropped
   // here before `computeStaleNodeIds`/`classifyEvidence` ever see it.
-  const trace = filterTraceToGraph(ingestTrace(config, rootDir), graph);
+  const trace = filterTraceToGraph(scanTrace ?? emptyIngestedTrace(), graph);
   return { config, graph, trace, warnings };
 }
 
@@ -124,6 +135,23 @@ export function registerTraceCommand(program: Command): void {
         printTraceStatusText(result);
         reportGraphWarnings(warnings, opts.format);
       }
+      // issue #351 — a dedicated, one-line stderr notice when this scan hit
+      // file-descriptor exhaustion: the shard counts/diagnostics/staleRate
+      // above may be incomplete (the underlying graph could be missing
+      // entire spec/code trees). Exit code is UNCHANGED (`status` always
+      // exits 0 — this is a diagnostic read, not a hard requirement); the
+      // generic warning is already visible via `warnings[]` (json) /
+      // `reportGraphWarnings` (text) above, this is an ADDITIONAL, more
+      // specific pointer. Printed regardless of `--format` (mirrors
+      // `check.ts`'s own resource-exhaustion diagnostic, which is likewise
+      // format-agnostic — only the JSON payload's shape is format-gated).
+      if (warnings.some((w) => w.type === "system-resource-exhausted")) {
+        console.error(
+          "WARNING: this scan hit file-descriptor exhaustion (system-resource-exhausted) — " +
+            "shard/diagnostic counts above may be incomplete. Consider raising the OS " +
+            "file-descriptor limit (`ulimit -n`) and re-running.",
+        );
+      }
     });
 
   trace
@@ -171,6 +199,18 @@ export function registerTraceCommand(program: Command): void {
       } else {
         printTraceReportText(result);
         reportGraphWarnings(warnings, opts.format);
+      }
+      // issue #351 — same dedicated notice as `trace status` above (see its
+      // comment for the full rationale). Exit code is UNCHANGED: `report`
+      // keeps its existing contract (0 normally, 1 only for the zero-shards
+      // case handled above — resource exhaustion does not add a new exit
+      // path here).
+      if (warnings.some((w) => w.type === "system-resource-exhausted")) {
+        console.error(
+          "WARNING: this scan hit file-descriptor exhaustion (system-resource-exhausted) — the " +
+            "classification above may be incomplete. Consider raising the OS file-descriptor " +
+            "limit (`ulimit -n`) and re-running.",
+        );
       }
     });
 }

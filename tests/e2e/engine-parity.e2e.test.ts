@@ -83,7 +83,9 @@ function ingestFromTraceDir(root: string, traceDir: string): IngestedTrace {
     lockFile: ".trace.lock",
     trace: { artifacts: [traceGlob] },
   };
-  return ingestTrace(config, root);
+  // issue #351 — `ingestTrace` now returns `{ trace, warnings }`; this
+  // helper's callers only ever cared about the trace shape, so unwrap here.
+  return ingestTrace(config, root).trace;
 }
 
 /** Deterministic string form of an `IngestedTrace` for equality comparisons

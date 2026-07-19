@@ -18,7 +18,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { relative } from "node:path";
-import { globSync } from "glob";
+import { listFilesGuarded } from "./glob-utils.js";
 import { parseShardLines } from "./trace/schema.js";
 import { rewriteTestTags, type RewriteChange } from "./rename.js";
 import type { ArtgraphConfig } from "./types.js";
@@ -38,21 +38,49 @@ export interface TraceShardRewrite {
    * doesn't understand — left byte-untouched, reported instead of silently
    * skipped. Sorted. */
   unknownSchemaShards: string[];
+  /** issue #351 (H1) — set when the shard-discovery glob hit EMFILE/ENFILE
+   * for at least one `trace.artifacts` pattern (see `discoverShardPaths`
+   * below): some shards may have gone undiscovered, so a rename/split/merge
+   * that "found nothing to rewrite" in trace shards this run cannot be
+   * trusted to mean "no shard referenced this ID". Propagated by both
+   * callers (`executeRename` / `executeMerge` in `rename-executor.ts`) into
+   * `RenameResult.warnings` as a `system-resource-exhausted` entry. */
+  resourceExhaustedCode?: "EMFILE" | "ENFILE";
 }
 
-function discoverShardPaths(rootDir: string, patterns: string[]): string[] {
+// issue #351 (Step 0-pre HIGH-1, mirrors `src/trace/ingest.ts`'s identically
+// named function and its own #351 doc comment) — this used to call the
+// `glob` package's `globSync` directly, whose `globSync` does not throw on
+// EMFILE/ENFILE (`path-scurry`'s `#readdirFail` maps an unknown errno to an
+// empty child list and returns silently): the `catch { continue }` below
+// never even ran, because `globSync` never threw in the first place, so a
+// file-descriptor storm during rename's shard discovery used to vanish an
+// entire shard set with NO diagnostic at all. Routed through
+// `listFilesGuarded` (fast-glob) now: EMFILE/ENFILE is caught internally by
+// that helper and surfaced via `resourceExhaustedCode` instead of silently
+// returning `[]`. Every OTHER glob failure (a malformed pattern) keeps the
+// pre-existing "skip just that one pattern" behavior.
+function discoverShardPaths(
+  rootDir: string,
+  patterns: string[],
+): { paths: string[]; resourceExhaustedCode?: "EMFILE" | "ENFILE" } {
   const paths = new Set<string>();
+  let resourceExhaustedCode: "EMFILE" | "ENFILE" | undefined;
   for (const pattern of patterns) {
-    let matches: string[];
+    let result: ReturnType<typeof listFilesGuarded>;
     try {
-      matches = globSync(pattern, { cwd: rootDir, absolute: true });
+      result = listFilesGuarded(pattern, { cwd: rootDir });
     } catch {
       // An invalid glob shouldn't crash a fully-opt-in feature; just skip it.
       continue;
     }
-    for (const m of matches) paths.add(m);
+    if (result.resourceExhaustedCode) {
+      resourceExhaustedCode = result.resourceExhaustedCode;
+      continue;
+    }
+    for (const m of result.files) paths.add(m);
   }
-  return [...paths].sort();
+  return { paths: [...paths].sort(), resourceExhaustedCode };
 }
 
 /** Rewrite `[oldId]` -> `[newId]` inside one shard string field, mirroring
@@ -174,7 +202,7 @@ export function rewriteTraceShards(
   if (idPairs.length === 0) return { filesToWrite, changes, unknownSchemaShards };
 
   const patterns = config.trace?.artifacts ?? DEFAULT_TRACE_ARTIFACTS;
-  const shardPaths = discoverShardPaths(rootDir, patterns);
+  const { paths: shardPaths, resourceExhaustedCode } = discoverShardPaths(rootDir, patterns);
 
   for (const absPath of shardPaths) {
     if (!existsSync(absPath)) continue;
@@ -202,5 +230,5 @@ export function rewriteTraceShards(
   }
 
   unknownSchemaShards.sort();
-  return { filesToWrite, changes, unknownSchemaShards };
+  return { filesToWrite, changes, unknownSchemaShards, resourceExhaustedCode };
 }

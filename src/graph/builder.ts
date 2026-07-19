@@ -211,7 +211,7 @@ function buildIgnoredIdMatcher(prefixes: string[] | undefined): (id: string) => 
 export function buildGraph(
   rootDir: string,
   config: ArtgraphConfig,
-): { graph: ArtifactGraph; warnings: BuildWarning[] } {
+): { graph: ArtifactGraph; warnings: BuildWarning[]; trace?: IngestedTrace } {
   const nodes = new Map<string, GraphNode>();
   const edges: GraphEdge[] = [];
   const warnings: BuildWarning[] = [];
@@ -1280,13 +1280,65 @@ export function buildGraph(
   // existence probe, so a trace-absent project never pays for
   // `ingestTrace`'s `buildSymbolNameTable` re-parse and the graph this
   // function returns is byte-identical to pre-spec-020 output (FR-010,
-  // US1-3). Runs AFTER every other edge-producing pass (so the
+  // US1-3) — `ingestedTrace` below stays `undefined` and the `trace` key is
+  // omitted from this function's return value entirely (not merely
+  // `undefined`-valued) in that case, so a trace-absent scan's returned
+  // object is unchanged. Runs AFTER every other edge-producing pass (so the
   // claim/evidence cross-check below sees the FINAL set of declared
   // `implements` edges) and BEFORE dedup/sort (so the merge output goes
   // through the same canonicalization as everything else — INV-T2/T3).
-  if (hasTraceShards(config, rootDir)) {
-    const ingested = ingestTrace(config, rootDir);
+  //
+  // issue #351 ("Window B" elimination) — this is now the ONLY call to
+  // `ingestTrace` in the whole process for a given `scan()`/`buildGraph()`
+  // invocation: `src/commands/check.ts` / `src/commands/impact.ts` /
+  // `src/commands/trace.ts` used to each call `ingestTrace` a SECOND time
+  // independently (their own `hasTraceShards` + `ingestTrace` pair), which —
+  // besides the redundant `buildSymbolNameTable` re-parse — meant an
+  // EMFILE/ENFILE hit inside `ingestTrace` had NO guard at all on that
+  // second call site (a genuine, uncaught crash — see `ingestTrace`'s own
+  // doc comment and `buildSymbolNameTable`'s). Those commands now read the
+  // `trace` field this function returns instead (via `scan()`), so
+  // `ingestTrace`'s own EMFILE/ENFILE fail-safety (routed through
+  // `buildSymbolNameTable`) is this function's problem to surface, exactly
+  // like every other guarded read in this module: its `warnings` are folded
+  // into this scan's `warnings` via the SAME convert+`systemResourceExhaustedReported`
+  // dedup pattern the TS-fragment conversion loop above uses.
+  //
+  // issue #351 (H1) — `hasTraceShards` itself can now hit EMFILE/ENFILE
+  // (`present: false, resourceExhausted: true`): a false `present` in that
+  // case is NOT "no trace", it is "couldn't tell" — `ingestTrace` is still
+  // skipped (nothing reliable to ingest; `ingestedTrace` stays `undefined`,
+  // same as a genuinely trace-absent project), but the resource-exhaustion
+  // signal must still surface so `check --gate` / `impact` can refuse to
+  // treat a silently-degraded `exercises`-edge graph as trustworthy. Folds
+  // into the SAME per-scan `systemResourceExhaustedReported` dedup as every
+  // other guarded site in this module.
+  let ingestedTrace: IngestedTrace | undefined;
+  const shardProbe = hasTraceShards(config, rootDir);
+  if (shardProbe.present) {
+    const { trace: ingested, warnings: traceWarnings } = ingestTrace(config, rootDir);
+    for (const tw of traceWarnings) {
+      if (tw.type === "system-resource-exhausted") {
+        if (systemResourceExhaustedReported) continue;
+        systemResourceExhaustedReported = true;
+      }
+      warnings.push({ type: tw.type, id: tw.symbolId, files: [tw.filePath], message: tw.message });
+    }
     mergeTraceEdges(nodes, edges, ingested);
+    ingestedTrace = ingested;
+  } else if (shardProbe.resourceExhausted && !systemResourceExhaustedReported) {
+    systemResourceExhaustedReported = true;
+    warnings.push({
+      type: "system-resource-exhausted",
+      id: "glob:trace-shards",
+      files: [],
+      message:
+        "file descriptor exhaustion (EMFILE/ENFILE) while probing for trace shards during this " +
+        "scan; the process ran out of open file descriptors. Consider raising the OS " +
+        "file-descriptor limit (e.g. `ulimit -n`) and re-running — other file reads in this " +
+        "scan may also be failing the same way. Trace ingest was skipped this run (`exercises` " +
+        "edges may be missing).",
+    });
   }
 
   // Edge dedup + deterministic edge/node ordering (INV-T2/T3, INV-L4,
@@ -1304,7 +1356,12 @@ export function buildGraph(
     prevCache?.raw,
   );
 
-  return { graph: { nodes: sortedNodes, edges: dedupedEdges }, warnings };
+  const result: { graph: ArtifactGraph; warnings: BuildWarning[]; trace?: IngestedTrace } = {
+    graph: { nodes: sortedNodes, edges: dedupedEdges },
+    warnings,
+  };
+  if (ingestedTrace) result.trace = ingestedTrace;
+  return result;
 }
 
 // Generate `derives_from` edges by matching known file-name conventions within

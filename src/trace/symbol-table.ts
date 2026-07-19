@@ -37,7 +37,13 @@
 
 import { readFileSync } from "node:fs";
 import { relative } from "node:path";
-import { createTSParser, globCodeFiles, safeParseSync } from "../parsers/typescript.js";
+import {
+  createTSParser,
+  globCodeFiles,
+  safeParseSync,
+  systemResourceExhaustedMessage,
+  type TsParseWarning,
+} from "../parsers/typescript.js";
 import { DEFAULT_CONFIG } from "../types.js";
 
 type OxcProgram = import("oxc-parser").ParseResult["program"];
@@ -109,12 +115,54 @@ function exportedClassName(stmt: OxcStatement, decl: ClassLikeDecl): string | un
 // extraction gate (`!isTest`) needs the SAME testPatterns-derived answer for
 // that file the rest of the codebase would give it — never a hardcoded
 // filename regex.
+// issue #351 (Step 0-pre HIGH-1/HIGH-1b/HIGH-2) — `buildSymbolNameTable` used
+// to be completely unguarded against EMFILE/ENFILE (file-descriptor
+// exhaustion): the 117-line `globCodeFiles` call throws on it directly
+// (`listFilesOrThrow`'s external contract), the nested `createTSParser(...).
+// parse()` call could throw via its own `enumerateFiles`/`computeTestFileSet`
+// (see `typescript.ts`'s own issue #351 fix), and the per-file `readFileSync`
+// below already had a catch-all but never distinguished EMFILE/ENFILE from
+// "just skip this file". Every caller of THIS function (`src/trace/ingest.ts`'s
+// `ingestTrace`, reached from `src/graph/builder.ts`'s `buildGraph` AND —
+// pre-#351 — from `check.ts`/`impact.ts`'s own independent `ingestTrace`
+// calls) therefore had no protection at all, which is exactly the "Window B"
+// raw-crash class the Step 0-pre investigation confirmed via stack trace.
+// Degraded fail-safe now, matching this module's own documented contract
+// ("never throws, only loses symbol-name PRECISION" — see the file header):
+// each of the three EMFILE/ENFILE sources below degrades independently
+// (empty file list / empty parser warnings/nodes / skip-this-file), and AT
+// MOST ONE `system-resource-exhausted` `TsParseWarning` is returned per call
+// — shared across all three sources via `resourceExhaustedWarned` so a
+// caller never sees more than one entry for what is really one underlying
+// condition. A genuine `OxcLoadError` (issue #263) is UNCHANGED — it still
+// propagates uncaught from every call site below, exactly as before.
 export function buildSymbolNameTable(
   rootDir: string,
   includePatterns: string[],
   testPatterns: string[] = DEFAULT_CONFIG.testPatterns,
-): SymbolNameTable {
-  const files = globCodeFiles(rootDir, includePatterns);
+): { table: SymbolNameTable; warnings: TsParseWarning[] } {
+  const warnings: TsParseWarning[] = [];
+  let resourceExhaustedWarned = false;
+  const pushResourceExhausted = (symbolId: string, code: "EMFILE" | "ENFILE"): void => {
+    if (resourceExhaustedWarned) return;
+    resourceExhaustedWarned = true;
+    warnings.push({
+      type: "system-resource-exhausted",
+      symbolId,
+      filePath: symbolId,
+      message: systemResourceExhaustedMessage(code),
+    });
+  };
+
+  let files: string[];
+  try {
+    files = globCodeFiles(rootDir, includePatterns);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code;
+    if (code !== "EMFILE" && code !== "ENFILE") throw e;
+    files = [];
+    pushResourceExhausted("glob:symbol-table", code);
+  }
   const relPaths = new Set(files.map((f) => relative(rootDir, f)));
 
   // (relPath, name) -> candidate symbol ids. size > 1 == ambiguous.
@@ -141,13 +189,25 @@ export function buildSymbolNameTable(
   // actually get its own symbol node" existence check for Source 2, instead
   // of re-deriving `extractClassMembers`'s inclusion rules a second time.
   const symbolIds = new Set<string>();
-  const { nodes } = createTSParser(
+  // issue #351 — `createTSParser(...).parse()` now returns its own
+  // `system-resource-exhausted` warnings (see `typescript.ts`'s Step 0-pre
+  // HIGH-1b/HIGH-2 fix) instead of throwing past this call site. Merged into
+  // this function's own `warnings` under the same `resourceExhaustedWarned`
+  // one-per-call convergence used everywhere else in this function.
+  const { nodes, warnings: parseWarnings } = createTSParser(
     rootDir,
     includePatterns,
     "symbol",
     undefined,
     testPatterns,
   ).parse();
+  for (const tw of parseWarnings) {
+    if (tw.type === "system-resource-exhausted") {
+      if (resourceExhaustedWarned) continue;
+      resourceExhaustedWarned = true;
+    }
+    warnings.push(tw);
+  }
   for (const node of nodes) {
     if (node.kind !== "symbol") continue;
     const hashIdx = node.id.indexOf("#");
@@ -181,7 +241,17 @@ export function buildSymbolNameTable(
     let content: string;
     try {
       content = readFileSync(filePath, "utf-8");
-    } catch {
+    } catch (e) {
+      // issue #351 — same "skip this file, fail-safe" behavior as before for
+      // every errno, but EMFILE/ENFILE additionally contributes to this
+      // call's (at most one) `system-resource-exhausted` warning — symmetric
+      // with `globCodeFiles`'s and `createTSParser().parse()`'s own guards
+      // above, and with `parseTSFile`'s EMFILE/ENFILE handling in
+      // `typescript.ts`.
+      const code = (e as NodeJS.ErrnoException)?.code;
+      if (code === "EMFILE" || code === "ENFILE") {
+        pushResourceExhausted(`file:${relPath}`, code);
+      }
       continue;
     }
     // issue #269 — this used to call `loadOxc().parseSync(filePath, content)`
@@ -240,14 +310,17 @@ export function buildSymbolNameTable(
   }
 
   return {
-    hasFile: (relPath) => relPaths.has(relPath),
-    resolve: (relPath, fnName) => {
-      const byName = candidates.get(relPath);
-      const ids = byName?.get(fnName);
-      if (ids && ids.size === 1) {
-        return { kind: "symbol", id: [...ids][0]! };
-      }
-      return { kind: "file-fallback", id: `file:${relPath}` };
+    table: {
+      hasFile: (relPath) => relPaths.has(relPath),
+      resolve: (relPath, fnName) => {
+        const byName = candidates.get(relPath);
+        const ids = byName?.get(fnName);
+        if (ids && ids.size === 1) {
+          return { kind: "symbol", id: [...ids][0]! };
+        }
+        return { kind: "file-fallback", id: `file:${relPath}` };
+      },
     },
+    warnings,
   };
 }

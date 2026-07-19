@@ -53,6 +53,25 @@ const IMPACT_DOC_PREFIX_REJECTION = [
 // existing "No matching nodes found" message still fires.
 const REQ_ID_INPUT_RE = /^(?:[A-Za-z][\w-]*\/)?[A-Z][A-Za-z]*-\d+(?:\.\d+)*$/;
 
+// issue #351 (H1) — distinct from `TRACE_NO_SHARDS_GUIDANCE`: that message
+// means the shard-existence probe genuinely found zero matches, and its
+// "set up the runner" advice is actively MISLEADING when the probe instead
+// hit EMFILE/ENFILE and could not tell either way. `--tests` refuses to
+// guess in that case rather than risk silently treating "undetermined" as
+// "no shards" (which would proceed with a --tests selection built from
+// nothing, rather than the correct exit-1 fall-back-to-full-suite signal).
+const TRACE_SHARDS_PROBE_UNDETERMINED_GUIDANCE = [
+  "ERROR: could not determine whether trace shards exist.",
+  "",
+  "The shard-existence probe hit file descriptor exhaustion (EMFILE/ENFILE)",
+  'while globbing `trace.artifacts`. This is NOT the same as "no trace',
+  'shards" — `--tests` selection cannot be trusted either way, so this run',
+  "refuses to guess.",
+  "",
+  "Consider raising the OS file-descriptor limit (e.g. `ulimit -n`) and",
+  "re-running once your environment has recovered.",
+].join("\n");
+
 export function registerImpactCommand(program: Command): void {
   program
     .command("impact")
@@ -178,9 +197,24 @@ export function registerImpactCommand(program: Command): void {
       // spec 020 (FR-018, contracts/cli-surface.md §5) — `--tests` requires
       // trace evidence to exist at all; exit 1 with the SAME guidance string
       // `trace report` uses (FR-018's explicit "同文言" requirement) before
-      // any graph/git work happens.
-      const { hasTraceShards, ingestTrace } = await import("../trace/ingest.js");
-      const hasTrace = hasTraceShards(config, rootDir);
+      // any graph/git work happens. This is a cheap glob-only existence
+      // probe (no shard parsing, no `buildSymbolNameTable` re-parse), so it
+      // stays a direct call even after issue #351's "Window B" elimination
+      // below — only the ACTUAL ingest (`ingestTrace`) moved to `scan()`.
+      const { hasTraceShards } = await import("../trace/ingest.js");
+      const { present: hasTrace, resourceExhausted: shardProbeResourceExhausted } = hasTraceShards(
+        config,
+        rootDir,
+      );
+      // issue #351 (H1) — a probe-level EMFILE/ENFILE means "undetermined",
+      // not "no shards": check this BEFORE the `!hasTrace` guidance below so
+      // an exhaustion-degraded probe never gets misdiagnosed as a genuinely
+      // trace-absent project (`TRACE_NO_SHARDS_GUIDANCE`'s "set up the
+      // runner" advice would be actively wrong here).
+      if (opts.tests && shardProbeResourceExhausted) {
+        console.error(TRACE_SHARDS_PROBE_UNDETERMINED_GUIDANCE);
+        process.exit(1);
+      }
       if (opts.tests && !hasTrace) {
         console.error(TRACE_NO_SHARDS_GUIDANCE);
         process.exit(1);
@@ -238,7 +272,77 @@ export function registerImpactCommand(program: Command): void {
       // issue #279 — format-aware fatal-error handling for `scan()`: this
       // action had no catch of its own before, so the error used to
       // propagate uncaught to cli.ts's format-blind top-level catch.
-      const { graph, warnings } = await withFatalErrors(opts.format, () => scan(rootDir, config));
+      const {
+        graph,
+        warnings,
+        trace: scanTrace,
+      } = await withFatalErrors(opts.format, () => scan(rootDir, config));
+
+      // issue #351 (exit/diagnostic contract) — `system-resource-exhausted`
+      // in this scan's warnings means the graph may be missing entire
+      // spec/code trees, so NEITHER an impact blast radius NOR a `--tests`
+      // selection can be trusted — mirrors `check.ts`'s dedicated
+      // undeterminable exit, but `impact` has no `--gate` to condition on:
+      // this applies unconditionally, to EVERY mode (targets, `--diff`,
+      // `--tests`) and every early-exit path below (`finish` is the single
+      // choke point every one of them routes through). The JSON/text payload
+      // each path already produces is fully preserved — this only ADDS the
+      // dedicated stderr line and forces the final exit code to 1.
+      // `process.exitCode` (never `process.exit()`) so stdout/stderr already
+      // written by the exit path is never at risk of being cut off by an
+      // immediate process termination.
+      const resourceExhausted = warnings.some((w) => w.type === "system-resource-exhausted");
+      const finish = (code: 0 | 1): void => {
+        if (resourceExhausted) {
+          console.error(
+            "ERROR: scan hit file-descriptor exhaustion (system-resource-exhausted) — the graph " +
+              "may be missing entire spec/code trees, so this result (impact reach and/or " +
+              "--tests selection) cannot be trusted.",
+          );
+          console.error(
+            "       result is undetermined (exit 1); CI consumers should fall back to running " +
+              "the full test suite instead of trusting this selection. Once your environment " +
+              "has recovered (e.g. raise the OS file-descriptor limit via `ulimit -n`), re-run " +
+              "this command.",
+          );
+          process.exitCode = 1;
+        } else {
+          process.exitCode = code;
+        }
+      };
+
+      // issue #351 (H2 defense) — `hasTrace` above is the PRE-scan
+      // shard-existence probe; `scanTrace` is `scan()`'s own post-scan
+      // ingest result, sourced from `buildGraph`'s SECOND, independent
+      // `hasTraceShards` probe (see that function's own #351 doc comment).
+      // Nothing writes to the filesystem between the two calls, so they
+      // must always agree: `hasTrace === true` implies `scanTrace !==
+      // undefined`. When they disagree, `--tests`'s `testsToRun` (and the
+      // `exercises` edges feeding plain impact runs too) silently vanish —
+      // an E2E regression confirmed a baseline run producing real
+      // `testsToRun` while a degraded run exited 0 with ZERO warnings and no
+      // `testsToRun` key at all. Fix #1 above already covers the EMFILE/
+      // ENFILE cause (the scan-wide `resourceExhausted` check just above
+      // catches it via `finish`'s own message) — this is the structural
+      // backstop for every OTHER way the two probes could disagree (e.g. a
+      // race), so a silently-dropped trace selection can never look like a
+      // clean, trustworthy exit 0. Unconditional on `opts.tests`: a plain
+      // `impact` run silently losing `exercises` edges the same way must be
+      // caught too.
+      if (hasTrace && scanTrace === undefined) {
+        console.error(
+          "ERROR: trace-shard probe inconsistency — shards were detected before the scan, but " +
+            "the scan's own trace ingest found none; the result (impact reach and/or --tests " +
+            "selection) cannot be trusted.",
+        );
+        console.error(
+          "       result is undetermined (exit 1); CI consumers should fall back to running " +
+            "the full test suite instead of trusting this selection. Re-run this command.",
+        );
+        finish(1);
+        return;
+      }
+
       // issue #243 — read-only w.r.t. the lock: warn on a newer schema and
       // keep going (see commands/check.ts's identical comment).
       const { lock, schemaVersion } = readLockWithMeta(rootDir, config.lockFile);
@@ -248,14 +352,23 @@ export function registerImpactCommand(program: Command): void {
       // exclusion set (only when `trace.staleness === "exclude"`) so both the
       // BFS traversal below AND `--tests`'s testsToRun use the exact same
       // "what counts as evidence right now" trace snapshot.
+      //
+      // issue #351 ("Window B" elimination) — this used to call its own,
+      // independent `ingestTrace(config, rootDir)` (a SECOND ingest of the
+      // same shards `scan()` above already ingested, with no EMFILE/ENFILE
+      // guard of its own — see `check.ts`'s identical comment for the full
+      // rationale). Now reuses `scan()`'s own `trace` field; `scanTrace` and
+      // `hasTrace` (computed earlier, before `scan()` ran, from the same
+      // cheap glob probe) always agree since nothing writes to the file
+      // system in between.
       let ingestedTrace: import("../trace/ingest.js").IngestedTrace | undefined;
       let excludeStaleExercises: Set<string> | undefined;
-      if (hasTrace) {
+      if (scanTrace !== undefined) {
         // issue #275 — same ghost-node filter `check` applies: a node
         // `ingestTrace` produced that this graph can't resolve must never
         // reach `--tests`'s evidence join or the staleness exclusion below.
         const { filterTraceToGraph } = await import("../trace/ingest.js");
-        ingestedTrace = filterTraceToGraph(ingestTrace(config, rootDir), graph);
+        ingestedTrace = filterTraceToGraph(scanTrace, graph);
         if ((config.trace?.staleness ?? "warn") === "exclude") {
           const { computeStaleNodeIds } = await import("../trace/report.js");
           excludeStaleExercises = computeStaleNodeIds(graph, ingestedTrace);
@@ -356,7 +469,8 @@ export function registerImpactCommand(program: Command): void {
             // wired the json side here).
             reportGraphWarnings(warnings, opts.format);
           }
-          process.exit(0);
+          finish(0);
+          return;
         }
         entries = diffFiles.map((p) => ({ path: p, line: 1 }));
         inputDisplayLabels = diffFiles.slice();
@@ -396,7 +510,8 @@ export function registerImpactCommand(program: Command): void {
           // of `--format`. Print unconditionally (no `format` arg) rather
           // than gating on `opts.format`.
           reportGraphWarnings(warnings);
-          process.exit(1);
+          finish(1);
+          return;
         }
       }
 
@@ -446,7 +561,8 @@ export function registerImpactCommand(program: Command): void {
         // review F1 — same rationale as the scan-mode-mismatch exit above:
         // no JSON payload is produced on this path, so print unconditionally.
         reportGraphWarnings(warnings);
-        process.exit(1);
+        finish(1);
+        return;
       }
 
       if (startIds.length === 0) {
@@ -461,7 +577,8 @@ export function registerImpactCommand(program: Command): void {
         console.error(`No matching nodes found for: ${inputDisplayLabels.join(", ")}`);
         // review F1 — ditto: hard error, no JSON payload produced.
         reportGraphWarnings(warnings);
-        process.exit(1);
+        finish(1);
+        return;
       }
 
       const result = impact(
@@ -563,5 +680,12 @@ export function registerImpactCommand(program: Command): void {
         printImpactText(result);
         reportGraphWarnings(warnings, opts.format);
       }
+      // issue #351 — success path: the JSON/text payload above is unaffected
+      // (impact results and any `--tests` selection are still reported in
+      // full); `finish` only decides the FINAL exit code, forcing it to 1
+      // with the dedicated stderr diagnostic when this scan hit resource
+      // exhaustion, exit 0 otherwise (impact's normal, unconditional success
+      // code — there is no `--gate`/pass-fail concept here to override).
+      finish(0);
     });
 }

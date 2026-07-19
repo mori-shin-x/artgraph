@@ -59,7 +59,7 @@ export function printRenameText(result: RenameResult) {
       console.log(
         `WARNING: ${w.filePath} — unrecognized trace schema generation; left unrewritten (re-run the test suite to regenerate this trace)`,
       );
-    } else if (w.type === "unreadable-file") {
+    } else if (w.type === "unreadable-file" || w.type === "system-resource-exhausted") {
       console.log(`WARNING: ${w.message}`);
     } else {
       console.log(
