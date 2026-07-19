@@ -148,10 +148,22 @@ describe("impact-test-hub-303 (AC2 regression): impact(REQ-901) still forward-re
 // reachable via the hub's forward verifies, while the declared sibling is
 // blocked. Losing this would repeat the #286 gate-false-green regression
 // Option 2B fixed for reverse `exercises`.
+//
+// #361 update: reaching an evidence-only REQ through a restricted hub's
+// forward `verifies` now ALSO requires the matching predicate — REQ-EV must
+// carry its OWN `exercises` edge back to the BFS origin set (here,
+// fnStart), not just happen to share a hub with it (see traverse.ts's
+// `classifyEdgeTraversal`, R3a). Pre-#361 this fixture reached REQ-EV on
+// bare hub-membership alone (no `exercises` edge at all); that is exactly
+// the imprecise heuristic #361 tightens (it's also what let HIGH-2/#322's
+// daisy-chain and AXIS2 leaks through). The `exercises` edge added below
+// makes the fixture's implicit claim ("REQ-EV's evidence genuinely traces
+// back to fnStart") explicit and testable, preserving this test's original
+// intent under the new, stricter model.
 // ---------------------------------------------------------------------------
 
 describe("impact-test-hub-303 (HIGH-1): evidence-only REQ stays reachable through the hub; its declared sibling is blocked", () => {
-  it("symbol -> rev imports -> test hub -> fwd verifies reaches REQ-EV (no @impl anywhere) but NOT REQ-IMPL (@impl on a different symbol)", () => {
+  it("symbol -> rev imports -> test hub -> fwd verifies reaches REQ-EV (no @impl anywhere, matched by its own exercises evidence) but NOT REQ-IMPL (@impl on a different symbol)", () => {
     const nodes = new Map<string, GraphNode>([
       ["REQ-EV", node("REQ-EV", "req", "specs/x.md")],
       ["REQ-IMPL", node("REQ-IMPL", "req", "specs/x.md")],
@@ -183,6 +195,16 @@ describe("impact-test-hub-303 (HIGH-1): evidence-only REQ stays reachable throug
         target: "REQ-IMPL",
         kind: "verifies",
         provenances: ["code-tag"],
+      },
+      // #361 matching predicate: REQ-EV's own exercises evidence reaches
+      // fnStart (the BFS origin) — without this edge REQ-EV would no longer
+      // be collected at all under the new model (see the describe-block
+      // comment above).
+      {
+        source: "REQ-EV",
+        target: "symbol:src/x.ts#fnStart",
+        kind: "exercises",
+        provenances: ["coverage"],
       },
     ];
     const result = impact({ nodes, edges }, ["symbol:src/x.ts#fnStart"], {} as LockFile);
@@ -473,22 +495,28 @@ describe("impact-test-hub-303 (MEDIUM-2): reqProvenance excludes the blocked sib
 });
 
 // ---------------------------------------------------------------------------
-// Known limitation (issue #322) pin — the HIGH-1 shape above proved a
-// declared REQ is blocked while an evidence-only REQ stays reachable through
-// a shared restricted hub. This block pins the residual gap left OPEN on
-// purpose: rule (a)'s evidence-only exemption (traverse.ts) is a per-EDGE
-// predicate, not a per-hub one, so when the SAME hub is `verifies`-incident
-// to MORE THAN ONE evidence-only REQ, a BFS that legitimately needs one of
-// them still leaks its evidence-only SIBLING(s) too — even a sibling with
-// zero relationship to the start symbol. This is accepted/documented, not
-// fixed, by PR #321/#303 — see traverse.ts's file-header "Known residual
-// limitation" note and rule (a)'s comment. If this assertion ever starts
-// failing (REQ-EV2 no longer appears), it means issue #322 landed a fix and
-// this pin should be revisited/removed, not "repaired" back to green.
+// Issue #322 RESOLVED by #361 — the HIGH-1 shape above proved a declared REQ
+// is blocked while an evidence-only REQ stays reachable through a shared
+// restricted hub. This block used to pin the residual gap left OPEN on
+// purpose pre-#361: rule (a)'s evidence-only exemption was a per-EDGE
+// predicate, not a per-hub one, so when the SAME hub was `verifies`-incident
+// to MORE THAN ONE evidence-only REQ, a BFS that legitimately needed one of
+// them also leaked its evidence-only SIBLING(s) — even a sibling with zero
+// relationship to the start symbol.
+//
+// #361's two-layer propagation + matching predicate closes this structurally
+// on TWO independent levels: (1) a restricted hub's forward `verifies` now
+// requires the target REQ's OWN `exercises` evidence to reach the BFS's
+// origin set (so REQ-EV2, with zero relationship to fnStart, never matches
+// regardless of hub-sharing), and (2) even a MATCHED REQ (REQ-EV1 below) is
+// reached `"terminal"` (weak, collect-but-do-not-reopen) — it could never
+// reverse-walk back out to a sibling through the hub even without the
+// matching predicate. Either mechanism alone closes this fixture's original
+// leak; both apply here.
 // ---------------------------------------------------------------------------
 
-describe("impact-test-hub-303 (known limitation, issue #322 pin): sibling evidence-only REQs both leak through one shared hub", () => {
-  it("two evidence-only REQs (no @impl anywhere) verified by the SAME test hub: both land in impactReqs even though the start symbol has zero relationship to REQ-EV2", () => {
+describe("impact-test-hub-303 (issue #322 RESOLVED by #361): sibling evidence-only REQs no longer leak through one shared hub", () => {
+  it("REQ-EV1 (own exercises evidence reaches fnStart) is collected; REQ-EV2 (zero relationship to fnStart beyond sharing the hub) is not, even though both are evidence-only and verified by the SAME hub", () => {
     const nodes = new Map<string, GraphNode>([
       ["REQ-EV1", node("REQ-EV1", "req", "specs/x.md")],
       ["REQ-EV2", node("REQ-EV2", "req", "specs/x.md")],
@@ -497,8 +525,7 @@ describe("impact-test-hub-303 (known limitation, issue #322 pin): sibling eviden
     ]);
     const edges: GraphEdge[] = [
       // The ONLY route from fnStart to the hub is a bare import declaration —
-      // fnStart has no `implements` edge to either REQ-EV1 or REQ-EV2, and no
-      // relationship to REQ-EV2 at all beyond sharing this hub.
+      // fnStart has no `implements` edge to either REQ-EV1 or REQ-EV2.
       {
         source: "file:tests/y.test.ts",
         target: "symbol:src/y.ts#fnStart",
@@ -506,8 +533,9 @@ describe("impact-test-hub-303 (known limitation, issue #322 pin): sibling eviden
         provenances: ["ts-import"],
       },
       // Neither REQ has an `implements` edge anywhere in this graph — both
-      // are evidence-only, so rule (a) leaves the hub's forward `verifies`
-      // OPEN for both, per-edge.
+      // are evidence-only, so R3a's `reqsWithImplements` gate alone leaves
+      // the hub's forward `verifies` open to both, per-edge, exactly as
+      // pre-#361. The matching predicate below is what now tells them apart.
       {
         source: "file:tests/y.test.ts",
         target: "REQ-EV1",
@@ -520,10 +548,20 @@ describe("impact-test-hub-303 (known limitation, issue #322 pin): sibling eviden
         kind: "verifies",
         provenances: ["code-tag"],
       },
+      // REQ-EV1's own exercises evidence genuinely reaches the BFS origin
+      // (fnStart) — the matching predicate holds, so it is collected.
+      {
+        source: "REQ-EV1",
+        target: "symbol:src/y.ts#fnStart",
+        kind: "exercises",
+        provenances: ["coverage"],
+      },
+      // REQ-EV2 deliberately has NO exercises edge at all — its ONLY
+      // relationship to fnStart is sharing this hub, which #361 no longer
+      // treats as sufficient.
     ];
     const result = impact({ nodes, edges }, ["symbol:src/y.ts#fnStart"], {} as LockFile);
-    // Accepted current behavior (NOT the desired end state): both evidence-only
-    // REQs leak through, including the one (REQ-EV2) unrelated to fnStart.
-    expect(result.impactReqs.sort()).toEqual(["REQ-EV1", "REQ-EV2"]);
+    expect(result.impactReqs).toEqual(["REQ-EV1"]);
+    expect(result.impactReqs).not.toContain("REQ-EV2");
   });
 });

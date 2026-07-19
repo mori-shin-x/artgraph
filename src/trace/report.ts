@@ -80,6 +80,17 @@ function pairCompare(a: ClaimEvidencePair, b: ClaimEvidencePair): number {
  * BFS (spec 019 FR-001〜003) — a node never rolls UP into its container,
  * only DOWN into what it contains.
  *
+ * HIGH-3 (issue #361 Step 9 retro) pin — this forward-only (parent claim <-
+ * descendant evidence, never the reverse) direction MUST agree with
+ * `src/graph/traverse.ts`'s `classifyEdgeTraversal`'s R1 rule for `contains`
+ * (forward-only source -> target, reverse always blocked, issue #215/spec
+ * 019 FR-001〜003) — both are independent implementations of the same
+ * "containment evidence/reachability only flows down, never up" invariant.
+ * See `classifyEdgeTraversal`'s `"contains"` case for the other side of this
+ * cross-reference, and `tests/impact-contains-direction-361.test.ts` for the
+ * pinned integration test asserting both implementations agree on one
+ * shared fixture.
+ *
  * SCOPE: used ONLY inside `classifyEvidence`'s `implements`-edge loop below
  * (claim corroboration: `corroborated` / `unexercisedClaims`). Do NOT reuse
  * this for `suggestedImpls`, `infrastructure`, or `isExclusiveNode` — those

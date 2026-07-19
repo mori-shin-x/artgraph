@@ -86,7 +86,9 @@ Non-goals: 仕様文の意味的な正しさの判定、要求の良し悪し評
 - `imports`（code→code）: TS AST から派生。デグレ波及面
 - `exercises`（req→symbol|file）: 正規化済みテスト実行トレース成果物（`.artgraph/trace/`、spec 020）から導出。provenance は `coverage` のみ
 
-統合 impact クエリ: `git diff` の変更を起点に全エッジ型を双方向トラバース。例 `impact FR-001` は「依存する設計書 →（推移的に）詳細設計書 →（implements）実装シンボル →（verifies）テスト → さらにそのシンボルのコード依存元」まで一本で返す（＝要求から V 字の末端まで）。出力 = `{ 影響を受ける依存元コード, 紐づくドキュメント/仕様, drift したリンク, 未リンクの新シンボル }`。
+統合 impact クエリ: `git diff` の変更を起点に全エッジ型をトラバース。例 `impact FR-001` は「依存する設計書 →（推移的に）詳細設計書 →（implements）実装シンボル →（verifies）テスト → さらにそのシンボルのコード依存元」まで一本で返す（＝要求から V 字の末端まで）。出力 = `{ 影響を受ける依存元コード, 紐づくドキュメント/仕様, drift したリンク, 未リンクの新シンボル }`。
+
+トラバースは全エッジが無条件に対等ではない — 二層伝播（issue #361）: `implements` / `verifies`（宣言由来） / `contains`（doc→req|task, 順方向のみ）/ `depends_on`・`derives_from`（frontmatter 等の明示宣言を持つ辺）のような**宣言された**辺は推移的（strong）に辿るが、`exercises`（req↔code, 観測証拠）や `depends_on`・`derives_from` のうち provenance が inline-link のみの辺のような**偶然の観測**由来の辺は「収集はするが、そこから先へは展開しない」（weak / collect-terminal）。弱い到達は次の一歩の通行権を生まない、という不変条件により、テストハブ経由の無関係な兄弟 REQ 混入（#215/#286/#303/#322）やドキュメント間リンクからの無制限ファンアウト（#254）が構造的に止まる。詳細: [specs/020-coverage-derived-edges/spec.md FR-017](../specs/020-coverage-derived-edges/spec.md) と `src/graph/traverse.ts` のファイルヘッダコメント。
 
 エッジの認識論的クラスは 3 つある: **宣言**（`@impl` / `[REQ-ID]` / frontmatter — 誰かの主張。捏造可能）、**静的構造**（`ts-import` — バイト列からの機械的導出。捏造不可）、**実行証拠**（`exercises` — テスト実行で観測された事実。実行しないと生成されないため捏造不可）。`exercises` は宣言エッジ（`implements`）に黙って昇格せず、突き合わせにのみ使う（宣言と証拠が一致すれば `implements` の provenance に `coverage` を追記、証拠のみなら独立エッジのまま）。決定性は「trace 成果物を入力アーティファクトとして形式化する」ことで維持される: `graph = f(files, trace)`。同一の files と trace からは byte-identical な出力が得られ、鮮度（staleness）判定も同じ content-hash 照合の枠組みで決まる（詳細: [specs/020-coverage-derived-edges/](../specs/020-coverage-derived-edges/)）。
 

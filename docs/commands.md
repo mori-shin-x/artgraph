@@ -306,6 +306,31 @@ with no `@impl` tags or `.trace.lock`, so it works from day one. Requirement
 IDs are rejected as inputs — see the [rename note](#rename-does-not-reassign-impl-tags)
 if you need to trace the other direction.
 
+### Traversal semantics: declared edges are transitive, observed edges are collect-terminal (issue #361)
+
+Not every edge kind propagates the same way. **Declared** edges — `implements`,
+`verifies`, `contains` (doc → req|task, forward only), and `depends_on`/
+`derives_from` carrying an explicit declaration (frontmatter or an inline
+`(depends_on: ...)` annotation) — are strong: `impact` follows them
+transitively, hop after hop. **Observed** edges — `exercises` (req ↔ code,
+derived from test-execution coverage, [`artgraph trace`](#artgraph-trace))
+and a `depends_on`/`derives_from` edge whose provenance is inline-link-only
+(an author happened to write a markdown link, not a declared dependency) —
+are weak: `impact` still *collects* whatever they reach (it lands in the
+output), but never re-opens it for a further hop. A REQ reached only through
+someone else's incidental test coverage, or a doc reached only through
+someone else's markdown link, cannot itself become a bridge to a THIRD,
+unrelated node. A later declared (strong) path to the same node still
+upgrades it to fully transitive.
+
+This is why, for example, changing a symbol that an unrelated REQ's test
+happens to call no longer pulls that REQ's own other dependencies into the
+impact set, and why a single markdown link from a hub doc no longer fans out
+to everything the linked doc itself links to. See
+[`specs/020-coverage-derived-edges/spec.md` FR-017](../specs/020-coverage-derived-edges/spec.md)
+and `src/graph/traverse.ts`'s file-header comment for the full edge-kind ×
+direction classification table.
+
 ### `impact --diff --tests` — test selection from evidence (spec 020) <a id="impact---diff---tests--test-selection-from-evidence-spec-020"></a>
 
 `--tests` (only valid alongside `--diff`) lists exactly the `[REQ-NNN]`-tagged
