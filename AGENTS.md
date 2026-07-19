@@ -39,7 +39,7 @@ For full CLI reference, run `pnpm exec artgraph --help` or see https://github.co
 
 ### Step 0-pre: graph-core 変更時の shift-left インパクト調査 (#301)
 
-`src/graph/traverse.ts` / `src/graph/builder.ts`、エッジ意味論、または `impact()` / `check()` / `buildGraph()` などの graph-core 関数を変更する issue/PR では、設計 (Step 0) の**前に** [`.claude/skills/artgraph-graph-primitive-impact/SKILL.md`](./.claude/skills/artgraph-graph-primitive-impact/SKILL.md) の 9 チェック調査を実行する。調査は**クリーンな Sonnet 5 (`claude-sonnet-5`) サブエージェント**に委譲する (brief テンプレは SKILL.md 内)。
+`src/graph/traverse.ts` / `src/graph/builder.ts`、エッジ意味論、または `impact()` / `check()` / `buildGraph()` などの graph-core 関数を変更する issue/PR では、設計 (Step 0) の**前に** [`.claude/skills/artgraph-graph-primitive-impact/SKILL.md`](./.claude/skills/artgraph-graph-primitive-impact/SKILL.md) のチェックリスト調査を実行する (チェック数は skill 側が正)。調査は**クリーンな Sonnet 5 (`claude-sonnet-5`) サブエージェント**に委譲する (brief テンプレは SKILL.md 内)。
 
 この skill は一般配布 (`templates/skills/`) には含まれないリポジトリ内部専用 skill で、canonical コピーは `.claude/skills/` 配下のみ。`artgraph doctor` / `artgraph init --force` は canonical 外のディレクトリに触れないため共存できる。
 
