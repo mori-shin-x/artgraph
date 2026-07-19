@@ -16,6 +16,9 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { runAt } from "./helpers.js";
 import { SCHEMA_VERSION, hashContent } from "../src/trace/schema.js";
+import { buildGraph } from "../src/graph/builder.js";
+import { buildSymbolNameTable } from "../src/trace/symbol-table.js";
+import type { ArtgraphConfig } from "../src/types.js";
 
 const created: string[] = [];
 function track(dir: string): string {
@@ -365,6 +368,196 @@ describe("issue #350 — testPatterns-only negative pattern no longer produces a
       } finally {
         rmSync(tmp, { recursive: true, force: true });
       }
+    }
+  });
+});
+
+// PR #355 meta-review (M3) — every fixture above (`makeGhostFixture`) uses
+// `testPatterns: ["!src/ghost.ts"]`: a pool with NO positive pattern at all.
+// `globCodeFiles` (src/parsers/typescript.ts) short-circuits to `[]`
+// whenever a pattern list's own positive matches are empty (issue #266's
+// early return), so that negative pattern never gets a chance to exclude
+// anything from a non-empty pool in the first place — every assertion above
+// holds regardless of whether pool-scoped negation inside a REAL pool (one
+// with a positive pattern too) actually works. This block instead uses a
+// realistic config — `testPatterns: ["src/**/*.test.ts", "!src/legacy/**"]`,
+// mirroring `tests/issue-350-pool-separation.test.ts`'s own repro — and pins
+// the full trace ingestion path (`buildSymbolNameTable`, `filterTraceToGraph`,
+// shard evidence resolution via `check`/`trace report`/`trace status`)
+// against it end to end.
+//
+//   (a) src/legacy/orphan.test.ts — named and worded exactly like a test
+//       file (it even carries a `[REQ-900]`-style title in its own source
+//       text), and matches testPatterns' own positive pattern
+//       (`src/**/*.test.ts`) by name. It still gets excluded from the
+//       testPatterns POOL by that pool's own negative pattern
+//       (`!src/legacy/**`) — but it also matches `include`
+//       (`src/**/*.ts`), so it survives as an ordinary kind:"file" graph
+//       member (post-#350 pool separation), and `buildSymbolNameTable`
+//       (include-only discovery) sees it too.
+//   (b) src/normal.test.ts — an ordinary test file, unaffected by the
+//       legacy negation. Proves testPatterns' positive pattern is doing
+//       real work elsewhere in this same fixture (kind:"test" + a real
+//       `verifies` edge), not just coincidentally matching via `include`.
+//   (c) src/normal.ts — an ordinary src file: the trace's second evidence
+//       target, a plain include-pool control with no testPatterns
+//       involvement at all.
+function makeRealisticPoolFixture(configExtra: Record<string, unknown> = {}): string {
+  const orphanTestContent =
+    "export function legacyFn() {}\n\n" +
+    `describe("[${"REQ-900"}] orphan", () => {\n` +
+    '  it("calls legacyFn", () => {\n' +
+    "    legacyFn();\n" +
+    "  });\n" +
+    "});\n";
+  const normalTestContent =
+    'import { normalFn } from "./normal.js";\n\n' +
+    `describe("[${"REQ-902"}] normal", () => {\n` +
+    '  it("calls normalFn", () => {\n' +
+    "    normalFn();\n" +
+    "  });\n" +
+    "});\n";
+  const normalSrcContent = "export function normalFn() {}\n";
+
+  const tmp = makeRepo(
+    {
+      "src/legacy/orphan.test.ts": orphanTestContent,
+      "src/normal.test.ts": normalTestContent,
+      "src/normal.ts": normalSrcContent,
+      "specs/spec.md":
+        "# Fixture\n\n" +
+        "- REQ-900: reached only via src/legacy/orphan.test.ts's trace evidence " +
+        "(pool-excluded-from-testPatterns file).\n" +
+        "- REQ-901: reached only via src/normal.ts's trace evidence " +
+        "(plain include-pool file).\n",
+    },
+    {
+      include: ["src/**/*.ts", "!**/node_modules/**"],
+      testPatterns: ["src/**/*.test.ts", "!src/legacy/**"],
+      ...configExtra,
+    },
+  );
+  writeShard(tmp, "w1.jsonl", [
+    metaLine(),
+    testLine({
+      testName: `[${"REQ-900"}] exercises legacyFn via the pool-excluded legacy file`,
+      testFile: "tests/req900.test.ts",
+      hits: [{ file: "src/legacy/orphan.test.ts", fn: "legacyFn" }],
+      hashes: { "src/legacy/orphan.test.ts": hashContent(orphanTestContent) },
+    }),
+    testLine({
+      testName: `[${"REQ-901"}] exercises normalFn via a plain include-pool file`,
+      testFile: "tests/req901.test.ts",
+      hits: [{ file: "src/normal.ts", fn: "normalFn" }],
+      hashes: { "src/normal.ts": hashContent(normalSrcContent) },
+    }),
+  ]);
+  return tmp;
+}
+
+describe("PR #355 meta-review (M3) — realistic testPatterns pool (positive pattern + pool-scoped negative pattern) trace ingestion", () => {
+  it("M3-T1: pool separation keeps (a) a real, non-ghost graph member with NO verifies edge (negative pattern proven to actually apply), and acceptExercises rescues both REQs to exercised with offGraph 0", async () => {
+    const tmp = makeRealisticPoolFixture({ trace: { acceptExercises: true } });
+    try {
+      const config: ArtgraphConfig = {
+        include: ["src/**/*.ts", "!**/node_modules/**"],
+        specDirs: ["specs"],
+        testPatterns: ["src/**/*.test.ts", "!src/legacy/**"],
+        mode: "symbol",
+        lockFile: ".trace.lock",
+      };
+
+      // (1) pool separation: (a) survives as kind:"file" via `include` even
+      // though testPatterns' own negative pattern drops it from the
+      // testPatterns pool; (b) is a normal kind:"test" member, proving the
+      // pool's positive pattern still does real work elsewhere.
+      const { graph } = buildGraph(tmp, config);
+      expect(graph.nodes.get("file:src/legacy/orphan.test.ts")?.kind).toBe("file");
+      expect(graph.nodes.get("file:src/normal.test.ts")?.kind).toBe("test");
+      // Symbol-mode decomposition of (a) as an ordinary (non-test) file
+      // produces the exact node id `buildSymbolNameTable` will resolve the
+      // trace hit to — so it is structurally impossible for this hit to be
+      // a ghost.
+      expect(graph.nodes.has("symbol:src/legacy/orphan.test.ts#legacyFn")).toBe(true);
+
+      // (3) discriminating power: despite (a)'s source text carrying a
+      // `[REQ-900]`-style test title (the same shape that gives (b) its
+      // `verifies` edge below), (a) has NO `verifies` edge at all — proof
+      // the pool's negative pattern actually excluded it from test
+      // classification, not merely that it "happens" to still resolve.
+      expect(
+        graph.edges.some(
+          (e) => e.kind === "verifies" && e.source === "file:src/legacy/orphan.test.ts",
+        ),
+      ).toBe(false);
+      expect(
+        graph.edges.some((e) => e.kind === "verifies" && e.source === "file:src/normal.test.ts"),
+      ).toBe(true);
+
+      // `buildSymbolNameTable` is include-only discovery (never testPatterns)
+      // — (a) is in scope regardless of its testPatterns-pool exclusion, and
+      // resolves the hit at symbol grain, matching the graph node above.
+      const { table } = buildSymbolNameTable(tmp, config.include, config.testPatterns);
+      expect(table.hasFile("src/legacy/orphan.test.ts")).toBe(true);
+      expect(table.resolve("src/legacy/orphan.test.ts", "legacyFn")).toEqual({
+        kind: "symbol",
+        id: "symbol:src/legacy/orphan.test.ts#legacyFn",
+      });
+
+      // (2) end-to-end: neither REQ has an `@impl` anywhere, so (like A-T1)
+      // `acceptExercises: true` is the only path to `exercised` — proving
+      // the trace evidence for both (a) and (c) actually reached `check`.
+      const { stdout, exitCode } = await runAt(tmp, ["check", "--format", "json"]);
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(stdout);
+      const req900 = result.coverage.find((c: { reqId: string }) => c.reqId === "REQ-900");
+      const req901 = result.coverage.find((c: { reqId: string }) => c.reqId === "REQ-901");
+      expect(req900.status).toBe("exercised");
+      expect(req901.status).toBe("exercised");
+      expect(result.uncovered).not.toContain("REQ-900");
+      expect(result.uncovered).not.toContain("REQ-901");
+
+      // offGraph stays 0 — neither (a)'s nor (c)'s evidence was dropped as a
+      // ghost by `filterTraceToGraph`.
+      const { stdout: statusOut } = await runAt(tmp, ["trace", "status", "--format", "json"]);
+      const statusResult = JSON.parse(statusOut);
+      expect(statusResult.diagnostics.offGraph).toBe(0);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("M3-T2: same fixture without acceptExercises — trace report classifies both REQs' exclusive evidence as suggestedImpls (existing A-T3 convention), and (a) still has no verifies edge", async () => {
+    const tmp = makeRealisticPoolFixture();
+    try {
+      const { stdout, exitCode } = await runAt(tmp, ["trace", "report", "--format", "json"]);
+      expect(exitCode).toBe(0);
+      const result = JSON.parse(stdout);
+      expect(result.suggestedImpls).toEqual(
+        expect.arrayContaining([
+          { reqId: "REQ-900", node: "symbol:src/legacy/orphan.test.ts#legacyFn" },
+          { reqId: "REQ-901", node: "symbol:src/normal.ts#normalFn" },
+        ]),
+      );
+
+      // Re-pin the negative-pattern discriminating power on this variant
+      // too: (a) must not have been reclassified as a test.
+      const config: ArtgraphConfig = {
+        include: ["src/**/*.ts", "!**/node_modules/**"],
+        specDirs: ["specs"],
+        testPatterns: ["src/**/*.test.ts", "!src/legacy/**"],
+        mode: "symbol",
+        lockFile: ".trace.lock",
+      };
+      const { graph } = buildGraph(tmp, config);
+      expect(graph.nodes.get("file:src/legacy/orphan.test.ts")?.kind).toBe("file");
+      expect(
+        graph.edges.some(
+          (e) => e.kind === "verifies" && e.source === "file:src/legacy/orphan.test.ts",
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 });
