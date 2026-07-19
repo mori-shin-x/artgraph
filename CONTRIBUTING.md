@@ -99,13 +99,13 @@ Keep slugs short, lowercase, and hyphen-separated (e.g. `docs/oss-standards`).
 
 1. Branch off `main` using the naming convention above.
 2. Keep commits focused and follow the message style above.
-3. Run `pnpm build && pnpm test && pnpm knip` locally.
+3. Run `pnpm build && pnpm test && pnpm knip && pnpm lint && pnpm format:check` locally.
 4. Open a PR and fill in [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md):
    - Summary and linked issue
    - Change-type checkbox
    - Testing notes
    - Breaking-change flag
-5. Wait for CI (build / knip / test on Node 22) to pass.
+5. Wait for CI (lint / format, build / knip / test on Node 22) to pass.
 
 Add new tests whenever you change behavior. Bug fixes should include a regression test.
 
