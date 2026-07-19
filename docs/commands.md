@@ -331,6 +331,17 @@ to everything the linked doc itself links to. See
 and `src/graph/traverse.ts`'s file-header comment for the full edge-kind ×
 direction classification table.
 
+A restricted test hub's own `verifies` to an evidence-only REQ additionally
+requires that REQ's own `exercises` evidence to reach back to the walk's
+origin (the "matching predicate") — **except** in a project that has never
+ingested a trace shard, where the graph has zero `exercises` edges anywhere
+and the predicate can never be satisfied by construction; `impact` fails open
+in that one case (bare hub membership is enough, as it was pre-#361) so a
+trace-absent project's evidence-only REQs still surface instead of being
+silently dropped from `impactReqs` / `check --diff --gate` scope (issue
+#363). The moment the graph has even one `exercises` edge anywhere, the
+predicate is mandatory again project-wide.
+
 ### `impact --diff --tests` — test selection from evidence (spec 020) <a id="impact---diff---tests--test-selection-from-evidence-spec-020"></a>
 
 `--tests` (only valid alongside `--diff`) lists exactly the `[REQ-NNN]`-tagged

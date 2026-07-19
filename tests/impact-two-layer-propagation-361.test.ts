@@ -516,6 +516,19 @@ describe("gate reachability (#361): evidence-only REQ survives current∪baselin
       ["REQ-902", node("REQ-902", "req", "specs/x.md")],
       ["symbol:src/sample.ts#fnB", node("symbol:src/sample.ts#fnB", "symbol", "src/sample.ts")],
       ["file:tests/hub.test.ts", node("file:tests/hub.test.ts", "test", "tests/hub.test.ts")],
+      // H1 (issue #363) fixture note: REQ-UNRELATED / fnZ exist SOLELY so
+      // `currentGraph` has at least one `exercises` edge somewhere in the
+      // graph (`graphHasExercisesEdges === true`). Without this, `currentGraph`
+      // would be indistinguishable from a shard-less project (zero exercises
+      // edges graph-wide) and the H1 fail-open fallback would make R3a
+      // collect REQ-902 anyway (bare hub membership), which would make this
+      // fixture assert the WRONG thing — this test's actual intent is "the
+      // graph HAS exercises evidence somewhere, but REQ-902's own evidence
+      // does not reach the BFS origin (fnB)", i.e. the matching predicate is
+      // active and genuinely fails, not "matching is impossible in
+      // principle".
+      ["REQ-UNRELATED", node("REQ-UNRELATED", "req", "specs/unrelated.md")],
+      ["symbol:src/z.ts#fnZ", node("symbol:src/z.ts#fnZ", "symbol", "src/z.ts")],
     ]);
     const hubEdges: GraphEdge[] = [
       {
@@ -530,8 +543,18 @@ describe("gate reachability (#361): evidence-only REQ survives current∪baselin
         kind: "verifies",
         provenances: ["code-tag"],
       },
+      // H1 fixture note (see above): unrelated exercises edge, not connected
+      // to fnB/REQ-902/hub.test.ts at all — present only so
+      // `graphHasExercisesEdges` is true in BOTH currentGraph and
+      // baselineGraph, keeping the matching-predicate active in current too.
+      {
+        source: "REQ-UNRELATED",
+        target: "symbol:src/z.ts#fnZ",
+        kind: "exercises",
+        provenances: ["coverage"],
+      },
     ];
-    const currentGraph = { nodes, edges: [...hubEdges] }; // no exercises edge: matching predicate fails
+    const currentGraph = { nodes, edges: [...hubEdges] }; // exercises edge exists graph-wide, but not for REQ-902 -> fnB: matching predicate fails
     const baselineGraph = {
       nodes,
       edges: [
@@ -553,5 +576,118 @@ describe("gate reachability (#361): evidence-only REQ survives current∪baselin
 
     const union = new Set([...currentScope, ...baselineScope]);
     expect(union.has("REQ-902")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H1 (issue #363) — the R3a matching predicate (`reqsExercisingOrigin`) is
+// built exclusively from `exercises` edges, so a project that has never
+// ingested a trace shard has a PERMANENTLY EMPTY predicate: applying it
+// unconditionally silently erased every evidence-only REQ reached through a
+// restricted hub, even though the project simply has no trace data yet (not
+// a genuine matching failure). Fixed by failing open — bare hub membership
+// suffices — whenever the WHOLE graph has zero `exercises` edges; the
+// predicate stays mandatory the moment even one `exercises` edge exists
+// anywhere in the graph. Regression fixtures below are (i)/(ii)/(iii) from
+// the H1 meta-review: (i) shard-less fail-open (this file's new coverage),
+// (ii) matching-predicate-active sibling exclusion (already covered by the
+// AXIS2 "REQ-EV1 (matched).../REQ-EV2 (sibling, no exercises at all)" test
+// above — confirmed to still pass unmodified, no duplicate needed), and
+// (iii) the partial-trace residual limitation this fallback deliberately
+// does NOT cover.
+// ---------------------------------------------------------------------------
+
+describe("H1 (#363): matching predicate fails open when the whole graph has zero exercises edges", () => {
+  it("fixture (i) shard-less: hub-verified evidence-only REQ-EV1 IS collected via bare hub membership when the graph has NO exercises edges anywhere", () => {
+    const nodes = new Map<string, GraphNode>([
+      ["REQ-EV1", node("REQ-EV1", "req", "specs/x.md")],
+      [
+        "symbol:src/start.ts#fnStart",
+        node("symbol:src/start.ts#fnStart", "symbol", "src/start.ts"),
+      ],
+      ["file:tests/hub.test.ts", node("file:tests/hub.test.ts", "test", "tests/hub.test.ts")],
+    ]);
+    const edges: GraphEdge[] = [
+      {
+        source: "file:tests/hub.test.ts",
+        target: "symbol:src/start.ts#fnStart",
+        kind: "imports",
+        provenances: ["ts-import"],
+      },
+      {
+        source: "file:tests/hub.test.ts",
+        target: "REQ-EV1",
+        kind: "verifies",
+        provenances: ["code-tag"],
+      },
+      // Deliberately NO `exercises` edge anywhere in this graph — this IS
+      // the fixture: a project that has never ingested a trace shard.
+    ];
+    const r = impact({ nodes, edges }, ["symbol:src/start.ts#fnStart"], {} as LockFile);
+    // Pre-#361/#303-era behavior, restored by the H1 fail-open fallback: the
+    // matching predicate cannot be satisfied (no exercises edges exist to
+    // satisfy it with), so R3a falls back to bare hub membership instead of
+    // unconditionally blocking every evidence-only REQ.
+    expect(r.impactReqs).toEqual(["REQ-EV1"]);
+  });
+
+  it("fixture (iii) mixed/partial-trace (known residual limitation, tracked as a follow-up issue): once the graph has exercises evidence ANYWHERE, the predicate is mandatory again for every restricted-hub REQ — a hub-verified REQ whose OWN evidence lands elsewhere (not on this walk's origin) is excluded exactly like a REQ with no evidence at all", () => {
+    const nodes = new Map<string, GraphNode>([
+      ["REQ-EV1", node("REQ-EV1", "req", "specs/x.md")],
+      ["REQ-EV2", node("REQ-EV2", "req", "specs/x.md")],
+      [
+        "symbol:src/start.ts#fnStart",
+        node("symbol:src/start.ts#fnStart", "symbol", "src/start.ts"),
+      ],
+      [
+        "symbol:src/elsewhere.ts#fnElsewhere",
+        node("symbol:src/elsewhere.ts#fnElsewhere", "symbol", "src/elsewhere.ts"),
+      ],
+      ["file:tests/hub.test.ts", node("file:tests/hub.test.ts", "test", "tests/hub.test.ts")],
+    ]);
+    const edges: GraphEdge[] = [
+      {
+        source: "file:tests/hub.test.ts",
+        target: "symbol:src/start.ts#fnStart",
+        kind: "imports",
+        provenances: ["ts-import"],
+      },
+      // REQ-EV1: traced, but its OWN exercises evidence lands on an
+      // unrelated node (fnElsewhere), never on this walk's origin
+      // (fnStart) — a genuinely partial-trace project (some coverage
+      // exists, just not for this REQ/origin pair).
+      {
+        source: "file:tests/hub.test.ts",
+        target: "REQ-EV1",
+        kind: "verifies",
+        provenances: ["code-tag"],
+      },
+      {
+        source: "REQ-EV1",
+        target: "symbol:src/elsewhere.ts#fnElsewhere",
+        kind: "exercises",
+        provenances: ["coverage"],
+      },
+      // REQ-EV2: tag-only, no exercises evidence anywhere.
+      {
+        source: "file:tests/hub.test.ts",
+        target: "REQ-EV2",
+        kind: "verifies",
+        provenances: ["code-tag"],
+      },
+    ];
+    const r = impact({ nodes, edges }, ["symbol:src/start.ts#fnStart"], {} as LockFile);
+    // The graph HAS an exercises edge (REQ-EV1 -> fnElsewhere), so
+    // `graphHasExercisesEdges` is true and the H1 fail-open fallback does
+    // NOT apply — the matching predicate is mandatory. Neither REQ is
+    // collected: REQ-EV1 despite having real (just origin-unmatched)
+    // evidence, exactly like a REQ with none at all. This asymmetry between
+    // "shard-less" (fixture i, fails open) and "partial-trace" (this
+    // fixture, stays strict) is a known, deliberately accepted residual
+    // limitation of the (origin, REQ)-pair-grained matching predicate
+    // (tracked as a follow-up issue) — pinned here so a future change to
+    // this behavior is a conscious decision, not an accidental regression.
+    expect(r.impactReqs).not.toContain("REQ-EV1");
+    expect(r.impactReqs).not.toContain("REQ-EV2");
   });
 });

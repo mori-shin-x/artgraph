@@ -113,6 +113,15 @@ import type { LockFile } from "../types.js";
 //       reverse-walk back out to reach the hub's OTHER evidence-only
 //       siblings, closing the residual leak `tests/impact-test-hub-303.test
 //       .ts`'s old "known limitation, issue #322 pin" block documented).
+//       H1 (issue #363): the matching predicate REQUIRES `exercises` evidence
+//       to exist, so it fails open — bare hub membership suffices, as
+//       pre-#361 — whenever the WHOLE graph has zero `exercises` edges
+//       (`graphHasExercisesEdges`, see below): a project that has never
+//       ingested a trace shard can never satisfy the predicate by
+//       construction, and applying it anyway silently erases every
+//       evidence-only REQ from `impactReqs`/gate scope rather than legitimately
+//       finding no match. See the matching-predicate paragraph below for the
+//       partial-trace residual limitation this fallback does NOT cover.
 //   R3b restricted hub's forward `imports`: always blocked (unchanged).
 //   R4  a stale `exercises` edge (`excludeStaleExercises`) is skipped
 //       entirely, before classification runs at all (unchanged).
@@ -163,6 +172,26 @@ import type { LockFile } from "../types.js";
 // (rather than from `visited`, which grows as the BFS explores) is what
 // keeps this predicate from becoming a NEW passport-transfer mechanism itself
 // (a node visited mid-walk must never retroactively count as "origin").
+//
+// H1 (issue #363) fail-open fallback — the matching predicate above can only
+// ever be satisfied by a real `exercises` edge, so a project that has never
+// ingested a trace shard (zero `exercises` edges anywhere in the graph) has a
+// PERMANENTLY EMPTY predicate: every evidence-only REQ would be unconditionally
+// blocked at R3a, not because matching legitimately failed but because
+// matching is impossible in principle for that project. `classifyEdgeTraversal`
+// therefore short-circuits R3a's matching-predicate check behind
+// `graphHasExercisesEdges` (computed once, hoisted to the top of `impact()` —
+// the same boolean spec 020's `reqProvenance` gate already needed, now shared
+// rather than duplicated) and falls back to the pre-#361/#303-era rule: bare
+// hub membership is enough, fail-open, preserving the OLD guarantee that a
+// trace-absent project's evidence-only REQs still surface. The moment the
+// graph has even ONE `exercises` edge anywhere, real evidence exists somewhere
+// and the matching predicate becomes mandatory again for every restricted-hub
+// R3a decision graph-wide (not just for the REQ that has the edge) — so a
+// PARTIAL-trace project (one REQ traced via `exercises`, an evidence-only
+// sibling REQ sharing the same hub with NO `exercises` edge of its own) still
+// excludes that untraced sibling exactly as #361 intended (tracked as a
+// follow-up issue).
 //
 // `maxDepth` gets no new default here — the weak/terminal layer already stops
 // every unbounded-cascade axis structurally, so depth-limiting is not needed
@@ -240,6 +269,7 @@ function classifyEdgeTraversal(
     graph: ArtifactGraph;
     reqsWithImplements: ReadonlySet<string>;
     reqsExercisingOrigin: ReadonlySet<string>;
+    graphHasExercisesEdges: boolean;
   },
 ): { blocked: true } | { blocked: false; state: ReachState } {
   switch (edge.kind) {
@@ -278,7 +308,25 @@ function classifyEdgeTraversal(
         // ONLY when ITS OWN `exercises` evidence reaches the BFS's fixed
         // origin set. Bare hub-membership is no longer sufficient by itself
         // (the HIGH-2/#322 daisy-chain fix).
-        if (!ctx.reqsExercisingOrigin.has(edge.target)) return { blocked: true };
+        //
+        // H1 (issue #363) fail-open fallback — the matching predicate above
+        // is built exclusively from `exercises` edges (`reqsExercisingOrigin`
+        // below), so a project that has never ingested a trace shard has a
+        // permanently EMPTY predicate: applying it here would unconditionally
+        // block every evidence-only REQ, silently erasing them from
+        // `impactReqs` / `check --diff --gate` scope even though matching is
+        // simply not possible yet, not failing. Fail-open when the graph has
+        // ZERO `exercises` edges anywhere (trace-absent, matching is
+        // impossible in principle): fall back to the pre-#361/#303-era rule
+        // where bare hub membership is enough. The moment the graph has even
+        // ONE `exercises` edge, real evidence exists and the matching
+        // predicate becomes mandatory again — a partial-trace project (one
+        // REQ traced, a sibling evidence-only REQ sharing the same hub not
+        // traced) still excludes that untraced sibling (tracked as a
+        // follow-up issue).
+        if (ctx.graphHasExercisesEdges && !ctx.reqsExercisingOrigin.has(edge.target)) {
+          return { blocked: true };
+        }
         return { blocked: false, state: "terminal" };
       }
       // reverse `verifies` (req -> its verifying test): unconditional;
@@ -344,6 +392,14 @@ export function impact(
 ): ImpactResult {
   const staleExercisesNodes = options?.excludeStaleExercises;
 
+  // H1 (issue #363) / spec 020 (FR-017) — hoisted to the top of `impact()`
+  // since #363 gave it a SECOND consumer: the R3a matching-predicate
+  // fail-open check in `classifyEdgeTraversal` (below, via `classifyCtx`)
+  // needs it up front just like `reqsWithImplements`/`reqsExercisingOrigin`
+  // do, and the `reqProvenance` gate further down (originally the only
+  // caller) now just reads this same value instead of recomputing it.
+  const graphHasExercisesEdges = graph.edges.some((e) => e.kind === "exercises");
+
   // PR #299 meta-review Finding 2 (Option 2B) — precompute which REQ ids
   // have at least one `implements` edge ANYWHERE in the graph (not just
   // within the eventual `visited` set — this must be known up front,
@@ -387,7 +443,7 @@ export function impact(
     if (originIds.has(edge.target)) reqsExercisingOrigin.add(edge.source);
   }
 
-  const classifyCtx = { graph, reqsWithImplements, reqsExercisingOrigin };
+  const classifyCtx = { graph, reqsWithImplements, reqsExercisingOrigin, graphHasExercisesEdges };
 
   // #361 — `visited` now carries one of THREE reach states (`ReachState`,
   // above); see the file-header "Current model" section for the full
@@ -553,8 +609,9 @@ export function impact(
   // through, say, a static import chain AND directly by a test's exercises
   // edge. Gated behind "does the graph have ANY exercises edge at all" so a
   // trace-absent scan (zero exercises edges) never adds this key to
-  // `ImpactResult` — FR-010 byte-identical requirement (T021(e)).
-  const graphHasExercisesEdges = graph.edges.some((e) => e.kind === "exercises");
+  // `ImpactResult` — FR-010 byte-identical requirement (T021(e)). (`graphHasExercisesEdges`
+  // is now hoisted to the top of `impact()` — H1/#363 — since the R3a
+  // matching-predicate fail-open check needs the same value earlier.)
   let reqProvenance: ImpactResult["reqProvenance"];
   if (graphHasExercisesEdges) {
     const provenanceByReq = new Map<string, Set<"static" | "evidence">>();
