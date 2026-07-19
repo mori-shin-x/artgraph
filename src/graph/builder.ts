@@ -30,6 +30,7 @@ import {
   type IngestedTrace,
 } from "../trace/ingest.js";
 import type { ArtifactGraph, GraphNode, GraphEdge, ArtgraphConfig } from "../types.js";
+import { missingNodeModulesProtection, formatPoolProtectionMessage } from "../config.js";
 
 export interface BuildWarning {
   type:
@@ -120,7 +121,29 @@ export interface BuildWarning {
     // issue #333 — same silent-skip bug, scoped to an ordinary (non
     // re-export) `import ... from "./missing"` statement. SILENT, same
     // rationale as `unresolved-reexport` above.
-    | "unresolved-import";
+    | "unresolved-import"
+    // issue #356 — `include` has a `"!**/node_modules/**"`-style negation but
+    // `testPatterns` doesn't (or vice versa): a purely structural config-shape
+    // check, independent of whether either pool has actually matched a
+    // node_modules file yet (contrast `node-modules-in-scan` above, which only
+    // fires once a match is observed). SILENT: unlike `node-modules-in-scan`,
+    // this fires on EVERY scan of an asymmetric config regardless of whether
+    // the project even has a node_modules directory — the stderr default
+    // presenter would otherwise be noisy on a healthy, node_modules-free repo.
+    // Observable via `scan --format json` `warnings[]` only, same convention
+    // as `unresolved-reexport` / `unresolved-import` above. See
+    // `missingNodeModulesProtection` (`../config.js`) for the shared judge
+    // this warning and `artgraph doctor`'s advisory finding of the same name
+    // both call into. A pool where both `include` and `testPatterns` are
+    // silently unprotected (no mention of node_modules at all) stays silent,
+    // as before — indistinguishable from a deliberate symmetric choice. PR
+    // #359 review (H2) added a second trigger, independent of symmetry: a
+    // pool whose negative pattern MENTIONS node_modules but, per real glob
+    // semantics, doesn't actually cover every nesting depth (a "broken
+    // exclusion") is reported regardless of the other pool's state — see
+    // `missingNodeModulesProtection`'s own doc comment for why that case is
+    // never ambiguous with an intentional choice the way silence is.
+    | "config-pool-protection-asymmetry";
   id: string;
   files: string[];
   message?: string;
@@ -136,6 +159,8 @@ const SILENT_WARNING_TYPES: ReadonlySet<BuildWarning["type"]> = new Set([
   // both types above.
   "unresolved-reexport",
   "unresolved-import",
+  // issue #356 — see the `BuildWarning["type"]` union's own doc comment above.
+  "config-pool-protection-asymmetry",
 ]);
 
 export function isSilentWarning(type: BuildWarning["type"]): boolean {
@@ -207,6 +232,29 @@ export function buildGraph(
   const nodes = new Map<string, GraphNode>();
   const edges: GraphEdge[] = [];
   const warnings: BuildWarning[] = [];
+
+  // issue #356 — purely structural config-shape check, computed up front
+  // (scan start, before file discovery) since it only reads `config.include`
+  // / `config.testPatterns` — no filesystem access, no dependency on what
+  // discovery actually matches. See `missingNodeModulesProtection`'s own doc
+  // comment (`../config.js`) for the shared judge this warning and
+  // `artgraph doctor`'s advisory finding of the same name both call into.
+  // PR #359 review (M2) — the message text itself is also shared
+  // (`formatPoolProtectionMessage`), so `scan` and `doctor` can never
+  // describe the same issue differently. Only the first issue is surfaced
+  // here (matches the pre-existing single-warning contract of this warning
+  // type); `missingNodeModulesProtection` orders `include` before
+  // `testPatterns` deterministically.
+  const poolProtectionIssues = missingNodeModulesProtection(config);
+  if (poolProtectionIssues.length > 0) {
+    const issue = poolProtectionIssues[0];
+    warnings.push({
+      type: "config-pool-protection-asymmetry",
+      id: issue.pool,
+      files: [],
+      message: formatPoolProtectionMessage(issue),
+    });
+  }
 
   // issue #295 (PR #334 meta-review LOW-1 wording fix) — `system-resource-
   // exhausted` (EMFILE/ENFILE) is a scan-wide condition, not a per-file one:
@@ -692,11 +740,26 @@ export function buildGraph(
   if (nodeModulesFiles.length > 0) {
     let fromInclude = false;
     let fromTestPatterns = false;
+    // issue #356 — same single pass as before, but no longer breaks early:
+    // the pool membership booleans above still need every offending file
+    // visited, and now so does per-pool sample collection below (a pool with
+    // offending files must contribute at least one entry to `files`, which an
+    // early "stop once both flags are true" break could miss for whichever
+    // pool's first hit comes later in iteration order). No extra glob call —
+    // this reuses the same `includeFiles`/`testFiles` membership sets already
+    // computed by `discoverCodeFiles` above.
+    const includeSamples: string[] = [];
+    const testPatternsSamples: string[] = [];
     for (let i = 0; i < codeFiles.length; i++) {
       if (!relCodeFiles[i].split(/[\\/]/).includes("node_modules")) continue;
-      if (includeFiles.has(codeFiles[i])) fromInclude = true;
-      if (testFiles.has(codeFiles[i])) fromTestPatterns = true;
-      if (fromInclude && fromTestPatterns) break;
+      if (includeFiles.has(codeFiles[i])) {
+        fromInclude = true;
+        includeSamples.push(relCodeFiles[i]);
+      }
+      if (testFiles.has(codeFiles[i])) {
+        fromTestPatterns = true;
+        testPatternsSamples.push(relCodeFiles[i]);
+      }
     }
     const configKeys =
       fromInclude && fromTestPatterns
@@ -704,10 +767,28 @@ export function buildGraph(
         : fromTestPatterns
           ? '"testPatterns"'
           : '"include"';
+    // issue #356 — `files` (cap 5, unchanged) is now sampled per-pool rather
+    // than taken unconditionally off the front of `nodeModulesFiles`: a
+    // pool's SOLE offending file could previously fall outside the first 5
+    // entries in discovery order and never appear in the sample at all, even
+    // though the warning's own remediation text names that pool. Seed with
+    // one entry from each pool that actually has offending files (order:
+    // include's first hit, then testPatterns'), then backfill any remaining
+    // slots (up to 5 total) from the full offending-file list in its
+    // original discovery order, skipping anything already seeded.
+    const files: string[] = [];
+    if (includeSamples.length > 0) files.push(includeSamples[0]);
+    if (testPatternsSamples.length > 0 && !files.includes(testPatternsSamples[0])) {
+      files.push(testPatternsSamples[0]);
+    }
+    for (const f of nodeModulesFiles) {
+      if (files.length >= 5) break;
+      if (!files.includes(f)) files.push(f);
+    }
     warnings.push({
       type: "node-modules-in-scan",
       id: "node_modules",
-      files: nodeModulesFiles.slice(0, 5),
+      files,
       message: `${nodeModulesFiles.length} scanned file(s) are under node_modules/ — add "!**/node_modules/**" to ${configKeys} in .artgraph.json to exclude them`,
     });
   }

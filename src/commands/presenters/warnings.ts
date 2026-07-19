@@ -119,6 +119,12 @@ export function printWarnings(warnings: BuildWarning[]) {
       // `BuildWarning["type"]`'s doc comment in graph/builder.ts).
       case "unresolved-reexport":
       case "unresolved-import":
+      // issue #356 — silent: a config-shape check that fires on EVERY scan of
+      // an asymmetric config regardless of whether node_modules even exists
+      // in the project, so showing it by default would be high-noise (see
+      // `BuildWarning["type"]`'s doc comment in graph/builder.ts). Still
+      // observable via `scan --format json` `warnings[]`.
+      case "config-pool-protection-asymmetry":
         break;
       default: {
         // Exhaustiveness check: if `BuildWarning.type` gains a new variant

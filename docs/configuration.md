@@ -90,6 +90,55 @@ Degenerate patterns behave as inert rather than as errors: a doubled
 negation (`"!!foo/**"`), a bare `"!"`, and an empty string (`""`) are all
 accepted without complaint and simply do not produce a working exclusion.
 
+**Asymmetric / broken protection (issue #356, judgment updated by PR #359).**
+`node-modules-in-scan` above only fires once a matched file is actually under
+node_modules. Separately, `artgraph scan` also runs a purely structural,
+config-shape-only check, and `artgraph doctor` reports the identical result
+as an advisory `config-pool-protection-asymmetry` finding (severity `pass`,
+never affects doctor's exit code, and scoped to projects with at least one
+Tier 1 agent already detected) — both surfaces render through the same
+judge and the same message-generation function, so they can never disagree
+or say different things about the same config.
+
+The judge does **not** just look for the literal substring/segment
+`node_modules` in a negative pattern — that used to false-positive on
+`!node_modules/**` (no `**/` prefix: only ever excludes a repo-ROOT
+`node_modules/`, leaving `packages/foo/node_modules/**` completely
+unprotected) and false-negative on a working pattern like
+`!**/*node_modules*/**` (protects every depth, but the old segment-equality
+check didn't recognize the wildcarded segment as "node_modules"). Instead, a
+pool is judged **protected** only if its negative patterns, matched with
+[picomatch](https://github.com/micromatch/picomatch) using the exact option
+set `fast-glob` itself uses for ignore-pattern evaluation, cover THREE
+representative synthetic paths at increasing nesting depth
+(`node_modules/x.ts`, `a/node_modules/x.ts`, `a/b/node_modules/x.ts`). This
+stays purely structural and filesystem-free (no real files are touched or
+even need to exist) — it is real glob matching against fixed synthetic
+inputs, not a heuristic proxy for it.
+
+Two categories are reported:
+
+- **Unprotected (asymmetry)** — one pool is protected by the check above and
+  the other isn't; the unprotected pool is named.
+- **Broken exclusion** — a pool's negative pattern clearly *mentions*
+  node_modules (the old segment check) but the real matcher says it still
+  isn't protected at every depth (e.g. the `!node_modules/**` example
+  above). This fires **regardless of the other pool's state** — a broken
+  exclusion attempt is never ambiguous with a deliberate symmetric choice
+  the way silence is, so it is reported even when both pools end up
+  "unprotected" by the matcher.
+
+A pool with no positive pattern at all (empty array, or every entry
+negated — per issue #266 such a pool can never match a file) is excluded
+from both categories entirely: it structurally cannot ingest node_modules,
+so judging its protection would be reporting on a hypothetical that can't
+happen. A config where BOTH remaining (non-degenerate) pools lack any
+node_modules-related pattern is still not reported by either surface — it
+remains indistinguishable from a deliberate, symmetric choice (e.g.
+intentionally scanning vendored code, as described above). Whichever
+category fires, the remediation text always names the canonical
+`"!**/node_modules/**"` form (protects every nesting depth) as the fix.
+
 ## `specDirs` — spec/doc file enumeration
 
 Every markdown file under a configured `specDirs` entry is enumerated with

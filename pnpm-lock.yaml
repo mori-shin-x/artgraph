@@ -34,6 +34,9 @@ importers:
       oxc-parser:
         specifier: ^0.137.0
         version: 0.137.0
+      picomatch:
+        specifier: ^2.3.1
+        version: 2.3.2
       remark-parse:
         specifier: ^11.0.0
         version: 11.0.0
@@ -53,6 +56,9 @@ importers:
       '@types/node':
         specifier: ^22.15.0
         version: 22.19.21
+      '@types/picomatch':
+        specifier: ^2.3.0
+        version: 2.3.4
       '@vitest/coverage-v8':
         specifier: ^4.1.9
         version: 4.1.9(vitest@4.1.9)
@@ -965,6 +971,9 @@ packages:
 
   '@types/node@8.10.66':
     resolution: {integrity: sha512-tktOkFUA4kXx2hhhrB8bIFb5TbwzS4uOhKEmwiD+NoiL0qtP2OQ9mFldbgD4dV1djrlBYP6eBuQZiWjuHUpqFw==}
+
+  '@types/picomatch@2.3.4':
+    resolution: {integrity: sha512-0so8lU8O5zatZS/2Fi4zrwks+vZv7e0dygrgEZXljODXBig97l4cPQD+9LabXfGJOWwoRkTVz6Q4edZvD12UOA==}
 
   '@types/q@1.5.8':
     resolution: {integrity: sha512-hroOstUScF6zhIi+5+x0dzqrHA1EJi+Irri6b1fxolMTqqHIV/Cg77EtnQcZqZCu8hR3mX2BzIxN4/GzI68Kfw==}
@@ -3390,6 +3399,8 @@ snapshots:
       undici-types: 6.21.0
 
   '@types/node@8.10.66': {}
+
+  '@types/picomatch@2.3.4': {}
 
   '@types/q@1.5.8': {}
 
