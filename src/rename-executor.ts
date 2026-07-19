@@ -19,7 +19,7 @@ import type { LockChange } from "./rename-lock.js";
 import { readLockWithMeta, assertLockSchemaWritable, warnIfNewerLockSchema } from "./lock.js";
 import { scan, reconcile, ReconcileResourceExhaustedError } from "./scan.js";
 import { loadConfig } from "./config.js";
-import { globCodeFiles } from "./parsers/typescript.js";
+import { globCodeFiles, systemResourceExhaustedMessage } from "./parsers/typescript.js";
 import type { BuildWarning } from "./graph/builder.js";
 import { assertValidTargetId } from "./rename-validate-id.js";
 import { rewriteTraceShards } from "./rename-trace.js";
@@ -63,6 +63,17 @@ export type RenameWarning =
   | {
       type: "unreadable-file";
       filePath: string;
+      message: string;
+    }
+  // issue #351 (H1) — `rewriteTraceShards`'s shard-discovery glob
+  // (`src/rename-trace.ts`'s `discoverShardPaths`) hit EMFILE/ENFILE for at
+  // least one `trace.artifacts` pattern: some shards may have gone
+  // undiscovered this run, so "no trace-shard references found/rewritten"
+  // cannot be trusted as "none existed". Scan-wide (not per-file), so no
+  // `filePath` field — mirrors `BuildWarning`'s `system-resource-exhausted`
+  // shape minus the (here, not meaningful) `id`/`files`.
+  | {
+      type: "system-resource-exhausted";
       message: string;
     };
 
@@ -580,6 +591,17 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
         filePath,
       }),
     ),
+    // issue #351 (H1) — see `RenameWarning`'s own `system-resource-exhausted`
+    // doc comment: the shard-discovery glob itself hit EMFILE/ENFILE, so
+    // trace-shard rewrite results this run cannot be trusted as complete.
+    ...(traceRewrite.resourceExhaustedCode
+      ? [
+          {
+            type: "system-resource-exhausted" as const,
+            message: systemResourceExhaustedMessage(traceRewrite.resourceExhaustedCode),
+          },
+        ]
+      : []),
   ];
 
   const postWriteScanWarnings = applyWrites(rootDir, config, filesToWrite, dryRun, force);
@@ -856,6 +878,17 @@ export function executeMerge(
         filePath,
       }),
     ),
+    // issue #351 (H1) — see `RenameWarning`'s own `system-resource-exhausted`
+    // doc comment: the shard-discovery glob itself hit EMFILE/ENFILE, so
+    // trace-shard rewrite results this run cannot be trusted as complete.
+    ...(traceRewrite.resourceExhaustedCode
+      ? [
+          {
+            type: "system-resource-exhausted" as const,
+            message: systemResourceExhaustedMessage(traceRewrite.resourceExhaustedCode),
+          },
+        ]
+      : []),
   ];
 
   const postWriteScanWarnings = applyWrites(rootDir, config, filesToWrite, dryRun, force);

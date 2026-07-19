@@ -53,6 +53,25 @@ const IMPACT_DOC_PREFIX_REJECTION = [
 // existing "No matching nodes found" message still fires.
 const REQ_ID_INPUT_RE = /^(?:[A-Za-z][\w-]*\/)?[A-Z][A-Za-z]*-\d+(?:\.\d+)*$/;
 
+// issue #351 (H1) — distinct from `TRACE_NO_SHARDS_GUIDANCE`: that message
+// means the shard-existence probe genuinely found zero matches, and its
+// "set up the runner" advice is actively MISLEADING when the probe instead
+// hit EMFILE/ENFILE and could not tell either way. `--tests` refuses to
+// guess in that case rather than risk silently treating "undetermined" as
+// "no shards" (which would proceed with a --tests selection built from
+// nothing, rather than the correct exit-1 fall-back-to-full-suite signal).
+const TRACE_SHARDS_PROBE_UNDETERMINED_GUIDANCE = [
+  "ERROR: could not determine whether trace shards exist.",
+  "",
+  "The shard-existence probe hit file descriptor exhaustion (EMFILE/ENFILE)",
+  'while globbing `trace.artifacts`. This is NOT the same as "no trace',
+  'shards" — `--tests` selection cannot be trusted either way, so this run',
+  "refuses to guess.",
+  "",
+  "Consider raising the OS file-descriptor limit (e.g. `ulimit -n`) and",
+  "re-running once your environment has recovered.",
+].join("\n");
+
 export function registerImpactCommand(program: Command): void {
   program
     .command("impact")
@@ -183,7 +202,19 @@ export function registerImpactCommand(program: Command): void {
       // stays a direct call even after issue #351's "Window B" elimination
       // below — only the ACTUAL ingest (`ingestTrace`) moved to `scan()`.
       const { hasTraceShards } = await import("../trace/ingest.js");
-      const hasTrace = hasTraceShards(config, rootDir);
+      const { present: hasTrace, resourceExhausted: shardProbeResourceExhausted } = hasTraceShards(
+        config,
+        rootDir,
+      );
+      // issue #351 (H1) — a probe-level EMFILE/ENFILE means "undetermined",
+      // not "no shards": check this BEFORE the `!hasTrace` guidance below so
+      // an exhaustion-degraded probe never gets misdiagnosed as a genuinely
+      // trace-absent project (`TRACE_NO_SHARDS_GUIDANCE`'s "set up the
+      // runner" advice would be actively wrong here).
+      if (opts.tests && shardProbeResourceExhausted) {
+        console.error(TRACE_SHARDS_PROBE_UNDETERMINED_GUIDANCE);
+        process.exit(1);
+      }
       if (opts.tests && !hasTrace) {
         console.error(TRACE_NO_SHARDS_GUIDANCE);
         process.exit(1);
@@ -279,6 +310,38 @@ export function registerImpactCommand(program: Command): void {
           process.exitCode = code;
         }
       };
+
+      // issue #351 (H2 defense) — `hasTrace` above is the PRE-scan
+      // shard-existence probe; `scanTrace` is `scan()`'s own post-scan
+      // ingest result, sourced from `buildGraph`'s SECOND, independent
+      // `hasTraceShards` probe (see that function's own #351 doc comment).
+      // Nothing writes to the filesystem between the two calls, so they
+      // must always agree: `hasTrace === true` implies `scanTrace !==
+      // undefined`. When they disagree, `--tests`'s `testsToRun` (and the
+      // `exercises` edges feeding plain impact runs too) silently vanish —
+      // an E2E regression confirmed a baseline run producing real
+      // `testsToRun` while a degraded run exited 0 with ZERO warnings and no
+      // `testsToRun` key at all. Fix #1 above already covers the EMFILE/
+      // ENFILE cause (the scan-wide `resourceExhausted` check just above
+      // catches it via `finish`'s own message) — this is the structural
+      // backstop for every OTHER way the two probes could disagree (e.g. a
+      // race), so a silently-dropped trace selection can never look like a
+      // clean, trustworthy exit 0. Unconditional on `opts.tests`: a plain
+      // `impact` run silently losing `exercises` edges the same way must be
+      // caught too.
+      if (hasTrace && scanTrace === undefined) {
+        console.error(
+          "ERROR: trace-shard probe inconsistency — shards were detected before the scan, but " +
+            "the scan's own trace ingest found none; the result (impact reach and/or --tests " +
+            "selection) cannot be trusted.",
+        );
+        console.error(
+          "       result is undetermined (exit 1); CI consumers should fall back to running " +
+            "the full test suite instead of trusting this selection. Re-run this command.",
+        );
+        finish(1);
+        return;
+      }
 
       // issue #243 — read-only w.r.t. the lock: warn on a newer schema and
       // keep going (see commands/check.ts's identical comment).

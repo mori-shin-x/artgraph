@@ -217,6 +217,16 @@ export function registerCheckCommand(program: Command): void {
         // the committed baseSha..HEAD range when `--base` resolved.
         // @impl 023-check-base-ref/FR-006
         const diffFiles = getGitDiffFiles(rootDir, baseSha);
+        // issue #351 (L1) — `warnings` (from `scan()` above) is already
+        // final at this point; both early-exit blocks below used to
+        // `process.exit(0)` unconditionally, so a `system-resource-exhausted`
+        // scan (the graph may be missing entire spec/code trees) combined
+        // with an empty/untracked diff produced a false green under
+        // `--gate` — the exact false-pass this PR's `impact.ts`
+        // `resourceExhausted`-covers-every-early-exit pattern exists to
+        // close, applied here to `check`'s own early exits. Computed once,
+        // shared by both blocks (nothing mutates `warnings` in between).
+        const resourceExhausted = warnings.some((w) => w.type === "system-resource-exhausted");
         if (diffFiles.length === 0 && baseUnavailableError === undefined) {
           // spec 017 (Critical fix E1, issue #182 review) — in CI the checked-
           // out working tree already matches the commit under test, so `git
@@ -236,6 +246,22 @@ export function registerCheckCommand(program: Command): void {
           const ciWarning =
             "WARNING: gate is not active in CI without --base <ref> — pass --base <ref> (e.g. --base origin/main) to gate the PR's commit range.";
           if (showCiWarning) console.error(ciWarning);
+
+          // issue #351 (L1) — same undeterminable framing as the main-flow
+          // gate check further below (mirrors that block's message
+          // byte-for-byte): only printed under `--gate` (a plain check's
+          // warning is already visible via the json `warnings[]` field below
+          // / `reportGraphWarnings`, and its documented contract is exit 0
+          // regardless).
+          if (opts.gate && resourceExhausted) {
+            console.error(
+              "ERROR: scan hit file-descriptor exhaustion (system-resource-exhausted) — the graph " +
+                "may be missing entire spec/code trees, so pass/fail cannot be determined reliably.",
+            );
+            console.error(
+              "       gate result is undetermined; not treating as pass. Retry once your environment has recovered.",
+            );
+          }
 
           // E4: same fix as `impact --diff` — don't ignore `--format json` on
           // the "no changes" case. Shape matches the normal `check
@@ -268,7 +294,12 @@ export function registerCheckCommand(program: Command): void {
           } else {
             console.log("No changes detected in git diff.");
           }
-          process.exit(0);
+          // issue #351 (L1) — mirrors the main-flow consolidated exit below
+          // exactly: `--gate` + resource exhaustion is exit 1 (undetermined,
+          // never a silent pass), everything else keeps this branch's
+          // pre-existing exit 0 (JSON/text payload above is unchanged
+          // either way — a usage/verdict distinction, not a payload one).
+          process.exit(opts.gate && resourceExhausted ? 1 : 0);
         }
         const entries = pathsToEntries(diffFiles);
         const { startIds: currentStartIds } = resolveStartIds(graph, entries);
@@ -386,6 +417,19 @@ export function registerCheckCommand(program: Command): void {
           baseUnavailableError === undefined &&
           baseline?.status !== "unavailable"
         ) {
+          // issue #351 (L1) — same undeterminable framing as the
+          // `diffFiles.length === 0` block above and the main-flow gate
+          // check further below: only printed under `--gate`.
+          if (opts.gate && resourceExhausted) {
+            console.error(
+              "ERROR: scan hit file-descriptor exhaustion (system-resource-exhausted) — the graph " +
+                "may be missing entire spec/code trees, so pass/fail cannot be determined reliably.",
+            );
+            console.error(
+              "       gate result is undetermined; not treating as pass. Retry once your environment has recovered.",
+            );
+          }
+
           // spec 017 (Critical fix D1, issue #182 review) — same E4-style gap
           // as the `diffFiles.length === 0` branch above: `--format json` was
           // silently ignored here, breaking a CI/Skill consumer piping `check
@@ -417,7 +461,9 @@ export function registerCheckCommand(program: Command): void {
           } else {
             console.log("Changed files are not tracked in the graph.");
           }
-          process.exit(0);
+          // issue #351 (L1) — same `--gate`-conditioned exit-1 override as
+          // the `diffFiles.length === 0` block above.
+          process.exit(opts.gate && resourceExhausted ? 1 : 0);
         }
 
         // Reduces a resolved start-id set to a scope (start ids + impact

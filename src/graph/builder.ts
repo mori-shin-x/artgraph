@@ -1303,8 +1303,19 @@ export function buildGraph(
   // like every other guarded read in this module: its `warnings` are folded
   // into this scan's `warnings` via the SAME convert+`systemResourceExhaustedReported`
   // dedup pattern the TS-fragment conversion loop above uses.
+  //
+  // issue #351 (H1) — `hasTraceShards` itself can now hit EMFILE/ENFILE
+  // (`present: false, resourceExhausted: true`): a false `present` in that
+  // case is NOT "no trace", it is "couldn't tell" — `ingestTrace` is still
+  // skipped (nothing reliable to ingest; `ingestedTrace` stays `undefined`,
+  // same as a genuinely trace-absent project), but the resource-exhaustion
+  // signal must still surface so `check --gate` / `impact` can refuse to
+  // treat a silently-degraded `exercises`-edge graph as trustworthy. Folds
+  // into the SAME per-scan `systemResourceExhaustedReported` dedup as every
+  // other guarded site in this module.
   let ingestedTrace: IngestedTrace | undefined;
-  if (hasTraceShards(config, rootDir)) {
+  const shardProbe = hasTraceShards(config, rootDir);
+  if (shardProbe.present) {
     const { trace: ingested, warnings: traceWarnings } = ingestTrace(config, rootDir);
     for (const tw of traceWarnings) {
       if (tw.type === "system-resource-exhausted") {
@@ -1315,6 +1326,19 @@ export function buildGraph(
     }
     mergeTraceEdges(nodes, edges, ingested);
     ingestedTrace = ingested;
+  } else if (shardProbe.resourceExhausted && !systemResourceExhaustedReported) {
+    systemResourceExhaustedReported = true;
+    warnings.push({
+      type: "system-resource-exhausted",
+      id: "glob:trace-shards",
+      files: [],
+      message:
+        "file descriptor exhaustion (EMFILE/ENFILE) while probing for trace shards during this " +
+        "scan; the process ran out of open file descriptors. Consider raising the OS " +
+        "file-descriptor limit (e.g. `ulimit -n`) and re-running — other file reads in this " +
+        "scan may also be failing the same way. Trace ingest was skipped this run (`exercises` " +
+        "edges may be missing).",
+    });
   }
 
   // Edge dedup + deterministic edge/node ordering (INV-T2/T3, INV-L4,

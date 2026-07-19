@@ -327,18 +327,27 @@ describe("artgraph trace status/report: trace-chain EMFILE (issue #351)", () => 
     expect(result.stderr).toMatch(/system-resource-exhausted/);
   });
 
-  it("trace report: does not crash, warnings[] carries the reason, dedicated stderr notice, exit code contract unchanged (0 — shards exist)", async () => {
+  // issue #351 (H1 follow-on) — this test used to assert exit 0 here: before
+  // H1's fix, `discoverShardPaths` (`src/trace/ingest.ts`) called the `glob`
+  // package directly, which this suite's `vi.mock("fast-glob")` does NOT
+  // intercept — so a blanket EMFILE simulation left shard DISCOVERY
+  // unaffected (only `buildSymbolNameTable`'s fast-glob-based re-parse
+  // degraded), and this fixture's real shard was still found. Now that
+  // `discoverShardPaths` is fast-glob-based too (the whole point of H1), a
+  // blanket EMFILE genuinely prevents confirming the shard exists —
+  // `ingested.shardCount` degrades to 0, and `trace report`'s own
+  // pre-existing "zero shards is a hard error" contract
+  // (`src/commands/trace.ts`) correctly fires exit 1 instead of silently
+  // reporting success it can no longer back up. This is the intended,
+  // stricter behavior H1 introduces, not a regression.
+  it("trace report: EMFILE that genuinely blinds shard discovery correctly refuses to report (exit 1, no silent success)", async () => {
     const root = makeFixture("artgraph-351-trace-report-");
     globControl.failCode = "EMFILE";
 
     const result = await runCli(["trace", "report", "--format", "json"], { cwd: root });
 
-    expect(result.exitCode).toBe(0);
-    const payload = JSON.parse(result.stdout);
-    expect(
-      payload.warnings.some((w: { type: string }) => w.type === "system-resource-exhausted"),
-    ).toBe(true);
-    expect(result.stderr).toMatch(/system-resource-exhausted/);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/no trace shards found/i);
   });
 });
 
