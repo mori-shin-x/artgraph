@@ -35,10 +35,14 @@ specs, no `@impl` tags, no config required**:
 </p>
 
 ```bash
-pnpm dlx artgraph init --agents=claude   # brownfield-safe; no specs required
+npx artgraph init --agents=claude   # brownfield-safe; no specs required
 # ... edit a file ...
-pnpm dlx artgraph impact --diff          # → files affected via your TS import graph
+npx artgraph impact --diff          # → files affected via your TS import graph
 ```
+
+> Using another package manager? Read `npx artgraph` as `pnpm dlx artgraph`
+> (or `pnpm exec` once installed), `bunx artgraph`, or
+> `deno run -A npm:artgraph/cli` throughout — see [Quickstart](#quickstart).
 
 `impact --diff` walks the deterministic TypeScript import graph, so it works
 from day one on any TS repo. Specs, `@impl` tags, and drift detection are
@@ -93,6 +97,30 @@ artgraph adds the layer *above* the code:
 
 Code-graph MCPs answer *"where is this used?"*. artgraph answers *"which
 requirement does this satisfy, and does it still?"*.
+
+<details>
+<summary><strong>Table of contents</strong></summary>
+
+- [30-second tag-zero start](#30-second-tag-zero-start)
+- [Bootstrapping an existing project](#bootstrapping-an-existing-project)
+- [Why artgraph](#why-artgraph)
+- [Quickstart](#quickstart)
+- [How the agent loop works](#how-the-agent-loop-works)
+  - [CI gate for pull requests](#ci-gate-for-pull-requests)
+  - [CI test selection for pull requests](#ci-test-selection-for-pull-requests)
+- [End-to-end: spec → @impl → check](#end-to-end-spec-impl-check)
+- [See the graph](#see-the-graph)
+- [Coverage-derived traceability](#coverage-derived-traceability)
+- [A turn with Spec Kit + artgraph](#a-turn-with-spec-kit--artgraph)
+- [Skills](#skills)
+- [SDD tool integration](#sdd-tool-integration)
+- [How references are expressed](#how-references-are-expressed)
+- [Commands](#commands)
+- [Documentation](#documentation)
+- [Requirements](#requirements)
+- [License](#license)
+
+</details>
 
 ## Quickstart
 
@@ -177,6 +205,11 @@ commit range instead: the verdict is computed against
 `git merge-base <ref> HEAD`, so only issues the PR itself introduced fail the
 gate — pre-existing debt on the base branch is suppressed.
 
+The recipes below use npm — with pnpm, swap `npm ci` for
+`pnpm install --frozen-lockfile` (plus `pnpm/action-setup`), `npx` for
+`pnpm exec`, and `npm test` for `pnpm test` (Bun / Deno equivalents work the
+same way).
+
 ```yaml
 name: artgraph-gate
 on: pull_request
@@ -188,12 +221,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # required — on a shallow clone the merge-base cannot be resolved and the gate fails closed (exit 1)
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm exec artgraph check --diff --base "origin/${{ github.base_ref }}" --gate
+      - run: npm ci
+      - run: npx artgraph check --diff --base "origin/${{ github.base_ref }}" --gate
 ```
 
 Exit codes: `0` = no new issues, `2` = the PR introduced drift / orphans /
@@ -216,20 +248,20 @@ in the graph) or whenever the selection looks doubtful.
       - name: Select and run tests (full-suite fallback on exit 1)
         run: |
           set +e
-          out=$(pnpm exec artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format json)
+          out=$(npx artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format json)
           status=$?
           set -e
           if [ "$status" -ne 0 ]; then
             echo "impact exited $status — falling back to the full suite"
-            pnpm test; exit $?
+            npm test; exit $?
           fi
           files=$(echo "$out" | jq -r '[.testsToRun[]?.testFile] | unique | .[]')
           # drop files the PR itself deleted — vitest exits 1 on nonexistent paths
           files=$(for f in $files; do [ -f "$f" ] && echo "$f"; done)
           if [ -z "$files" ]; then
-            pnpm test   # empty selection — run everything to stay safe
+            npm test   # empty selection — run everything to stay safe
           else
-            echo "$files" | xargs pnpm vitest run
+            echo "$files" | xargs npx vitest run
           fi
 ```
 
@@ -241,7 +273,7 @@ recorded under its old path, so its tests silently drop from the selection
 code's evidence is stale by construction, so use `"warn"` for CI selection
 (a runtime warning fires on that combination).
 
-## End-to-end: spec → `@impl` → `check`
+## End-to-end: spec → `@impl` → `check` <a id="end-to-end-spec-impl-check"></a>
 
 ```bash
 # 1. Write a requirement
@@ -339,8 +371,8 @@ exercised by one REQ's tests but never claimed surfaces as a **SUGGESTED
 IMPL**.
 
 ```bash
-pnpm exec artgraph trace status               # shard counts, staleness rate
-pnpm exec artgraph trace report --format json # declared-vs-exercised audit
+npx artgraph trace status               # shard counts, staleness rate
+npx artgraph trace report --format json # declared-vs-exercised audit
 ```
 
 `artgraph impact --diff --tests` extends impact analysis with test
