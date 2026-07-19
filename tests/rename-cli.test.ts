@@ -330,7 +330,7 @@ describe("CLI: rename --merge/--into", () => {
       expect(src).not.toContain("@impl REQ-002");
 
       // C1: the merge target must appear exactly once as a definition list item.
-      const defLines = spec.split("\n").filter((l) => /^- REQ-100:/.test(l));
+      const defLines = spec.split("\n").filter((l) => l.startsWith("- REQ-100:"));
       expect(defLines).toHaveLength(1);
       // Old definitions are gone.
       expect(spec).not.toMatch(/^- REQ-001:/m);
@@ -495,7 +495,7 @@ describe.skipIf(IS_WIN_RENAME_CLI || IS_ROOT_RENAME_CLI)(
       const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
       expect(src).toContain("@impl REQ-100");
       const spec = readFileSync(resolve(tmp, "specs/feature.md"), "utf-8");
-      const defLines = spec.split("\n").filter((l) => /^- REQ-100:/.test(l));
+      const defLines = spec.split("\n").filter((l) => l.startsWith("- REQ-100:"));
       expect(defLines).toHaveLength(1);
     });
   },

@@ -138,7 +138,8 @@ authentication.
 present to color drift/orphan/uncovered nodes; a missing lock just renders
 without that extra state.
 
-`--output` only ever writes `index.html`, `app.js`, and `vendor/cytoscape.min.js`
+`--output` only ever writes `index.html`, `app.js`, `vendor/cytoscape.min.js`,
+and `vendor/cytoscape.LICENSE` (the bundled library's MIT notice)
 into the target directory, and refuses to run if it finds anything else there
 (e.g. you pointed `--output` at a GitHub Pages `docs/` dir or the repo root by
 mistake) — pass `--force` to overwrite anyway. The `vendor/` subdirectory is

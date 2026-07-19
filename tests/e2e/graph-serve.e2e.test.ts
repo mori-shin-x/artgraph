@@ -91,7 +91,7 @@ describe("e2e: scan --serve", () => {
   });
 
   it(
-    "serves /, /app.js, /vendor/cytoscape.min.js and 404s unknown paths",
+    "serves /, /app.js, /vendor/cytoscape.min.js, /vendor/cytoscape.LICENSE and 404s unknown paths",
     { timeout: 15000 },
     async () => {
       child = spawn("node", [CLI, "scan", "--serve", "--port", String(PORT)], {
@@ -144,6 +144,11 @@ describe("e2e: scan --serve", () => {
       // Cytoscape minified is ~425KB — a truncated or missing file would come
       // in well under 100KB.
       expect(vendor.body.length).toBeGreaterThan(100_000);
+
+      const vendorLicense = await fetchOnce(`http://127.0.0.1:${PORT}/vendor/cytoscape.LICENSE`);
+      expect(vendorLicense.status).toBe(200);
+      expect(vendorLicense.contentType).toMatch(/text\/plain/);
+      expect(vendorLicense.body.toString("utf-8")).toContain("Permission is hereby granted");
 
       const notFound = await fetchOnce(`http://127.0.0.1:${PORT}/does-not-exist`);
       expect(notFound.status).toBe(404);

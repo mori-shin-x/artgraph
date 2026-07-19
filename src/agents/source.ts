@@ -20,13 +20,7 @@
 // install path until that path is removed.
 
 import { createHash } from "node:crypto";
-import {
-  existsSync,
-  lstatSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-} from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { SkillsInstallError } from "../init.js";
 

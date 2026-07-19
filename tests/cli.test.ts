@@ -368,9 +368,13 @@ describe("CLI: scan graph payload", () => {
       const indexPath = join(outDir, "index.html");
       const appPath = join(outDir, "app.js");
       const vendorPath = join(outDir, "vendor", "cytoscape.min.js");
+      // License compliance: exports redistribute cytoscape, so its MIT
+      // notice must land next to the bundle.
+      const vendorLicensePath = join(outDir, "vendor", "cytoscape.LICENSE");
       expect(existsSync(indexPath)).toBe(true);
       expect(existsSync(appPath)).toBe(true);
       expect(existsSync(vendorPath)).toBe(true);
+      expect(existsSync(vendorLicensePath)).toBe(true);
 
       const html = readFileSync(indexPath, "utf-8");
       // Payload lives inside `<script id="artgraph-data" type="application/json">…</script>`.

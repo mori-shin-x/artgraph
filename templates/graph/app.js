@@ -244,7 +244,7 @@
     if (Number.isNaN(d.getTime())) return iso;
     try {
       return d.toLocaleString();
-    } catch (_) {
+    } catch {
       return d.toISOString();
     }
   }

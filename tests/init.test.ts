@@ -154,7 +154,7 @@ describe("runInit", () => {
     mkdirSync(join(tmp, "src"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
 
-    const result = runInit(tmp);
+    runInit(tmp);
 
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
     const config = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
@@ -200,7 +200,7 @@ describe("runInit", () => {
     mkdirSync(join(tmp, "docs"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
 
-    const result = runInit(tmp);
+    runInit(tmp);
 
     const config = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
     expect(config.specDirs).toEqual(["docs"]);
@@ -209,7 +209,7 @@ describe("runInit", () => {
   it("widens include pattern when src/ does not exist", () => {
     writeFileSync(join(tmp, "app.ts"), "export const x = 1;\n");
 
-    const result = runInit(tmp);
+    runInit(tmp);
 
     const config = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
     expect(config.include).toContain("**/*.ts");
@@ -241,7 +241,7 @@ describe("runInit", () => {
     mkdirSync(join(tmp, "docs"));
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
 
-    const result = runInit(tmp);
+    runInit(tmp);
 
     const config = JSON.parse(readFileSync(join(tmp, ".artgraph.json"), "utf-8"));
     expect(config.specDirs).toEqual(["specs", "docs"]);
@@ -319,7 +319,7 @@ describe("runInit", () => {
     writeFileSync(join(tmp, "src", "app.ts"), "export const x = 1;\n");
     writeFileSync(join(tmp, ".artgraph.json"), '{"include":["old"]}\n');
 
-    const result = runInit(tmp, { force: true, noScan: true });
+    runInit(tmp, { force: true, noScan: true });
 
     expect(existsSync(join(tmp, ".artgraph.json"))).toBe(true);
     expect(existsSync(join(tmp, ".trace.lock"))).toBe(false);

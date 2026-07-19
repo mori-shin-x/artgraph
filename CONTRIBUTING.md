@@ -31,9 +31,11 @@ If you install with Bun, Deno, or another manager that does not honor npm's `pre
 | `pnpm test`       | Run the vitest suite once                       |
 | `pnpm test:watch` | Run vitest in watch mode                        |
 | `pnpm knip`       | Detect unused exports / files / dependencies    |
+| `pnpm lint`       | Lint JS/TS with oxlint (warnings fail)          |
+| `pnpm format`     | Format JS/TS with oxfmt (`format:check` to verify only) |
 | `pnpm artgraph …` | Invoke the locally built CLI (after `pnpm build`) |
 
-Before opening a pull request, run `pnpm build && pnpm test && pnpm knip` locally — CI gates on the same three commands. The `pre-push` git hook runs `typecheck`, `knip`, `test:unit`, and `test:e2e` automatically; if you `git push` and everything passes, CI will almost certainly pass too.
+Before opening a pull request, run `pnpm build && pnpm test && pnpm knip && pnpm lint && pnpm format:check` locally — CI gates on the same commands. The `pre-push` git hook runs `typecheck`, `knip`, `test:unit`, and `test:e2e` automatically; if you `git push` and everything passes, CI will almost certainly pass too.
 
 ## Git hooks
 
@@ -42,7 +44,7 @@ Enforced locally via [lefthook](https://github.com/evilmartians/lefthook). Insta
 **`pre-commit`** — runs on staged `.ts` / `.tsx` / `.mts` / `.cts` / `.js` / `.mjs` / `.cjs` files, in parallel:
 
 - `oxfmt --write` on staged files. Formatted files are re-staged automatically (`stage_fixed: true`), so the commit reflects the formatted output.
-- `oxlint` on staged files. Commit fails on any lint error.
+- `oxlint --deny-warnings` on staged files. Commit fails on any lint error or warning (same bar as the CI `lint` job).
 
 **`pre-push`** — runs project-wide, serially, before push:
 
@@ -97,13 +99,13 @@ Keep slugs short, lowercase, and hyphen-separated (e.g. `docs/oss-standards`).
 
 1. Branch off `main` using the naming convention above.
 2. Keep commits focused and follow the message style above.
-3. Run `pnpm build && pnpm test && pnpm knip` locally.
+3. Run `pnpm build && pnpm test && pnpm knip && pnpm lint && pnpm format:check` locally.
 4. Open a PR and fill in [`.github/PULL_REQUEST_TEMPLATE.md`](./.github/PULL_REQUEST_TEMPLATE.md):
    - Summary and linked issue
    - Change-type checkbox
    - Testing notes
    - Breaking-change flag
-5. Wait for CI (build / knip / test on Node 22) to pass.
+5. Wait for CI (lint / format, build / knip / test on Node 22) to pass.
 
 Add new tests whenever you change behavior. Bug fixes should include a regression test.
 

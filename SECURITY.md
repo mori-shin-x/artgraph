@@ -2,14 +2,15 @@
 
 ## Supported versions
 
-artgraph is pre-1.0. Only the latest `0.1.x` release line receives security
-fixes. Because the project is pre-1.0, the public API may change between minor
-releases, and previous minor lines are not maintained.
+artgraph is pre-1.0. Only the **latest published minor release line** (the
+newest `0.x` minor on [npm](https://www.npmjs.com/package/artgraph)) receives
+security fixes. Because the project is pre-1.0, the public API may change
+between minor releases, and previous minor lines are not maintained.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
-| < 0.1   | :x:                |
+| Version              | Supported          |
+| -------------------- | ------------------ |
+| Latest `0.x` minor   | :white_check_mark: |
+| Older release lines  | :x:                |
 
 ## Reporting a vulnerability
 
@@ -33,6 +34,6 @@ artgraph is maintained on a best-effort basis. For a valid report, we will:
 - Acknowledge receipt within **7 days**.
 - Triage and confirm (or reject) the report within **14 days** when feasible.
 - Coordinate disclosure with the reporter and publish a fix as a patch release
-  on the `0.1.x` line.
+  on the latest minor line.
 
 No bug bounty program is offered.

@@ -100,6 +100,9 @@ const TEMPLATE_DIR = resolve(import.meta.dirname, "../../templates/graph");
 const INDEX_HTML_PATH = resolve(TEMPLATE_DIR, "index.html");
 const APP_JS_PATH = resolve(TEMPLATE_DIR, "app.js");
 const VENDOR_JS_PATH = resolve(TEMPLATE_DIR, "vendor/cytoscape.min.js");
+// Cytoscape's MIT notice must accompany every redistributed copy of the
+// bundle, so static exports copy it alongside cytoscape.min.js.
+const VENDOR_LICENSE_PATH = resolve(TEMPLATE_DIR, "vendor/cytoscape.LICENSE");
 
 // The JSON payload is embedded verbatim inside `<script type="application/json">`.
 // A literal `</script>` in the data (e.g. a filePath containing `</`, or any
@@ -166,7 +169,7 @@ export async function startServer(opts: ServeOptions): Promise<ServeHandle> {
     console.error(`warning: binding to ${host} exposes the graph to your network`);
   }
 
-  // Read and cache all three static payloads at startup:
+  // Read and cache all four static payloads at startup:
   //   - fail-fast: a missing template kills startup with a clear message
   //     instead of 500-ing on first request (and thanks to A3, doing so
   //     after writeHead(200) which left the client with an empty body).
@@ -176,6 +179,7 @@ export async function startServer(opts: ServeOptions): Promise<ServeHandle> {
   const html = readIndexHtml(opts.data);
   const appJs = readStaticAsset(APP_JS_PATH, "app.js");
   const vendorJs = readStaticAsset(VENDOR_JS_PATH, "cytoscape.min.js");
+  const vendorLicense = readStaticAsset(VENDOR_LICENSE_PATH, "cytoscape.LICENSE");
 
   return new Promise<ServeHandle>((resolvePromise, reject) => {
     // Tracks the promise lifecycle so post-listen errors don't try to
@@ -211,6 +215,11 @@ export async function startServer(opts: ServeOptions): Promise<ServeHandle> {
         if (url === "/vendor/cytoscape.min.js") {
           res.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
           res.end(vendorJs);
+          return;
+        }
+        if (url === "/vendor/cytoscape.LICENSE") {
+          res.writeHead(200, { "content-type": "text/plain; charset=utf-8" });
+          res.end(vendorLicense);
           return;
         }
         res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
@@ -356,6 +365,14 @@ export async function writeStaticExport(opts: ExportOptions): Promise<void> {
   }
 
   const html = readIndexHtml(data);
+  // Fail before any writes (same fail-fast contract as readIndexHtml's vendor
+  // check) so a half-written export never lands on disk.
+  if (!existsSync(VENDOR_LICENSE_PATH)) {
+    throw new Error(
+      `artgraph graph: cytoscape license notice missing at ${VENDOR_LICENSE_PATH}. ` +
+        "Run `pnpm build` (the prebuild step copies it into templates/graph/vendor/).",
+    );
+  }
   mkdirSync(outputDir, { recursive: true });
 
   // D2 (issue #170): once we get here, vendor/ is entirely artgraph-owned —
@@ -372,4 +389,5 @@ export async function writeStaticExport(opts: ExportOptions): Promise<void> {
   writeFileSync(resolve(outputDir, "index.html"), html, "utf-8");
   copyFileSync(APP_JS_PATH, resolve(outputDir, "app.js"));
   copyFileSync(VENDOR_JS_PATH, resolve(vendorDir, "cytoscape.min.js"));
+  copyFileSync(VENDOR_LICENSE_PATH, resolve(vendorDir, "cytoscape.LICENSE"));
 }

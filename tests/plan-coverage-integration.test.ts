@@ -28,7 +28,7 @@
 //   (l) text output contains "By source file:" and "By requirement:"
 //   (m) unresolvedFilePath from Stage A surfaces in top-level diagnostics[]
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import { tmpdir } from "node:os";

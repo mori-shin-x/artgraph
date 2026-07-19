@@ -110,6 +110,20 @@ describe.skipIf(!RUN_PACK)("e2e: npm pack + install", () => {
     expect(r.status).toBe(0);
     expect(r.stdout.trim()).toBe(PKG_VERSION);
   });
+
+  // PR #362 review (M2): `files` in package.json controls what actually
+  // ships to npm — a local `pnpm build` can look fine while the published
+  // tarball silently drops the cytoscape license notice. Assert against the
+  // REAL installed package dir (not the repo source) so a missing `files`
+  // entry fails here instead of surfacing as a support ticket after publish.
+  it("installed package includes the cytoscape vendor license and THIRD-PARTY-NOTICES.md", () => {
+    const installedPkgDir = join(pkgDir, "node_modules", "artgraph");
+    expect(existsSync(installedPkgDir)).toBe(true);
+    expect(existsSync(join(installedPkgDir, "templates/graph/vendor/cytoscape.LICENSE"))).toBe(
+      true,
+    );
+    expect(existsSync(join(installedPkgDir, "THIRD-PARTY-NOTICES.md"))).toBe(true);
+  });
 });
 
 // issue #263 — verify the REAL CLI-level error UX for an oxc-parser native

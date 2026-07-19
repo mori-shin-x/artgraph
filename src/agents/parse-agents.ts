@@ -63,15 +63,11 @@ export function parseAgentsList(raw: string): AgentId[] {
     // `--agents=CLAUDE,CODEX` only hinted at "claude").
     const suggestions = [
       ...new Set(
-        nonLowercase
-          .map((t) => t.toLowerCase())
-          .filter((t) => findDescriptor(t) !== undefined),
+        nonLowercase.map((t) => t.toLowerCase()).filter((t) => findDescriptor(t) !== undefined),
       ),
     ];
     const hint =
-      suggestions.length > 0
-        ? ` Did you mean ${suggestions.map((s) => `"${s}"`).join(", ")}?`
-        : "";
+      suggestions.length > 0 ? ` Did you mean ${suggestions.map((s) => `"${s}"`).join(", ")}?` : "";
 
     // E1: also surface case-normalized duplicates in this same error so a
     // combo like `Claude,claude` doesn't force the user through two
@@ -105,7 +101,10 @@ export function parseAgentsList(raw: string): AgentId[] {
     seen.add(t);
   }
   if (dupes.size > 0) {
-    const formatted = [...dupes].sort().map((t) => `"${t}"`).join(", ");
+    const formatted = [...dupes]
+      .sort()
+      .map((t) => `"${t}"`)
+      .join(", ");
     throw new AgentsParseError(
       `ERROR: Duplicate agent identifier(s): ${formatted}. Supported values: ${SUPPORTED_LIST}.`,
     );

@@ -562,7 +562,7 @@ describe("loadConfig", () => {
         // REQ nodes dedup by ID regardless of the parent/child specDirs bug, so
         // this alone wouldn't have caught the ghost-doc regression — pinned
         // here anyway to document the "req: 1" behavior from issue #234.
-        expect([...graph.nodes.keys()].filter((k) => /^REQ-/.test(k))).toHaveLength(1);
+        expect([...graph.nodes.keys()].filter((k) => k.startsWith("REQ-"))).toHaveLength(1);
       } finally {
         warnSpy.mockRestore();
         rmSync(tmpRoot, { recursive: true });

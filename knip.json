@@ -1,5 +1,5 @@
 {
   "ignore": [".claude/**", "tests/fixtures/**", "examples/**", "templates/graph/app.js"],
-  "ignoreDependencies": ["oxfmt", "oxlint", "cytoscape", "@types/cytoscape"],
+  "ignoreDependencies": ["cytoscape", "@types/cytoscape"],
   "ignoreExportsUsedInFile": true
 }

@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    "dist/",
+    "coverage/",
+    "tests/fixtures/",
+    "tests/__snapshots__/",
+    "templates/graph/vendor/"
+  ]
+}

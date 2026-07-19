@@ -7,14 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createFreshProject } from "../agents/helpers.js";
 
@@ -101,9 +94,7 @@ describe("e2e: artgraph doctor — drift / FAIL detection", () => {
     const r = runCli(proj.dir, ["doctor", "--format", "json"]);
     expect(r.status).toBe(1);
     const parsed = JSON.parse(r.stdout);
-    const drift = parsed.findings.find(
-      (f: { kind: string }) => f.kind === "skill-file-drift",
-    );
+    const drift = parsed.findings.find((f: { kind: string }) => f.kind === "skill-file-drift");
     expect(drift).toBeDefined();
     expect(drift.path).toContain(".agents/skills/artgraph-verify/SKILL.md");
     expect(drift.expected).toMatch(/^[0-9a-f]{64}$/);

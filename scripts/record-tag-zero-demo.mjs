@@ -40,11 +40,7 @@ try {
   );
   writeFileSync(
     join(workDir, "package.json"),
-    JSON.stringify(
-      { name: "brownfield-fixture", version: "0.0.0", type: "module" },
-      null,
-      2,
-    ),
+    JSON.stringify({ name: "brownfield-fixture", version: "0.0.0", type: "module" }, null, 2),
   );
 
   const gitEnv = {
@@ -72,9 +68,7 @@ try {
       timeout: 30000,
     });
     if (r.status !== 0) {
-      throw new Error(
-        `CLI failed for [${args.join(" ")}]: exit ${r.status}\n${r.stderr}`,
-      );
+      throw new Error(`CLI failed for [${args.join(" ")}]: exit ${r.status}\n${r.stderr}`);
     }
     return r.stdout;
   }
@@ -188,9 +182,7 @@ try {
   const lines = [JSON.stringify(HEADER)];
   for (const e of events) lines.push(JSON.stringify(e));
   writeFileSync(OUT_CAST, lines.join("\n") + "\n");
-  console.log(
-    `Wrote ${OUT_CAST} — ${events.length} events, ~${t.toFixed(1)}s runtime.`,
-  );
+  console.log(`Wrote ${OUT_CAST} — ${events.length} events, ~${t.toFixed(1)}s runtime.`);
   console.log("Next: pnpm demo:svg");
 } finally {
   try {
