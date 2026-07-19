@@ -22,6 +22,8 @@ See `<agent_skills_path>/<skill-name>/SKILL.md` for each Skill's full descriptio
 - When proposing a code change: invoke **artgraph-impact** with `path:symbol`.
 - With trace shards present (`artgraph/vitest` runner): `{{ARTGRAPH_EXEC}} impact --diff --tests` selects only the tests exercising a change (in CI add `--base origin/<base>` to select from the PR's commit range; exit 1 → fall back to the full suite); `{{ARTGRAPH_EXEC}} trace report` cross-checks `@impl` claims against execution evidence.
 
+`artgraph init` also wires up an automatic gate hook for agents that support one (Claude Code / Codex CLI Stop hook, Kiro IDE agent-stop hook): it runs `{{ARTGRAPH_EXEC}} check --gate --diff` after each turn so drift surfaces immediately, without waiting for CI.
+
 ### Quickstart
 
 ```bash

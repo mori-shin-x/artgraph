@@ -13,6 +13,30 @@ export type AgentId = "claude" | "codex" | "cursor" | "copilot" | "kiro";
 
 export type AgentContextLoad = "native-agents-md" | "wrapper-required" | "both";
 
+/**
+ * issue #366 (scope A) — per-agent Stop-hook install configuration. Two
+ * formats reflect the two shapes the supported agents expect on disk:
+ *   - "json-event-array": a single JSON config file keyed by event name,
+ *     each event holding an array of `{ hooks: [...] }` groups (Claude Code
+ *     `.claude/settings.json`, Codex CLI `.codex/hooks.json`).
+ *   - "file-per-hook": one self-contained hook definition file per hook
+ *     (Kiro IDE `.kiro/hooks/*.kiro.hook`).
+ * `configPath` is repo-root relative (POSIX). `templatePath` is relative to
+ * the package root (`templates/hooks/...`).
+ */
+export type HookConfig =
+  | {
+      format: "json-event-array";
+      configPath: string;
+      event: string;
+      templatePath: string;
+    }
+  | {
+      format: "file-per-hook";
+      configPath: string;
+      templatePath: string;
+    };
+
 export interface AgentDescriptor {
   /** CLI `--agents=<list>` identifier (lowercase, no aliases). */
   id: AgentId;
@@ -37,6 +61,13 @@ export interface AgentDescriptor {
    *   - "both":             loads AGENTS.md natively AND supports a wrapper
    */
   agentContextLoad: AgentContextLoad;
+  /**
+   * issue #366 (scope A) — Stop-hook install configuration for this agent.
+   * `undefined` when the agent has no supported hook mechanism yet (Cursor,
+   * Copilot); `src/hooks/index.ts`'s dispatch treats that as
+   * `skipped-no-hook-config`.
+   */
+  hook?: HookConfig;
 }
 
 export const AGENT_DESCRIPTORS: readonly AgentDescriptor[] = [
@@ -46,6 +77,12 @@ export const AGENT_DESCRIPTORS: readonly AgentDescriptor[] = [
     skillsPath: ".claude/skills",
     wrapperFile: "CLAUDE.md",
     agentContextLoad: "both",
+    hook: {
+      format: "json-event-array",
+      configPath: ".claude/settings.json",
+      event: "Stop",
+      templatePath: "templates/hooks/claude/settings.json.template",
+    },
   },
   {
     id: "codex",
@@ -53,6 +90,12 @@ export const AGENT_DESCRIPTORS: readonly AgentDescriptor[] = [
     skillsPath: ".agents/skills",
     wrapperFile: null,
     agentContextLoad: "native-agents-md",
+    hook: {
+      format: "json-event-array",
+      configPath: ".codex/hooks.json",
+      event: "Stop",
+      templatePath: "templates/hooks/codex/hooks.json.template",
+    },
   },
   {
     id: "cursor",
@@ -74,6 +117,11 @@ export const AGENT_DESCRIPTORS: readonly AgentDescriptor[] = [
     skillsPath: ".kiro/skills",
     wrapperFile: null,
     agentContextLoad: "native-agents-md",
+    hook: {
+      format: "file-per-hook",
+      configPath: ".kiro/hooks/artgraph-check.kiro.hook",
+      templatePath: "templates/hooks/kiro/artgraph-check.kiro.hook.template",
+    },
   },
 ] as const;
 

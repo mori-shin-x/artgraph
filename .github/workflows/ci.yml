@@ -204,10 +204,20 @@ jobs:
 
   # spec 013 SC-007 scope-out regression guard (#144): the cross-agent
   # extensions spec promises NO MCP server implementation, NO plugin
-  # marketplace manifests, NO non-Claude agent hooks. PR #114 T034 ran this
-  # as a one-off grep; this job makes it a standing tree-wide guard.
+  # marketplace manifests. PR #114 T034 ran this as a one-off grep; this job
+  # makes it a standing tree-wide guard.
   # specs/013-cross-agent-extensions/ is excluded — its research/spec docs
   # legitimately quote the forbidden terms.
+  #
+  # issue #366 (scope A) — `\.codex/hooks` and `kiro.*hook` were removed from
+  # FORBIDDEN: Codex CLI / Kiro IDE hook support is now in scope (`src/hooks/`),
+  # so those patterns started flagging shipped, intentional files. Step 0-pre
+  # (HIGH-4) flagged that `kiro.*hook` in particular was path-unscoped and
+  # would have over-matched any file merely mentioning "hook" near "kiro", not
+  # just `.kiro/hooks/`; rather than narrow it, it is dropped outright here —
+  # #342 tracks a path-limited SC-007 redesign, and until that lands this
+  # guard just doesn't police the hooks surface (`.cursor/hooks` stays
+  # forbidden — Cursor hooks are still out of scope).
   scope-guard:
     name: scope-guard (SC-007)
     runs-on: ubuntu-latest
@@ -215,7 +225,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: SC-007 scope-out regression guard
         run: |
-          FORBIDDEN='(mcp[-_]server|\.claude-plugin|\.codex-plugin|\.cursor-plugin|\.codex/hooks|\.cursor/hooks|kiro.*hook)'
+          FORBIDDEN='(mcp[-_]server|\.claude-plugin|\.codex-plugin|\.cursor-plugin|\.cursor/hooks)'
           # Review H1: split the `git ls-files` call from the `grep` so a
           # `ls-files` failure isn't swallowed by grep's `|| true` (which is
           # only meant to tolerate grep's own "no match" exit code 1) — with

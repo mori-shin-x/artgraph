@@ -731,10 +731,14 @@ describe("runInit default behavior (P0)", () => {
   });
 
   it("default mode creates .claude/settings.json with the Stop hook", () => {
+    // issue #366 (scope A) — hook install is now per-agent (`--agents=<csv>`
+    // drives which agents' hook configs `installHooks` touches), so
+    // `agents: ["claude"]` is required here where a bare `runInit(tmp)` used
+    // to be enough back when the Stop hook was Claude-only and unconditional.
     writeFileSync(join(tmp, "package.json"), JSON.stringify({ name: "t", type: "module" }));
     writeFileSync(join(tmp, "pnpm-lock.yaml"), "");
 
-    runInit(tmp);
+    runInit(tmp, { agents: ["claude"] });
 
     const settingsPath = join(tmp, ".claude", "settings.json");
     expect(existsSync(settingsPath)).toBe(true);
@@ -1293,7 +1297,10 @@ describe("runInit — hook-only remediation path (issue #257)", () => {
     });
 
     // Hook created.
-    expect(result.hooksInstall?.action).toBe("created");
+    expect(result.hooksInstall?.perAgent).toEqual([
+      { agentId: "claude", action: "created", failure: false },
+    ]);
+    expect(result.hooksInstall?.anyFailure).toBe(false);
     const settingsPath = join(tmp, ".claude", "settings.json");
     expect(existsSync(settingsPath)).toBe(true);
     const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));

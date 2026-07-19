@@ -3,11 +3,11 @@
  * `.kiro/steering/artgraph.md` so that the Kiro agent learns when to call
  * `artgraph impact / check --diff / reconcile`.
  *
- * Kiro currently has no public Hook API, so this provider only writes a
- * Markdown steering file (FR-008 / FR-011, Clarifications Q2). Should Kiro
- * expose a hook trigger system in the future, `install()` accepts forward-
- * compat opts (unknown keys are ignored) so callers can opt-in via
- * `runIntegrate` without breaking existing repos.
+ * Steering-only, by design: the Stop-hook (`.kiro/hooks/artgraph-check.kiro.hook`)
+ * is handled by the `src/hooks/` layer (issue #366 scope A), not this
+ * provider — `install()` still accepts forward-compat opts (unknown keys are
+ * ignored) so callers can pass extra options via `runIntegrate` without
+ * breaking existing repos, but KiroProvider itself stays steering-only.
  *
  * Contract:
  *  - specs/009-sdd-integration/contracts/integration-provider.md (lifecycle)
@@ -44,12 +44,10 @@ export class KiroProvider implements IntegrationProvider {
     }
 
     // FR-011 / T066 — forward-compat: we read only the fields we currently
-    // need (`force`). Any other key on `opts` (e.g. a future `mode?:
-    // "steering" | "hook"`) is silently ignored, which keeps existing
-    // Steering-only callers working when a future PR widens InstallOptions.
-    // A future "hook mode" implementation MUST add an explicit branch here
-    // *and* a migration step that preserves any existing steering file (see
-    // tests/integrate/providers/kiro.test.ts → "FR-011 forward-compat design").
+    // need (`force`). Any other key on `opts` is silently ignored, which
+    // keeps existing Steering-only callers working when a future PR widens
+    // InstallOptions. The Stop-hook is handled by `src/hooks/` (issue #366
+    // scope A) — see the class-level doc comment above.
     const force = opts.force === true;
 
     const created: string[] = [];
