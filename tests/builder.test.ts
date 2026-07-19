@@ -1,15 +1,6 @@
 import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from "vitest";
 import { dirname, join, resolve } from "node:path";
-import {
-  writeFileSync,
-  unlinkSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  rmdirSync,
-  rmSync,
-  chmodSync,
-} from "node:fs";
+import { writeFileSync, mkdirSync, mkdtempSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { buildGraph, type BuildWarning } from "../src/graph/builder.js";
 import { buildLockFromGraph } from "../src/lock.js";
@@ -64,7 +55,7 @@ describe("buildGraph: namespace collision resolution", () => {
   });
 
   it("should warn on ambiguous unqualified @impl for colliding IDs", () => {
-    const { graph, warnings } = buildGraph(NS_FIXTURE_DIR, nsConfig);
+    const { warnings } = buildGraph(NS_FIXTURE_DIR, nsConfig);
 
     // ambiguous-impl.ts has `// @impl FR-001` which is ambiguous
     const ambiguousWarnings = warnings.filter(

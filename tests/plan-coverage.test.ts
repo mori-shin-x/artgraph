@@ -20,7 +20,7 @@
 // File-unit tests use an AUTH-* fixture; symbol-unit tests stand up a
 // separate symbol-mode fixture so the two pipelines stay isolated.
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";

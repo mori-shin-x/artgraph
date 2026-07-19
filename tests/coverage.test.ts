@@ -1,14 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
 import { buildGraph } from "../src/graph/builder.js";
-import { computeCoverage, type CoverageEntry } from "../src/coverage.js";
+import { computeCoverage } from "../src/coverage.js";
 import type {
   ArtifactGraph,
   EdgeKind,
   NodeKind,
   ArtgraphConfig,
   TestResultMap,
-  TestResultRecord,
 } from "../src/types.js";
 
 const FIXTURE_DIR = resolve(import.meta.dirname, "fixtures");

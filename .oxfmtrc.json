@@ -3,5 +3,15 @@
   "indentStyle": "space",
   "indentWidth": 2,
   "printWidth": 100,
-  "ignorePatterns": ["dist/"]
+  "ignorePatterns": [
+    "dist/",
+    "templates/graph/vendor/",
+    "**/*.md",
+    "**/*.json",
+    "**/*.jsonc",
+    "**/*.yml",
+    "**/*.yaml",
+    "**/*.html",
+    "**/*.css"
+  ]
 }

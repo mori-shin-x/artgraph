@@ -569,7 +569,7 @@ function addExtraneousFindings(
     if (!stat.isDirectory()) continue;
 
     const onDisk: string[] = [];
-    walk(subRoot, subRoot, onDisk, out, descriptor, rootAbs);
+    walk(subRoot, onDisk, out, descriptor, rootAbs);
     for (const abs of onDisk) {
       // Compute the file's relPath relative to `distRoot`, matching the
       // POSIX form used by `SkillFile.relPath`.
@@ -865,12 +865,7 @@ function hashFile(abs: string): string {
   // symlink into a device file. When the file is too large, we throw a
   // synthetic ENOENT-shaped error with `code = "E_FILE_TOO_LARGE"` so the
   // caller can convert it to a `walk-error` finding.
-  let stat;
-  try {
-    stat = lstatSync(abs);
-  } catch (e) {
-    throw e;
-  }
+  const stat = lstatSync(abs);
   if (stat.isSymbolicLink()) {
     const err = new Error(
       `Refused to hash symlink at ${abs} (structural check does not follow links).`,
@@ -890,7 +885,6 @@ function hashFile(abs: string): string {
 }
 
 function walk(
-  distRoot: string,
   current: string,
   out: string[],
   findings: DoctorFinding[],
@@ -930,7 +924,7 @@ function walk(
     }
     if (stat.isSymbolicLink()) continue;
     if (stat.isDirectory()) {
-      walk(distRoot, full, out, findings, descriptor, rootAbs);
+      walk(full, out, findings, descriptor, rootAbs);
     } else if (stat.isFile()) {
       // C-adj-1 — reject over-threshold files with a `walk-error` finding so
       // extraneous-file scanning does not OOM on a rogue multi-GB drop.

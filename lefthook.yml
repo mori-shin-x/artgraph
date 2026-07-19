@@ -7,7 +7,9 @@ pre-commit:
       stage_fixed: true
     oxlint:
       glob: "*.{ts,tsx,mts,cts,js,mjs,cjs}"
-      run: pnpm exec oxlint {staged_files}
+      # --deny-warnings matches the CI lint job — otherwise a warning-carrying
+      # commit passes the hook locally and fails CI.
+      run: pnpm exec oxlint --deny-warnings {staged_files}
 
 pre-push:
   parallel: false

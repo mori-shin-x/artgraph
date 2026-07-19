@@ -1593,7 +1593,7 @@ function computeLineHasCode(
     for (let i = Math.max(c.start, 0); i < end; i++) inComment[i] = 1;
   }
   const numLines = lineStarts.length;
-  const hasCode: boolean[] = new Array(numLines + 1).fill(false);
+  const hasCode: boolean[] = Array.from({ length: numLines + 1 }, () => false);
   for (let line = 1; line <= numLines; line++) {
     const start = lineStarts[line - 1];
     const end = line < numLines ? lineStarts[line] : content.length;

@@ -20,10 +20,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  AGENT_DESCRIPTORS,
-  type AgentId,
-} from "../../src/agents/descriptors.js";
+import { AGENT_DESCRIPTORS } from "../../src/agents/descriptors.js";
 import { createFreshProject, readDistributedTree } from "../agents/helpers.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
@@ -95,9 +92,7 @@ describe("e2e: artgraph init --agents=<single>", () => {
         expect(r.status, `stderr: ${r.stderr}`).toBe(0);
 
         const canonical = readDistributedTree(TEMPLATES_DIR);
-        const distributed = readDistributedTree(
-          join(proj.dir, descriptor.skillsPath),
-        );
+        const distributed = readDistributedTree(join(proj.dir, descriptor.skillsPath));
         // Every canonical path must appear at the destination with matching
         // sha256. The destination MAY have extra paths from a future test that
         // adds bookkeeping files, so we assert containment rather than equality.
@@ -149,9 +144,7 @@ describe("e2e: artgraph init --agents=claude,codex,cursor,copilot,kiro --force",
       const t = readDistributedTree(join(proj.dir, descriptor.skillsPath));
       expect(t.paths, `path set differs at ${descriptor.skillsPath}`).toEqual(ref.paths);
       for (const p of ref.paths) {
-        expect(t.sha256[p], `sha256 differs for ${descriptor.skillsPath}/${p}`).toBe(
-          ref.sha256[p],
-        );
+        expect(t.sha256[p], `sha256 differs for ${descriptor.skillsPath}/${p}`).toBe(ref.sha256[p]);
       }
     }
   });

@@ -29,10 +29,7 @@
 import { describe, it, expect } from "vitest";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import {
-  AGENT_DESCRIPTORS,
-  type AgentDescriptor,
-} from "../../src/agents/descriptors.js";
+import { AGENT_DESCRIPTORS } from "../../src/agents/descriptors.js";
 import { readSkillSource } from "../../src/agents/source.js";
 import { distribute } from "../../src/agents/distribute.js";
 import {
@@ -41,13 +38,7 @@ import {
   type DistributedTreeSnapshot,
 } from "./helpers.js";
 
-const REPO_TEMPLATES_DIR = resolve(
-  import.meta.dirname,
-  "..",
-  "..",
-  "templates",
-  "skills",
-);
+const REPO_TEMPLATES_DIR = resolve(import.meta.dirname, "..", "..", "templates", "skills");
 
 /**
  * Compare two `DistributedTreeSnapshot` instances for full byte-equality:
@@ -55,10 +46,7 @@ const REPO_TEMPLATES_DIR = resolve(
  * human-readable diffs (empty when equal) so vitest's assertion shows the
  * exact divergence rather than a Map-deep-equality black box.
  */
-function diffSnapshots(
-  a: DistributedTreeSnapshot,
-  b: DistributedTreeSnapshot,
-): string[] {
+function diffSnapshots(a: DistributedTreeSnapshot, b: DistributedTreeSnapshot): string[] {
   const diffs: string[] = [];
   const allPaths = new Set([...a.paths, ...b.paths]);
   for (const p of allPaths) {
@@ -89,10 +77,9 @@ describe("distribute() — US2 multi-agent scenarios", () => {
           force: true,
         });
         // Fresh project → every target should land as a write, none as no-op.
-        expect(
-          result.writtenPaths.length,
-          `agent=${descriptor.id} expected all-fresh writes`,
-        ).toBe(result.targets.length);
+        expect(result.writtenPaths.length, `agent=${descriptor.id} expected all-fresh writes`).toBe(
+          result.targets.length,
+        );
         expect(result.noopPaths.length).toBe(0);
       }
 
@@ -120,10 +107,7 @@ describe("distribute() — US2 multi-agent scenarios", () => {
           const a = perAgent.get(ids[i]!)!;
           const b = perAgent.get(ids[j]!)!;
           const diffs = diffSnapshots(a, b);
-          expect(
-            diffs,
-            `${ids[i]} vs ${ids[j]} diverged: ${diffs.join("; ")}`,
-          ).toEqual([]);
+          expect(diffs, `${ids[i]} vs ${ids[j]} diverged: ${diffs.join("; ")}`).toEqual([]);
         }
       }
     } finally {
@@ -191,10 +175,7 @@ describe("distribute() — US2 multi-agent scenarios", () => {
       // (relpaths under <skillsPath> are descriptor-independent).
       const codexAfter = readDistributedTree(join(dir, codex.skillsPath));
       const crossDiffs = diffSnapshots(claudeAfter, codexAfter);
-      expect(
-        crossDiffs,
-        `codex tree diverges from claude: ${crossDiffs.join("; ")}`,
-      ).toEqual([]);
+      expect(crossDiffs, `codex tree diverges from claude: ${crossDiffs.join("; ")}`).toEqual([]);
     } finally {
       cleanup();
     }
@@ -224,8 +205,7 @@ describe("distribute() — US2 multi-agent scenarios", () => {
       for (const p of [skillImpactPath, skillVerifyPath, sharedPath]) {
         mkdirSync(dirname(p), { recursive: true });
       }
-      const initialImpactBody =
-        "---\nname: artgraph-impact\ndescription: stub\n---\nv1\n";
+      const initialImpactBody = "---\nname: artgraph-impact\ndescription: stub\n---\nv1\n";
       writeFileSync(skillImpactPath, initialImpactBody, "utf-8");
       writeFileSync(
         skillVerifyPath,
@@ -246,10 +226,7 @@ describe("distribute() — US2 multi-agent scenarios", () => {
       // Capture snapshot A (post-v1) per agent.
       const snapshotsA = new Map<string, DistributedTreeSnapshot>();
       for (const descriptor of AGENT_DESCRIPTORS) {
-        snapshotsA.set(
-          descriptor.id,
-          readDistributedTree(join(projectDir, descriptor.skillsPath)),
-        );
+        snapshotsA.set(descriptor.id, readDistributedTree(join(projectDir, descriptor.skillsPath)));
       }
 
       // Sanity: every destination has v1 bytes of the SKILL.md we'll edit.
@@ -303,10 +280,7 @@ describe("distribute() — US2 multi-agent scenarios", () => {
         );
 
         // On-disk bytes equal the new source bytes verbatim.
-        const onDisk = readFileSync(
-          join(distRoot, "artgraph-impact", "SKILL.md"),
-          "utf-8",
-        );
+        const onDisk = readFileSync(join(distRoot, "artgraph-impact", "SKILL.md"), "utf-8");
         expect(onDisk).toBe(editedBody);
 
         // Untouched files keep their v1 sha256 (no collateral rewrites).
@@ -323,21 +297,14 @@ describe("distribute() — US2 multi-agent scenarios", () => {
       const ids = AGENT_DESCRIPTORS.map((d) => d.id);
       const snapsB = new Map<string, DistributedTreeSnapshot>();
       for (const descriptor of AGENT_DESCRIPTORS) {
-        snapsB.set(
-          descriptor.id,
-          readDistributedTree(join(projectDir, descriptor.skillsPath)),
-        );
+        snapsB.set(descriptor.id, readDistributedTree(join(projectDir, descriptor.skillsPath)));
       }
       for (let i = 0; i < ids.length; i++) {
         for (let j = i + 1; j < ids.length; j++) {
-          const diffs = diffSnapshots(
-            snapsB.get(ids[i]!)!,
-            snapsB.get(ids[j]!)!,
+          const diffs = diffSnapshots(snapsB.get(ids[i]!)!, snapsB.get(ids[j]!)!);
+          expect(diffs, `${ids[i]} vs ${ids[j]} post-edit diverged: ${diffs.join("; ")}`).toEqual(
+            [],
           );
-          expect(
-            diffs,
-            `${ids[i]} vs ${ids[j]} post-edit diverged: ${diffs.join("; ")}`,
-          ).toEqual([]);
         }
       }
     } finally {

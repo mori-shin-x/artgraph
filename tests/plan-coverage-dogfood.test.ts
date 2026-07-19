@@ -16,7 +16,7 @@
 // avoids depending on a built dist/ in CI.
 
 import { describe, it, expect } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runPlanCoverage } from "../src/plan-coverage/index.js";
 

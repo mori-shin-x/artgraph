@@ -6,15 +6,7 @@
 // These helpers stay framework-agnostic on purpose (no vitest imports) so they
 // can also be used from e2e or perf suites later.
 
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
