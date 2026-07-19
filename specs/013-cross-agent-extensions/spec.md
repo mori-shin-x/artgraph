@@ -118,6 +118,7 @@ Tier 1 エージェント向けに配布された Skills および agent-context
 - **FR-012**: 上記診断コマンドは drift / 欠落 / 不整合を 1 件でも検出した場合は非 0 終了する。本 spec では当該診断を `artgraph check --gate` (PR ゲート) には組み込まない (= ゲート挙動を spec 013 では変更しない)。ゲート組込みの要否は別 spec で評価する。
 - **FR-013**: `--agents` は既存フラグ群 (`--minimal` / `--no-skills` / `--no-agent-context` / `--no-integrate` / `--no-hooks` / `--no-scan` / `--integrations=<list>` / `--integrate-gate` / `--force` / `--format`) と直交する。組合せルール: (a) `--minimal` は最強で全 stage を OFF にし `--agents` 指定があっても無視 (警告)、(b) `--no-skills` かつ `--no-agent-context` の併用時は配布対象 stage が両方無効なため `--agents` 不要、(c) `--no-skills` 単独時は agent-context stage が走るため `--agents` 必須、(d) `--no-agent-context` 単独時は Skills stage が走るため `--agents` 必須、(e) `--integrations` は SDD ツール統合の責務であり Skills / agent-context 配布とは独立に動作する。
 - **FR-014**: MCP サーバの起動・登録・設定生成は本 spec では一切行わない。`.claude-plugin/marketplace.json` 等のプラグイン配布マニフェスト生成も行わない。Claude Code 以外のエージェント向け hooks (Codex `.codex/hooks.json`、Cursor `.cursor/hooks.json`、Kiro agent hooks 等) の配布も行わない。
+- **FR-015** (issue #356 で追加): `artgraph doctor` は `.artgraph.json` の `include` / `testPatterns` それぞれの node_modules 除外用負パターン (`"!**/node_modules/**"` 相当) の有無を診断し、片方のみに存在する非対称な構成を advisory (severity `pass`、doctor の終了コードを変更しない) として報告する。判定は負パターンの文字列・パスセグメント比較のみによる構造的診断である (Constitution Principle V に整合)。既存の `config-missing-agents-field` (spec 013 follow-up #158) と同じゲート条件 (少なくとも 1 Tier 1 エージェントが検出されていること) の下で評価する — 配布が 1 件も無いプロジェクトでは doctor 自体が空レポートを返す既存の短絡経路を維持するため。両方に負パターンが無い構成 (vendor コードを意図的にスキャンする等の対称な選択) は診断対象としない — ユーザーの意図的選択と区別できないため。
 
 ### Key Entities
 

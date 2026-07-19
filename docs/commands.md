@@ -711,6 +711,16 @@ artgraph doctor --agents=claude,codex      # restrict scope
 artgraph doctor --format json              # machine-readable
 ```
 
+`doctor` also runs one config-only diagnostic, scoped to projects where at
+least one Tier 1 agent distribution is already detected (same gate as the
+`agents`-field advisory findings): `config-pool-protection-asymmetry`
+(issue #356) — advisory (severity `pass`, never affects the exit code) —
+fires when `.artgraph.json`'s `include` and `testPatterns` disagree on
+whether they exclude node_modules (one has a `"!**/node_modules/**"`-style
+negative pattern, the other doesn't). See `docs/configuration.md`'s
+node_modules section for the full rationale, including why a config where
+_both_ pools lack the negation is not reported.
+
 Exit code is `0` when every finding is `pass` (or no Tier 1 distribution
 exists yet), non-zero when at least one finding is `fail` (drift / missing /
 wrapper missing the import / extraneous file). Example text output:

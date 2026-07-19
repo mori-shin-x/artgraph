@@ -593,6 +593,44 @@ function validateTestResultPaths(value: unknown): void {
   }
 }
 
+// issue #356 — `include` and `testPatterns` are two independent glob pools
+// (see `discoverCodeFiles` in `parsers/typescript.ts`, and `DEFAULT_CONFIG`'s
+// own doc comment in `types.ts`): each pool needs its OWN
+// `"!**/node_modules/**"`-style negative pattern to stay protected from
+// node_modules ingestion (issue #350's HIGH-2 widened this from a single
+// shared negation to two). This helper is the single shared judge of "did
+// the user's config leave exactly one pool unprotected" — called by both the
+// silent `config-pool-protection-asymmetry` scan warning (`graph/builder.ts`)
+// and the `artgraph doctor` advisory finding of the same name (`doctor.ts`),
+// so the two surfaces can never disagree.
+//
+// Purely structural (Constitution Principle V): a pool counts as "protected"
+// iff it contains a pattern that (a) starts with `!` and (b) has
+// `node_modules` as a whole path segment somewhere in its body — a string /
+// path-segment check only, no glob expansion, no filesystem access. Mirrors
+// the segment-based (not substring) node_modules detection already used for
+// the `node-modules-in-scan` warning below in `buildGraph`.
+//
+// Fires ONLY on asymmetry (one pool protected, the other not) and returns
+// the UNPROTECTED pool's key. Both pools missing the negation is
+// deliberately NOT reported here: it is indistinguishable from a deliberate,
+// symmetric choice to scan node_modules on purpose (e.g. checked-in vendored
+// code — see docs/configuration.md's node_modules section), and the
+// existing (non-silent) `node-modules-in-scan` warning already covers that
+// case once such a config actually matches a file under node_modules. Both
+// pools protected also returns `[]` (nothing to report) — this is a design
+// decision, not an oversight.
+export function missingNodeModulesProtection(
+  config: Pick<ArtgraphConfig, "include" | "testPatterns">,
+): Array<"include" | "testPatterns"> {
+  const hasNodeModulesNegation = (patterns: string[]): boolean =>
+    patterns.some((p) => p.startsWith("!") && p.slice(1).split(/[\\/]/).includes("node_modules"));
+  const includeProtected = hasNodeModulesNegation(config.include);
+  const testPatternsProtected = hasNodeModulesNegation(config.testPatterns);
+  if (includeProtected === testPatternsProtected) return [];
+  return includeProtected ? ["testPatterns"] : ["include"];
+}
+
 export function loadConfig(rootDir: string): ArtgraphConfig {
   const configPath = resolve(rootDir, CONFIG_FILE);
   if (!existsSync(configPath)) return { ...DEFAULT_CONFIG };

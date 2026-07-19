@@ -90,6 +90,22 @@ Degenerate patterns behave as inert rather than as errors: a doubled
 negation (`"!!foo/**"`), a bare `"!"`, and an empty string (`""`) are all
 accepted without complaint and simply do not produce a working exclusion.
 
+**Asymmetric protection (issue #356).** `node-modules-in-scan` above only
+fires once a matched file is actually under node_modules. Separately,
+`artgraph scan` also runs a purely structural, config-shape-only check: if
+exactly one of `include` / `testPatterns` carries a node_modules-excluding
+negative pattern and the other doesn't, a silent `config-pool-protection-asymmetry`
+warning is added to `scan --format json`'s `warnings[]` (not shown by the
+default stderr presenter — it would otherwise fire on every scan of an
+asymmetric config, even on a project with no node_modules directory at all).
+`artgraph doctor` reports the same asymmetry as an advisory
+`config-pool-protection-asymmetry` finding (severity `pass`, never affects
+doctor's exit code, and scoped to projects with at least one Tier 1 agent
+already detected). A config where BOTH pools lack the negation is not
+reported by either surface — it is indistinguishable from a deliberate,
+symmetric choice (e.g. intentionally scanning vendored code, as described
+above).
+
 ## `specDirs` — spec/doc file enumeration
 
 Every markdown file under a configured `specDirs` entry is enumerated with

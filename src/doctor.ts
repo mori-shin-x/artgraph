@@ -28,7 +28,7 @@ import {
 import { buildAgentsMdBody, inspectMarkerBlock } from "./agents/agent-context.js";
 import { detectPackageManager } from "./package-manager.js";
 import { readSkillSource, type SkillSource } from "./agents/source.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, missingNodeModulesProtection } from "./config.js";
 
 /** Skip files larger than this when hashing / walking (C-adj-1). Prevents an
  * accidentally-planted multi-GB file inside a Skills dir from OOM-ing the
@@ -83,7 +83,22 @@ export type DoctorFindingKind =
    * only (severity `pass`) — the on-disk state itself isn't broken, just
    * unrecorded.
    */
-  | "agent-installed-not-recorded";
+  | "agent-installed-not-recorded"
+  /**
+   * issue #356 / spec 013 FR-015 — `.artgraph.json`'s `include` /
+   * `testPatterns` node_modules-protection negation is asymmetric: one pool
+   * has a node_modules-excluding negative pattern (DEFAULT_CONFIG's own, see
+   * types.ts), the other doesn't. Advisory only (severity `pass`) — never
+   * flips the doctor exit code. Purely structural (Principle V): computed by
+   * the same `missingNodeModulesProtection` helper (`config.ts`) the silent
+   * `config-pool-protection-asymmetry` `scan` warning uses, so the two
+   * surfaces can never disagree. Gated on at least one Tier 1 agent being
+   * detected (same gate `config-missing-agents-field` above uses) — this
+   * keeps doctor's empty-report short-circuit (no distribution, no config
+   * findings → clean empty report) intact; see the gate's own comment at the
+   * `runDoctor` call site for why.
+   */
+  | "config-pool-protection-asymmetry";
 
 export interface DoctorFinding {
   severity: DoctorFindingSeverity;
@@ -152,6 +167,15 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   // (no `opts.agents`) detection path can trust `config.agents` as SSOT
   // instead of blind on-disk observation, when the field is present.
   const config = loadConfig(rootAbs);
+
+  // issue #356 / spec 013 FR-015 — config-shape advisory. The judge itself
+  // (`missingNodeModulesProtection`) only reads `config.include` /
+  // `config.testPatterns`, so it is computed here, up front, at no extra
+  // cost. Whether it actually PRODUCES a finding is decided further below
+  // (gated on `detectedDescriptors.length > 0`, same as
+  // `config-missing-agents-field`'s own gate) — see that gate's comment for
+  // why.
+  const missingProtectionPools = missingNodeModulesProtection(config);
 
   // Step 1 — detect agents.
   //   - explicit `opts.agents`: trust the caller; the CLI parser has already
@@ -312,6 +336,36 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
     }
   }
 
+  // @impl 013-cross-agent-extensions/FR-015
+  // issue #356 / spec 013 FR-015 — same gate as `config-missing-agents-field`
+  // above (`detectedDescriptors.length > 0`): doctor's empty-report
+  // short-circuit right below assumes NO Tier 1 distribution context means
+  // "nothing to report" and returns before Step 4 (`addAgentsMdFindings`,
+  // which runs unconditionally once past the short-circuit) ever executes.
+  // Firing this advisory unconditionally — independent of agent detection —
+  // would bypass that short-circuit on a project with zero installed agents
+  // and inadvertently pull in Step 4's AGENTS.md check, which would then
+  // report a genuine `agents-md-missing` FAIL for a project that never ran
+  // `artgraph init` at all — a new non-zero exit code the config-shape
+  // advisory alone must never cause. Gating on the same condition
+  // `config-missing-agents-field` already uses keeps this finding confined
+  // to projects where doctor already has Tier 1 distribution context to
+  // report on.
+  const poolProtectionFindings: DoctorFinding[] = [];
+  if (missingProtectionPools.length > 0 && detectedDescriptors.length > 0) {
+    const missingKey = missingProtectionPools[0];
+    const protectedKey = missingKey === "include" ? "testPatterns" : "include";
+    poolProtectionFindings.push({
+      severity: "pass",
+      agent: null,
+      kind: "config-pool-protection-asymmetry",
+      path: ".artgraph.json",
+      expected: `node_modules-excluding negative pattern in both "include" and "testPatterns"`,
+      actual: `missing from "${missingKey}"`,
+      message: `"${protectedKey}" excludes node_modules but "${missingKey}" does not — add a "!**/node_modules/**"-style negative pattern to "${missingKey}" in .artgraph.json, or remove it from "${protectedKey}" if scanning node_modules via "${missingKey}" is intentional.`,
+    });
+  }
+
   if (
     detectedDescriptors.length === 0 &&
     absentDescriptors.length === 0 &&
@@ -354,6 +408,11 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   // above (config-missing-agents-field / agent-recorded-but-missing /
   // agent-installed-not-recorded).
   findings.push(...configFindings);
+
+  // issue #356 — config-pool-protection-asymmetry advisory, computed above
+  // (gated on `detectedDescriptors.length > 0`, same as
+  // `config-missing-agents-field`).
+  findings.push(...poolProtectionFindings);
 
   // Step 3 — per-agent Skills + extraneous-file diagnostics.
   for (const descriptor of detectedDescriptors) {
@@ -835,8 +894,12 @@ export function formatDoctorReportText(report: DoctorReport): string {
 
   // spec 013 follow-up (#158) — config-level advisory, surfaced once as a
   // NOTICE line (mirrors the agents-md-body-stale NOTICE convention).
+  // issue #356 — `config-pool-protection-asymmetry` joins the same NOTICE
+  // treatment: same shape (agent: null, severity: "pass", config-only).
   const configLevelFindings = report.findings.filter(
-    (f) => f.agent === null && f.kind === "config-missing-agents-field",
+    (f) =>
+      f.agent === null &&
+      (f.kind === "config-missing-agents-field" || f.kind === "config-pool-protection-asymmetry"),
   );
   for (const f of configLevelFindings) {
     lines.push(`NOTICE: ${f.message}`);
