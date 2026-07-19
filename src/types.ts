@@ -639,32 +639,32 @@ export interface ArtgraphConfig {
   specDirs: string[];
   /**
    * fast-glob patterns for test files, resolved relative to the repo root.
-   * A leading `!` exclusion is mechanically supported here too, but prefer
-   * putting exclusions in `include` instead: trace evaluation
-   * (`buildSymbolNameTable`) resolves symbol names against `include` only,
-   * never `testPatterns`, so a `testPatterns`-only negative pattern narrows
-   * the scanned/graph file set without narrowing what trace evaluation sees.
-   * That divergence can no longer surface a phantom finding, though (issue
-   * #275): trace evidence is attributed only to nodes the CURRENT graph
-   * actually has — `src/trace/ingest.ts`'s `filterTraceToGraph` drops any
-   * node it can't resolve (via `resolveTraceGraphNodeId`, shared with
-   * `src/graph/builder.ts`'s graph-edge merge) before `check` / `impact
-   * --tests` / `trace report` ever see it, and counts what it dropped in
-   * `diagnostics.offGraph` (`trace status`/`trace report`, never a silent
-   * drop). A `testPatterns`-only exclusion therefore costs lost precision —
-   * a symbol/test pairing that could have been an attributed finding
-   * silently contributes nothing instead — not a phantom `@impl` / drift
-   * candidate. See docs/configuration.md's `include` / `testPatterns`
-   * section.
+   *
+   * issue #350 (pool separation) — `include` and `testPatterns` are two
+   * INDEPENDENT glob pools: `discoverCodeFiles`
+   * (`src/parsers/typescript.ts`) globs each pool separately and unions the
+   * positive matches. A `!`-prefixed pattern here applies ONLY to
+   * `testPatterns`' own positive matches — it narrows test *classification*
+   * (see the isTest note below) but does NOT remove a file from the graph
+   * if `include` still matches it (the file survives at `kind: "file"` via
+   * the `include` pool). Symmetrically, a negative pattern in `include`
+   * does not narrow test classification on its own. **To exclude a path
+   * from the graph entirely, add the same negative pattern to BOTH
+   * `include` and `testPatterns`** — see docs/configuration.md's `include`
+   * / `testPatterns` section. Before pool separation (PR #349, issue #350)
+   * a negative `testPatterns` pattern silently excluded matching files from
+   * the WHOLE scan (as if written under `include`), not just from test
+   * classification — that surprise is what motivates writing the exclusion
+   * in both places now that the two pools are independent.
    *
    * issue #323 — this is also the SOLE source of truth for whether a file is
    * a "test" (node kind `"test"` vs `"file"`, and whether `[REQ-x]` test-title
-   * tags are extracted from it): `src/parsers/typescript.ts`'s
-   * `computeTestFileSet` glob-matches this list once per scan and every
-   * `isTest` decision derives from Set membership in the result — there is no
-   * separate hardcoded filename heuristic. Narrowing `testPatterns` therefore
-   * also narrows (as intended) which files contribute `verifies` edges and
-   * test-node coverage, on top of the discovery effect described above.
+   * tags are extracted from it): `discoverCodeFiles`'s `testFiles` result
+   * (the `testPatterns` pool's own match set) is what every `isTest` decision
+   * derives from — there is no separate hardcoded filename heuristic.
+   * Narrowing `testPatterns` therefore narrows (as intended) which files
+   * contribute `verifies` edges and test-node coverage, independent of
+   * whether those files stay in the graph via `include`.
    */
   testPatterns: string[];
   lockFile: string;
@@ -724,19 +724,30 @@ export const DEFAULT_CONFIG: ArtgraphConfig = {
   // depth (including nested ones, e.g. `packages/*/node_modules` in a
   // monorepo): fast-glob does not exclude node_modules by default, so
   // without this a fresh `artgraph scan` would ingest thousands of vendored
-  // .ts files into the graph. Per issue #275 the exclusion deliberately
-  // lives in `include`, not `testPatterns` — see the `testPatterns` doc
-  // comment above for why.
+  // .ts files into the graph. issue #350 (HIGH-2) — `testPatterns` below
+  // carries the SAME negation for the same reason: since pool separation
+  // made `include` and `testPatterns` independent discovery pools, this
+  // pool needs its own `"!**/node_modules/**"` entry too, or a default
+  // (unconfigured) project's `testPatterns` pool alone would newly ingest
+  // vendored `*.test.ts`/`*.spec.ts` files that `include`'s negation no
+  // longer implicitly protected once the two pools stopped sharing one
+  // ignore list.
   include: ["src/**/*.ts", "src/**/*.tsx", "!**/node_modules/**"],
   specDirs: ["specs", "docs"],
   // issue #323 — `**/*.spec.tsx` was missing here even though the other
   // three test/spec x ts/tsx combinations are all present; this default was
   // simply asymmetric with itself. Now that `isTest` (node kind, `[REQ-x]`
   // tag extraction gating) is DERIVED from `testPatterns` rather than a
-  // hardcoded regex (see `computeTestFileSet` / `parseTSFile` in
+  // hardcoded regex (see `discoverCodeFiles` / `parseTSFile` in
   // `src/parsers/typescript.ts`), this default doubles as the fallback used
   // whenever a caller does not supply its own `testPatterns` — so the
   // asymmetry would otherwise have silently widened beyond file discovery.
-  testPatterns: ["**/*.test.ts", "**/*.spec.ts", "**/*.test.tsx", "**/*.spec.tsx"],
+  testPatterns: [
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/*.test.tsx",
+    "**/*.spec.tsx",
+    "!**/node_modules/**",
+  ],
   lockFile: ".trace.lock",
 };

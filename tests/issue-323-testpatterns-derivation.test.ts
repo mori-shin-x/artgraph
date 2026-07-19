@@ -18,13 +18,12 @@
 //   (c) `DEFAULT_CONFIG.testPatterns`'s `foo.spec.tsx` addition (the
 //       default-symmetry fix) actually takes effect: an UNCONFIGURED project
 //       classifies a `*.spec.tsx` file as a test node.
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { join } from "node:path";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { buildGraph } from "../src/graph/builder.js";
 import { impact } from "../src/graph/traverse.js";
-import { printWarnings } from "../src/commands/presenters/warnings.js";
 import type { ArtgraphConfig, LockFile } from "../src/types.js";
 import { DEFAULT_CONFIG } from "../src/types.js";
 
@@ -124,69 +123,14 @@ describe("issue #323 — testPatterns-derived isTest (AC c): DEFAULT_CONFIG.test
   });
 });
 
-// PR #349 (H1 mitigation, issue #350 tracks the real pool-separation fix) —
-// `codePatterns = [...include, ...testPatterns]` is ONE integrated glob, so
-// a `!`-prefixed `testPatterns` entry lands in the SAME shared `ignore` list
-// as an `include` exclusion — it drops matching files from the whole scan,
-// not just from test classification. Reproduced twice independently.
-// `buildGraph` now warns visibly (`"testpatterns-negative-pattern"`,
-// NOT silent) whenever `testPatterns` carries a negative pattern.
-describe("PR #349 — testPatterns negative-pattern visible warning (H1 mitigation)", () => {
-  let tmp: string;
-
-  afterEach(() => {
-    if (tmp) rmSync(tmp, { recursive: true, force: true });
-  });
-
-  function setup(testPatterns: string[]): { tmp: string; config: ArtgraphConfig } {
-    tmp = mkdtempSync(join(tmpdir(), "artgraph-349-testpatterns-negative-"));
-    mkdirSync(join(tmp, "specs"), { recursive: true });
-    mkdirSync(join(tmp, "src"), { recursive: true });
-    mkdirSync(join(tmp, "src", "legacy"), { recursive: true });
-    writeFileSync(join(tmp, "specs", "spec.md"), "# Spec\n\n- REQ-001: a requirement\n");
-    writeFileSync(join(tmp, "src", "widget.ts"), "// @impl REQ-001\nexport function widget() {}\n");
-    // A file under src/legacy that ONLY the testPatterns negative pattern
-    // (not any `include` exclusion) would drop from the whole scan.
-    writeFileSync(
-      join(tmp, "src", "legacy", "old.ts"),
-      "// @impl REQ-001\nexport function oldWidget() {}\n",
-    );
-    const config: ArtgraphConfig = {
-      include: ["src/**/*.ts"],
-      specDirs: ["specs"],
-      testPatterns,
-      lockFile: ".trace.lock",
-    };
-    return { tmp, config };
-  }
-
-  it("emits a testpatterns-negative-pattern warning when testPatterns has a negative pattern", () => {
-    const { tmp: root, config } = setup(["**/*.test.ts", "!src/legacy/**"]);
-    const { warnings } = buildGraph(root, config);
-    const w = warnings.find((x) => x.type === "testpatterns-negative-pattern");
-    expect(w).toBeDefined();
-    expect(w?.message).toMatch(/testPatterns/);
-    expect(w?.message).toMatch(/include/);
-  });
-
-  it("the warning shows up in the default text (stderr) output too", () => {
-    const { tmp: root, config } = setup(["**/*.test.ts", "!src/legacy/**"]);
-    const { warnings } = buildGraph(root, config);
-
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      printWarnings(warnings);
-      const printed = spy.mock.calls.map((c) => String(c[0])).join("\n");
-      expect(printed).toMatch(/testpatterns-negative-pattern|testPatterns contains a negative/);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it("does NOT emit the warning when testPatterns has no negative pattern", () => {
-    const { tmp: root, config } = setup(["**/*.test.ts"]);
-    const { warnings } = buildGraph(root, config);
-    const w = warnings.find((x) => x.type === "testpatterns-negative-pattern");
-    expect(w).toBeUndefined();
-  });
-});
+// PR #349 (H1 mitigation) added a `"testpatterns-negative-pattern"` warning
+// here for the merged-pool surprise this file used to document (a
+// `!`-prefixed `testPatterns` entry silently dropping files from the whole
+// scan). Issue #350 replaced the merged pool with real pool separation
+// (`discoverCodeFiles` in `src/parsers/typescript.ts`) — a negative
+// `testPatterns` pattern now narrows test *classification* only, never the
+// whole graph, so the warning's premise no longer exists and it (along with
+// its three pinning tests) was removed. See `tests/issue-350-pool-separation
+// .test.ts` for the pool-separation regression coverage that replaces it,
+// including the exact silent-`check --gate`-escape scenario this warning
+// used to be a stopgap for.

@@ -6,8 +6,7 @@ import {
   type InlineLinkRef,
 } from "../parsers/markdown.js";
 import {
-  computeTestFileSet,
-  globCodeFiles,
+  discoverCodeFiles,
   parseTSFilePaths,
   takeResolverResourceExhaustedWarning,
 } from "../parsers/typescript.js";
@@ -96,6 +95,13 @@ export interface BuildWarning {
     // silently ingest vendored files into the graph. NOT silent — shown by
     // default, to guide the user toward adding the exclusion. Non-fatal:
     // does not affect exit codes.
+    //
+    // issue #350 (HIGH-2) — since `include` and `testPatterns` are two
+    // independent discovery pools (see `discoverCodeFiles` in
+    // `parsers/typescript.ts`), a node_modules hit can come from either
+    // pool, or both. The remediation text below is computed per-scan from
+    // which pool(s) actually matched the offending files, rather than always
+    // pointing at `include` — see the emission site further down.
     | "node-modules-in-scan"
     // issue #333 — a re-export (`export { x } from`, `export * from`,
     // `export * as ns from`, or the S3-C3/S3-C4 source-null forms) whose
@@ -114,21 +120,7 @@ export interface BuildWarning {
     // issue #333 — same silent-skip bug, scoped to an ordinary (non
     // re-export) `import ... from "./missing"` statement. SILENT, same
     // rationale as `unresolved-reexport` above.
-    | "unresolved-import"
-    // PR #349 (H1 mitigation, issue #350 tracks the real fix) — the
-    // integrated discovery glob below (`codePatterns = [...include,
-    // ...testPatterns]`, fed to `globCodeFiles`) merges `include`'s and
-    // `testPatterns`' negative patterns into ONE shared `ignore` list. A
-    // `!`-prefixed entry in `testPatterns` therefore does not merely narrow
-    // test *classification* — it excludes matching files from the WHOLE
-    // scan/graph, exactly as if it had been written under `include`.
-    // Reproduced twice independently against this exact shape. Root cause is
-    // that discovery uses one shared pool instead of two (tracked as its own
-    // fix in issue #350); until that lands, this warning makes the surprise
-    // visible instead of a silent file drop. Fires at most once per scan.
-    // NOT silent — shown by default (not in SILENT_WARNING_TYPES), unlike
-    // the two `unresolved-reexport` / `unresolved-import` types above.
-    | "testpatterns-negative-pattern";
+    | "unresolved-import";
   id: string;
   files: string[];
   message?: string;
@@ -218,15 +210,17 @@ export function buildGraph(
 
   // issue #295 (PR #334 meta-review LOW-1 wording fix) — `system-resource-
   // exhausted` (EMFILE/ENFILE) is a scan-wide condition, not a per-file one:
-  // the markdown loop below, the `globCodeFiles` guard, the tsconfig read
-  // guard, and the TS warning-conversion loop further down can each
-  // independently observe it in the same `buildGraph()` call. This flag
-  // makes all of those sites agree on "has this scan already reported it" so
-  // at most one warning of this type ever lands in `warnings`, regardless of
-  // how many files hit it. Which site actually sets the flag is NOT a race:
+  // the markdown loop below, the `discoverCodeFiles` guard (issue #350 —
+  // covers BOTH the `include` and `testPatterns` pools symmetrically in one
+  // guard, see that call site's own comment), the tsconfig read guard, and
+  // the TS warning-conversion loop further down can each independently
+  // observe it in the same `buildGraph()` call. This flag makes all of those
+  // sites agree on "has this scan already reported it" so at most one
+  // warning of this type ever lands in `warnings`, regardless of how many
+  // files hit it. Which site actually sets the flag is NOT a race:
   // `buildGraph` runs synchronously, single-threaded, and every guarded site
   // below executes in a fixed, deterministic order (markdown loop, then the
-  // `globCodeFiles` guard, then the tsconfig read guard, then the TS
+  // `discoverCodeFiles` guard, then the tsconfig read guard, then the TS
   // warning-conversion loop, which surfaces failures from `parseTSFile`'s own
   // guarded read) for any given call — which one reports it is fully
   // determined by which sites this particular scan happens to hit, not by
@@ -599,10 +593,11 @@ export function buildGraph(
   }
 
   // Parse TypeScript files — incrementally when the parse cache holds valid
-  // fragments. The file set comes from globCodeFiles (the same fast-glob
-  // call the parser's own file enumeration is built on), so hit and miss
-  // paths see the same files a full scan would. Only changed files are
-  // handed to the oxc parser; a fully-warm run never loads it at all.
+  // fragments. The file set comes from `discoverCodeFiles` (the same
+  // pool-separated glob discovery the parser's own file enumeration is built
+  // on — see its doc comment in `parsers/typescript.ts`, issue #350), so hit
+  // and miss paths see the same files a full scan would. Only changed files
+  // are handed to the oxc parser; a fully-warm run never loads it at all.
   // Deliberate constraint: because oxc never loads on a fully-warm run, a
   // broken environment (see `OxcLoadError`, issue #263's fail-fast) still
   // succeeds as long as the cache stays valid — the output is just a memo of
@@ -611,44 +606,44 @@ export function buildGraph(
   // oxc. This is an intentional trade-off: it avoids paying the cost of an
   // unconditional oxc dlopen probe on every command just to fail fast
   // earlier.
-  const codePatterns = [...config.include, ...config.testPatterns];
-  // PR #349 (H1 mitigation) — `codePatterns` above is the ONE integrated
-  // glob discovery uses (`globCodeFiles` below), and it folds `include`'s
-  // and `testPatterns`' negative patterns into a single shared `ignore`
-  // list. A `!`-prefixed `testPatterns` entry therefore excludes matching
-  // files from the whole scan, not just from test classification — see the
-  // `BuildWarning["type"]`'s own `"testpatterns-negative-pattern"` doc
-  // comment above for the full rationale (issue #350 tracks the real pool-
-  // separation fix). Warn once per scan whenever `testPatterns` carries at
-  // least one negative pattern, regardless of how many.
-  if (config.testPatterns.some((p) => p.startsWith("!"))) {
-    warnings.push({
-      type: "testpatterns-negative-pattern",
-      id: "testPatterns",
-      files: [],
-      message:
-        'testPatterns contains a negative ("!") pattern; discovery merges include and ' +
-        "testPatterns into one shared ignore list, so this excludes matching files from " +
-        "the whole graph, not just from test classification. Put the exclusion in " +
-        '"include" instead (issue #350 tracks separating the two glob pools).',
-    });
-  }
   const tsMode = config.mode ?? "file";
   const codeId = config.reqPatterns?.codeId;
+  // issue #350 — `include` and `testPatterns` are two independent glob pools
+  // (see `discoverCodeFiles`'s own doc comment): each pool's negative
+  // patterns apply only to that pool's own positive patterns, then the
+  // matches are unioned. Pre-#350 this was ONE integrated glob over
+  // `[...include, ...testPatterns]`, which folded both lists' negative
+  // patterns into a single shared `ignore` — a `!`-prefixed `testPatterns`
+  // entry therefore used to exclude matching files from the WHOLE scan, not
+  // just from test classification (PR #349's now-retired
+  // `testpatterns-negative-pattern` warning existed to surface that surprise
+  // until this real fix landed).
+  //
   // issue #335 (Step 0-pre HIGH-1) — both this file's markdown loop above
-  // and `globCodeFiles` below now route through `../glob-utils.js`, so both
-  // enumeration passes share one fixed fast-glob option set and one
-  // deterministic sort. They still have DIFFERENT external failure
-  // contracts on EMFILE/ENFILE, by design: the markdown loop calls
-  // `listFilesGuarded` (swallow + `resourceExhaustedCode`, matching the
-  // fail-safe behavior a scan-wide degradation needs there — see that
-  // call site's own comment), while `globCodeFiles` still calls
-  // `listFilesOrThrow` (throws, exactly like the raw `fast-glob` call it
-  // replaced) so this try/catch below keeps working unchanged. Do not
-  // assume the two call sites fail the same way.
+  // and `discoverCodeFiles` below (via `globCodeFiles`) route through
+  // `../glob-utils.js`, so both enumeration passes share one fixed fast-glob
+  // option set and one deterministic sort. They still have DIFFERENT
+  // external failure contracts on EMFILE/ENFILE, by design: the markdown
+  // loop calls `listFilesGuarded` (swallow + `resourceExhaustedCode`,
+  // matching the fail-safe behavior a scan-wide degradation needs there —
+  // see that call site's own comment), while `discoverCodeFiles` still
+  // throws on EMFILE/ENFILE from either of its two underlying
+  // `globCodeFiles` calls (exactly like the single raw `globCodeFiles` call
+  // it replaces) so this try/catch below keeps working unchanged and
+  // symmetrically covers BOTH pools (Step 0-pre MEDIUM-1 — previously the
+  // `codePatterns` glob and the separate `computeTestFileSet` glob each
+  // needed their own independent guard; a single `discoverCodeFiles` call
+  // means a single guard here can never leave one pool unguarded). Do not
+  // assume the markdown and code call sites fail the same way.
   let codeFiles: string[];
+  let testFiles: Set<string>;
+  let includeFiles: Set<string>;
   try {
-    codeFiles = globCodeFiles(rootDir, codePatterns);
+    ({
+      files: codeFiles,
+      testFiles,
+      includeFiles,
+    } = discoverCodeFiles(rootDir, config.include, config.testPatterns));
   } catch (e) {
     const code = (e as NodeJS.ErrnoException)?.code;
     if (code === "EMFILE" || code === "ENFILE") {
@@ -667,6 +662,8 @@ export function buildGraph(
         });
       }
       codeFiles = [];
+      testFiles = new Set();
+      includeFiles = new Set();
     } else {
       // Any other glob failure (e.g. a malformed pattern) is a real problem
       // the user needs to see, not something to silently paper over with an
@@ -683,13 +680,35 @@ export function buildGraph(
   // `node_modules.ts` doesn't false-positive and Windows backslash paths
   // still match. `files` is capped at 5 entries to keep `scan --format
   // json` output bounded on repos with thousands of vendored files.
+  //
+  // issue #350 (HIGH-2) — `include` and `testPatterns` are now independent
+  // discovery pools, so a node_modules hit can come from either pool, or
+  // both — the remediation text is computed dynamically from which pool(s)
+  // actually matched the offending files (via `includeFiles`/`testFiles`
+  // membership, both already computed by `discoverCodeFiles` above at no
+  // extra glob-call cost) rather than always pointing at `include`, which
+  // would be silently wrong advice for a `testPatterns`-only leak.
   const nodeModulesFiles = relCodeFiles.filter((f) => f.split(/[\\/]/).includes("node_modules"));
   if (nodeModulesFiles.length > 0) {
+    let fromInclude = false;
+    let fromTestPatterns = false;
+    for (let i = 0; i < codeFiles.length; i++) {
+      if (!relCodeFiles[i].split(/[\\/]/).includes("node_modules")) continue;
+      if (includeFiles.has(codeFiles[i])) fromInclude = true;
+      if (testFiles.has(codeFiles[i])) fromTestPatterns = true;
+      if (fromInclude && fromTestPatterns) break;
+    }
+    const configKeys =
+      fromInclude && fromTestPatterns
+        ? '"include" and "testPatterns"'
+        : fromTestPatterns
+          ? '"testPatterns"'
+          : '"include"';
     warnings.push({
       type: "node-modules-in-scan",
       id: "node_modules",
       files: nodeModulesFiles.slice(0, 5),
-      message: `${nodeModulesFiles.length} scanned file(s) are under node_modules/ — add "!**/node_modules/**" to "include" in .artgraph.json to exclude them`,
+      message: `${nodeModulesFiles.length} scanned file(s) are under node_modules/ — add "!**/node_modules/**" to ${configKeys} in .artgraph.json to exclude them`,
     });
   }
 
@@ -756,43 +775,17 @@ export function buildGraph(
   );
   const tsFragmentsValid = prevCache !== undefined && prevCache.data.tsEnvKey === tsEnvKey;
 
-  // issue #323 — one integrated glob over `config.testPatterns`, reused for
-  // both (a) the parse-cache kind-mismatch guard below (a warm fragment's
-  // `kind` can go stale when ONLY testPatterns changes, content unchanged —
-  // see `fragmentTestKindMatches`'s doc comment in parse-cache.ts) and (b)
-  // the `isTest` classification `parseTSFilePaths` needs for any file that
-  // misses the cache. Computed once here (not inside `parseTSFilePaths`) so
-  // the two call sites can never see a different testPatterns match for the
-  // same file within one build.
-  //
-  // `computeTestFileSet` routes through `globCodeFiles` -> `listFilesOrThrow`
-  // (throws on EMFILE/ENFILE), same as the `codePatterns` glob above — guard
-  // it the same way rather than let a raw glob error crash the whole build.
-  let testFiles: Set<string>;
-  try {
-    testFiles = computeTestFileSet(rootDir, config.testPatterns);
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException)?.code;
-    if (code === "EMFILE" || code === "ENFILE") {
-      if (!systemResourceExhaustedReported) {
-        systemResourceExhaustedReported = true;
-        warnings.push({
-          type: "system-resource-exhausted",
-          id: "glob:test-patterns",
-          files: [],
-          message:
-            `file descriptor exhaustion (${code}) while globbing testPatterns during this scan; ` +
-            "the process ran out of open file descriptors. Consider raising the OS " +
-            "file-descriptor limit (e.g. `ulimit -n`) and re-running — other file reads " +
-            "in this scan may also be failing the same way. Shown once per scan " +
-            "regardless of how many files were affected.",
-        });
-      }
-      testFiles = new Set();
-    } else {
-      throw e;
-    }
-  }
+  // issue #323 — `testFiles` (the `testPatterns` pool's own match set) is
+  // reused for both (a) the parse-cache kind-mismatch guard below (a warm
+  // fragment's `kind` can go stale when ONLY testPatterns changes, content
+  // unchanged — see `fragmentTestKindMatches`'s doc comment in
+  // parse-cache.ts) and (b) the `isTest` classification `parseTSFilePaths`
+  // needs for any file that misses the cache. issue #350 — this is now the
+  // SAME `testFiles` `discoverCodeFiles` already computed above (as part of
+  // discovering `codeFiles` itself), not a second, independent glob call:
+  // the two call sites below can never see a different testPatterns match
+  // for the same file within one build, and no extra glob call is spent
+  // getting it (Step 0-pre MEDIUM-1).
 
   const nextTs: Record<string, TsFragment> = {};
   const fragmentByFile = new Map<string, TsFragment>();

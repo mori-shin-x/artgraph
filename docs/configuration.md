@@ -6,77 +6,85 @@ README's end-to-end example. This page documents the blocks users typically
 touch: `reqPatterns`, `ignoreIdPrefixes`, `docGraph`, `taskConventions`, and
 how edge provenance is surfaced.
 
-## `include` / `testPatterns` — code and test file globs
+## `include` / `testPatterns` — code and test file globs <a id="include--testpatterns"></a>
 
 Both are lists of [fast-glob](https://github.com/mrmlnc/fast-glob) patterns
 resolved relative to the repo root (defaults: `include: ["src/**/*.ts",
-"src/**/*.tsx", "!**/node_modules/**"]`). A leading `!` marks a pattern as
-an exclusion (e.g. `"!src/generated/**"`), matching fast-glob's own
-negative-pattern convention; excluded files are dropped from both scanning
-and `artgraph rename`'s rewrite scope. A list made up entirely of
-exclusions matches zero files.
+"src/**/*.tsx", "!**/node_modules/**"]`, `testPatterns: ["**/*.test.ts",
+"**/*.spec.ts", "**/*.test.tsx", "**/*.spec.tsx", "!**/node_modules/**"]`).
+A leading `!` marks a pattern as an exclusion (e.g. `"!src/generated/**"`),
+matching fast-glob's own negative-pattern convention.
 
-**`testPatterns` is not just a discovery glob — it is the sole source of
-truth for whether a file is a "test" (issue #323).** Beyond widening/
-narrowing which files are scanned, `testPatterns` also determines: (1) a
-matched file's graph node kind (`"test"` vs `"file"`), and (2) whether
-`[REQ-x]`-style tags in that file's test titles are extracted into
-`verifies` edges at all. There is no separate hardcoded filename heuristic —
-a file matches `testPatterns` or it does not, and every downstream decision
-follows from that one answer. Narrowing `testPatterns` therefore narrows
-(as intended) not just which files are discovered, but also which files'
-`verifies` edges and test-node coverage show up in the graph — a file that
-falls out of `testPatterns` stops being treated as a test even if its
-filename still looks like one (e.g. `foo.test.ts`). See "Put exclusions in
-`include`, not `testPatterns`" just below for another reason a negative
-pattern here is best avoided even though it technically works.
+**`include` and `testPatterns` are two independent glob pools (issue
+#350).** Each pool is globbed on its own — a `!`-prefixed pattern in one
+list applies ONLY to that list's own positive patterns, never to the
+other's. The discovered code-file set is the *union* of both pools'
+positive matches. Concretely:
 
-**Put exclusions in `include`, not `testPatterns`.** A negative pattern on
-`testPatterns` narrows the scanned file set the same way it does on
-`include`, so it lines up with the graph (see "`testPatterns` is not just a
-discovery glob" above for how that same narrowing also reaches isTest
-classification and `verifies` edges) — but trace evaluation
-(`buildSymbolNameTable`) only ever consults `include` when it resolves
-symbol names, never `testPatterns`. A negative pattern that only lives in
-`testPatterns` therefore drifts from what trace evaluation sees: the trace
-layer can resolve a hit against a file the graph itself has excluded.
+- A negative pattern in `testPatterns` narrows which matched files are
+  treated as tests (see "`testPatterns` is the sole source of truth for
+  `isTest`" below) but does **not** remove a file from the graph if
+  `include` still matches it — the file simply survives at `kind: "file"`
+  instead of `kind: "test"`.
+- A negative pattern in `include` narrows the code-file set the same way,
+  but does not by itself narrow test classification if `testPatterns`
+  still matches the file.
+- **To exclude a path from the graph entirely, add the same negative
+  pattern to BOTH `include` and `testPatterns`.** Neither list alone is
+  enough once the two pools are independent.
 
-That drift can no longer produce a phantom finding, though (issue #275):
-**trace evidence is attributed only to nodes the current graph actually
-has.** `ingestTrace`'s output is filtered against the graph
-(`filterTraceToGraph`, using the same symbol/file-grain resolution rule
-`buildGraph` itself uses to fold trace evidence into edges) before `check`,
-`impact --tests`, or `trace report` ever see it — a node the graph can't
-resolve is dropped, never treated as real evidence, and the number dropped
-is surfaced in `trace status`/`trace report`'s `diagnostics.offGraph` (never
-a silent drop). A `testPatterns`-only exclusion therefore costs lost
-precision — a symbol/test pairing that could have been an attributed finding
-silently contributes nothing instead — not a phantom `@impl` / drift
-candidate. Putting exclusions in `include` instead avoids that precision
-loss (the symbol table and the graph agree on scope from the start), so it
-remains the recommendation.
+A list made up entirely of exclusions matches zero files for that pool
+(it never widens the *other* pool). Excluded files (from both pools) are
+dropped from `artgraph rename`'s rewrite scope too — `rename` enumerates
+its rewrite candidates through the exact same `discoverCodeFiles` helper
+`scan`/`check`/`impact` build the graph from, so the two are structurally
+guaranteed to agree on scope; a file discoverable by scan can never be
+silently skipped by rename, or vice versa.
 
-**node_modules is excluded by default (issue #287).** `artgraph init`
-generates configs whose `include` ends with `"!**/node_modules/**"` (as
-shown above), because fast-glob does not exclude node_modules on its own —
-without the negation, a broad pattern like `"**/*.ts"` (the config `init`
-produces when no `src/` directory is detected) would ingest thousands of
-vendored `.ts` files into the graph on the very first scan. Projects
-created before this version can add `"!**/node_modules/**"` to their own
-`include` to opt in. `artgraph scan` emits a `node-modules-in-scan` warning
-whenever the matched file set still contains files under a node_modules
-directory, so a missing exclusion is caught rather than silently producing
-a bloated graph.
+Before pool separation (PR #349, issue #350), `include` and `testPatterns`
+were globbed together as one merged pool, so a `!`-prefixed `testPatterns`
+entry silently excluded matching files from the *whole* scan — exactly as
+if it had been written under `include`. Projects that relied on that
+(likely accidental) behavior need to add the same negative pattern to
+`include` now to keep those files out of the graph.
 
-Configs that omit `include` entirely pick up the new default automatically
-on upgrade, with no action needed — but any previously-scanned files under a
-node_modules path silently leave the graph on the next scan, since they are
-now excluded rather than detected, so no `node-modules-in-scan` warning
-fires for them. Only configs with an explicit `include` need the manual
-opt-in described above. A config that deliberately includes node_modules —
-for checked-in vendored code, say — will instead see the
-`node-modules-in-scan` warning on every run; it is informational only and
-never affects exit codes.
+**`testPatterns` is the sole source of truth for whether a file is a
+"test" (issue #323).** Independent of which pool(s) discovered it, a file
+that matches `testPatterns` gets: (1) graph node kind `"test"` (vs
+`"file"`), and (2) `[REQ-x]`-style tags in its test titles extracted into
+`verifies` edges. There is no separate hardcoded filename heuristic — a
+file matches `testPatterns` or it does not, and every downstream decision
+follows from that one answer. A file that falls out of `testPatterns`
+stops being treated as a test even if its filename still looks like one
+(e.g. `foo.test.ts`) — but, per pool separation above, it does not
+disappear from the graph unless `include` excludes it too.
+
+**node_modules is excluded by default (issue #287, extended by #350).**
+`artgraph init` generates configs whose `include` **and** `testPatterns`
+both end with `"!**/node_modules/**"` (as shown above) — both pools need
+the negation now that they are independent, since fast-glob does not
+exclude node_modules on its own. Without it, a broad pattern like
+`"**/*.ts"` (the `include` config `init` produces when no `src/` directory
+is detected) would ingest thousands of vendored `.ts` files into the graph
+on the very first scan, and a similarly broad `testPatterns` pool could
+separately ingest vendored `*.test.ts`/`*.spec.ts` files even with
+`include`'s own negation in place. Projects created before this version
+can add `"!**/node_modules/**"` to their own `include` and `testPatterns`
+to opt in. `artgraph scan` emits a `node-modules-in-scan` warning whenever
+the matched file set still contains files under a node_modules directory;
+the warning's remediation text names whichever of `"include"` /
+`"testPatterns"` (or both) actually matched the offending files, so the
+fix it suggests is always the pool(s) that need the exclusion.
+
+Configs that omit both `include` and `testPatterns` entirely pick up the
+new defaults automatically on upgrade, with no action needed — but any
+previously-scanned files under a node_modules path silently leave the
+graph on the next scan, since they are now excluded rather than detected,
+so no `node-modules-in-scan` warning fires for them. Only configs with an
+explicit `include` or `testPatterns` need the manual opt-in described
+above. A config that deliberately includes node_modules — for checked-in
+vendored code, say — will instead see the `node-modules-in-scan` warning
+on every run; it is informational only and never affects exit codes.
 
 Degenerate patterns behave as inert rather than as errors: a doubled
 negation (`"!!foo/**"`), a bare `"!"`, and an empty string (`""`) are all
