@@ -19,7 +19,7 @@ import type { LockChange } from "./rename-lock.js";
 import { readLockWithMeta, assertLockSchemaWritable, warnIfNewerLockSchema } from "./lock.js";
 import { scan, reconcile, ReconcileResourceExhaustedError } from "./scan.js";
 import { loadConfig } from "./config.js";
-import { globCodeFiles, systemResourceExhaustedMessage } from "./parsers/typescript.js";
+import { discoverCodeFiles, systemResourceExhaustedMessage } from "./parsers/typescript.js";
 import type { BuildWarning } from "./graph/builder.js";
 import { assertValidTargetId } from "./rename-validate-id.js";
 import { rewriteTraceShards } from "./rename-trace.js";
@@ -267,6 +267,21 @@ function filterRelevantFiles(files: string[]): string[] {
  * (issue #213). Returned paths are root-relative and sorted for deterministic
  * change ordering.
  *
+ * issue #350 (Step 0-pre HIGH-1) — the code/test half now calls the SAME
+ * `discoverCodeFiles` helper `graph/builder.ts` uses for `scan`'s own file
+ * discovery, instead of an independently-written
+ * `globCodeFiles(rootDir, [...config.include, ...config.testPatterns])`
+ * merged-pool call. Pre-#350 the two were two SEPARATE implementations of
+ * the same "union include and testPatterns" idea that happened to agree only
+ * because both went through the same merged-ignore-list bug — any future fix
+ * to one without the other would have silently diverged `rename`'s rewrite
+ * scope from `scan`'s graph scope (a file `scan` newly discovers under pool
+ * separation but `rename` still doesn't enumerate would keep its `@impl`
+ * tag pointing at a stale ID forever, with the new occurrence surfacing as
+ * an unexplained `orphan-edge`/`uncovered` on the very next scan). Sharing
+ * one helper makes that class of drift structurally impossible instead of
+ * relying on the two call sites being kept in sync by hand.
+ *
  * PR #339 meta-review (F1) — the markdown half of this enumeration used to
  * call the `glob` package's `globSync` directly; now routed through
  * `../glob-utils.js`'s `listFilesOrThrow` (the SAME throw-on-EMFILE/ENFILE
@@ -298,7 +313,7 @@ function enumerateRewriteFiles(rootDir: string, config: ArtgraphConfig): string[
       absPaths.add(resolve(file));
     }
   }
-  for (const file of globCodeFiles(rootDir, [...config.include, ...config.testPatterns])) {
+  for (const file of discoverCodeFiles(rootDir, config.include, config.testPatterns).files) {
     absPaths.add(resolve(file));
   }
   return filterRelevantFiles([...absPaths].map((f) => relative(rootDir, f))).sort();

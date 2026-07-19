@@ -111,16 +111,6 @@ export function printWarnings(warnings: BuildWarning[]) {
       case "node-modules-in-scan":
         console.error(`WARNING: ${w.message ?? `node-modules-in-scan (${w.files.join(", ")})`}`);
         break;
-      // PR #349 (H1 mitigation) — `testPatterns` carries a negative ("!")
-      // pattern, which the integrated discovery glob folds into the SAME
-      // shared ignore list `include`'s exclusions use, silently dropping
-      // matching files from the whole graph. Shown by default (NOT in
-      // SILENT_WARNING_TYPES): the builder-provided message already carries
-      // the full explanation and the fix, so print it verbatim with the id
-      // as fallback.
-      case "testpatterns-negative-pattern":
-        console.error(`WARNING: ${w.message ?? `testpatterns-negative-pattern "${w.id}"`}`);
-        break;
       // Filtered above via `isSilentWarning`, but the switch still needs
       // cases so the exhaustiveness check below stays happy.
       case "phantom-import-repaired":

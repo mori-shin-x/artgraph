@@ -399,16 +399,73 @@ function splitIncludePatterns(
 // `listFilesOrThrow` so this call site shares its fixed fast-glob option set
 // and its deterministic `.sort()` with the markdown-side enumeration
 // (`graph/builder.ts`). `listFilesOrThrow` preserves the EXACT external
-// contract this function already had (throws on EMFILE/ENFILE — the one
-// call site that matters, `graph/builder.ts`, already guards that itself;
-// see its own HIGH-2 comment) — the only observable change is the added
-// sort, which was already the case for every OTHER pre-existing caller
-// (`rename-executor.ts`, `trace/symbol-table.ts`) since none of them
+// contract this function already had (throws on EMFILE/ENFILE — every call
+// site that matters, `discoverCodeFiles` below chief among them, already
+// guards that itself; see its own doc comment) — the only observable change
+// is the added sort, which was already the case for every OTHER pre-existing
+// caller (`rename-executor.ts`, `trace/symbol-table.ts`) since none of them
 // depended on raw readdir order.
 export function globCodeFiles(rootDir: string, patterns: string[]): string[] {
   const { include, ignore } = splitIncludePatterns(rootDir, patterns);
   if (include.length === 0) return [];
   return listFilesOrThrow(include, { ignore });
+}
+
+// issue #350 — pool separation. Pre-#350, `graph/builder.ts` and
+// `rename-executor.ts`'s `enumerateRewriteFiles` each independently built
+// `codePatterns = [...include, ...testPatterns]` and fed that ONE merged
+// pattern list to `globCodeFiles`, which folds every negative pattern from
+// BOTH lists into a SINGLE shared `ignore` applied to every positive pattern
+// combined. That silently let a `!`-prefixed `testPatterns` entry exclude a
+// file from the WHOLE graph (as if it had been written under `include`)
+// instead of merely narrowing which files are classified as tests — see
+// PR #349 (the H1 mitigation warning this change retires) and the issue #350
+// Step 0-pre investigation's HIGH-1/HIGH-2/MEDIUM-1/Check-15 findings.
+//
+// Fix: `include` and `testPatterns` are two INDEPENDENT glob pools, each
+// globbed on its own (so each pool's negative patterns apply ONLY to that
+// pool's own positive patterns), then unioned. `files` is the deduped,
+// deterministically-sorted union of both pools' matches — the discovered
+// code-file set. `testFiles` is the `testPatterns` pool's own match set,
+// unchanged in meaning from `computeTestFileSet(rootDir, testPatterns)`
+// (isTest classification / `fragmentTestKindMatches` cache guard) — exposed
+// here so a caller that already needs `files` doesn't pay for a second,
+// redundant glob call to also get `testFiles` (Step 0-pre MEDIUM-1: total
+// glob-call count stays the same two calls a merged-pool caller already
+// made — one for `include`, one for `testPatterns` — it just stops sharing
+// one `ignore` list between them). `includeFiles` is the `include` pool's
+// own match set, exposed for the same reason `testFiles` is: a caller that
+// needs to classify a file by WHICH pool(s) matched it (e.g.
+// `graph/builder.ts`'s `node-modules-in-scan` remediation text — a file
+// under node_modules can be reachable via `include`, `testPatterns`, or
+// both, and the right fix depends on which) can do so via `Set.has` against
+// these two sets without a third glob call.
+//
+// Check 15 (monotonicity, Step 0-pre) — this can only ever WIDEN discovery
+// relative to the pre-#350 merged-pool behavior, never narrow it: a file the
+// old merged-ignore scheme included matched at least one pool's positive
+// pattern(s) and matched NEITHER pool's negative patterns (the shared
+// `ignore` came from both), so it necessarily still survives in that same
+// pool here, unaffected by the other pool's now-independent negative
+// patterns.
+//
+// EMFILE/ENFILE from EITHER underlying `globCodeFiles` call is NOT caught
+// here — it propagates uncaught so a single try/catch at the call site
+// (`graph/builder.ts`) symmetrically guards both pools in one place, rather
+// than the pre-#350 shape where the `codePatterns` glob and the separate
+// `computeTestFileSet` glob each needed their own independent guard.
+export function discoverCodeFiles(
+  rootDir: string,
+  includePatterns: string[],
+  testPatterns: string[],
+): { files: string[]; testFiles: Set<string>; includeFiles: Set<string> } {
+  const includeFiles = globCodeFiles(rootDir, includePatterns);
+  const testFileList = globCodeFiles(rootDir, testPatterns);
+  const includeFileSet = new Set(includeFiles);
+  const testFileSet = new Set(testFileList);
+  const files = new Set(includeFiles);
+  for (const f of testFileList) files.add(f);
+  return { files: [...files].sort(), testFiles: testFileSet, includeFiles: includeFileSet };
 }
 
 // Parse exactly the given files (used by the parse-cache path to reparse only

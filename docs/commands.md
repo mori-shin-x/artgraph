@@ -589,6 +589,17 @@ the files `.artgraph.json` puts in scan scope (`specDirs` markdown plus
 `include` / `testPatterns` code and tests). Git tracking state is irrelevant:
 uncommitted and untracked files are rewritten too.
 
+- **Rewrite scope always matches scan scope (issue #350).** `rename`
+  enumerates its code/test rewrite candidates through the exact same
+  `discoverCodeFiles` pool-separated discovery helper `scan`/`check`/
+  `impact` use to build the graph (see
+  [`include` / `testPatterns`](configuration.md#include--testpatterns)),
+  instead of a separately-written equivalent. A file the graph discovers is
+  therefore always a file `rename` rewrites, and vice versa — a
+  `testPatterns`-only negative pattern can no longer leave a renamed ID
+  stale in a file the next `scan` picks back up (which would have
+  surfaced as a surprise `orphan-edge`/`uncovered` finding).
+
 ```bash
 artgraph rename --from REQ-001 --to REQ-100
 artgraph rename --split REQ-001 --into REQ-101 REQ-102

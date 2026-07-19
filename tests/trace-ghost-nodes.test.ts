@@ -106,25 +106,49 @@ function makeGhostFixture(configExtra: Record<string, unknown> = {}): string {
   return tmp;
 }
 
-describe("trace-ghost-nodes (#275): filterTraceToGraph drops nodes the graph doesn't have", () => {
-  it("A-T1 [gate false-green pin]: acceptExercises: true + staleness: warn — a ghost node's evidence never rescues its REQ to `exercised`; it stays uncovered", async () => {
+describe("trace-ghost-nodes (#275, closed for the testPatterns-only case by #350): filterTraceToGraph drops nodes the graph doesn't have", () => {
+  // issue #350 — every test below used `testPatterns: ["!src/ghost.ts"]`
+  // (a negative pattern living ONLY in `testPatterns`) as its ghost-repro
+  // mechanism: pre-#350, that negation excluded `src/ghost.ts` from the
+  // WHOLE graph (the merged discovery pool) while `buildSymbolNameTable`
+  // (which resolves trace hits, and always discovers from `config.include`
+  // ONLY — see `src/trace/ingest.ts`) still saw the file, producing a
+  // `symbol:src/ghost.ts#ghostFn` id with evidence but no matching graph
+  // node — a "ghost". Pool separation (`discoverCodeFiles`,
+  // `src/parsers/typescript.ts`) makes the graph's own discovered file set
+  // `include ∪ testPatterns` — a pool `include` is always part of — so ANY
+  // file `buildSymbolNameTable` can see (include-only) is now STRUCTURALLY
+  // GUARANTEED to also be a real graph node. The specific "testPatterns-only
+  // negative pattern" ghost this suite pinned can therefore no longer be
+  // constructed at all: `src/ghost.ts` is now a perfectly ordinary graph
+  // member, and its evidence is real, not a ghost. `filterTraceToGraph` /
+  // `resolveTraceGraphNodeId` (src/trace/ingest.ts) are UNCHANGED and still
+  // exist as defense-in-depth against any OTHER divergence — see A-T4a/b/c
+  // below, which are unaffected by #350 and continue to pin that code path.
+  // These five tests are updated to pin the NEW, corrected behavior instead
+  // of being deleted, so a future regression that reopens this gap (e.g. a
+  // future change to `buildSymbolNameTable`'s own file-discovery patterns)
+  // still has a failing test to catch it.
+  it("A-T1 [closed by #350]: src/ghost.ts's evidence is real (not a ghost) — with acceptExercises: true it legitimately rescues REQ-900 to `exercised`", async () => {
     const tmp = makeGhostFixture({ trace: { acceptExercises: true } });
     const { stdout, exitCode } = await runAt(tmp, ["check", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
 
     const req900 = result.coverage.find((c: { reqId: string }) => c.reqId === "REQ-900");
-    expect(req900.status).toBe("untagged");
-    expect(result.uncovered).toContain("REQ-900");
-    expect(result.exercisableUncovered).not.toContain("REQ-900");
+    expect(req900.status).toBe("exercised");
+    expect(result.uncovered).not.toContain("REQ-900");
   });
 
-  it("A-T2 [gate false-red pin]: staleness: gate — a ghost node's hashesAtTrace entry does not trip the staleness gate (exit 2)", async () => {
+  it("A-T2 [closed by #350]: src/ghost.ts is a real node now — its deliberately-wrong hashesAtTrace entry is a genuine staleness finding and correctly trips the gate", async () => {
     // REQ-900 also gets a REAL `@impl` on a REAL (non-ghost) function so the
     // fixture has ZERO other scoped issues (mirrors the isolation technique
     // `check-evidence.test.ts`'s "T019f" staleness=gate fixture uses) — the
-    // only possible cause of a gate failure here is the ghost's stale-looking
-    // hashesAtTrace entry, were it not filtered out first.
+    // only issue here is `src/ghost.ts`'s deliberately-wrong `hashesAtTrace`
+    // entry. Pre-#350 that entry belonged to a ghost node and was harmless
+    // (dropped by `filterTraceToGraph` before `computeStaleNodeIds` ever saw
+    // it). Post-#350, `src/ghost.ts` is a REAL graph member, so the wrong
+    // hash is genuine stale evidence and SHOULD trip `staleness: "gate"`.
     const tmp = makeRepo(
       {
         "src/real.ts": "export function realFn() {\n  // @impl REQ-900\n}\n",
@@ -139,11 +163,9 @@ describe("trace-ghost-nodes (#275): filterTraceToGraph drops nodes the graph doe
         testName: "[REQ-900] exercises ghostFn",
         testFile: "tests/req900.test.ts",
         hits: [{ file: "src/ghost.ts", fn: "ghostFn" }],
-        // Deliberately wrong hash — if the ghost's hashesAtTrace entry
-        // survived filtering, `computeStaleNodeIds` would ALSO already treat
-        // it as stale simply because `file:src/ghost.ts` doesn't exist in
-        // the graph at all (see its own "owning file no longer exists"
-        // fallback), independent of the hash value chosen here.
+        // Deliberately wrong hash — `src/ghost.ts` is a real graph member
+        // post-#350, so this now genuinely disagrees with the current
+        // `symbol:src/ghost.ts#ghostFn` content hash.
         hashes: { "src/ghost.ts": "0000000000000000" },
       }),
     ]);
@@ -151,24 +173,21 @@ describe("trace-ghost-nodes (#275): filterTraceToGraph drops nodes the graph doe
     const { stdout, exitCode } = await runAt(tmp, ["check", "--format", "json", "--gate"]);
     const result = JSON.parse(stdout);
 
-    expect(result.staleEvidence).toEqual([]);
-    expect(result.staleGate).toBe(false);
-    expect(exitCode).toBe(0);
+    const req900Stale = result.staleEvidence.find((s: { reqId: string }) => s.reqId === "REQ-900");
+    expect(req900Stale?.symbols).toEqual(["symbol:src/ghost.ts#ghostFn"]);
+    expect(result.staleGate).toBe(true);
+    expect(exitCode).toBe(2);
   });
 
-  it("A-T3 [symptom pin]: a ghost node never appears in any trace report finding (corroborated/unexercisedClaims/suggestedImpls/infrastructure)", async () => {
+  it("A-T3 [closed by #350]: src/ghost.ts is real now — its exclusive, unclaimed evidence surfaces as an ordinary suggestedImpls finding", async () => {
     const tmp = makeGhostFixture();
     const { stdout, exitCode } = await runAt(tmp, ["trace", "report", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
 
-    const allNodes = [
-      ...result.corroborated.map((p: { node: string }) => p.node),
-      ...result.unexercisedClaims.map((p: { node: string }) => p.node),
-      ...result.suggestedImpls.map((p: { node: string }) => p.node),
-      ...result.infrastructure.map((i: { node: string }) => i.node),
-    ];
-    expect(allNodes.some((n) => n.includes("ghost"))).toBe(false);
+    expect(result.suggestedImpls).toEqual([
+      { reqId: "REQ-900", node: "symbol:src/ghost.ts#ghostFn" },
+    ]);
   });
 
   it("A-T4a [over-filter prevention, file mode — most important]: symbol-grain evidence whose OWNING FILE is a real file-mode graph node survives filtering (acceptExercises rescue still fires)", async () => {
@@ -300,26 +319,52 @@ describe("trace-ghost-nodes (#275): filterTraceToGraph drops nodes the graph doe
     expect(result.infrastructure).toEqual([]);
   });
 
-  it("A-T5 [diagnostics]: the ghost node dropped by filtering is counted in diagnostics.offGraph (json and text)", async () => {
+  it("A-T5 [closed by #350]: src/ghost.ts's evidence is no longer filtered out — diagnostics.offGraph is 0 (json and text)", async () => {
     const tmp = makeGhostFixture();
     const { stdout: jsonOut, exitCode } = await runAt(tmp, ["trace", "status", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(jsonOut);
-    expect(result.diagnostics.offGraph).toBe(1);
+    expect(result.diagnostics.offGraph).toBe(0);
 
     const { stdout: textOut } = await runAt(tmp, ["trace", "status"]);
-    expect(textOut).toContain("offGraph:      1");
+    expect(textOut).toContain("offGraph:      0");
   });
 
-  it("A-T6 [staleness: exclude — no regression]: the pre-existing incidental exclusion of ghost evidence (computeStaleNodeIds' 'owning file not in graph' fallback) still holds once the explicit #275 filter runs first", async () => {
+  it("A-T6 [closed by #350]: staleness: exclude — src/ghost.ts's evidence is real, so acceptExercises: true rescues REQ-900 to `exercised` here too", async () => {
     const tmp = makeGhostFixture({ trace: { staleness: "exclude", acceptExercises: true } });
     const { stdout, exitCode } = await runAt(tmp, ["check", "--format", "json"]);
     expect(exitCode).toBe(0);
     const result = JSON.parse(stdout);
 
     const req900 = result.coverage.find((c: { reqId: string }) => c.reqId === "REQ-900");
-    expect(req900.status).toBe("untagged");
-    expect(result.uncovered).toContain("REQ-900");
+    expect(req900.status).toBe("exercised");
+    expect(result.uncovered).not.toContain("REQ-900");
     expect(result.staleEvidence).toEqual([]);
+  });
+});
+
+// issue #350 — positive regression pin: the exact `testPatterns`-only
+// negative-pattern config every fixture above uses can no longer produce a
+// ghost node at all (see the describe block's header comment). This directly
+// exercises `filterTraceToGraph`'s `offGraph` count (rather than a
+// downstream symptom) as the most direct possible pin of that closure.
+describe("issue #350 — testPatterns-only negative pattern no longer produces any offGraph trace evidence", () => {
+  it("offGraph stays 0 across acceptExercises/staleness variants", async () => {
+    for (const traceConfig of [
+      {},
+      { acceptExercises: true },
+      { staleness: "exclude" as const },
+      { staleness: "gate" as const },
+    ]) {
+      const tmp = makeGhostFixture({ trace: traceConfig });
+      try {
+        const { stdout, exitCode } = await runAt(tmp, ["trace", "status", "--format", "json"]);
+        expect(exitCode).toBe(0);
+        const result = JSON.parse(stdout);
+        expect(result.diagnostics.offGraph).toBe(0);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    }
   });
 });
