@@ -563,19 +563,26 @@ describe("impact-evidence (#286 regression): reverse `exercises` traversal does 
     expect(result.impactReqs).not.toContain("REQ-901");
   });
 
-  it("impact(fnA) still returns REQ-901 via the forward @impl / implements edge — but a residual forward cascade also carries REQ-902 in (documented, tracked as #300)", () => {
+  it("impact(fnA) returns ONLY REQ-901 via the forward @impl / implements edge — the forward cascade into REQ-902 is closed (issue #300, resolved by #361)", () => {
     // Path: fnA -(forward implements)-> REQ-901 -(forward exercises)-> fnB
-    // -(forward implements)-> REQ-902. Option A skips REVERSE exercises but
-    // preserves FORWARD, so the cascade "REQ -> incidentally-exercised symbol
-    // -> that symbol's OTHER @impl claim" still leaks. This forward-cascade
-    // closure is tracked as #300 — a distinct follow-up from #298 (which
-    // covers reverse traversal re-enable / Option C only, per PR #299's
-    // meta-review Finding 1). Closing #300 would skip forward-exercises hops
-    // into symbols whose @impl belongs to a different REQ. Pinning current
-    // behavior so any change to it is intentional.
+    // -(forward implements)-> REQ-902. Pre-#361, forward `exercises` was
+    // unconditionally strong/transitive, so the cascade "REQ ->
+    // incidentally-exercised symbol -> that symbol's OTHER @impl claim"
+    // leaked REQ-902 in even though fnA has zero code relationship to it.
+    // Issue #361's two-layer propagation model makes forward `exercises`
+    // `"terminal"` (weak, collect-but-do-not-reopen, see traverse.ts's
+    // `classifyEdgeTraversal`): REQ-901 -> fnB is still collected (fnB lands
+    // in `affectedFiles`, see the next test below), but fnB is never
+    // DEQUEUED, so its own `implements` edge to REQ-902 is never explored.
+    // This closes issue #300 — was previously pinned as "current behavior,
+    // change must be intentional"; the assertion below is that intentional
+    // change.
     const { nodes, edges } = setup();
     const result = impact({ nodes, edges }, ["symbol:src/sample.ts#fnA"], {} as LockFile);
-    expect(result.impactReqs.sort()).toEqual(["REQ-901", "REQ-902"]);
+    expect(result.impactReqs).toEqual(["REQ-901"]);
+    expect(result.impactReqs).not.toContain("REQ-902");
+    // fnB is still collected (weak/terminal reach), it just doesn't re-open.
+    expect(result.affectedFiles).toContain("src/sample.ts");
   });
 
   it("impact(REQ-901) still forward-follows exercises: fnA and fnB (as executed by REQ-901's test) are BOTH in affectedFiles's src/sample.ts", () => {

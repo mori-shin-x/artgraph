@@ -1,141 +1,205 @@
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import type { ArtifactGraph, DriftEntry, ImpactResult, SymbolEntry } from "../types.js";
+import type { ArtifactGraph, DriftEntry, EdgeKind, ImpactResult, SymbolEntry } from "../types.js";
 import type { LockFile } from "../types.js";
 
-// spec 019 (FR-001〜006, issue #215) — `contains` (doc -> req|task) is the
-// ONE edge kind the BFS below does not treat as bidirectional. Every other
-// edge kind (`depends_on` / `derives_from` / `implements` / `verifies` /
-// `imports`) and the file→symbol expansion (the `node.kind === "file"`
-// branch below) keep the spec 014/016 bidirectional semantics unchanged.
+// ============================================================================
+// History (spec 019 / #215, #286, #303) — WHY the BFS below does not treat
+// every edge kind as unconditionally, symmetrically bidirectional.
+// ============================================================================
 //
-// Why: Spec Kit / Kiro's standard layout is "1 feature = 1 spec.md with
-// multiple REQs". Treating `contains` as bidirectional let a symbol-unit
-// BFS walk req -> (reverse contains) parent doc -> (forward contains)
-// sibling req -> sibling req's implementors, dragging the WHOLE feature's
-// REQ set into `impactReqs` / `affectedFiles` / `drifted` even when the
-// target symbol has zero code dependency on the sibling. That defeated the
-// per-change-context value proposition `artgraph impact` exists for (see
-// specs/019-impact-doc-containment/spec.md US1). The same amplification
-// happens one hub further for tasks: a task's `implements` edge to its REQ
-// plus tasks.md's `contains` edges to every sibling task reconstructs the
-// same blowup through the task layer, so the direction constraint applies
-// uniformly to `contains` edges regardless of whether the target is a req
-// or a task node (FR-003) — restricting only req targets leaves the task
-// path wide open and the symptom returns almost unchanged.
+// spec 019 (FR-001〜006, issue #215) — `contains` (doc -> req|task) was the
+// FIRST edge kind found to need a direction constraint. Spec Kit / Kiro's
+// standard layout is "1 feature = 1 spec.md with multiple REQs"; treating
+// `contains` as bidirectional let a symbol-unit BFS walk
+// req -> (reverse contains) parent doc -> (forward contains) sibling req ->
+// sibling req's implementors, dragging the WHOLE feature's REQ set into
+// `impactReqs` / `affectedFiles` / `drifted` even when the target symbol has
+// zero code dependency on the sibling (specs/019-impact-doc-containment/
+// spec.md US1). The fix: `contains` reverse traversal is blocked outright
+// (R1, below); the parent doc is not simply dropped, though — after the BFS
+// completes, `impact()` re-attaches each visited req/task's parent doc(s) via
+// a one-hop, non-recursive post-processing pass (FR-004〜006, "attribution",
+// unchanged by #361 — see MEDIUM-2 note there). File→symbol expansion (the
+// `node.kind === "file"` branch below) is the reason a file startId still
+// drags in same-file symbols; for symbol startIds `resolveStartIds`
+// deliberately omits the parent file node (spec 016 R-006).
 //
-// The parent doc is not simply dropped: after the BFS below completes,
-// `impact()` re-attaches each visited req/task's parent doc(s) via a
-// one-hop, non-recursive post-processing pass (FR-004〜006, "attribution").
-// Attributed docs land in `affectedDocs` and participate in drift detection
-// exactly like BFS-reached docs, but nothing is expanded FROM an attributed
-// doc — so attribution restores "which spec is this REQ's home" context
-// without reopening the sibling-REQ leak. `maxDepth` no longer needs to
-// double as a `contains`-blast-radius mitigation (the old comment's
-// workaround is gone): attribution is a depth-independent post-BFS step,
-// so `maxDepth` keeps its one meaning — how many graph-edge hops the BFS
-// itself takes.
+// issue #286 (PR #299 Option 2B) — `exercises` (req -> symbol|file,
+// coverage-derived) was the SECOND edge kind found to need a direction
+// constraint, for the same "hub bridges unrelated siblings" shape: a
+// symbol-start BFS reverse-following `exercises` (node -> req) reached every
+// REQ whose test happened to CALL that symbol, not just the REQ(s) the
+// symbol actually implements. The historical (pre-#361) fix allowed reverse
+// `exercises` ONLY for a REQ with NO `implements` edge anywhere
+// (evidence-only, `reqsWithImplements` below) — since check/plan-coverage
+// fold `impact()`'s results into their `--diff --gate` scope, fully blocking
+// reverse `exercises` would make the `acceptExercises: true` evidence-only
+// workflow (spec 020 FR-012〜015) permanently unreachable from a
+// symbol/file startId and silently drop it from gate scope.
 //
-// File→symbol expansion (the `node.kind === "file"` branch below) is the
-// reason a file startId still drags in same-file symbols; for symbol startIds
-// `resolveStartIds` deliberately omits the parent file node so a symbol-unit
-// input doesn't sweep up its siblings (spec 016 R-006 mitigation).
+// issue #303 — Option 2B closed the reverse-`exercises` leak but the SAME
+// symptom reproduced through `verifies`/`imports`, which stayed
+// unconditionally bidirectional: a TEST node is a natural hub for both (one
+// test file `verifies` several sibling REQs and `imports` several sibling
+// src symbols). The historical fix: a node reached via a REVERSE
+// `verifies`/`imports` hop onto a `kind === "test"` node became a
+// "restricted test hub" — its own forward `verifies` only continued to
+// evidence-only REQs, and its own forward `imports` was blocked outright.
 //
-// issue #286 — `exercises` (req -> symbol|file, coverage-derived) is now the
-// SECOND edge kind the BFS below does not unconditionally treat as
-// bidirectional (alongside `contains` above), for the exact same class of
-// reason. A symbol-start BFS that reverse-follows `exercises` (node -> req)
-// reaches every REQ whose test happens to CALL that symbol, not just the
-// REQ(s) the symbol actually implements — e.g. a "create X, then read X back
-// to verify" test pattern means the read-verification symbol's `exercises`
-// edge fans out to every REQ under test, even ones with zero code
-// relationship to that symbol (reported against a real project: `getBookmark`
-// picked up `markRead`/`favorite`/`archive` REQs solely because each of those
-// REQs' tests called `getBookmark` to assert on resulting state).
+// Both fixes shared a structural weak point later formalized as issue #322 /
+// Step 0-pre HIGH-2: the evidence-only exemption was a per-EDGE predicate
+// keyed only by "does this REQ have an `implements` edge", not a per-(origin,
+// REQ) one — so once a BFS legitimately reached ONE evidence-only REQ through
+// a hub, that REQ's own bare hub-membership became a "passport" letting the
+// walk continue OUT the other side to unrelated evidence-only siblings, and
+// the same shape could daisy-chain hub-to-hub indefinitely. Tagging the
+// passport with more state does not fix this: the exemption condition and
+// the onward-passage condition were the same predicate, so any tag applied
+// to satisfy one automatically satisfies the other for the next hop too.
 //
-// PR #299 meta-review Finding 2 (Option 2B, partial re-enable) — an
-// unconditional reverse-`exercises` skip has a real cost: `check`/
-// `plan-coverage` fold `impact()`'s `impactReqs`/`affectedDocs`/
-// `affectedFiles` into their `--diff --gate` scope filter (see
-// `src/commands/check.ts`'s `buildScope`, `src/plan-coverage/index.ts`), so a
-// REQ with NO `implements` edge at all — the `acceptExercises: true`
-// evidence-only workflow, spec 020 FR-012〜015 — becomes permanently
-// unreachable from a symbol/file startId once reverse `exercises` is fully
-// blocked, and `check --diff --gate` silently drops it from scope. The fix:
-// reverse `exercises` traversal is BLOCKED only when the source REQ has at
-// least one `implements` edge somewhere in the graph (the #286 leak class —
-// a REQ that already has a real `@impl` claim doesn't need a reverse
-// `exercises` walk to be reachable, and allowing it is what leaked sibling
-// REQs). It is ALLOWED when the source REQ has NO `implements` edge at all
-// (evidence-only REQ), since in that case there is no other path back to the
-// REQ and no sibling-REQ leak risk (an evidence-only REQ's `exercises` edges
-// are its ONLY edges, so reverse-walking them reaches only itself, never a
-// sibling). `reqsWithImplements` (computed once per `impact()` call, below)
-// is the precomputed membership check this conditional relies on. This is a
-// partial fix, not full provenance-aware reverse traversal — a REQ that HAS
-// an `@impl` claim on some OTHER symbol still cannot be reached in reverse
-// from an incidentally-exercised symbol (the original #286 case stays
-// fixed); full provenance-aware traversal (e.g. distinguishing "this REQ's
-// own exclusive evidence" from "somebody else's incidental call") is tracked
-// separately as issue #298. See specs/020's FR-017 note for the original
-// analysis. `symbol -> REQ` reachability for a REQ that DOES have an
-// `@impl` claim is NOT lost: it is carried by the (always-forward-and-
-// reverse) `implements` edge, which only exists when the symbol genuinely
-// claims the REQ via `@impl` — exactly the distinction #286 needs.
-// `--tests` (`impact --diff --tests`) is unaffected by any of this: it
-// resolves tests via `ingestedTrace.reqsByNode` directly, never via this BFS.
+// ============================================================================
+// Current model (issue #361) — two-layer propagation + matching predicate.
+// ============================================================================
 //
-// issue #303 — Option 2B (above) closed the reverse-`exercises` leak but PR
-// #299's own E2E verification found the SAME user-visible symptom
-// ("unrelated REQ shows up in `impact(<symbol>)`") reproduces through a
-// DIFFERENT mechanism it doesn't touch: `verifies` and `imports` are both
-// unconditionally bidirectional, and a TEST node is a natural hub for both —
-// one test file routinely `verifies` several sibling REQs (one per `it()`
-// block) and `imports` several sibling src symbols/files it exercises. A
-// symbol-start BFS that reverse-walks INTO a test hub for REQ-A's sake (via
-// `verifies` or `imports`) and then forward-walks back OUT of that SAME hub
-// picks up REQ-A's siblings too — REQs (or files) with zero code
-// relationship to the original symbol. Two concrete paths from the repro:
-//   (1) `symbol:fnB -(fwd implements)-> REQ-902 -(rev verifies)-> test file
-//       -(fwd verifies)-> REQ-901` — REQ-901's test happens to import fnB's
-//       module for a side-assertion, so fnB's own `implements` edge to
-//       REQ-902 is enough to reach the shared test hub.
-//   (2) `symbol:fnB -(rev imports)-> test file -(fwd verifies)-> REQ-901` —
-//       even a bare `import { fnA, fnB } from "../src/sample"` (no
-//       assertion at all) makes the test file a hub for fnB.
-// This is the same "hub node bridges unrelated siblings" shape #215
-// (`contains`) and #286 (`exercises`) already fixed for their own edge
-// kinds, applied to the two kinds that survived those fixes. The mitigation
-// (applied in the BFS loop below): a node reached via a REVERSE
-// `verifies`/`imports` hop onto a `kind === "test"` node is a "restricted
-// test hub" — its OWN forward `verifies` edges only continue to REQs that
-// are evidence-only (`!reqsWithImplements.has(target)`, preserving the
-// Option 2B evidence-only guarantee so this fix cannot repeat the #286
-// gate-false-green regression), and its OWN forward `imports` edges are
-// never followed at all (closing repro path (2) — a bare import declaration
-// through a test hub has no assertion-based relationship to reach through).
-// A test node reached any OTHER way (a startId, a forward hop, e.g. the
-// test verifying/importing something that then reverse-reaches it from a
-// DIFFERENT direction) stays fully unrestricted — see the `visited`
-// two-state (`"restricted"` / `"unrestricted"`) bookkeeping below, which
-// lets a later unrestricted arrival upgrade and re-expand a node an earlier
-// restricted arrival under-explored. Every non-test node, and every
-// reverse-`verifies`/`imports` hop that does NOT land on a test node,
-// is entirely unaffected — this is strictly narrower than #215/#286's
-// direction-level blocks.
+// #361 replaces the single-axis "restricted"/"unrestricted" test-hub state
+// (and the bare `reqsWithImplements`-only exemption above) with a THREE-state
+// `ReachState` model and moves every one of R1-R5 below into ONE explicit
+// classification function (`classifyEdgeTraversal`) instead of leaving them
+// scattered across separate `if` branches:
 //
-// Known residual limitation (tracked as issue #322, intentionally NOT fixed
-// here) — evidence-only REQs (no `implements` edge anywhere) are still
-// reachable FROM one another through a shared restricted hub: the rule (a)
-// exemption below is a per-EDGE predicate, not a per-hub one, so a hub
-// `verifies`-incident to more than one evidence-only REQ lets a BFS arriving
-// for ONE of them walk back out to its evidence-only SIBLINGS too, and the
-// same shape can daisy-chain one hop further into another hub. This mirrors
-// a structural property Option 2B (reverse `exercises`, above) already has
-// for the same reason — an evidence-only REQ's only path back is through the
-// very edges that also connect it to its siblings — so it is not specific to
-// #303's `verifies`/`imports` mechanism. See rule (a)'s comment below for the
-// mechanics and `tests/impact-test-hub-303.test.ts`'s "known limitation"
-// describe block for a pinned repro.
+//   - `"expandable"` — the node may be dequeued and its own edges explored.
+//     Every DECLARED edge (`implements`, `contains` forward, `verifies`/
+//     `imports` reached any way OTHER than through a restricted hub's own
+//     forward hop, and `depends_on`/`derives_from` carrying at least one
+//     EXPLICIT-declaration provenance) grants this state — "strong",
+//     transitive, exactly like every edge kind behaved pre-#361.
+//   - `"restricted"` — a `kind === "test"` node reached via a reverse
+//     `verifies`/`imports` hop (the #303 hub-arrival shape). Still
+//     EXPANDABLE (it IS dequeued), but its OWN forward `verifies`/`imports`
+//     edges are narrowed per R3a/R3b below. A later, unrestricted arrival at
+//     the SAME node upgrades and re-expands it (unchanged from #303).
+//   - `"terminal"` — a WEAK, "collect but do not re-open" reach: the node
+//     lands in `visited` (so it still contributes to `impactReqs` /
+//     `affectedFiles` / `affectedDocs` / `reqProvenance` / post-BFS
+//     attribution, all of which key off `visited`'s KEYS only) but is NEVER
+//     enqueued — its own outgoing/incoming edges are never explored. A weak
+//     reach can therefore never become anyone's passport to a further hop;
+//     this is the structural fix for HIGH-2 / issue #322 (a terminal REQ
+//     cannot reverse-walk back out to a sibling through the hub that
+//     terminally reached it, and a terminal file cannot cascade to its
+//     same-file symbols via the `node.kind === "file"` expansion below,
+//     which — like every other expansion step — only runs for a DEQUEUED,
+//     i.e. non-terminal, node). A later STRONG arrival at the same node still
+//     upgrades it to `"expandable"` and re-enqueues it for full expansion
+//     (`isNewReach`'s total order below), so weak-then-strong reach is not
+//     lossy — only strong-only-via-weak-hops is blocked.
+//
+// `classifyEdgeTraversal` (below) is the SSOT for every edge kind's
+// direction x provenance x hub-context classification — R1-R5 (still true,
+// now expressed there instead of inline):
+//   R1  `contains` reverse: always blocked (issue #215, unchanged).
+//   R2  `exercises` reverse (symbol/file -> req): blocked when the source REQ
+//       has an `implements` edge anywhere (`reqsWithImplements`, unchanged
+//       eligibility test from Option 2B) — but when ALLOWED, the reach is now
+//       `"terminal"` (was `"unrestricted"` pre-#361): an evidence-only REQ
+//       reached this way still lands in `impactReqs`/gate scope (Option 2B's
+//       guarantee is preserved — see the gate-reachability regression test),
+//       it just can no longer reverse-walk onward to a sibling.
+//   R3a restricted hub's forward `verifies`: blocked when the target REQ has
+//       an `implements` edge anywhere (unchanged). Otherwise (evidence-only)
+//       NOW additionally requires the **matching predicate** below; on a
+//       match the reach is `"terminal"` (was `"unrestricted"`) — this is the
+//       #361 fix for HIGH-2/#322's daisy-chain (a terminal REQ cannot
+//       reverse-walk back out to reach the hub's OTHER evidence-only
+//       siblings, closing the residual leak `tests/impact-test-hub-303.test
+//       .ts`'s old "known limitation, issue #322 pin" block documented).
+//       H1 (issue #363): the matching predicate REQUIRES `exercises` evidence
+//       to exist, so it fails open — bare hub membership suffices, as
+//       pre-#361 — whenever the WHOLE graph has zero `exercises` edges
+//       (`graphHasExercisesEdges`, see below): a project that has never
+//       ingested a trace shard can never satisfy the predicate by
+//       construction, and applying it anyway silently erases every
+//       evidence-only REQ from `impactReqs`/gate scope rather than legitimately
+//       finding no match. See the matching-predicate paragraph below for the
+//       partial-trace residual limitation this fallback does NOT cover.
+//   R3b restricted hub's forward `imports`: always blocked (unchanged).
+//   R4  a stale `exercises` edge (`excludeStaleExercises`) is skipped
+//       entirely, before classification runs at all (unchanged).
+//   R5  file→symbol expansion only runs when a `file` node is DEQUEUED — so
+//       it never fires for a terminally-reached file (unchanged mechanism,
+//       new consequence: a file reached only via forward `exercises` no
+//       longer sweeps in its same-file symbols).
+//
+// New for #361 — the `exercises` edge kind's FORWARD direction (req ->
+// symbol|file) is now ALSO `"terminal"` (was `"expandable"`/unconditional
+// pre-#361): a REQ's own coverage-derived `exercises` edge to the code it
+// happens to exercise is observational evidence, not a declared dependency,
+// so it should not itself grant transitive reach onward from the exercised
+// node — this closes the forward cascade axis (`fnA -implements-> REQ-901
+// -exercises-> fnB -implements-> REQ-902`, where REQ-902 used to leak in via
+// REQ-901's own unrelated test coverage of fnB; fnB itself, one hop away,
+// still legitimately lands in `affectedFiles`).
+//
+// New for #361 — `depends_on`/`derives_from` (doc <-> doc/req, both
+// directions symmetric) now classify per EDGE by provenance instead of being
+// unconditionally `"expandable"`: an edge carrying at least one EXPLICIT
+// declaration provenance (`frontmatter`, `annotation`, `convention` — i.e.
+// anything other than `inline-link`) is `"expandable"` (strong, transitive,
+// unchanged from pre-#361); an edge whose provenances are `inline-link`
+// ONLY is `"terminal"` (weak, collect-but-do-not-reopen) — a markdown link
+// between two docs is an incidental cross-reference an author happened to
+// write, not a declared "this doc depends on that doc" relationship, and
+// pre-#361 this was the #254 unbounded-fan-out source (a hub doc's ONE
+// inline link could drag in every doc the LINKED doc itself links to,
+// unbounded). `dedupEdges` (canonical.ts) unions provenances by (source,
+// target, kind) — a single physical edge can carry BOTH `frontmatter` and
+// `inline-link` provenances (e.g. an explicit frontmatter declaration that
+// happens to also be phrased as a markdown link in the body); such an edge
+// is `"expandable"` (any one explicit-declaration provenance is enough,
+// verified against `dedupEdges`'s actual merge behavior before relying on
+// this).
+//
+// The matching predicate (Step 0-pre Q2) — a candidate evidence-only REQ `R`
+// reached via a restricted hub's forward `verifies` (R3a above) is collected
+// ONLY when `R` itself has an `exercises` edge landing on a node in the BFS's
+// fixed ORIGIN set (`originIds` below: `startIds` plus the same-file-symbol
+// expansion of any file-kind startId — computed ONCE, before the BFS loop
+// starts, from the immutable input, never from the evolving `visited` state).
+// This is the (origin, REQ)-pair-grained check HIGH-2's own analysis called
+// for: it is no longer enough for a REQ to merely SHARE a hub with the
+// current walk — the REQ's own coverage evidence must actually reach back to
+// where this walk started. Computing `originIds` from the frozen input
+// (rather than from `visited`, which grows as the BFS explores) is what
+// keeps this predicate from becoming a NEW passport-transfer mechanism itself
+// (a node visited mid-walk must never retroactively count as "origin").
+//
+// H1 (issue #363) fail-open fallback — the matching predicate above can only
+// ever be satisfied by a real `exercises` edge, so a project that has never
+// ingested a trace shard (zero `exercises` edges anywhere in the graph) has a
+// PERMANENTLY EMPTY predicate: every evidence-only REQ would be unconditionally
+// blocked at R3a, not because matching legitimately failed but because
+// matching is impossible in principle for that project. `classifyEdgeTraversal`
+// therefore short-circuits R3a's matching-predicate check behind
+// `graphHasExercisesEdges` (computed once, hoisted to the top of `impact()` —
+// the same boolean spec 020's `reqProvenance` gate already needed, now shared
+// rather than duplicated) and falls back to the pre-#361/#303-era rule: bare
+// hub membership is enough, fail-open, preserving the OLD guarantee that a
+// trace-absent project's evidence-only REQs still surface. The moment the
+// graph has even ONE `exercises` edge anywhere, real evidence exists somewhere
+// and the matching predicate becomes mandatory again for every restricted-hub
+// R3a decision graph-wide (not just for the REQ that has the edge) — so a
+// PARTIAL-trace project (one REQ traced via `exercises`, an evidence-only
+// sibling REQ sharing the same hub with NO `exercises` edge of its own) still
+// excludes that untraced sibling exactly as #361 intended (tracked as a
+// follow-up issue).
+//
+// `maxDepth` gets no new default here — the weak/terminal layer already stops
+// every unbounded-cascade axis structurally, so depth-limiting is not needed
+// as a mitigation (unlike some historical proposals). `reqProvenance`'s
+// external "static"/"evidence" JSON contract (spec 020 FR-017) is unchanged;
+// `impact --diff --tests` (`ingestedTrace.reqsByNode`) is BFS-independent and
+// untouched by any of this.
+//
 // spec 020 (FR-017, contracts/cli-surface.md §5) — `impact()`'s optional 5th
 // argument. Kept as a trailing options object (rather than widening the
 // existing `maxDepth?: number` 4th param) so every pre-020 call site
@@ -173,6 +237,152 @@ export interface ImpactTraversalOptions {
   excludeStaleExercises?: ReadonlySet<string>;
 }
 
+// #361 — canonical reach-state a node can be in during one `impact()` BFS
+// run. See the file-header "Current model (issue #361)" section for the
+// full semantics. Intentionally a 3-value union rather than a boolean pair:
+// the ORDER (`"terminal"` < `"restricted"` < `"expandable"`, see
+// `REACH_RANK`/`isNewReach` below) is itself meaningful — a later arrival
+// only ever upgrades a node rightward along this order, never downgrades it.
+type ReachState = "expandable" | "restricted" | "terminal";
+
+const REACH_RANK: Record<ReachState, number> = { terminal: 0, restricted: 1, expandable: 2 };
+
+// #361 — the single classification function every edge kind x direction x
+// hub-context decision goes through, consolidating what used to be separate
+// inline `if` branches for R1 (`contains` reverse), R2 (`exercises`
+// reverse), and R3a/R3b (restricted hub's own forward `verifies`/`imports`).
+// See the file-header "Current model" section for the full R1-R5 table and
+// the matching-predicate rationale this applies for R3a.
+//
+// `fromRestricted` is true only when the node CURRENTLY BEING EXPANDED
+// (i.e. the BFS dequeue this call's edges belong to) is itself in
+// `"restricted"` state — the only state that narrows what its OWN forward
+// edges may do. An `"expandable"` node's forward edges are never narrowed by
+// this function — every edge kind keeps its pre-#303 unconditional
+// semantics for a non-restricted expansion, exactly like a startId or a
+// forward-reached node always could.
+function classifyEdgeTraversal(
+  edge: { source: string; target: string; kind: EdgeKind; provenances: readonly string[] },
+  direction: "forward" | "reverse",
+  fromRestricted: boolean,
+  ctx: {
+    graph: ArtifactGraph;
+    reqsWithImplements: ReadonlySet<string>;
+    reqsExercisingOrigin: ReadonlySet<string>;
+    graphHasExercisesEdges: boolean;
+  },
+): { blocked: true } | { blocked: false; state: ReachState } {
+  switch (edge.kind) {
+    case "contains":
+      // R1 — forward-only (doc -> req|task, or class -> method per spec
+      // 021); reverse always blocked (issue #215, spec 019 FR-001〜003).
+      // Never narrowed by hub context — `contains` is never emitted from a
+      // `kind === "test"` source.
+      //
+      // HIGH-3 (issue #361 Step 9 retro) pin — `src/trace/report.ts`'s
+      // `reqExercises()` independently re-implements a `contains` walk (its
+      // claim-corroboration evidence roll-up) and MUST agree with this
+      // forward-only direction: `reqExercises` only walks DOWN via
+      // `containsIndex` (source -> targets, i.e. a claim on a container is
+      // corroborated by a contained node's evidence), never up from a
+      // contained node to its container — the exact same asymmetry as R1
+      // here. See `reqExercises`'s own doc comment for its side of this
+      // cross-reference, and `tests/impact-contains-direction-361.test.ts`
+      // for the pinned integration test asserting both implementations
+      // agree on one shared fixture.
+      return direction === "forward" ? { blocked: false, state: "expandable" } : { blocked: true };
+
+    case "implements":
+      // Always strong both directions — a declared `@impl` claim is never
+      // gated by hub context or provenance.
+      return { blocked: false, state: "expandable" };
+
+    case "verifies": {
+      if (direction === "forward") {
+        if (!fromRestricted) return { blocked: false, state: "expandable" };
+        // R3a — restricted hub's own forward `verifies`. Blocked when the
+        // target REQ already has an `implements` edge anywhere (unchanged
+        // eligibility test from Option 2B/#303).
+        if (ctx.reqsWithImplements.has(edge.target)) return { blocked: true };
+        // Evidence-only target REQ: the #361 matching predicate — collect it
+        // ONLY when ITS OWN `exercises` evidence reaches the BFS's fixed
+        // origin set. Bare hub-membership is no longer sufficient by itself
+        // (the HIGH-2/#322 daisy-chain fix).
+        //
+        // H1 (issue #363) fail-open fallback — the matching predicate above
+        // is built exclusively from `exercises` edges (`reqsExercisingOrigin`
+        // below), so a project that has never ingested a trace shard has a
+        // permanently EMPTY predicate: applying it here would unconditionally
+        // block every evidence-only REQ, silently erasing them from
+        // `impactReqs` / `check --diff --gate` scope even though matching is
+        // simply not possible yet, not failing. Fail-open when the graph has
+        // ZERO `exercises` edges anywhere (trace-absent, matching is
+        // impossible in principle): fall back to the pre-#361/#303-era rule
+        // where bare hub membership is enough. The moment the graph has even
+        // ONE `exercises` edge, real evidence exists and the matching
+        // predicate becomes mandatory again — a partial-trace project (one
+        // REQ traced, a sibling evidence-only REQ sharing the same hub not
+        // traced) still excludes that untraced sibling (tracked as a
+        // follow-up issue).
+        if (ctx.graphHasExercisesEdges && !ctx.reqsExercisingOrigin.has(edge.target)) {
+          return { blocked: true };
+        }
+        return { blocked: false, state: "terminal" };
+      }
+      // reverse `verifies` (req -> its verifying test): unconditional;
+      // landing on a `kind === "test"` node is the #303 hub ARRIVAL.
+      return {
+        blocked: false,
+        state: ctx.graph.nodes.get(edge.source)?.kind === "test" ? "restricted" : "expandable",
+      };
+    }
+
+    case "imports": {
+      if (direction === "forward") {
+        // R3b — restricted hub's own forward `imports`: always blocked.
+        if (fromRestricted) return { blocked: true };
+        return { blocked: false, state: "expandable" };
+      }
+      const landsOnTest = ctx.graph.nodes.get(edge.source)?.kind === "test";
+      return { blocked: false, state: landsOnTest ? "restricted" : "expandable" };
+    }
+
+    case "exercises": {
+      // Forward (req -> symbol|file): #361 — always weak/`"terminal"` now
+      // (the forward-cascade fix: a REQ's own incidental coverage of a
+      // symbol/file must not itself grant transitive reach onward from
+      // there). Staleness (R4) is filtered out by the caller before this
+      // function is ever reached for a stale edge.
+      if (direction === "forward") return { blocked: false, state: "terminal" };
+      // Reverse (symbol|file -> req): R2 eligibility unchanged (blocked when
+      // the source REQ already has an `implements` edge anywhere — the #286
+      // leak class); when allowed, #361 makes the reach `"terminal"` (was
+      // `"expandable"` pre-#361) — an evidence-only REQ still lands in
+      // `impactReqs`/gate scope (Option 2B's guarantee), it just can no
+      // longer reverse-walk onward to a sibling through shared edges.
+      if (ctx.reqsWithImplements.has(edge.source)) return { blocked: true };
+      return { blocked: false, state: "terminal" };
+    }
+
+    case "depends_on":
+    case "derives_from": {
+      // #361 — classify per edge by provenance, symmetric both directions:
+      // any EXPLICIT-declaration provenance (`frontmatter` / `annotation` /
+      // `convention` — anything other than `inline-link`) makes the edge
+      // strong/`"expandable"` (transitive, unchanged from pre-#361).
+      // `inline-link`-ONLY makes it weak/`"terminal"` — an incidental
+      // markdown cross-reference, not a declared dependency (the #254
+      // unbounded-fan-out fix). `dedupEdges` (canonical.ts) unions
+      // provenances by (source, target, kind), so a single physical edge
+      // carrying BOTH `frontmatter` and `inline-link` (an explicit
+      // declaration an author also happened to phrase as a link) is still
+      // `"expandable"` — any one explicit provenance is enough.
+      const isWeak = edge.provenances.every((p) => p === "inline-link");
+      return { blocked: false, state: isWeak ? "terminal" : "expandable" };
+    }
+  }
+}
+
 export function impact(
   graph: ArtifactGraph,
   startIds: string[],
@@ -182,14 +392,21 @@ export function impact(
 ): ImpactResult {
   const staleExercisesNodes = options?.excludeStaleExercises;
 
+  // H1 (issue #363) / spec 020 (FR-017) — hoisted to the top of `impact()`
+  // since #363 gave it a SECOND consumer: the R3a matching-predicate
+  // fail-open check in `classifyEdgeTraversal` (below, via `classifyCtx`)
+  // needs it up front just like `reqsWithImplements`/`reqsExercisingOrigin`
+  // do, and the `reqProvenance` gate further down (originally the only
+  // caller) now just reads this same value instead of recomputing it.
+  const graphHasExercisesEdges = graph.edges.some((e) => e.kind === "exercises");
+
   // PR #299 meta-review Finding 2 (Option 2B) — precompute which REQ ids
   // have at least one `implements` edge ANYWHERE in the graph (not just
   // within the eventual `visited` set — this must be known up front,
-  // independent of BFS order, since it gates whether a reverse `exercises`
-  // walk is even attempted). A REQ in this set is the #286 leak class
-  // (reachable via its own `@impl` claim, so reverse `exercises` must stay
-  // blocked for it); a REQ absent from this set is evidence-only and reverse
-  // `exercises` is its only possible path back, so it's allowed through.
+  // independent of BFS order, since `classifyEdgeTraversal` (R2/R3a) needs
+  // it to decide eligibility before any traversal happens). A REQ in this
+  // set is the #286 leak class (reachable via its own `@impl` claim); a REQ
+  // absent from this set is evidence-only.
   const reqsWithImplements = new Set<string>();
   for (const edge of graph.edges) {
     if (edge.kind !== "implements") continue;
@@ -197,61 +414,96 @@ export function impact(
     if (target?.kind === "req") reqsWithImplements.add(edge.target);
   }
 
-  // issue #303 — a `visited` node now carries one of two reach states:
-  // `"restricted"` (reached ONLY via a reverse `verifies`/`imports` hop onto
-  // a `kind === "test"` node, the pass-through-hub shape below) or
-  // `"unrestricted"` (every other kind of arrival: a start id, a forward
-  // hop, a reverse hop onto a non-test node, or a reverse hop over some
-  // OTHER edge kind). `"unrestricted"` is always final. A node visited
-  // `"restricted"` may later be UPGRADED by an `"unrestricted"` arrival
-  // (e.g. the test file is also a startId, or a second, unrestricted path
-  // reaches it) — the upgrade re-enters the queue and gets fully
-  // re-expanded, since the earlier restricted visit may have skipped edges
-  // an unrestricted visit is allowed to take. This does not double-count
-  // anything: `visited`'s KEYS (not its values) are what every downstream
-  // aggregation loop (`affectedFiles`/`impactReqs`/drift/provenance) reads,
-  // and a key is only ever added once.
-  const visited = new Map<string, "restricted" | "unrestricted">();
-  const queue: Array<{ id: string; depth: number; restrictedTestHub: boolean }> = startIds.map(
-    (id) => ({ id, depth: 0, restrictedTestHub: false }),
-  );
+  // #361 (HIGH-2/#322 matching predicate) — the BFS's fixed ORIGIN node id
+  // set: `startIds` plus the same-file-symbol expansion of every file-kind
+  // startId (mirroring the `node.kind === "file"` expansion the BFS itself
+  // does below, computed here ONCE from the immutable `startIds` input
+  // rather than from the evolving `visited` state — see the file-header
+  // "Current model" section for why this distinction is load-bearing: a node
+  // visited MID-walk must never retroactively count as origin, or the
+  // matching predicate becomes a new passport-transfer mechanism itself).
+  const originIds = new Set<string>(startIds);
+  for (const startId of startIds) {
+    const startNode = graph.nodes.get(startId);
+    if (!startNode || startNode.kind !== "file") continue;
+    for (const [symId, symNode] of graph.nodes) {
+      if (symNode.kind === "symbol" && symNode.filePath === startNode.filePath) {
+        originIds.add(symId);
+      }
+    }
+  }
 
-  // Is `next` new information for a node currently at `existing` (undefined
-  // = never visited)? Shared by the dequeue-time re-processing guard and
-  // every push-time dedup guard below so they can never disagree about what
-  // counts as "worth (re-)expanding".
-  const isNewReach = (
-    existing: "restricted" | "unrestricted" | undefined,
-    next: "restricted" | "unrestricted",
-  ): boolean => {
-    if (existing === "unrestricted") return false;
-    if (existing === "restricted") return next === "unrestricted";
-    return true;
+  // #361 — REQ ids whose OWN `exercises` edge lands on a node in `originIds`
+  // above. This is `classifyEdgeTraversal`'s R3a matching-predicate lookup:
+  // a restricted hub's forward `verifies` to an evidence-only REQ collects
+  // that REQ only when it is a member of this set.
+  const reqsExercisingOrigin = new Set<string>();
+  for (const edge of graph.edges) {
+    if (edge.kind !== "exercises") continue;
+    if (originIds.has(edge.target)) reqsExercisingOrigin.add(edge.source);
+  }
+
+  const classifyCtx = { graph, reqsWithImplements, reqsExercisingOrigin, graphHasExercisesEdges };
+
+  // #361 — `visited` now carries one of THREE reach states (`ReachState`,
+  // above); see the file-header "Current model" section for the full
+  // semantics. `isNewReach` encodes the total order every transition must
+  // move rightward along (terminal -> restricted -> expandable, never
+  // backward) — shared by the dequeue-time re-processing guard and every
+  // reach attempt below so they can never disagree about what counts as
+  // "worth (re-)recording". `visited`'s KEYS (not its values) are what every
+  // downstream aggregation loop (`affectedFiles`/`impactReqs`/drift/
+  // provenance) reads, and a key is only ever added once — this still holds
+  // under the 3-state model exactly as it did under #303's 2-state one.
+  const visited = new Map<string, ReachState>();
+  const queue: Array<{ id: string; depth: number; state: "expandable" | "restricted" }> =
+    startIds.map((id) => ({ id, depth: 0, state: "expandable" }));
+
+  const isNewReach = (existing: ReachState | undefined, next: ReachState): boolean =>
+    REACH_RANK[next] > (existing === undefined ? -1 : REACH_RANK[existing]);
+
+  // #361 — the single place a node's reach is ever recorded. A `"terminal"`
+  // (weak) reach is recorded DIRECTLY into `visited` and never queued — by
+  // construction it has nothing left to do (it is never dequeued, so it can
+  // never expand its own edges or trigger the file→symbol expansion below).
+  // An `"expandable"`/`"restricted"` reach is only ever pushed to the queue;
+  // the authoritative `visited.set` for those happens at dequeue time
+  // (below), matching #303's original push-time-is-just-a-dedup-hint /
+  // dequeue-time-is-authoritative split.
+  const attemptReach = (id: string, depth: number, state: ReachState): void => {
+    if (state === "terminal") {
+      if (isNewReach(visited.get(id), "terminal")) visited.set(id, "terminal");
+      return;
+    }
+    if (isNewReach(visited.get(id), state)) {
+      queue.push({ id, depth, state });
+    }
   };
 
   while (queue.length > 0) {
-    const { id, depth, restrictedTestHub } = queue.shift()!;
-    const state: "restricted" | "unrestricted" = restrictedTestHub ? "restricted" : "unrestricted";
+    const { id, depth, state } = queue.shift()!;
     if (!isNewReach(visited.get(id), state)) continue;
     visited.set(id, state);
 
     if (maxDepth !== undefined && depth >= maxDepth) continue;
 
+    // R5 — file→symbol expansion only ever runs for a DEQUEUED (i.e.
+    // expandable/restricted, never terminal) file node; a file reached only
+    // via a weak/terminal edge (e.g. forward `exercises`) does not sweep in
+    // its same-file symbols (#361 consequence of "weak reach grants no
+    // passage", not a special case here).
     const node = graph.nodes.get(id);
     if (node && node.kind === "file") {
       for (const [symId, symNode] of graph.nodes) {
-        if (
-          symNode.kind === "symbol" &&
-          symNode.filePath === node.filePath &&
-          isNewReach(visited.get(symId), "unrestricted")
-        ) {
-          queue.push({ id: symId, depth: depth + 1, restrictedTestHub: false });
+        if (symNode.kind === "symbol" && symNode.filePath === node.filePath) {
+          attemptReach(symId, depth + 1, "expandable");
         }
       }
     }
 
+    const fromRestricted = state === "restricted";
     for (const edge of graph.edges) {
-      // spec 020 (FR-017, US5-2/US3 ⑥) — a stale `exercises` edge is
+      // R4 — spec 020 (FR-017, US5-2/US3 ⑥): a stale `exercises` edge is
       // excluded from traversal altogether when `staleness: "exclude"`.
       if (
         edge.kind === "exercises" &&
@@ -261,97 +513,12 @@ export function impact(
         continue;
       }
       if (edge.source === id) {
-        // issue #303 — `restrictedTestHub` is true only when THIS dequeue
-        // instance reached a `kind === "test"` node via a reverse
-        // `verifies`/`imports` hop (see the reverse-branch comment below).
-        // That test node is a pass-through hub: a test file typically
-        // `verifies` several sibling REQs and `imports` several sibling src
-        // symbols/files that have nothing to do with each other, so
-        // treating ITS OWN forward `verifies`/`imports` edges as
-        // unconditionally bidirectional lets a BFS that arrived at the hub
-        // for REQ-A's sake walk right back out to REQ-B (or REQ-B's
-        // implementing file) — the hub-node leak class this issue reports
-        // (see the file-header comment for the two concrete repro paths).
-        // Two restrictions apply, ONLY when `restrictedTestHub` is true for
-        // this node, and ONLY to these two edge kinds:
-        //  (a) forward `verifies` (test -> req): blocked when the target
-        //      REQ has an `implements` edge somewhere in the graph
-        //      (`reqsWithImplements`) — that REQ has its own `@impl`-based
-        //      reachability and doesn't need this hub to reach it (blocking
-        //      it here is what closes the leak). Left OPEN when the target
-        //      REQ has NO `implements` edge anywhere (evidence-only,
-        //      `acceptExercises: true` workflow) — for EVERY such REQ, an
-        //      exercising test IS its only path back, so blocking it here
-        //      unconditionally would repeat the #286 gate-false-green
-        //      regression Option 2B (PR #299) fixed for reverse `exercises`.
-        //      Known residual limitation (issue #322, accepted/documented,
-        //      NOT fixed by this PR): this is a per-EDGE predicate, not a
-        //      per-hub one — when the SAME hub is `verifies`-incident to
-        //      MORE THAN ONE evidence-only REQ, a BFS arriving at the hub
-        //      for one of them still walks back out to its evidence-only
-        //      SIBLINGS too (a single-hop leak between evidence-only REQs
-        //      sharing a hub), and the same shape can daisy-chain one hop
-        //      further if a sibling is itself `verifies`-incident to
-        //      ANOTHER test hub. This is structurally the same tradeoff as
-        //      Option 2B's reverse-`exercises` allowance above, not a new
-        //      #303-only gap; see the file-header "Known residual
-        //      limitation" note.
-        //  (b) forward `imports` (test -> imported file/symbol): always
-        //      blocked. This closes the 4th leak mechanism from the issue:
-        //      reverse `imports` INTO a test (a bare import declaration,
-        //      no assertion) followed by forward `imports` back OUT of that
-        //      same test into an unrelated sibling src file, reaching that
-        //      sibling's REQ purely because both files happen to be
-        //      imported by the same test.
-        // Every other forward edge kind, and every forward edge out of a
-        // non-restricted node, keeps its pre-#303 unconditional semantics.
-        let blocked = false;
-        if (restrictedTestHub) {
-          if (edge.kind === "verifies") {
-            blocked = reqsWithImplements.has(edge.target);
-          } else if (edge.kind === "imports") {
-            blocked = true;
-          }
-        }
-        if (!blocked && isNewReach(visited.get(edge.target), "unrestricted")) {
-          queue.push({ id: edge.target, depth: depth + 1, restrictedTestHub: false });
-        }
+        const result = classifyEdgeTraversal(edge, "forward", fromRestricted, classifyCtx);
+        if (!result.blocked) attemptReach(edge.target, depth + 1, result.state);
       }
-      // spec 019 (FR-001〜003) / issue #286 / PR #299 Finding 2 (Option 2B):
-      // reverse traversal (target -> source) skips `contains` edges so a
-      // req/task node cannot walk "backwards" into its parent doc during
-      // BFS. Reverse traversal of an `exercises` edge is BLOCKED only when
-      // its source REQ has an `implements` edge somewhere in the graph (the
-      // #286 leak class — see the file-header comment for the full
-      // rationale and the readlater/getBookmark repro); it is ALLOWED when
-      // the source REQ has no `implements` edge at all, so an evidence-only
-      // REQ (`acceptExercises: true` workflow, no `@impl` anywhere) stays
-      // reachable from the symbol/file it's exercised by — otherwise
-      // `check --diff --gate` / `plan-coverage` would silently drop it from
-      // scope (issue #286, full provenance-aware traversal tracked as
-      // #298). Every other edge kind keeps unconditional reverse traversal.
-      if (
-        edge.target === id &&
-        edge.kind !== "contains" &&
-        !(edge.kind === "exercises" && reqsWithImplements.has(edge.source))
-      ) {
-        // issue #303 — a reverse hop that lands on a `kind === "test"` node
-        // via `verifies` or `imports` is the pass-through-hub ARRIVAL: mark
-        // it `restricted` so the forward-branch restriction above applies
-        // when this dequeue instance is later expanded. A reverse hop onto
-        // any OTHER node kind, or via any OTHER edge kind (`implements` /
-        // `depends_on` / `derives_from` / the evidence-only-allowed
-        // `exercises`), stays `unrestricted` — unchanged from pre-#303
-        // behavior; only the test-hub arrival itself is new.
-        const reachesTestHub =
-          (edge.kind === "verifies" || edge.kind === "imports") &&
-          graph.nodes.get(edge.source)?.kind === "test";
-        const nextState: "restricted" | "unrestricted" = reachesTestHub
-          ? "restricted"
-          : "unrestricted";
-        if (isNewReach(visited.get(edge.source), nextState)) {
-          queue.push({ id: edge.source, depth: depth + 1, restrictedTestHub: reachesTestHub });
-        }
+      if (edge.target === id) {
+        const result = classifyEdgeTraversal(edge, "reverse", fromRestricted, classifyCtx);
+        if (!result.blocked) attemptReach(edge.source, depth + 1, result.state);
       }
     }
   }
@@ -408,13 +575,15 @@ export function impact(
 
   // spec 019 (FR-005) — attributed docs are drift-checked exactly like any
   // other visited node; docs unioned in above are added to `visited` here
-  // (`"unrestricted"`: attribution is a declarative one-hop lookup, not a
-  // hub-arrival, so it carries none of the #303 restriction — setting on an
-  // already-visited req is a no-op either way) purely so the shared drift
-  // loop below covers both BFS-reached and attribution-reached docs without
-  // duplicating the lock-comparison logic.
+  // (`"expandable"`: attribution is a declarative one-hop lookup, not a
+  // hub-arrival or a weak/`exercises`/`inline-link` reach, so it carries
+  // none of the #303/#361 restrictions — setting on an already-visited req
+  // is a no-op either way) purely so the shared drift loop below covers both
+  // BFS-reached and attribution-reached docs without duplicating the
+  // lock-comparison logic. The exact state value is otherwise unread beyond
+  // this point — every downstream loop keys off `visited`'s presence only.
   for (const id of affectedDocs) {
-    visited.set(id, "unrestricted");
+    visited.set(id, "expandable");
   }
 
   for (const id of visited.keys()) {
@@ -440,8 +609,9 @@ export function impact(
   // through, say, a static import chain AND directly by a test's exercises
   // edge. Gated behind "does the graph have ANY exercises edge at all" so a
   // trace-absent scan (zero exercises edges) never adds this key to
-  // `ImpactResult` — FR-010 byte-identical requirement (T021(e)).
-  const graphHasExercisesEdges = graph.edges.some((e) => e.kind === "exercises");
+  // `ImpactResult` — FR-010 byte-identical requirement (T021(e)). (`graphHasExercisesEdges`
+  // is now hoisted to the top of `impact()` — H1/#363 — since the R3a
+  // matching-predicate fail-open check needs the same value earlier.)
   let reqProvenance: ImpactResult["reqProvenance"];
   if (graphHasExercisesEdges) {
     const provenanceByReq = new Map<string, Set<"static" | "evidence">>();
