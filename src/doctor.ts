@@ -28,7 +28,7 @@ import {
 import { buildAgentsMdBody, inspectMarkerBlock } from "./agents/agent-context.js";
 import { detectPackageManager } from "./package-manager.js";
 import { readSkillSource, type SkillSource } from "./agents/source.js";
-import { loadConfig, missingNodeModulesProtection } from "./config.js";
+import { loadConfig, missingNodeModulesProtection, formatPoolProtectionMessage } from "./config.js";
 
 /** Skip files larger than this when hashing / walking (C-adj-1). Prevents an
  * accidentally-planted multi-GB file inside a Skills dir from OOM-ing the
@@ -86,17 +86,21 @@ export type DoctorFindingKind =
   | "agent-installed-not-recorded"
   /**
    * issue #356 / spec 013 FR-015 — `.artgraph.json`'s `include` /
-   * `testPatterns` node_modules-protection negation is asymmetric: one pool
-   * has a node_modules-excluding negative pattern (DEFAULT_CONFIG's own, see
-   * types.ts), the other doesn't. Advisory only (severity `pass`) — never
-   * flips the doctor exit code. Purely structural (Principle V): computed by
-   * the same `missingNodeModulesProtection` helper (`config.ts`) the silent
-   * `config-pool-protection-asymmetry` `scan` warning uses, so the two
-   * surfaces can never disagree. Gated on at least one Tier 1 agent being
-   * detected (same gate `config-missing-agents-field` above uses) — this
-   * keeps doctor's empty-report short-circuit (no distribution, no config
-   * findings → clean empty report) intact; see the gate's own comment at the
-   * `runDoctor` call site for why.
+   * `testPatterns` node_modules protection has a problem: either one pool
+   * lacks a working node_modules-excluding negative pattern while the other
+   * has one ("unprotected"), or a pool has a negative pattern that mentions
+   * node_modules but doesn't actually cover every nesting depth per real
+   * glob semantics ("broken exclusion" — PR #359 review H2). Advisory only
+   * (severity `pass`) — never flips the doctor exit code. Structural
+   * (Principle V: no filesystem access, fully deterministic — glob-pattern
+   * matching against a fixed set of representative synthetic paths, not
+   * semantic/NLP reasoning): computed by the same `missingNodeModulesProtection`
+   * helper (`config.ts`) the silent `config-pool-protection-asymmetry` `scan`
+   * warning uses, so the two surfaces can never disagree. Gated on at least
+   * one Tier 1 agent being detected (same gate `config-missing-agents-field`
+   * above uses) — this keeps doctor's empty-report short-circuit (no
+   * distribution, no config findings → clean empty report) intact; see the
+   * gate's own comment at the `runDoctor` call site for why.
    */
   | "config-pool-protection-asymmetry";
 
@@ -174,8 +178,11 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   // cost. Whether it actually PRODUCES a finding is decided further below
   // (gated on `detectedDescriptors.length > 0`, same as
   // `config-missing-agents-field`'s own gate) — see that gate's comment for
-  // why.
-  const missingProtectionPools = missingNodeModulesProtection(config);
+  // why. That gate is evaluated AFTER the config↔disk cross-check block
+  // below, which can itself grow `detectedDescriptors` (the
+  // `agent-installed-not-recorded` case) — so an unrecorded-but-installed
+  // agent, discovered only by that later pass, still unlocks this advisory.
+  const poolProtectionIssues = missingNodeModulesProtection(config);
 
   // Step 1 — detect agents.
   //   - explicit `opts.agents`: trust the caller; the CLI parser has already
@@ -351,18 +358,30 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   // `config-missing-agents-field` already uses keeps this finding confined
   // to projects where doctor already has Tier 1 distribution context to
   // report on.
+  // PR #359 review (M2) — message text shared with `graph/builder.ts`'s
+  // `config-pool-protection-asymmetry` scan warning via
+  // `formatPoolProtectionMessage`, so the two surfaces can never describe
+  // the same issue differently. Only the first issue is surfaced (matches
+  // the pre-existing single-finding contract of this advisory);
+  // `missingNodeModulesProtection` orders `include` before `testPatterns`
+  // deterministically.
   const poolProtectionFindings: DoctorFinding[] = [];
-  if (missingProtectionPools.length > 0 && detectedDescriptors.length > 0) {
-    const missingKey = missingProtectionPools[0];
-    const protectedKey = missingKey === "include" ? "testPatterns" : "include";
+  if (poolProtectionIssues.length > 0 && detectedDescriptors.length > 0) {
+    const issue = poolProtectionIssues[0];
     poolProtectionFindings.push({
       severity: "pass",
       agent: null,
       kind: "config-pool-protection-asymmetry",
       path: ".artgraph.json",
-      expected: `node_modules-excluding negative pattern in both "include" and "testPatterns"`,
-      actual: `missing from "${missingKey}"`,
-      message: `"${protectedKey}" excludes node_modules but "${missingKey}" does not — add a "!**/node_modules/**"-style negative pattern to "${missingKey}" in .artgraph.json, or remove it from "${protectedKey}" if scanning node_modules via "${missingKey}" is intentional.`,
+      expected:
+        issue.reason === "broken-exclusion"
+          ? `"!**/node_modules/**" (covers every nesting depth) in "${issue.pool}"`
+          : `node_modules-excluding negative pattern in both "include" and "testPatterns"`,
+      actual:
+        issue.reason === "broken-exclusion"
+          ? `a narrower pattern in "${issue.pool}" that does not cover nested node_modules`
+          : `missing from "${issue.pool}"`,
+      message: formatPoolProtectionMessage(issue),
     });
   }
 

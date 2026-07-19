@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, relative, isAbsolute } from "node:path";
+import picomatch from "picomatch";
 import {
   DEFAULT_CONFIG,
   type ArtgraphConfig,
@@ -593,42 +594,247 @@ function validateTestResultPaths(value: unknown): void {
   }
 }
 
+// PR #359 review (H1) — `include` / `testPatterns` are read as glob PATTERN
+// LISTS by both `discoverCodeFiles` (parsers/typescript.ts, fed straight
+// into `fastGlob.sync`) and `missingNodeModulesProtection` (below, whose
+// `.some()` / picomatch calls require a real string array). Before this
+// check, `raw.include ?? DEFAULT_CONFIG.include` only guarded `undefined` —
+// a hand-edited `.artgraph.json` with a bare string (`"include":
+// "src/**/*.ts"`) or a mixed-type array (`["src/**", 42]`) sailed straight
+// through to those call sites and crashed deep inside them with an opaque,
+// non-actionable error (e.g. `patterns.some is not a function`), rather than
+// failing closed with a message that says what's actually wrong. Mirrors
+// `validateTestResultPaths` above (strict shape, not `validateSpecDirs`'s
+// lenient array-or-undefined posture): a config field that is consumed as a
+// glob pattern LIST must actually BE one — there is no sensible partial
+// fallback for "half the entries are strings, half aren't" the way there is
+// for, say, an optional boolean flag.
+function validateGlobPatternList(value: unknown, field: "include" | "testPatterns"): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    throw new Error(
+      `Invalid "${field}" in .artgraph.json: expected an array of glob pattern strings, got ${typeof value}`,
+    );
+  }
+  for (const [i, entry] of value.entries()) {
+    if (typeof entry !== "string") {
+      throw new Error(
+        `Invalid "${field}[${i}]" in .artgraph.json: expected a glob pattern string, got ${typeof entry} (${JSON.stringify(entry)})`,
+      );
+    }
+  }
+}
+
 // issue #356 — `include` and `testPatterns` are two independent glob pools
 // (see `discoverCodeFiles` in `parsers/typescript.ts`, and `DEFAULT_CONFIG`'s
 // own doc comment in `types.ts`): each pool needs its OWN
 // `"!**/node_modules/**"`-style negative pattern to stay protected from
 // node_modules ingestion (issue #350's HIGH-2 widened this from a single
-// shared negation to two). This helper is the single shared judge of "did
-// the user's config leave exactly one pool unprotected" — called by both the
-// silent `config-pool-protection-asymmetry` scan warning (`graph/builder.ts`)
-// and the `artgraph doctor` advisory finding of the same name (`doctor.ts`),
-// so the two surfaces can never disagree.
+// shared negation to two). `missingNodeModulesProtection` (below) is the
+// single shared judge — called by both the silent
+// `config-pool-protection-asymmetry` scan warning (`graph/builder.ts`) and
+// the `artgraph doctor` advisory finding of the same name (`doctor.ts`), so
+// the two surfaces can never disagree — and `formatPoolProtectionMessage`
+// (further below) is the single shared message generator both surfaces
+// render through, so their wording can never drift apart either (PR #359
+// review M2).
 //
-// Purely structural (Constitution Principle V): a pool counts as "protected"
-// iff it contains a pattern that (a) starts with `!` and (b) has
-// `node_modules` as a whole path segment somewhere in its body — a string /
-// path-segment check only, no glob expansion, no filesystem access. Mirrors
-// the segment-based (not substring) node_modules detection already used for
-// the `node-modules-in-scan` warning below in `buildGraph`.
+// PR #359 review (H2) — a plain string/path-segment check ("does a negative
+// pattern contain a `node_modules` segment anywhere") cannot actually judge
+// PROTECTION: measured false positive — `!node_modules/**` (no `**/`
+// prefix) contains the segment but only ever excludes a REPO-ROOT
+// `node_modules/`, leaving `packages/foo/node_modules/**` completely
+// unprotected; measured false negative — `!**/*node_modules*/**` protects
+// every nesting depth via a wildcard segment but the old segment-equality
+// check doesn't recognize `*node_modules*` as containing the exact literal
+// `node_modules` and misjudged it as unprotected, silently swallowing a
+// genuine leak into an advisory that never fires. `isMatcherProtected`
+// below replaces the heuristic with real glob semantics (picomatch) evaluated
+// against representative synthetic paths — still purely structural
+// (Constitution Principle V: no filesystem access, fully deterministic), just
+// backed by the actual matching engine instead of a string proxy for it.
+const SYNTHETIC_NODE_MODULES_PATHS = [
+  "node_modules/x.ts",
+  "a/node_modules/x.ts",
+  "a/b/node_modules/x.ts",
+] as const;
+
+// picomatch options mirroring fast-glob's OWN ignore-pattern evaluation,
+// verified by reading fast-glob's and micromatch's source (both vendored
+// under node_modules at the pinned versions this project actually installs):
 //
-// Fires ONLY on asymmetry (one pool protected, the other not) and returns
-// the UNPROTECTED pool's key. Both pools missing the negation is
-// deliberately NOT reported here: it is indistinguishable from a deliberate,
-// symmetric choice to scan node_modules on purpose (e.g. checked-in vendored
-// code — see docs/configuration.md's node_modules section), and the
-// existing (non-silent) `node-modules-in-scan` warning already covers that
-// case once such a config actually matches a file under node_modules. Both
-// pools protected also returns `[]` (nothing to report) — this is a design
-// decision, not an oversight.
+//   - fast-glob's `utils.pattern.makeRe` (fast-glob/out/utils/pattern.js)
+//     calls `micromatch.makeRe(pattern, options)`.
+//   - micromatch's own `makeRe` (micromatch/index.js) is defined as
+//     `(...args) => picomatch.makeRe(...args)` — a bare passthrough, not a
+//     wrapper that re-derives or renames options. So whatever options
+//     fast-glob's `Provider._getMicromatchOptions()`
+//     (fast-glob/out/providers/provider.js) builds land in picomatch
+//     completely unchanged — there is no micromatch-specific option
+//     translation layer to account for.
+//   - fast-glob's entry filter (fast-glob/out/providers/filters/entry.js)
+//     ALWAYS evaluates negative/ignore patterns with `dot: true` forced,
+//     regardless of the scan-wide `dot` setting (which this project pins to
+//     `false` for POSITIVE patterns — see glob-utils.ts). We exclusively
+//     evaluate negative (post-`!`) patterns here, so we mirror that forced
+//     value rather than the scan-wide default. (None of the synthetic paths
+//     above contain a dot-segment, so in practice this is inert for this
+//     matcher today — pinned anyway so the option set is an honest,
+//     verifiable mirror of fast-glob's real evaluation, not a convenient
+//     subset that happens to work for the current fixtures.)
+//   - `matchBase: false`, `nobrace: false`, `nocase: false`, `noext: false`,
+//     `noglobstar: false` are direct negations of fast-glob's own
+//     `baseNameMatch` (false) / `braceExpansion` (true) /
+//     `caseSensitiveMatch` (true) / `extglob` (true) / `globstar` (true)
+//     defaults; `posix: true` / `strictSlashes: false` are fast-glob's own
+//     hardcoded values, not settings-derived.
+//
+// `picomatch(patterns, options)` compiled with an ARRAY of patterns already
+// matches a candidate string against every pattern with OR semantics
+// (picomatch/lib/picomatch.js), matching fast-glob's own "any negative
+// pattern excludes the entry" ignore behavior.
+const FAST_GLOB_IGNORE_OPTIONS: picomatch.PicomatchOptions = {
+  dot: true,
+  matchBase: false,
+  nobrace: false,
+  nocase: false,
+  noext: false,
+  noglobstar: false,
+  posix: true,
+  strictSlashes: false,
+};
+
+// A pool is "protected" iff EVERY representative synthetic path is matched
+// by at least one of the pool's negative patterns (stripped of their leading
+// `!`) — i.e. no nesting depth is left uncovered. Empty input (no negative
+// patterns at all) is trivially unprotected; `picomatch([])` would otherwise
+// build a matcher over zero patterns, which never matches anything anyway,
+// but the early return avoids depending on that incidental behavior.
+function isMatcherProtected(strippedNegativePatterns: string[]): boolean {
+  if (strippedNegativePatterns.length === 0) return false;
+  const isMatch = picomatch(strippedNegativePatterns, FAST_GLOB_IGNORE_OPTIONS);
+  return SYNTHETIC_NODE_MODULES_PATHS.every((p) => isMatch(p));
+}
+
+// The OLD string/path-segment heuristic, KEPT (not replaced) — it is no
+// longer the protection judge (`isMatcherProtected` above owns that now),
+// but it is still exactly the right signal for "did the user clearly INTEND
+// to exclude node_modules here", which is what the new "broken exclusion"
+// category (below) needs: a pattern that mentions `node_modules` as a
+// literal path segment but, per the real matcher, doesn't actually cover
+// every nesting depth (e.g. `!node_modules/**` with no `**/` prefix).
+// Mirrors the segment-based (not substring) node_modules detection already
+// used for the `node-modules-in-scan` warning in `buildGraph`.
+function mentionsNodeModules(patterns: string[]): boolean {
+  return patterns.some(
+    (p) => p.startsWith("!") && p.slice(1).split(/[\\/]/).includes("node_modules"),
+  );
+}
+
+// PR #359 review (M1, issue #266) — a pool with no positive pattern at all
+// (empty array, or every entry negated) can never match a single file, so it
+// structurally cannot ingest node_modules regardless of what its negative
+// patterns do or don't cover. Judging such a pool's "protection" would be
+// reporting on a hypothetical that cannot happen — exclude it from EVERY
+// check below entirely (neither "protected" nor "unprotected": simply out of
+// scope for both the asymmetry and the broken-exclusion category).
+function hasPositivePattern(patterns: string[]): boolean {
+  return patterns.some((p) => !p.startsWith("!"));
+}
+
+function strippedNegatives(patterns: string[]): string[] {
+  return patterns.filter((p) => p.startsWith("!")).map((p) => p.slice(1));
+}
+
+export type PoolKey = "include" | "testPatterns";
+export type PoolProtectionReason = "unprotected" | "broken-exclusion";
+
+export interface PoolProtectionIssue {
+  pool: PoolKey;
+  reason: PoolProtectionReason;
+}
+
+// Single shared judge (see the block comment above this section for the
+// full rationale). Evaluated per pool:
+//   - a degenerate pool (M1, no positive pattern) is skipped entirely;
+//   - "broken exclusion" (H2's third category) fires when the pool clearly
+//     MENTIONS node_modules but the real matcher says it isn't actually
+//     protected — reported regardless of the other pool's state, since a
+//     broken exclusion attempt is never a deliberate symmetric choice (there
+//     is no ambiguity to preserve, unlike the both-silent case below);
+//   - "unprotected" (the original asymmetry category) fires when both pools
+//     are eligible, their matcher-protected verdicts disagree, and the
+//     unprotected side isn't already reported as a broken exclusion.
+// Both-eligible-and-both-unprotected-with-no-mention stays silent, same as
+// before H2 — indistinguishable from a deliberate, symmetric choice to scan
+// node_modules on purpose (e.g. checked-in vendored code — see
+// docs/configuration.md's node_modules section).
 export function missingNodeModulesProtection(
   config: Pick<ArtgraphConfig, "include" | "testPatterns">,
-): Array<"include" | "testPatterns"> {
-  const hasNodeModulesNegation = (patterns: string[]): boolean =>
-    patterns.some((p) => p.startsWith("!") && p.slice(1).split(/[\\/]/).includes("node_modules"));
-  const includeProtected = hasNodeModulesNegation(config.include);
-  const testPatternsProtected = hasNodeModulesNegation(config.testPatterns);
-  if (includeProtected === testPatternsProtected) return [];
-  return includeProtected ? ["testPatterns"] : ["include"];
+): PoolProtectionIssue[] {
+  const pools: Record<PoolKey, string[]> = {
+    include: config.include,
+    testPatterns: config.testPatterns,
+  };
+  const eligible: Record<PoolKey, boolean> = {
+    include: hasPositivePattern(pools.include),
+    testPatterns: hasPositivePattern(pools.testPatterns),
+  };
+  const protectedFlag: Record<PoolKey, boolean> = {
+    include: eligible.include && isMatcherProtected(strippedNegatives(pools.include)),
+    testPatterns:
+      eligible.testPatterns && isMatcherProtected(strippedNegatives(pools.testPatterns)),
+  };
+  const broken: Record<PoolKey, boolean> = {
+    include: eligible.include && mentionsNodeModules(pools.include) && !protectedFlag.include,
+    testPatterns:
+      eligible.testPatterns &&
+      mentionsNodeModules(pools.testPatterns) &&
+      !protectedFlag.testPatterns,
+  };
+  const asymmetricUnprotected: PoolKey | null =
+    eligible.include &&
+    eligible.testPatterns &&
+    protectedFlag.include !== protectedFlag.testPatterns
+      ? protectedFlag.include
+        ? "testPatterns"
+        : "include"
+      : null;
+
+  const issues: PoolProtectionIssue[] = [];
+  for (const pool of ["include", "testPatterns"] as const) {
+    if (!eligible[pool]) continue;
+    if (broken[pool]) {
+      issues.push({ pool, reason: "broken-exclusion" });
+    } else if (pool === asymmetricUnprotected) {
+      issues.push({ pool, reason: "unprotected" });
+    }
+  }
+  return issues;
+}
+
+// PR #359 review (M2) — single shared message-generation function so
+// `graph/builder.ts`'s silent `config-pool-protection-asymmetry` scan
+// warning and `doctor.ts`'s advisory finding of the same name can never say
+// different things about the identical underlying issue. Remediation is
+// always the canonical `"!**/node_modules/**"` form (protects every nesting
+// depth) — never a narrower, pool-specific variant — so the fix it points at
+// is always correct regardless of which category triggered it.
+export function formatPoolProtectionMessage(issue: PoolProtectionIssue): string {
+  if (issue.reason === "broken-exclusion") {
+    return (
+      `"${issue.pool}" has a node_modules-excluding pattern that does not cover every nesting ` +
+      `depth — replace it with "!**/node_modules/**" in .artgraph.json's "${issue.pool}" to ` +
+      `actually protect it.`
+    );
+  }
+  const protectedKey: PoolKey = issue.pool === "include" ? "testPatterns" : "include";
+  return (
+    `"${protectedKey}" excludes node_modules (has a "!**/node_modules/**"-style negative ` +
+    `pattern) but "${issue.pool}" does not — add "!**/node_modules/**" to "${issue.pool}" in ` +
+    `.artgraph.json to protect that pool too, or remove it from "${protectedKey}" if scanning ` +
+    `node_modules via "${issue.pool}" is intentional.`
+  );
 }
 
 export function loadConfig(rootDir: string): ArtgraphConfig {
@@ -661,6 +867,13 @@ export function loadConfig(rootDir: string): ArtgraphConfig {
   validateTaskConventions(raw.taskConventions, new Set(disabledBuiltins ?? []));
 
   validateTestResultPaths(raw.testResultPaths);
+
+  // PR #359 review (H1) — see `validateGlobPatternList`'s own doc comment.
+  // `undefined` round-trips as `undefined` (the `?? DEFAULT_CONFIG.*`
+  // fallback below still applies); anything else must actually be a glob
+  // pattern string array.
+  validateGlobPatternList(raw.include, "include");
+  validateGlobPatternList(raw.testPatterns, "testPatterns");
 
   const planCoverage = validatePlanCoverage(raw.planCoverage);
 

@@ -30,7 +30,7 @@ import {
   type IngestedTrace,
 } from "../trace/ingest.js";
 import type { ArtifactGraph, GraphNode, GraphEdge, ArtgraphConfig } from "../types.js";
-import { missingNodeModulesProtection } from "../config.js";
+import { missingNodeModulesProtection, formatPoolProtectionMessage } from "../config.js";
 
 export interface BuildWarning {
   type:
@@ -134,8 +134,15 @@ export interface BuildWarning {
     // as `unresolved-reexport` / `unresolved-import` above. See
     // `missingNodeModulesProtection` (`../config.js`) for the shared judge
     // this warning and `artgraph doctor`'s advisory finding of the same name
-    // both call into, and why a symmetric (both-protected or
-    // both-unprotected) config never fires this.
+    // both call into. A pool where both `include` and `testPatterns` are
+    // silently unprotected (no mention of node_modules at all) stays silent,
+    // as before — indistinguishable from a deliberate symmetric choice. PR
+    // #359 review (H2) added a second trigger, independent of symmetry: a
+    // pool whose negative pattern MENTIONS node_modules but, per real glob
+    // semantics, doesn't actually cover every nesting depth (a "broken
+    // exclusion") is reported regardless of the other pool's state — see
+    // `missingNodeModulesProtection`'s own doc comment for why that case is
+    // never ambiguous with an intentional choice the way silence is.
     | "config-pool-protection-asymmetry";
   id: string;
   files: string[];
@@ -232,19 +239,20 @@ export function buildGraph(
   // discovery actually matches. See `missingNodeModulesProtection`'s own doc
   // comment (`../config.js`) for the shared judge this warning and
   // `artgraph doctor`'s advisory finding of the same name both call into.
-  const missingProtectionPools = missingNodeModulesProtection(config);
-  if (missingProtectionPools.length > 0) {
-    const missingKey = missingProtectionPools[0];
-    const protectedKey = missingKey === "include" ? "testPatterns" : "include";
+  // PR #359 review (M2) — the message text itself is also shared
+  // (`formatPoolProtectionMessage`), so `scan` and `doctor` can never
+  // describe the same issue differently. Only the first issue is surfaced
+  // here (matches the pre-existing single-warning contract of this warning
+  // type); `missingNodeModulesProtection` orders `include` before
+  // `testPatterns` deterministically.
+  const poolProtectionIssues = missingNodeModulesProtection(config);
+  if (poolProtectionIssues.length > 0) {
+    const issue = poolProtectionIssues[0];
     warnings.push({
       type: "config-pool-protection-asymmetry",
-      id: missingKey,
+      id: issue.pool,
       files: [],
-      message:
-        `"${protectedKey}" excludes node_modules (has a "!**/node_modules/**"-style negative ` +
-        `pattern) but "${missingKey}" does not — add the same negative pattern to "${missingKey}" ` +
-        `in .artgraph.json to protect that pool too, or remove it from "${protectedKey}" if ` +
-        `scanning node_modules via "${missingKey}" is intentional.`,
+      message: formatPoolProtectionMessage(issue),
     });
   }
 
