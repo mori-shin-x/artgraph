@@ -204,10 +204,24 @@ jobs:
 
   # spec 013 SC-007 scope-out regression guard (#144): the cross-agent
   # extensions spec promises NO MCP server implementation, NO plugin
-  # marketplace manifests, NO non-Claude agent hooks. PR #114 T034 ran this
-  # as a one-off grep; this job makes it a standing tree-wide guard.
+  # marketplace manifests. PR #114 T034 ran this as a one-off grep; this job
+  # makes it a standing tree-wide guard.
   # specs/013-cross-agent-extensions/ is excluded — its research/spec docs
   # legitimately quote the forbidden terms.
+  #
+  # issue #366 (scope A) — Codex CLI / Kiro IDE hook support is now in scope
+  # (`src/hooks/`), and the templates it ships
+  # (`templates/hooks/kiro/artgraph-check.kiro.hook.template`, and
+  # `templates/hooks/codex/**` as a safety net) would otherwise trip
+  # `\.codex/hooks` / `kiro.*hook`. Rather than drop those FORBIDDEN patterns
+  # outright (Step 0-pre / meta-review HIGH-1: `\.codex/hooks` still guards
+  # against a future stray `.codex/hooks/**` commit, and `kiro.*hook` only
+  # ever matched this one shipped template in this PR), they stay in
+  # FORBIDDEN and the shipped template paths are excluded the same way
+  # specs/013-cross-agent-extensions/ already is. #342 tracks a path-limited
+  # SC-007 redesign; until that lands this is the narrowest exclusion that
+  # keeps the guard policing everything else (`.cursor/hooks` stays
+  # forbidden — Cursor hooks are still out of scope).
   scope-guard:
     name: scope-guard (SC-007)
     runs-on: ubuntu-latest
@@ -215,14 +229,14 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - name: SC-007 scope-out regression guard
         run: |
-          FORBIDDEN='(mcp[-_]server|\.claude-plugin|\.codex-plugin|\.cursor-plugin|\.codex/hooks|\.cursor/hooks|kiro.*hook)'
+          FORBIDDEN='(mcp[-_]server|\.claude-plugin|\.codex-plugin|\.cursor-plugin|\.cursor/hooks|\.codex/hooks|kiro.*hook)'
           # Review H1: split the `git ls-files` call from the `grep` so a
           # `ls-files` failure isn't swallowed by grep's `|| true` (which is
           # only meant to tolerate grep's own "no match" exit code 1) — with
           # `set -e` (the default for `run:` steps), a failing assignment
           # line now fails the job instead of silently treating "ls-files
           # broke" the same as "no forbidden files found".
-          FILES=$(git ls-files ':!specs/013-cross-agent-extensions/**')
+          FILES=$(git ls-files ':!specs/013-cross-agent-extensions/**' ':!templates/hooks/kiro/**' ':!templates/hooks/codex/**')
           # Review H2: case-insensitive, so e.g. `MCP-Server`/`Kiro...Hook`
           # can't slip past the guard on casing alone.
           MATCHES=$(printf '%s\n' "$FILES" | grep -iE "$FORBIDDEN" || true)

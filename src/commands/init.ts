@@ -1,7 +1,7 @@
 // `artgraph init` — extracted verbatim from `src/cli.ts` (issue #162).
 
 import { Command } from "commander";
-import { AGENT_IDS, type AgentId } from "../agents/descriptors.js";
+import { AGENT_IDS, findDescriptor, type AgentId } from "../agents/descriptors.js";
 import {
   AGENTS_REQUIRED_ERROR,
   loadIntegrate,
@@ -256,50 +256,84 @@ export function registerInitCommand(program: Command): void {
             }
           }
 
-          // Stop hook install result (issue #109). Structured data comes from
-          // `runInit`/`installHooks`; formatting is fully owned here so init.ts
-          // stays print-free.
+          // Stop hook install result (issue #109; generalized cross-agent by
+          // issue #366 scope A). Structured data comes from
+          // `runInit`/`installHooks`; formatting is fully owned here so
+          // init.ts stays print-free. One block per agent (agentId +
+          // configPath identify which agent/file an action refers to) — a
+          // later agent's outcome no longer silently overwrites an earlier
+          // one's (HIGH-1, Step 0-pre).
           if (result.hooksInstall) {
-            switch (result.hooksInstall.action) {
-              case "created":
-                console.log("\nCreated .claude/settings.json with artgraph Stop hook");
-                break;
-              case "merged-b":
-                console.log("\nAdded artgraph Stop hook to existing .claude/settings.json");
-                break;
-              case "merged-c":
-                console.log("\nAdded artgraph Stop hook (other hooks preserved)");
-                break;
-              case "conflict":
-                // A2: `.artgraph.json` has already been (re-)written by the
-                // time we hit this branch, so a bare re-run of `artgraph init`
-                // now trips the "already exists" guard. Point the user at
-                // `--force` (with `--no-hooks` as the escape hatch) so they
-                // know how to complete setup after resolving the Stop
-                // conflict — that guidance was missing.
-                console.error(
-                  `\n[WARN] .claude/settings.json already has a Stop hook configured.\nartgraph did NOT modify this file to avoid clobbering your setup.\n\nTo add artgraph's gate, manually merge the following into hooks.Stop:\n\n  {\n    "hooks": [\n      { "type": "command", "command": "${result.hooksInstall.reason}" }\n    ]\n  }\n\n(artgraph's config and Skills were installed successfully; only the Stop hook was skipped.)\n\nAfter you have merged the snippet above, re-run \`artgraph init --force\` to\ncomplete setup (or run with \`--no-hooks\` if you prefer to keep the current\nStop hook and skip artgraph's gate).\n`,
-                );
-                break;
-              case "invalid-json":
-                console.error(
-                  `\nERROR: .claude/settings.json is not valid JSON: ${result.hooksInstall.reason}. Not modifying.`,
-                );
-                break;
-              case "io-error":
-                console.error(`\nERROR: Stop hook install failed: ${result.hooksInstall.reason}`);
-                break;
-              case "skipped-no-pm":
-                console.error(
-                  "\nWARNING: Cannot detect package manager; skipping Stop hook install (config saved to .artgraph.json).",
-                );
-                break;
-              default: {
-                // E3: exhaustiveness guard — a new `hooksInstall.action`
-                // variant will fail `tsc` here instead of silently skipping
-                // the CLI-level formatting. Mirrors `printWarnings`.
-                const _exhaustive: never = result.hooksInstall.action;
-                void _exhaustive;
+            for (const outcome of result.hooksInstall.perAgent) {
+              const hook = findDescriptor(outcome.agentId)?.hook;
+              const configPath = hook?.configPath ?? "its hook config";
+              switch (outcome.action) {
+                case "created":
+                  console.log(
+                    `\n[${outcome.agentId}] Created ${configPath} with artgraph Stop hook`,
+                  );
+                  break;
+                case "merged-b":
+                  console.log(
+                    `\n[${outcome.agentId}] Added artgraph Stop hook to existing ${configPath}`,
+                  );
+                  break;
+                case "merged-c":
+                  console.log(
+                    `\n[${outcome.agentId}] Added artgraph Stop hook to ${configPath} (other hooks preserved)`,
+                  );
+                  break;
+                case "conflict": {
+                  // A2: `.artgraph.json` has already been (re-)written by the
+                  // time we hit this branch, so a bare re-run of `artgraph
+                  // init` now trips the "already exists" guard. Point the
+                  // user at `--force` (with `--no-hooks` as the escape
+                  // hatch) so they know how to complete setup after
+                  // resolving the conflict — that guidance was missing.
+                  //
+                  // The remediation differs by format: json-event-array's
+                  // `reason` is a pasteable command (there's a merge target,
+                  // `hooks.<event>`); file-per-hook has no merge target — the
+                  // whole file is the conflict, so `reason` is a sentence,
+                  // not a command, and the fix is to move/remove that file.
+                  const remediation =
+                    hook?.format === "json-event-array"
+                      ? `To add artgraph's gate, manually merge this into your existing hook config:\n\n  ${outcome.reason}\n\n`
+                      : `${outcome.reason ?? `${configPath} already exists`}. Move or remove it, then re-run — artgraph never overwrites an existing hook file, even with --force.\n\n`;
+                  console.error(
+                    `\n[WARN] [${outcome.agentId}] ${configPath} already has a Stop hook configured.\nartgraph did NOT modify this file to avoid clobbering your setup.\n\n${remediation}(artgraph's config and Skills were installed successfully; only this agent's Stop hook was skipped.)\n\nAfter you have resolved the conflict, re-run \`artgraph init --force\` to\ncomplete setup (or run with \`--no-hooks\` if you prefer to keep the current\nhook and skip artgraph's gate for this agent).\n`,
+                  );
+                  break;
+                }
+                case "invalid-json":
+                  console.error(
+                    `\nERROR: [${outcome.agentId}] ${configPath} is not valid JSON: ${outcome.reason}. Not modifying.`,
+                  );
+                  break;
+                case "io-error":
+                  console.error(
+                    `\nERROR: [${outcome.agentId}] Stop hook install failed: ${outcome.reason}`,
+                  );
+                  break;
+                case "skipped-no-pm":
+                  console.error(
+                    `\nWARNING: [${outcome.agentId}] Cannot detect package manager; skipping Stop hook install (config saved to .artgraph.json).`,
+                  );
+                  break;
+                case "skipped-no-hook-config":
+                  // Nothing to report — this agent has no hook mechanism
+                  // (yet). Agents not part of this install run are simply
+                  // absent from `perAgent` (src/hooks/index.ts) rather than
+                  // reported here.
+                  break;
+                default: {
+                  // E3: exhaustiveness guard — a new `HookOutcome.action`
+                  // variant will fail `tsc` here instead of silently
+                  // skipping the CLI-level formatting. Mirrors
+                  // `printWarnings`.
+                  const _exhaustive: never = outcome.action;
+                  void _exhaustive;
+                }
               }
             }
           }
@@ -313,7 +347,7 @@ export function registerInitCommand(program: Command): void {
         if (result.integrationFailureCount && result.integrationFailureCount > 0) {
           process.exitCode = 1;
         }
-        if (result.hooksInstall?.failure) {
+        if (result.hooksInstall?.anyFailure) {
           process.exitCode = 1;
         }
       } catch (e) {

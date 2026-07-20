@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "enabled": true,
+  "name": "artgraph traceability gate",
+  "description": "Run artgraph check --gate --diff when the agent finishes a turn.",
+  "when": { "type": "agentStop" },
+  "then": {
+    "type": "runCommand",
+    "command": "{{ARTGRAPH_EXEC}} check --gate --diff",
+    "timeout": 60
+  }
+}

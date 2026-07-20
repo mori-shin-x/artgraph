@@ -147,58 +147,58 @@ describe("KiroProvider", () => {
   });
 
   // -------------------------------------------------------------------------
-  // T065 — FR-011 future hook API extensibility design tests
+  // T065 — FR-011 forward-compat / provider-boundary tests
   //
-  // These guard the invariants needed for a future "hook mode" PR to land
-  // without breaking existing Steering-only repos:
-  //   (a) `install` must accept *extended* InstallOptions (with future
-  //       `mode?: "steering" | "hook"`) without TypeScript or runtime
-  //       breakage when the new field is absent — i.e. existing callers
-  //       keep working unchanged.
-  //   (b) Adopting the future hook mode must NOT delete the existing
-  //       `.kiro/steering/artgraph.md` belonging to a long-lived repo;
-  //       a future migration is responsible for that. We assert today's
-  //       provider doesn't preemptively wipe steering files when an
-  //       unknown `mode` opt is supplied.
+  // Resolved by issue #366 (scope A): the Kiro Stop-hook
+  // (`.kiro/hooks/artgraph-check.kiro.hook`) is installed by the `src/hooks/`
+  // layer, NOT KiroProvider — `install()` never grew a `mode` discriminator
+  // and never will; KiroProvider stays steering-only permanently, not just
+  // "for now". These tests are kept (reframed, not deleted) because they
+  // still guard a real invariant: InstallOptions is not sealed against extra
+  // keys, and the provider must keep ignoring ones it doesn't recognize
+  // (e.g. a hypothetical unrelated future option) without ever coupling
+  // itself to hook install logic or touching the steering file as a side
+  // effect of an unknown key.
   // -------------------------------------------------------------------------
-  describe("FR-011 forward-compat design (T065)", () => {
-    // Shape the test types as if a future PR widened InstallOptions to add
-    // an optional `mode` discriminator. The test compiles only because the
-    // current InstallOptions is *not* sealed against extra keys.
-    type FutureInstallOptions = import("../../../src/types.js").InstallOptions & {
+  describe("FR-011 forward-compat / hook-is-not-my-job (T065)", () => {
+    // `mode` here stands in for "any option key KiroProvider doesn't
+    // recognize" — it is deliberately NOT a real InstallOptions field (hook
+    // mode is `src/hooks/`'s responsibility, never KiroProvider's), so this
+    // cast is the only way to shape the test.
+    type OptsWithUnknownKey = import("../../../src/types.js").InstallOptions & {
       mode?: "steering" | "hook";
     };
 
-    it("(a) install signature stays back-compat: a future `mode?` field doesn't break existing calls", () => {
+    it("(a) install ignores unrecognized option keys without breaking existing calls", () => {
       copyFixture(join(FIXTURES, "kiro-empty"), tmp);
 
       // Existing Steering-only callers — the field is absent.
-      const opts1: FutureInstallOptions = {};
+      const opts1: OptsWithUnknownKey = {};
       const r1 = provider.install(tmp, opts1);
       expect(r1.providerId).toBe("kiro");
       expect(r1.noop).toBe(false);
 
-      // Idempotent re-run with the future field present but undefined.
-      const opts2: FutureInstallOptions = { mode: undefined };
+      // Idempotent re-run with the unrecognized field present but undefined.
+      const opts2: OptsWithUnknownKey = { mode: undefined };
       const r2 = provider.install(tmp, opts2);
       expect(r2.noop).toBe(true);
 
-      // And with the future field set to its current default ("steering") —
-      // current provider must continue treating this identically.
-      const opts3: FutureInstallOptions = { mode: "steering" };
+      // And with the unrecognized field set to a non-undefined value —
+      // still ignored, same steady-state result.
+      const opts3: OptsWithUnknownKey = { mode: "steering" };
       const r3 = provider.install(tmp, opts3);
       expect(r3.noop).toBe(true);
     });
 
-    it("(b) migration guard: passing a future `mode: 'hook'` value does not delete the existing steering file", () => {
+    it("(b) an unrecognized 'hook' option value does not delete the existing steering file", () => {
       copyFixture(join(FIXTURES, "kiro-installed"), tmp);
       const steering = join(tmp, ".kiro/steering/artgraph.md");
       const before = readFileSync(steering, "utf-8");
 
-      // Even if a future caller experimentally passes the hook-mode opt, the
-      // current implementation must remain in Steering mode and leave the
-      // file untouched (no preemptive deletion / overwrite).
-      const opts: FutureInstallOptions = { mode: "hook" };
+      // KiroProvider has no hook-install branch and never will — passing a
+      // `mode: "hook"`-shaped option must not be interpreted as one; the
+      // provider stays in Steering mode and leaves the file untouched.
+      const opts: OptsWithUnknownKey = { mode: "hook" };
       const r = provider.install(tmp, opts);
       // No content change is allowed.
       expect(readFileSync(steering, "utf-8")).toBe(before);

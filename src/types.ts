@@ -629,6 +629,32 @@ export interface PlanCoverageConfig {
  */
 export type PackageManager = "npm" | "pnpm" | "bun" | "deno";
 
+/**
+ * issue #366 (scope A) — per-agent outcome of the Stop-hook install stage.
+ * One entry per agent in `--agents=<csv>` that has a `hook` config
+ * (`src/agents/descriptors.ts`). Mirrors the single-agent `action`/`reason`/
+ * `failure` shape the original Claude-only `installHooks()` returned, plus
+ * `agentId` so `InitResult.hooksInstall` can report per-agent (BREAKING
+ * CHANGE: `InitResult.hooksInstall` is now `{perAgent, anyFailure}` rather
+ * than a single outcome — see `src/hooks/index.ts`).
+ */
+export type HookOutcome = {
+  agentId: import("./agents/descriptors.js").AgentId;
+  action:
+    | "created"
+    | "merged-b"
+    | "merged-c"
+    | "conflict"
+    | "invalid-json"
+    | "io-error"
+    | "skipped-no-pm"
+    | "skipped-no-hook-config";
+  /** Detail for conflict/error outcomes: rendered command or parse/IO error message. */
+  reason?: string;
+  /** true → CLI translates this into a non-zero exit code. */
+  failure?: boolean;
+};
+
 export interface ArtgraphConfig {
   /**
    * fast-glob patterns for source files, resolved relative to the repo root.

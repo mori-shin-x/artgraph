@@ -50,7 +50,7 @@ describe("npm packaging", () => {
     // Runtime-critical templates that must never silently drop out of the
     // walk (e.g. via a stray .npmignore or a directory rename).
     expect(expected).toContain("templates/agent-context/agents-md-snippet.md");
-    expect(expected).toContain("templates/hooks/settings.json.template");
+    expect(expected).toContain("templates/hooks/claude/settings.json.template");
     // License compliance: the vendored cytoscape bundle must never ship
     // without its MIT notice (copied by scripts/copy-vendor.mjs).
     expect(expected).toContain("templates/graph/vendor/cytoscape.LICENSE");
