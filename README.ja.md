@@ -82,9 +82,9 @@ npx artgraph impact --diff          # → TS の import グラフから影響フ
 
 > 別のパッケージマネージャを使っている場合は、以降の `npx artgraph` を
 > `pnpm dlx artgraph` (インストール済みなら `pnpm exec`)、`bunx artgraph`、
-> `deno run -A npm:artgraph/cli` に読み替えてください — [クイックスタート](#クイックスタート) 参照。
+> `deno run -A npm:artgraph/cli` に読み替えてください。[クイックスタート](#クイックスタート) を参照。
 
-`impact --diff` は決定的な TypeScript の import グラフをたどるため、どんな TS リポジトリでも導入したその日から動きます。仕様書・`@impl` タグ・ドリフト検出はオプトインで、プロジェクトのトレーサビリティ要求が高まるにつれて段階的に追加していけます。
+`impact --diff` は決定的な TypeScript の import グラフをたどるため、どんな TS リポジトリでも導入したその日から動きます。仕様書・`@impl` タグ・ドリフト検出はオプトインなので、必要になったぶんだけ、あとから足していけます。
 
 ## artgraph が必要な理由
 
@@ -99,20 +99,20 @@ npx artgraph integrate speckit   # after_tasks / before_implement / after_implem
 npx artgraph integrate kiro      # .kiro/steering/artgraph.md を書き出し
 ```
 
-`artgraph init` は、SDD ツールがすでに入っていればそれを検出して自動で配線します — [SDD ツール統合](#sdd-ツール統合) を参照。
+`artgraph init` は、SDD ツールがすでに入っていればそれを検出して自動で設定します。詳しくは [SDD ツール統合](#sdd-ツール統合) を参照してください。
 
-### コードグラフ MCP は、あなたの仕様を知らない
+### コードグラフ MCP は仕様を知らない
 
-codegraph、GitNexus、Sourcegraph MCP などのコードグラフ MCP は、AI コーディングエージェントにコードベースのシンボルレベルのマップを提供します。有用ではありますが、そのマップの範囲はコードで途切れています。エージェントが `signIn` を書き換えたときに、`specs/auth.md` の `REQ-001` に「email と password」と書かれていることも、`docs/auth.md` が古くなっていることも、テストがまだ旧仕様に基づいていることも、何も教えてくれません。
+codegraph、GitNexus、Sourcegraph MCP などのコードグラフ MCP は、AI コーディングエージェントにコードベースのシンボルレベルのマップを提供します。便利ですが、そのマップはコードで途切れています。エージェントが `signIn` を書き換えたときに、`specs/auth.md` の `REQ-001` に「email と password」と書かれていることも、`docs/auth.md` が古くなっていることも、テストがまだ旧仕様に基づいていることも、何も教えてくれません。
 
-artgraph は、そのコードの*上*にもう一段レイヤーを重ねます:
+コードグラフの*上*にもう一層を重ねるのが artgraph です:
 
 - **要件 ID がプライマリキー** — 仕様書にリストされ、エージェントが `@impl` に書き、テストが角括弧で囲む。この同じ `REQ-001` という文字列が 4 層を結合します。
 - **すべてのエッジが決定的** — `@impl` タグ、`[REQ-ID]` のテスト名、Markdown リンク、YAML フロントマター、SDD ツールの規約、TypeScript の import、テスト実行トレース。グラフの生成に LLM は介在しません。埋め込みも RAG もなしです。
-- **変更単位のコンテキストルーティング** — `artgraph impact --diff` は、その変更が触れる仕様書・ドキュメント・テストだけを返します。コンテキストファイルを丸ごと渡すのではなく、*この差分に関わる範囲だけ*をエージェントに渡せます。スコープは意図的に狭く、同じ `spec.md` に書かれた兄弟要件も、同じクラスの兄弟メソッドも巻き込みません — [docs/skills-guide.md](./docs/skills-guide.md#file-mode-vs-symbol-mode) を参照。
+- **変更単位のコンテキストルーティング** — `artgraph impact --diff` は、その変更が触れる仕様書・ドキュメント・テストだけを返します。コンテキストファイルを丸ごと渡すのではなく、*この差分に関わる範囲だけ*をエージェントに渡せます。スコープは意図的に狭く、同じ `spec.md` に書かれた兄弟要件も、同じクラスの兄弟メソッドも巻き込みません。詳しくは [docs/skills-guide.md](./docs/skills-guide.md#file-mode-vs-symbol-mode) を参照してください。
 - **CI ゲートとしてのドリフト検出** — `artgraph check --gate` は、仕様が変わったのにコード / テストが追従していないときにビルドを落とします。実行するたびにバイト単位で同一の出力になります。
 
-コードグラフ MCP が答えるのは *「これはどこで使われている？」*。artgraph が答えるのは *「これはどの要件を満たしているのか、そしていまも満たせているのか？」* です。
+コードグラフ MCP が答えるのは *「これはどこで使われている？」*。artgraph が答えるのは *「これはどの要件を満たすもので、いまも満たせているのか？」* です。
 
 ## 既存プロジェクトのブートストラップ
 
@@ -122,11 +122,11 @@ artgraph は、そのコードの*上*にもう一段レイヤーを重ねます
 you> src/auth 配下のトレーサビリティをブートストラップしてください。
 ```
 
-`artgraph-bootstrap` Skill が新しい `REQ-NNN` エントリつきの `specs/auth.md` を提案し、対応する実装コードに `@impl REQ-NNN` タグを付け、カバーするテストには `[REQ-NNN]` を付与します。仕上げに `artgraph scan && artgraph check` で結果を検証 — すべてがひとつのレビュー可能な diff にまとまるので、あとはレビューして、調整して、コミットするだけです。
+`artgraph-bootstrap` Skill が新しい `REQ-NNN` エントリつきの `specs/auth.md` を提案し、対応する実装コードに `@impl REQ-NNN` タグを付け、カバーするテストには `[REQ-NNN]` を付与します。仕上げに `artgraph scan && artgraph check` で結果を検証します。ここまでが 1 つの diff にまとまるので、内容を確認して、必要なら手を入れて、コミットするだけです。
 
 ## クイックスタート
 
-> **対応プラットフォーム:** macOS と Linux — Windows 上の **WSL2** を含む。ネイティブ Windows (PowerShell / cmd) は非対応です。[Windows に関する注記](#windows-に関する注記)を参照してください。
+> **対応プラットフォーム:** macOS と Linux (Windows 上の **WSL2** を含む)。ネイティブ Windows (PowerShell / cmd) は非対応です。[Windows に関する注記](#windows-に関する注記)を参照してください。
 
 <!-- Regenerate with: pnpm demo (build + demo:record + demo:svg) — see scripts/record-tag-zero-demo.mjs -->
 <p align="center">
@@ -145,7 +145,7 @@ npm install -D artgraph && npx artgraph init --agents=claude       # エージ�
 
 ### Tier 1 クロスエージェント配布
 
-`--agents=<list>` は、正となる同一の SKILL.md セット (6 個の Skills + 3 個の `_shared/` フラグメント) を、各エージェントが標準で参照するパスへ配布します。`AGENTS.md` がエージェントコンテキストの正本で、エージェントごとのラッパファイルには `@AGENTS.md` の import 行だけが入ります。
+`--agents=<list>` は、正となる同一の SKILL.md セット (6 個の Skills + 3 個の `_shared/` フラグメント) を、各エージェントが標準で参照するパスへ配布します。エージェントコンテキストの正は `AGENTS.md` で、エージェントごとのラッパファイルには `@AGENTS.md` の import 行だけが入ります。
 
 | `--agents` の値 | エージェント | Skills パス | ラッパファイル |
 | --- | --- | --- | --- |
@@ -155,34 +155,34 @@ npm install -D artgraph && npx artgraph init --agents=claude       # エージ�
 | `copilot`  | GitHub Copilot | `.github/skills/`  | `.github/copilot-instructions.md` |
 | `kiro`     | Kiro | `.kiro/skills/`    | — (`artgraph integrate kiro` 経由で `.kiro/steering/artgraph.md`) |
 
-> サポート対象は上記 5 つのエージェントに限定しています — artgraph は v0.x の間、Tier 1 を超えて対象を広げる予定はありません。[docs/architecture.md §8 Support Scope](./docs/architecture.md#8-support-scope) を参照。
+> サポート対象は上記 5 つのエージェントに限定しています。v0.x の間、Tier 1 の外へ広げる予定はありません。[docs/architecture.md §8 Support Scope](./docs/architecture.md#8-support-scope) を参照してください。
 
 ### Windows に関する注記
 
-ネイティブ Windows (PowerShell / cmd) は非対応です。artgraph は **WSL2** 内で実行してください — サポート対象のパッケージマネージャと Tier 1 エージェントはすべて動作します。Git Bash は未検証です。ネイティブ Windows のチームメンバーがリポジトリをチェックアウトする場合の CRLF / `.gitattributes` の扱いについては [docs/getting-started.md#windows](./docs/getting-started.md#windows) を参照してください。
+ネイティブ Windows (PowerShell / cmd) は非対応です。artgraph は **WSL2** 内で実行してください。サポート対象のパッケージマネージャと Tier 1 エージェントはすべて WSL2 上で動作します。Git Bash は未検証です。ネイティブ Windows のチームメンバーがリポジトリをチェックアウトする場合の CRLF / `.gitattributes` の扱いについては [docs/getting-started.md#windows](./docs/getting-started.md#windows) を参照してください。
 
 ## エージェントループの動作
 
-インストール後、artgraph は 3 つのタイミングでエージェントのランタイムに接続されます:
+インストールすると、artgraph は 3 つのタイミングでエージェントの動作に組み込まれます:
 
 1. **編集中 (Skills)** — エージェントが編集している最中に、`artgraph-impact` と `artgraph-plan-coverage` がエージェント自身の判断で発火し、提案された変更がどの REQ に触れるのかを *変更が適用される前に* 明らかにします。
-2. **ターン完了時 (Stop フック)** — Claude Code が `Stop` に達すると、`.claude/settings.json` のフックが `artgraph check --diff` を実行し、ドリフトが検出されればそのターンをブロックします。他の Tier 1 エージェントにも、ランタイムが許す範囲で同等のフックが用意されています。
-3. **SDD チェックポイント** — Spec Kit または Kiro が入っている場合、`artgraph integrate` が `after_tasks` / `after_implement` / 非ブロッキングの `before_implement` プレビュー (blocking ゲートは `--gate` でオプトイン) を SDD ワークフローに接続します。`tasks.md` / `plan.md` の変更は、あとでまとめてではなく、然るべきタイミングでチェックされます。
+2. **ターン完了時 (Stop フック)** — Claude Code がターンを終えようとすると、`.claude/settings.json` のフックが `artgraph check --diff` を実行し、ドリフトが検出されればそのターンをブロックします。他の Tier 1 エージェントにも、ランタイムが許す範囲で同等のフックが用意されています。
+3. **SDD チェックポイント** — Spec Kit または Kiro が入っている場合、`artgraph integrate` が `after_tasks` / `after_implement` / 非ブロッキングの `before_implement` プレビュー (blocking ゲートは `--gate` でオプトイン) を SDD ワークフローに接続します。`tasks.md` / `plan.md` の変更は「あとでまとめてチェック」ではなく「ズレた瞬間に検出」になります。
 
 どのフックも最終的には同じグラフに対する `artgraph check` に集約され、`--diff` は `.trace.lock` と比較します。このループに LLM は介在しません。
 
 ## SDD ツール統合
 
-`artgraph integrate` は、scan / reconcile / check のループをすでに使っている SDD ツールに接続します。組み込みの対象は Spec Kit (`.specify/extensions/artgraph/` に `after_tasks` / `after_implement` + 非ブロッキングの `before_implement` プレビュー。blocking ゲートは `--gate` でオプトイン) と Kiro (`.kiro/steering/artgraph.md`) です。OpenSpec はまだ未対応です — 仕様が見出し駆動で、グラフの主キーにできる安定した要件 ID を持たないためで、対応は [#25](https://github.com/mori-shin-x/artgraph/issues/25) で追っています。
+`artgraph integrate` は、すでに使っている SDD ツールに scan / reconcile / check のループを組み込みます。組み込みの対象は Spec Kit (`.specify/extensions/artgraph/` に `after_tasks` / `after_implement` + 非ブロッキングの `before_implement` プレビュー。blocking ゲートは `--gate` でオプトイン) と Kiro (`.kiro/steering/artgraph.md`) です。OpenSpec はまだ未対応です。仕様が見出し駆動で、グラフの主キーにできる安定した要件 ID を持たないためです。対応は [#25](https://github.com/mori-shin-x/artgraph/issues/25) で追っています。
 
 ```bash
-artgraph integrate speckit          # べき等 — .specify/ にフック
+artgraph integrate speckit          # べき等。.specify/ にフックを追加
 artgraph integrate speckit --gate   # before_implement を blocking ゲートに昇格
-artgraph integrate kiro             # .kiro/steering/artgraph.md を書く
+artgraph integrate kiro             # .kiro/steering/artgraph.md を書き出し
 artgraph integrate list             # ツールごとの検出/インストール状況
 ```
 
-`artgraph init` は、検出されたすべての SDD ツールをデフォルトで自動統合します (Spec Kit には非ブロッキングの `before_implement` プレビューが入ります。スキップしたい場合は `--no-integrate` を渡してください)。オプトインの `--gate` は全 REQ の絶対チェックのため、新規 spec の**初回**実装直前では必ず失敗します (全 REQ 未実装のため) — これは想定内の挙動です。gating ポリシーの設計は [#178](https://github.com/mori-shin-x/artgraph/issues/178) で継続中。実際に動くサンプルは [`examples/speckit-integration/`](./examples/speckit-integration) と [`examples/kiro-integration/`](./examples/kiro-integration) にあります。詳細は [docs/sdd-integration.md](./docs/sdd-integration.md) を参照。
+`artgraph init` は、検出されたすべての SDD ツールをデフォルトで自動統合します (Spec Kit には非ブロッキングの `before_implement` プレビューが入ります。スキップしたい場合は `--no-integrate` を渡してください)。オプトインの `--gate` は差分ではなく全 REQ を対象にチェックするため、新規 spec の**初回**実装直前では必ず失敗します (全 REQ 未実装のため)。これは想定内の挙動です。gating ポリシーの設計は [#178](https://github.com/mori-shin-x/artgraph/issues/178) で継続中。実際に動くサンプルは [`examples/speckit-integration/`](./examples/speckit-integration) と [`examples/kiro-integration/`](./examples/kiro-integration) にあります。詳細は [docs/sdd-integration.md](./docs/sdd-integration.md) を参照。
 
 ### Spec Kit + artgraph でのターンの例
 
@@ -202,7 +202,7 @@ agent> tasks.md には Files: src/auth.ts が列挙されていますが、こ�
        (c) 受け入れてそのまま進む
 ```
 
-*どの* REQ が言及されていないのか、*なぜ* 到達可能だったのか — その根拠は、変更ファイルに対する `artgraph plan-coverage` の出力に基づいています。グラフそのものについて LLM が推論しているわけではありません — 使っているのは CLI の決定的な出力だけです。
+*どの* REQ が言及されていないのか、*なぜ* 到達可能だったのか。その根拠は、変更ファイルに対する `artgraph plan-coverage` の出力そのものです。LLM がグラフを推論しているわけではなく、使っているのは CLI の決定的な出力だけです。
 
 ## エンドツーエンド: 仕様 → `@impl` → `check` <a id="エンドツーエンド-仕様--impl--check"></a>
 
@@ -271,7 +271,7 @@ artgraph には、CLI をエージェントのワークフローに接続する 
 | `artgraph-verify`        | n/a           | 実装完了。コードレビュー前に `artgraph check --diff` で自己検証                                                     |
 | `artgraph-rename`        | n/a           | ユーザーが REQ ID をリネーム/分割/マージしたいとき                                                                  |
 
-`file + symbol` の Skills は、ファイル単位・シンボル単位・クラスメソッド単位を受け付けます。後者 2 つには `.artgraph.json` の `"mode"` を `"symbol"` にする必要があります — トレードオフと `impactReqs` / `originReqs` の二軸ドリフトガイドについては [docs/skills-guide.md#file-mode-vs-symbol-mode](./docs/skills-guide.md#file-mode-vs-symbol-mode) を参照。
+`file + symbol` の Skills は、ファイル単位・シンボル単位・クラスメソッド単位を受け付けます。後者 2 つには `.artgraph.json` の `"mode"` を `"symbol"` にする必要があります。トレードオフと `impactReqs` / `originReqs` の二軸ドリフトガイドについては [docs/skills-guide.md#file-mode-vs-symbol-mode](./docs/skills-guide.md#file-mode-vs-symbol-mode) を参照してください。
 
 ## 参照の書き方
 
@@ -283,15 +283,15 @@ artgraph には、CLI をエージェントのワークフローに接続する 
 | テスト                  | `it("[REQ-001] …")` または `// req: "REQ-001"`  |
 | ドキュメントの関連      | フロントマター `artgraph.depends_on` / `derives_from`、kiro / spec-kit のファイル名規約から推論、またはインラインの `[text](./other.md)` リンク |
 
-ID の prefix は自由です (`[A-Z][A-Za-z]*-\d+`): 上の例で使っている `REQ-` は単なる慣習で、`FR-001` / `AUTH-2` / `US-12` なども設定なしでそのまま動きます。Spec Kit を使っている場合は、テンプレート標準の `FR-NNN` をそのまま使ってください。特定の ID 系列を追跡対象から外したい場合 (例: Spec Kit の `SC-NNN` Success Criteria — 実装対象の要求ではなくアウトカムのため) は、`.artgraph.json` の `ignoreIdPrefixes` に prefix を列挙します — [docs/configuration.md](./docs/configuration.md#ignoreidprefixes--exclude-specific-id-prefixes-from-tracking) を参照。
+ID の prefix は自由です (`[A-Z][A-Za-z]*-\d+`): 上の例で使っている `REQ-` は単なる慣習で、`FR-001` / `AUTH-2` / `US-12` なども設定なしでそのまま動きます。Spec Kit を使っている場合は、テンプレート標準の `FR-NNN` をそのまま使ってください。特定の ID 系列を追跡対象から外したい場合 (例: Spec Kit の `SC-NNN` Success Criteria。実装対象の要求ではなくアウトカムのため) は、`.artgraph.json` の `ignoreIdPrefixes` に prefix を列挙します。[docs/configuration.md](./docs/configuration.md#ignoreidprefixes--exclude-specific-id-prefixes-from-tracking) を参照してください。
 
-独自のパターンは `.artgraph.json` の `reqPatterns` で設定できます — [docs/configuration.md](./docs/configuration.md) を参照。
+独自のパターンは `.artgraph.json` の `reqPatterns` で設定できます。[docs/configuration.md](./docs/configuration.md) を参照してください。
 
 ## コマンド
 
 | コマンド                 | 目的                                                                                          |
 | ------------------------ | --------------------------------------------------------------------------------------------- |
-| `artgraph init`          | agent-native な一括セットアップ: 設定 + スキャン + Skills + SDD 統合 + Stop フック + エージェントコンテキスト |
+| `artgraph init`          | エージェント前提の一括セットアップ: 設定 + スキャン + Skills + SDD 統合 + Stop フック + エージェントコンテキスト |
 | `artgraph scan`          | グラフを構築して件数を出力 (`--serve` / `--output` でインタラクティブ HTML としてレンダリング) |
 | `artgraph check`         | ドリフト / 孤立 / 未カバーを報告 (`--gate` でフックを失敗させられる)                           |
 | `artgraph impact`        | ファイル単位の順方向インパクト (ファイルパス / `--diff`。`--tests` で再実行すべきタグ付きテストを選定) |
