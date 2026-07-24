@@ -44,8 +44,11 @@ An agent edits the implementation and leaves the spec alone:
 
 `artgraph check` catches the one-sided change, at symbol granularity:
 
-```console
-$ npx artgraph check
+```bash
+npx artgraph check
+```
+
+```
 DRIFT:
   symbol:src/validate-password.ts#validatePassword (symbol)
 ```

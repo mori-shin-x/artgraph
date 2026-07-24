@@ -38,8 +38,11 @@ AI エージェントが実装だけを書き換えて、仕様書は放置し�
 
 `artgraph check` は、この「片側だけの変更」をシンボル単位で検出します。
 
-```console
-$ npx artgraph check
+```bash
+npx artgraph check
+```
+
+```
 DRIFT:
   symbol:src/validate-password.ts#validatePassword (symbol)
 ```
