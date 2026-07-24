@@ -1,7 +1,7 @@
 {
   "name": "artgraph",
   "version": "0.3.0",
-  "description": "artgraph detects drift between your specs, docs, code, and tests in TypeScript repos — deterministically, no LLM.",
+  "description": "artgraph detects drift between your specs, docs, code, and tests — deterministically, no LLM.",
   "type": "module",
   "bin": {
     "artgraph": "./dist/cli.js"

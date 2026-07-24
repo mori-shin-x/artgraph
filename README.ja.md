@@ -14,7 +14,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-artgraph は、仕様・ドキュメント・コード・テストのズレ（ドリフト）を検出する TypeScript 向けの CLI ツールです。検出に LLM は使いません。
+artgraph は、仕様・ドキュメント・コード・テストのズレ（ドリフト）を検出する CLI ツールです。検出に LLM は使いません。
 
 「コードが変わったのに仕様書が古いまま」「仕様を変えたのに実装が置き去り」を、LLM に見つけさせるのではなく、決定的な仕組みで検出します。仕様書の要件 ID を、それを実装するコードと検証するテストに紐づけ、それぞれの本文をハッシュで管理することで、片側だけが変わった状態を機械的に見つけます。検出に LLM が介在しないので、同じ状態に対して何度実行してもバイト単位で同じ出力になります。
 
@@ -72,19 +72,19 @@ DRIFT:
 
 ## タグゼロで 30 秒スタート
 
-既存の TypeScript リポジトリさえあれば、**仕様書も `@impl` タグも設定ファイルもなし**で、3 コマンドでインパクト解析を試せます:
+既存のリポジトリさえあれば、**仕様書も `@impl` タグも設定ファイルもなし**で、3 コマンドでインパクト解析を試せます:
 
 ```bash
 npx artgraph init --agents=claude   # brownfield 対応・仕様書不要
 # ... ファイルを編集 ...
-npx artgraph impact --diff          # → TS の import グラフから影響ファイルを出力
+npx artgraph impact --diff          # → import グラフから影響ファイルを出力
 ```
 
 > 別のパッケージマネージャを使っている場合は、以降の `npx artgraph` を
 > `pnpm dlx artgraph` (インストール済みなら `pnpm exec`)、`bunx artgraph`、
 > `deno run -A npm:artgraph/cli` に読み替えてください。[クイックスタート](#クイックスタート) を参照。
 
-`impact --diff` は決定的な TypeScript の import グラフをたどるため、どんな TS リポジトリでも導入したその日から動きます。仕様書・`@impl` タグ・ドリフト検出はオプトインなので、必要になったぶんだけ、あとから足していけます。
+`impact --diff` は決定的な import グラフをたどるため、導入したその日から動きます。仕様書・`@impl` タグ・ドリフト検出はオプトインなので、必要になったぶんだけ、あとから足していけます。
 
 ## artgraph が必要な理由
 
@@ -130,7 +130,7 @@ you> src/auth 配下のトレーサビリティをブートストラップして
 
 <!-- Regenerate with: pnpm demo (build + demo:record + demo:svg) — see scripts/record-tag-zero-demo.mjs -->
 <p align="center">
-  <img src="./docs/demo/tag-zero.svg" alt="30秒タグゼロデモ: brownfield TS リポジトリで artgraph init のあとに artgraph impact --diff" />
+  <img src="./docs/demo/tag-zero.svg" alt="30秒タグゼロデモ: brownfield リポジトリで artgraph init のあとに artgraph impact --diff" />
 </p>
 
 ```bash

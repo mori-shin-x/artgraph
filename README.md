@@ -14,7 +14,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-artgraph detects drift between your specs, docs, code, and tests in TypeScript repos — deterministically, no LLM.
+artgraph detects drift between your specs, docs, code, and tests — deterministically, no LLM.
 
 Specs go stale. An agent changes the implementation and leaves the spec
 behind; or the spec gets updated and the code never follows. artgraph links
@@ -82,22 +82,22 @@ requirements (no `@impl`, no test).
 
 ## 30-second tag-zero start
 
-Have an existing TypeScript repo? Get impact analysis in three commands — **no
-specs, no `@impl` tags, no config required**:
+Get impact analysis on an existing repo in three commands — **no specs, no
+`@impl` tags, no config required**:
 
 ```bash
 npx artgraph init --agents=claude   # brownfield-safe; no specs required
 # ... edit a file ...
-npx artgraph impact --diff          # → files affected via your TS import graph
+npx artgraph impact --diff          # → files affected via your import graph
 ```
 
 > Using another package manager? Read `npx artgraph` as `pnpm dlx artgraph`
 > (or `pnpm exec` once installed), `bunx artgraph`, or
 > `deno run -A npm:artgraph/cli` throughout — see [Quickstart](#quickstart).
 
-`impact --diff` walks the deterministic TypeScript import graph, so it works
-from day one on any TS repo. Specs, `@impl` tags, and drift detection are
-opt-in — add them progressively as your project demands more traceability.
+`impact --diff` walks the deterministic import graph, so it works from day
+one on an untouched repo. Specs, `@impl` tags, and drift detection are
+opt-in — add them as you need them.
 
 ## Why artgraph
 
@@ -168,7 +168,7 @@ review, tweak, and commit.
 
 <!-- Regenerate with: pnpm demo (build + demo:record + demo:svg) — see scripts/record-tag-zero-demo.mjs -->
 <p align="center">
-  <img src="./docs/demo/tag-zero.svg" alt="30-second tag-zero demo: artgraph init followed by artgraph impact --diff on a brownfield TS repo" />
+  <img src="./docs/demo/tag-zero.svg" alt="30-second tag-zero demo: artgraph init followed by artgraph impact --diff on a brownfield repo" />
 </p>
 
 ```bash
