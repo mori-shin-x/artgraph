@@ -49,6 +49,28 @@ DRIFT:
 
 仕様は 8 文字のまま、コードは 6 文字。逆に、仕様書だけを書き換えてコードを放置したケースも同じ仕組みで検出されます。そしてこの `check` は `artgraph init` の時点で Stop フックに仕込まれるので、ドリフトを残したままターンを終えようとしたエージェントは `exit 2` でブロックされ、自分で気づいて直しに行きます。ほかに、実在しない要件 ID を指している `@impl` タグ（**孤立**）と、`@impl` もテストも付いていない要件（**未カバー**）も検出します。
 
+<details>
+<summary><strong>目次</strong></summary>
+
+- [タグゼロで 30 秒スタート](#タグゼロで-30-秒スタート)
+- [artgraph が必要な理由](#artgraph-が必要な理由)
+- [既存プロジェクトのブートストラップ](#既存プロジェクトのブートストラップ)
+- [クイックスタート](#クイックスタート)
+- [エージェントループの動作](#エージェントループの動作)
+- [エンドツーエンド: 仕様 → @impl → check](#エンドツーエンド-仕様--impl--check)
+- [グラフを見る](#グラフを見る)
+- [カバレッジ由来のトレーサビリティ](#カバレッジ由来のトレーサビリティ)
+- [Spec Kit + artgraph でのターンの例](#spec-kit--artgraph-でのターンの例)
+- [Skills](#skills)
+- [SDD ツール統合](#sdd-ツール統合)
+- [参照の書き方](#参照の書き方)
+- [コマンド](#コマンド)
+- [ドキュメント](#ドキュメント)
+- [動作要件](#動作要件)
+- [ライセンス](#ライセンス)
+
+</details>
+
 ## タグゼロで 30 秒スタート
 
 既存の TypeScript リポジトリさえあれば、**仕様書も `@impl` タグも設定ファイルもなし**で、3 コマンドでインパクト解析を試せます:
@@ -105,30 +127,6 @@ you> src/auth 配下のトレーサビリティをブートストラップして
 
 `artgraph-bootstrap` Skill が新しい `REQ-NNN` エントリつきの `specs/auth.md` を提案し、対応する実装コードに `@impl REQ-NNN` タグを付け、カバーするテストには `[REQ-NNN]` を付与します。仕上げに `artgraph scan && artgraph check` で結果を検証 — すべてがひとつのレビュー可能な diff にまとまるので、あとはレビューして、調整して、コミットするだけです。
 
-<details>
-<summary><strong>目次</strong></summary>
-
-- [タグゼロで 30 秒スタート](#タグゼロで-30-秒スタート)
-- [artgraph が必要な理由](#artgraph-が必要な理由)
-- [既存プロジェクトのブートストラップ](#既存プロジェクトのブートストラップ)
-- [クイックスタート](#クイックスタート)
-- [エージェントループの動作](#エージェントループの動作)
-  - [Pull Request の CI ゲート](#pull-request-の-ci-ゲート)
-  - [Pull Request の CI テスト選択](#pull-request-の-ci-テスト選択)
-- [エンドツーエンド: 仕様 → @impl → check](#エンドツーエンド-仕様--impl--check)
-- [グラフを見る](#グラフを見る)
-- [カバレッジ由来のトレーサビリティ](#カバレッジ由来のトレーサビリティ)
-- [Spec Kit + artgraph でのターンの例](#spec-kit--artgraph-でのターンの例)
-- [Skills](#skills)
-- [SDD ツール統合](#sdd-ツール統合)
-- [参照の書き方](#参照の書き方)
-- [コマンド](#コマンド)
-- [ドキュメント](#ドキュメント)
-- [動作要件](#動作要件)
-- [ライセンス](#ライセンス)
-
-</details>
-
 ## クイックスタート
 
 > **対応プラットフォーム:** macOS と Linux — Windows 上の **WSL2** を含む。ネイティブ Windows (PowerShell / cmd) は非対応です。[Windows に関する注記](#windows-に関する注記)を参照してください。
@@ -177,61 +175,6 @@ npm install -D artgraph && npx artgraph init --agents=claude       # エージ�
 3. **SDD チェックポイント** — Spec Kit または Kiro が入っている場合、`artgraph integrate` が `after_tasks` / `after_implement` / 非ブロッキングの `before_implement` プレビュー (blocking ゲートは `--gate` でオプトイン) を SDD ワークフローに接続します。`tasks.md` / `plan.md` の変更は、あとでまとめてではなく、然るべきタイミングでチェックされます。
 
 どのフックも最終的には同じグラフに対する `artgraph check` に集約され、`--diff` は `.trace.lock` と比較します。このループに LLM は介在しません。
-
-### Pull Request の CI ゲート
-
-CI のチェックアウトでは作業ツリーがコミットと完全に一致するため、素の `check --diff` には比較対象がありません。`--base <ref>` を渡すと PR のコミット範囲をゲートできます: 判定は `git merge-base <ref> HEAD` を基準に行われるため、**その PR が新規に導入した問題だけ**がゲートを落とし、base ブランチ側の既存債務は suppress されます。
-
-以下のレシピは npm を使っています — pnpm の場合は `npm ci` を
-`pnpm install --frozen-lockfile` (+ `pnpm/action-setup`) に、`npx` を
-`pnpm exec` に、`npm test` を `pnpm test` に読み替えてください (Bun / Deno も同様)。
-
-```yaml
-name: artgraph-gate
-on: pull_request
-
-jobs:
-  gate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # 必須 — shallow clone では merge-base が解決できず、ゲートは fail-closed (exit 1) になります
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm ci
-      - run: npx artgraph check --diff --base "origin/${{ github.base_ref }}" --gate
-```
-
-exit code: `0` = 新規問題なし、`2` = PR がドリフト / 孤立タグ / 未カバー REQ を導入、`1` = ゲート判定不能 (shallow clone など — fail-closed であり、無言で pass することはありません)。ローカルの Stop フックは従来どおり素の `check --gate --diff` (作業ツリー diff) を使います。`--base` はコミット範囲のゲート用です。
-
-### Pull Request の CI テスト選択
-
-trace shards がある場合 (`artgraph/vitest` runner)、`impact --diff --base <ref> --tests` は PR のコミット範囲に実行証拠が到達するテストだけを選択します — 上のゲートと同じ merge-base 意味論なので、CI の clean な作業ツリーでも機能します。`impact --tests` は**最適化**であり、ゲートはあくまで `check --diff --base --gate` 側です: exit `1` (解決できない ref / shallow clone / 変更 path がグラフ未解決) のときや選択結果が疑わしいときは full suite に fallback してください。
-
-```yaml
-      - name: Select and run tests (exit 1 なら full suite に fallback)
-        run: |
-          set +e
-          out=$(npx artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format json)
-          status=$?
-          set -e
-          if [ "$status" -ne 0 ]; then
-            echo "impact exited $status — falling back to the full suite"
-            npm test; exit $?
-          fi
-          files=$(echo "$out" | jq -r '[.testsToRun[]?.testFile] | unique | .[]')
-          # PR が削除したテストファイルを除外 — 存在しないパスを渡すと vitest が exit 1 になる
-          files=$(for f in $files; do [ -f "$f" ] && echo "$f"; done)
-          if [ -z "$files" ]; then
-            npm test   # 空選択 — 安全側に倒して全部走らせる
-          else
-            echo "$files" | xargs npx vitest run
-          fi
-```
-
-削除された、またはグラフ未追跡の変更ファイルは選択の入力に寄与しません。また PR のコミット範囲内で rename されたファイルは、旧パスで記録された trace evidence と join しなくなるため、そのテストは選択から無言で落ちます (宣言された限界 — その正しさは `check --diff --base --gate` ステップが捕まえます)。`trace.staleness: "exclude"` では変更コードの evidence が構造的に stale になるため、CI のテスト選択では `"warn"` を使ってください (この組み合わせでは実行時警告が出ます)。
 
 ## エンドツーエンド: 仕様 → `@impl` → `check` <a id="エンドツーエンド-仕様--impl--check"></a>
 
@@ -348,7 +291,7 @@ artgraph には、CLI をエージェントのワークフローに接続する 
 | `artgraph-verify`        | n/a           | 実装完了。コードレビュー前に `artgraph check --diff` で自己検証                                                     |
 | `artgraph-rename`        | n/a           | ユーザーが REQ ID をリネーム/分割/マージしたいとき                                                                  |
 
-`file + symbol` の Skills は、`src/auth.ts` (ファイル単位)、`src/auth.ts:validateToken` (シンボル単位)、`src/auth.ts:Sample.methodA` (クラスメソッド単位 — インライン export されたクラスのメソッドは独立したシンボルになるため、そのメソッドの REQ だけが返り兄弟メソッドの REQ は含まれません) を受け付けます。メソッド単位はファイル内精度のクエリで、クラスを import する依存元ファイルは含みません — 依存元まで含む爆風が必要な場合はクラス単位 (`src/auth.ts:Sample`)、ファイル単位、または `--diff` を使ってください。シンボル単位の入力を使う場合は、`.artgraph.json` の `"mode"` を `"symbol"` に設定したうえでグラフを再スキャンする必要があります — トレードオフや `impactReqs` / `originReqs` の二軸ドリフトガイドについては [docs/skills-guide.md#file-mode-vs-symbol-mode](./docs/skills-guide.md#file-mode-vs-symbol-mode) を参照。
+`file + symbol` の Skills は、ファイル単位・シンボル単位・クラスメソッド単位を受け付けます。後者 2 つには `.artgraph.json` の `"mode"` を `"symbol"` にする必要があります — トレードオフと `impactReqs` / `originReqs` の二軸ドリフトガイドについては [docs/skills-guide.md#file-mode-vs-symbol-mode](./docs/skills-guide.md#file-mode-vs-symbol-mode) を参照。
 
 ## SDD ツール統合
 

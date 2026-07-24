@@ -60,6 +60,28 @@ to end its turn on a drifted repo, and goes back to fix it. It also detects
 **orphans** (`@impl` pointing at a REQ that doesn't exist) and **uncovered**
 requirements (no `@impl`, no test).
 
+<details>
+<summary><strong>Table of contents</strong></summary>
+
+- [30-second tag-zero start](#30-second-tag-zero-start)
+- [Why artgraph](#why-artgraph)
+- [Bootstrapping an existing project](#bootstrapping-an-existing-project)
+- [Quickstart](#quickstart)
+- [How the agent loop works](#how-the-agent-loop-works)
+- [End-to-end: spec → @impl → check](#end-to-end-spec-impl-check)
+- [See the graph](#see-the-graph)
+- [Coverage-derived traceability](#coverage-derived-traceability)
+- [A turn with Spec Kit + artgraph](#a-turn-with-spec-kit--artgraph)
+- [Skills](#skills)
+- [SDD tool integration](#sdd-tool-integration)
+- [How references are expressed](#how-references-are-expressed)
+- [Commands](#commands)
+- [Documentation](#documentation)
+- [Requirements](#requirements)
+- [License](#license)
+
+</details>
+
 ## 30-second tag-zero start
 
 Have an existing TypeScript repo? Get impact analysis in three commands — **no
@@ -150,30 +172,6 @@ one, marks the covering tests with `[REQ-NNN]`, and verifies the result with
 `artgraph scan && artgraph check` — all as a single reviewable diff. You
 review, tweak, and commit.
 
-<details>
-<summary><strong>Table of contents</strong></summary>
-
-- [30-second tag-zero start](#30-second-tag-zero-start)
-- [Why artgraph](#why-artgraph)
-- [Bootstrapping an existing project](#bootstrapping-an-existing-project)
-- [Quickstart](#quickstart)
-- [How the agent loop works](#how-the-agent-loop-works)
-  - [CI gate for pull requests](#ci-gate-for-pull-requests)
-  - [CI test selection for pull requests](#ci-test-selection-for-pull-requests)
-- [End-to-end: spec → @impl → check](#end-to-end-spec-impl-check)
-- [See the graph](#see-the-graph)
-- [Coverage-derived traceability](#coverage-derived-traceability)
-- [A turn with Spec Kit + artgraph](#a-turn-with-spec-kit--artgraph)
-- [Skills](#skills)
-- [SDD tool integration](#sdd-tool-integration)
-- [How references are expressed](#how-references-are-expressed)
-- [Commands](#commands)
-- [Documentation](#documentation)
-- [Requirements](#requirements)
-- [License](#license)
-
-</details>
-
 ## Quickstart
 
 > **Platforms:** macOS and Linux — including **WSL2** on Windows. Native
@@ -253,82 +251,6 @@ you rarely type `artgraph check` yourself:
 
 Every hook reduces to `artgraph check` on the same graph, and `--diff`
 compares against `.trace.lock`. No LLM in the loop.
-
-### CI gate for pull requests
-
-In CI the checked-out working tree matches the commit exactly, so a plain
-`check --diff` has nothing to compare. Pass `--base <ref>` to gate the PR's
-commit range instead: the verdict is computed against
-`git merge-base <ref> HEAD`, so only issues the PR itself introduced fail the
-gate — pre-existing debt on the base branch is suppressed.
-
-The recipes below use npm — with pnpm, swap `npm ci` for
-`pnpm install --frozen-lockfile` (plus `pnpm/action-setup`), `npx` for
-`pnpm exec`, and `npm test` for `pnpm test` (Bun / Deno equivalents work the
-same way).
-
-```yaml
-name: artgraph-gate
-on: pull_request
-
-jobs:
-  gate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # required — on a shallow clone the merge-base cannot be resolved and the gate fails closed (exit 1)
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm ci
-      - run: npx artgraph check --diff --base "origin/${{ github.base_ref }}" --gate
-```
-
-Exit codes: `0` = no new issues, `2` = the PR introduced drift / orphans /
-uncovered REQs, `1` = the gate could not be evaluated (e.g. shallow clone —
-fail-closed, never a silent pass). The local Stop hook keeps using plain
-`check --gate --diff` (working-tree diff); `--base` is for commit-range
-gating.
-
-### CI test selection for pull requests
-
-With trace shards present (the `artgraph/vitest` runner),
-`impact --diff --base <ref> --tests` selects only the tests whose execution
-evidence reaches the PR's commit range — the same merge-base semantics as the
-gate above, so it works on CI's clean working tree. `impact --tests` is an
-**optimization**, the gate stays `check --diff --base --gate`: fall back to
-the full suite on exit `1` (unresolvable ref, shallow clone, no changed path
-in the graph) or whenever the selection looks doubtful.
-
-```yaml
-      - name: Select and run tests (full-suite fallback on exit 1)
-        run: |
-          set +e
-          out=$(npx artgraph impact --diff --base "origin/${{ github.base_ref }}" --tests --format json)
-          status=$?
-          set -e
-          if [ "$status" -ne 0 ]; then
-            echo "impact exited $status — falling back to the full suite"
-            npm test; exit $?
-          fi
-          files=$(echo "$out" | jq -r '[.testsToRun[]?.testFile] | unique | .[]')
-          # drop files the PR itself deleted — vitest exits 1 on nonexistent paths
-          files=$(for f in $files; do [ -f "$f" ] && echo "$f"; done)
-          if [ -z "$files" ]; then
-            npm test   # empty selection — run everything to stay safe
-          else
-            echo "$files" | xargs npx vitest run
-          fi
-```
-
-Deleted or graph-untracked changed files contribute no selection input, and
-a file renamed inside the PR's commit range no longer joins trace evidence
-recorded under its old path, so its tests silently drop from the selection
-(declared limitation — their correctness is what the `check --diff --base
---gate` step catches), and under `trace.staleness: "exclude"` the changed
-code's evidence is stale by construction, so use `"warn"` for CI selection
-(a runtime warning fires on that combination).
 
 ## End-to-end: spec → `@impl` → `check` <a id="end-to-end-spec-impl-check"></a>
 
@@ -476,16 +398,8 @@ distributed to every agent selected via `--agents=<list>`.
 | `artgraph-verify`        | n/a           | Implementation complete; run `artgraph check --diff` to self-verify before code review                            |
 | `artgraph-rename`        | n/a           | User wants to rename / split / merge requirement IDs                                                              |
 
-Skills marked `file + symbol` accept `src/auth.ts` (file unit),
-`src/auth.ts:validateToken` (symbol unit), or `src/auth.ts:Sample.methodA`
-(class-method unit — methods of inline-exported classes are symbols of their
-own, so `artgraph impact src/auth.ts:Sample.methodA` returns only that
-method's REQs, not its siblings'). A method unit is an in-file precision
-query: it does not include consumer files that import the class — reach for
-the class unit (`src/auth.ts:Sample`), the file unit, or `--diff` when you
-need the consumer-side blast radius. Symbol-level input additionally
-requires `.artgraph.json` to be set to `"mode": "symbol"` and the graph
-re-scanned — see
+Skills marked `file + symbol` accept a file, a symbol, or a class method as
+input; the latter two need `"mode": "symbol"` in `.artgraph.json`. See
 [docs/skills-guide.md#file-mode-vs-symbol-mode](./docs/skills-guide.md#file-mode-vs-symbol-mode)
 for the trade-off and the `impactReqs` / `originReqs` dual-axis drift guide.
 
