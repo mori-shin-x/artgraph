@@ -165,7 +165,6 @@ review, tweak, and commit.
 - [SDD tool integration](#sdd-tool-integration)
 - [How references are expressed](#how-references-are-expressed)
 - [Commands](#commands)
-- [Roadmap](#roadmap)
 - [Documentation](#documentation)
 - [Requirements](#requirements)
 - [License](#license)
@@ -493,7 +492,10 @@ for the trade-off and the `impactReqs` / `originReqs` dual-axis drift guide.
 tool you already use. Built-in targets are Spec Kit
 (`.specify/extensions/artgraph/` with `after_tasks` / `after_implement` + a
 non-blocking `before_implement` preview; the blocking gate is opt-in via
-`--gate`) and Kiro (`.kiro/steering/artgraph.md`).
+`--gate`) and Kiro (`.kiro/steering/artgraph.md`). OpenSpec is not supported
+yet — its specs are heading-driven with no stable requirement IDs to key the
+graph on; tracked in
+[#25](https://github.com/mori-shin-x/artgraph/issues/25).
 
 ```bash
 artgraph integrate speckit          # idempotent; hooks into .specify/
@@ -558,13 +560,6 @@ after upgrading to a version that changes symbol-extraction granularity, the
 next `reconcile` may rewrite the lock's symbol entries and `@impl`
 attributions accordingly. The 0.x series ships no migration tooling for
 this — review the `.trace.lock` diff before committing it.
-
-## Roadmap
-
-- OpenSpec support — heading-driven specs without stable requirement IDs ([#25](https://github.com/mori-shin-x/artgraph/issues/25))
-- GitHub Action on the Marketplace ([#126](https://github.com/mori-shin-x/artgraph/issues/126))
-- MCP server mode ([#143](https://github.com/mori-shin-x/artgraph/issues/143))
-- Language-agnostic file mode beyond TypeScript ([#368](https://github.com/mori-shin-x/artgraph/issues/368))
 
 ## Documentation
 

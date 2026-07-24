@@ -120,7 +120,6 @@ you> src/auth 配下のトレーサビリティをブートストラップして
 - [SDD ツール統合](#sdd-ツール統合)
 - [参照の書き方](#参照の書き方)
 - [コマンド](#コマンド)
-- [ロードマップ](#ロードマップ)
 - [ドキュメント](#ドキュメント)
 - [動作要件](#動作要件)
 - [ライセンス](#ライセンス)
@@ -350,7 +349,7 @@ artgraph には、CLI をエージェントのワークフローに接続する 
 
 ## SDD ツール統合
 
-`artgraph integrate` は、scan / reconcile / check のループをすでに使っている SDD ツールに接続します。組み込みの対象は Spec Kit (`.specify/extensions/artgraph/` に `after_tasks` / `after_implement` + 非ブロッキングの `before_implement` プレビュー。blocking ゲートは `--gate` でオプトイン) と Kiro (`.kiro/steering/artgraph.md`) です。
+`artgraph integrate` は、scan / reconcile / check のループをすでに使っている SDD ツールに接続します。組み込みの対象は Spec Kit (`.specify/extensions/artgraph/` に `after_tasks` / `after_implement` + 非ブロッキングの `before_implement` プレビュー。blocking ゲートは `--gate` でオプトイン) と Kiro (`.kiro/steering/artgraph.md`) です。OpenSpec はまだ未対応です — 仕様が見出し駆動で、グラフの主キーにできる安定した要件 ID を持たないためで、対応は [#25](https://github.com/mori-shin-x/artgraph/issues/25) で追っています。
 
 ```bash
 artgraph integrate speckit          # べき等 — .specify/ にフック
@@ -393,13 +392,6 @@ ID の prefix は自由です (`[A-Z][A-Za-z]*-\d+`): 上の例で使ってい�
 すべてのフラグの詳細リファレンス、`scan --serve`、`doctor` の finding 分類、`rename` の split / merge にまつわる注意点は [docs/commands.md](./docs/commands.md) を参照してください。
 
 なお、`reconcile` は現在のグラフから `.trace.lock` を**完全に再構築**します。シンボル抽出の粒度が変わるバージョンへアップグレードした後は、次回の `reconcile` で lock のシンボルエントリと `@impl` の帰属が書き換わることがあります。0.x 系では移行ツールを提供しないため、`.trace.lock` の差分を確認してからコミットしてください。
-
-## ロードマップ
-
-- OpenSpec 対応 — 要件 ID を持たない見出し駆動の仕様を扱えるようにする（[#25](https://github.com/mori-shin-x/artgraph/issues/25)）
-- GitHub Action の Marketplace 公開（[#126](https://github.com/mori-shin-x/artgraph/issues/126)）
-- MCP サーバーモード（[#143](https://github.com/mori-shin-x/artgraph/issues/143)）
-- 言語非依存の file mode — TypeScript 以外の言語に対応する（[#368](https://github.com/mori-shin-x/artgraph/issues/368)）
 
 ## ドキュメント
 
