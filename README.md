@@ -21,8 +21,7 @@ behind; or the spec gets updated and the code never follows. artgraph links
 the requirement IDs in your specs to the code that implements them and the
 tests that verify them, hashes each side, and tells you which side moved.
 Nothing on that path calls an LLM, so the same repo state always produces the
-same output — which is what makes it usable as a CI gate and as an agent Stop
-hook.
+same output.
 
 A spec says one thing:
 
@@ -55,7 +54,7 @@ DRIFT:
 
 The spec still says 8; the code says 6. The reverse case — spec edited, code
 untouched — is detected the same way. And because `artgraph init` wires this
-same check into your agent's Stop hook, the agent hits `exit 2` when it tries
+same `artgraph check` into your agent's Stop hook, the agent hits `exit 2` when it tries
 to end its turn on a drifted repo, and goes back to fix it. It also detects
 **orphans** (`@impl` pointing at a REQ that doesn't exist) and **uncovered**
 requirements (no `@impl`, no test).
@@ -68,12 +67,11 @@ requirements (no `@impl`, no test).
 - [Bootstrapping an existing project](#bootstrapping-an-existing-project)
 - [Quickstart](#quickstart)
 - [How the agent loop works](#how-the-agent-loop-works)
+- [SDD tool integration](#sdd-tool-integration)
+  - [A turn with Spec Kit + artgraph](#a-turn-with-spec-kit--artgraph)
 - [End-to-end: spec → @impl → check](#end-to-end-spec-impl-check)
 - [See the graph](#see-the-graph)
-- [Coverage-derived traceability](#coverage-derived-traceability)
-- [A turn with Spec Kit + artgraph](#a-turn-with-spec-kit--artgraph)
 - [Skills](#skills)
-- [SDD tool integration](#sdd-tool-integration)
 - [How references are expressed](#how-references-are-expressed)
 - [Commands](#commands)
 - [Documentation](#documentation)
@@ -107,12 +105,10 @@ opt-in — add them progressively as your project demands more traceability.
 
 Spec Kit and Kiro are good at the first half — turning a spec into code.
 Neither ships a deterministic answer for the second half: keeping the spec and
-the code in agreement *after* generation. Spec Kit's extension catalog carries
-a couple dozen validation and drift extensions, and essentially all of them
-are LLM prompt packs, which means the verdict can change between two runs on
-an unchanged repo.
+the code in agreement *after* generation.
 
-artgraph is built to be that second half rather than a replacement for either:
+artgraph is built on top of them. It replaces neither — it takes that second
+half:
 
 ```bash
 npx artgraph integrate speckit   # adds after_tasks / before_implement / after_implement hooks
@@ -124,8 +120,6 @@ automatically — see [SDD tool integration](#sdd-tool-integration).
 
 ### Your code graph doesn't know your spec
 
-Your repo probably already has a code-graph MCP. It knows your code. It doesn't know your spec.
-
 Code-graph MCPs — codegraph, GitNexus, Sourcegraph MCP, and dozens more — give
 AI coding agents a symbol-level map of your codebase. Useful, but the map
 stops at the code. When an agent rewrites `signIn`, nothing tells it that
@@ -134,26 +128,20 @@ now stale, or that a test still asserts the old contract.
 
 artgraph adds the layer *above* the code:
 
-- **One typed graph over requirements, docs, code, and tests** — every edge
-  is deterministic and sourced from AST-visible tags (`@impl`, `[REQ-ID]`,
-  `req:`), markdown links, YAML frontmatter, SDD-tool conventions,
-  TypeScript imports, or normalized test-execution trace artifacts. No LLM
-  in the graph, no embedding retrieval, no RAG.
-- **Per-change context routing** — `artgraph impact --diff` returns only the
-  specs, docs, and tests a given change touches. Feed *that* to the agent
-  instead of the whole context file. This holds even when one `spec.md`
-  defines several requirements (the Spec Kit / Kiro default): a sibling
-  requirement with no code dependency of its own doesn't ride along just
-  because it's declared in the same file. It also holds inside a class (the
-  OOP default of one class, many methods, each implementing its own
-  requirement): in symbol mode each method of an inline-exported class is a
-  graph node of its own, so editing one method doesn't drag in its siblings'
-  requirements.
-- **Drift as a CI gate** — `artgraph check --gate` fails the build when a
-  spec changed but the code/tests didn't. Byte-identical output on every run.
 - **Requirement IDs are the primary key** — the same `REQ-001` string is what
   the spec lists, what the agent puts in `@impl`, and what the test brackets.
-  That single key is what makes the 4-layer graph joinable at all.
+  That single key is what joins the four layers.
+- **Every edge is deterministic** — `@impl` tags, `[REQ-ID]` test names,
+  markdown links, YAML frontmatter, SDD-tool conventions, TypeScript imports,
+  test-execution traces. No LLM in the graph, no embeddings, no RAG.
+- **Per-change context routing** — `artgraph impact --diff` returns only the
+  specs, docs, and tests a given change touches. Feed *that* to the agent
+  instead of the whole context file. The scoping is narrow on purpose:
+  sibling requirements declared in the same `spec.md`, and sibling methods
+  declared in the same class, don't ride along — see
+  [docs/skills-guide.md](./docs/skills-guide.md#file-mode-vs-symbol-mode).
+- **Drift as a CI gate** — `artgraph check --gate` fails the build when a
+  spec changed but the code/tests didn't. Byte-identical output on every run.
 
 Code-graph MCPs answer *"where is this used?"*. artgraph answers *"which
 requirement does this satisfy, and does it still?"*.
@@ -193,16 +181,6 @@ npm install -D artgraph && npx artgraph init --agents=claude       # pick your a
 
 `artgraph init` runs the full setup: `.artgraph.json` config + initial scan + cross-agent Skills distribution + auto-integrate detected SDD tools + Stop hook + `AGENTS.md` snippet. Pass `--minimal` for bare config only, or any of `--no-skills` / `--no-agent-context` / `--no-integrate` / `--no-hooks` to skip specific stages. See [docs/commands.md#artgraph-init](./docs/commands.md#artgraph-init) for the full flag list.
 
-**If you use Claude Code and are joining a repo where the distributed
-Skills are already committed:** you can skip the manual install — type
-`/artgraph-setup` and the Skill detects your package manager and, after
-your confirmation, installs artgraph and verifies the setup. `init` runs
-only when the project has no committed `.artgraph.json` yet; when artgraph
-is already installed, the Skill reports the current setup state instead.
-The first person on a team installs manually as above and commits the
-distributed Skills — see
-[Committing distributed Skills](./docs/getting-started.md#committing-distributed-skills).
-
 ### Tier 1 cross-agent distribution
 
 `--agents=<list>` distributes the same canonical SKILL.md set (6 Skills +
@@ -233,8 +211,7 @@ Windows.
 
 ## How the agent loop works
 
-Once installed, artgraph plugs into the agent's runtime at three points, and
-you rarely type `artgraph check` yourself:
+Once installed, artgraph plugs into the agent's runtime at three points:
 
 1. **In-flight (Skills)** — while the agent is editing, `artgraph-impact` and
    `artgraph-plan-coverage` fire on the agent's initiative to surface which
@@ -251,6 +228,57 @@ you rarely type `artgraph check` yourself:
 
 Every hook reduces to `artgraph check` on the same graph, and `--diff`
 compares against `.trace.lock`. No LLM in the loop.
+
+## SDD tool integration
+
+`artgraph integrate` wires the scan / reconcile / check loop into the SDD
+tool you already use. Built-in targets are Spec Kit
+(`.specify/extensions/artgraph/` with `after_tasks` / `after_implement` + a
+non-blocking `before_implement` preview; the blocking gate is opt-in via
+`--gate`) and Kiro (`.kiro/steering/artgraph.md`). OpenSpec is not supported
+yet — its specs are heading-driven with no stable requirement IDs to key the
+graph on; tracked in
+[#25](https://github.com/mori-shin-x/artgraph/issues/25).
+
+```bash
+artgraph integrate speckit          # idempotent; hooks into .specify/
+artgraph integrate speckit --gate   # upgrade before_implement to a blocking gate
+artgraph integrate kiro             # writes .kiro/steering/artgraph.md
+artgraph integrate list             # detected / installed per tool
+```
+
+`artgraph init` auto-integrates every detected SDD tool by default (Spec Kit
+gets the non-blocking `before_implement` preview; pass `--no-integrate` to
+skip). Note that the opt-in `--gate` runs an absolute check, so it always
+fails right before the *first* implementation of a new spec (every REQ is
+still uncovered) — expected behavior, see
+[#178](https://github.com/mori-shin-x/artgraph/issues/178) for the gating
+policy work. Worked examples:
+[`examples/speckit-integration/`](./examples/speckit-integration)
+and [`examples/kiro-integration/`](./examples/kiro-integration). Full detail
+in [docs/sdd-integration.md](./docs/sdd-integration.md).
+
+### A turn with Spec Kit + artgraph
+
+Here is what a `/speckit-tasks` turn looks like once installed, with the
+`artgraph-plan-coverage` Skill wired in:
+
+```
+you> /speckit-tasks
+
+<Spec Kit generates tasks.md with T001, T002 pointing at REQ-003, REQ-004>
+<Stop → hook runs artgraph check --diff → clean>
+<artgraph-plan-coverage fires because tasks.md changed>
+
+agent> tasks.md lists Files: src/auth.ts, but that file also implements
+       REQ-001 and REQ-002 — neither is referenced from tasks.md / plan.md /
+       spec.md. Do you want me to (a) add tasks for REQ-001/002, (b) exclude
+       them from src/auth.ts's scope, or (c) accept and move on?
+```
+
+*Which* REQs weren't mentioned and *why* they were reachable comes from
+`artgraph plan-coverage` on the changed files. No LLM reasoning about the
+graph itself — just the CLI's deterministic output.
 
 ## End-to-end: spec → `@impl` → `check` <a id="end-to-end-spec-impl-check"></a>
 
@@ -312,78 +340,6 @@ With a `.trace.lock` present, drift / orphan / uncovered nodes are colored;
 without one, the raw graph structure is rendered. See
 [docs/commands.md](./docs/commands.md#artgraph-scan) for the full reference.
 
-## Coverage-derived traceability <a id="coverage-derived-traceability"></a>
-
-Don't want to hand-tag every implementation symbol with `@impl`? artgraph can
-derive `req → code` edges from **test-execution evidence** instead. Add the
-runner to your Vitest config:
-
-```ts
-// vitest.config.ts
-import { withTrace } from "artgraph/vitest/config";
-export default defineConfig(withTrace({ test: { /* ...your config... */ } }));
-```
-
-Setting `test.runner: "artgraph/vitest"` directly also works, but prefer
-`withTrace()`: it additionally wires a `globalSetup` that wipes the previous
-run's shards, so evidence is replaced per run instead of accumulating —
-with the bare runner, shards from earlier (including interrupted) runs
-linger and keep feeding outdated evidence into the graph.
-
-Run your suite as usual (`vitest run`), and artgraph writes normalized
-per-test evidence to `.artgraph/trace/`. The next `artgraph scan` fills in
-`exercises` edges for every `[REQ-NNN]`-tagged test's REQ → the symbols it
-actually ran — **with zero `@impl` tags in the code**, tag-zero
-traceability.
-
-By default `artgraph check` still reports these REQs as `uncovered` /
-`untagged` — the `exercised` coverage status is opt-in, not automatic. Add
-`"trace": {"acceptExercises": true}` to `.artgraph.json` to have that
-exercises evidence count as coverage (`check` also prints a `HINT:` telling
-you exactly this when it applies).
-
-`artgraph trace report` is the anti-fabrication story: it cross-checks
-`@impl` claims against that evidence. A declared `@impl REQ-001` whose
-REQ-001 tests never execute that symbol surfaces as an **UNEXERCISED
-CLAIM** — declared vs. exercised, caught automatically. Code exclusively
-exercised by one REQ's tests but never claimed surfaces as a **SUGGESTED
-IMPL**.
-
-```bash
-npx artgraph trace status               # shard counts, staleness rate
-npx artgraph trace report --format json # declared-vs-exercised audit
-```
-
-`artgraph impact --diff --tests` extends impact analysis with test
-selection: instead of the full suite, it lists exactly the tagged tests
-whose REQs exercise the changed code. See
-[docs/commands.md#artgraph-trace](./docs/commands.md#artgraph-trace) and
-[docs/configuration.md](./docs/configuration.md#trace--coverage-derived-traceability-spec-020)
-for the full reference, including the opt-in `exercised` coverage status and
-staleness handling.
-
-## A turn with Spec Kit + artgraph
-
-Here is what a `/speckit-tasks` turn looks like once installed, with the
-`artgraph-plan-coverage` Skill wired in:
-
-```
-you> /speckit-tasks
-
-<Spec Kit generates tasks.md with T001, T002 pointing at REQ-003, REQ-004>
-<Stop → hook runs artgraph check --diff → clean>
-<artgraph-plan-coverage fires because tasks.md changed>
-
-agent> tasks.md lists Files: src/auth.ts, but that file also implements
-       REQ-001 and REQ-002 — neither is referenced from tasks.md / plan.md /
-       spec.md. Do you want me to (a) add tasks for REQ-001/002, (b) exclude
-       them from src/auth.ts's scope, or (c) accept and move on?
-```
-
-*Which* REQs weren't mentioned and *why* they were reachable comes from
-`artgraph plan-coverage` on the changed files. No LLM reasoning about the
-graph itself — just the CLI's deterministic output.
-
 ## Skills
 
 artgraph ships 6 Skills that wire the CLI into the agent workflow. All are
@@ -402,35 +358,6 @@ Skills marked `file + symbol` accept a file, a symbol, or a class method as
 input; the latter two need `"mode": "symbol"` in `.artgraph.json`. See
 [docs/skills-guide.md#file-mode-vs-symbol-mode](./docs/skills-guide.md#file-mode-vs-symbol-mode)
 for the trade-off and the `impactReqs` / `originReqs` dual-axis drift guide.
-
-## SDD tool integration
-
-`artgraph integrate` wires the scan / reconcile / check loop into the SDD
-tool you already use. Built-in targets are Spec Kit
-(`.specify/extensions/artgraph/` with `after_tasks` / `after_implement` + a
-non-blocking `before_implement` preview; the blocking gate is opt-in via
-`--gate`) and Kiro (`.kiro/steering/artgraph.md`). OpenSpec is not supported
-yet — its specs are heading-driven with no stable requirement IDs to key the
-graph on; tracked in
-[#25](https://github.com/mori-shin-x/artgraph/issues/25).
-
-```bash
-artgraph integrate speckit          # idempotent; hooks into .specify/
-artgraph integrate speckit --gate   # upgrade before_implement to a blocking gate
-artgraph integrate kiro             # writes .kiro/steering/artgraph.md
-artgraph integrate list             # detected / installed per tool
-```
-
-`artgraph init` auto-integrates every detected SDD tool by default (Spec Kit
-gets the non-blocking `before_implement` preview; pass `--no-integrate` to
-skip). Note that the opt-in `--gate` runs an absolute check, so it always
-fails right before the *first* implementation of a new spec (every REQ is
-still uncovered) — expected behavior, see
-[#178](https://github.com/mori-shin-x/artgraph/issues/178) for the gating
-policy work. Worked examples:
-[`examples/speckit-integration/`](./examples/speckit-integration)
-and [`examples/kiro-integration/`](./examples/kiro-integration). Full detail
-in [docs/sdd-integration.md](./docs/sdd-integration.md).
 
 ## How references are expressed
 

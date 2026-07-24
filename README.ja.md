@@ -57,12 +57,11 @@ DRIFT:
 - [既存プロジェクトのブートストラップ](#既存プロジェクトのブートストラップ)
 - [クイックスタート](#クイックスタート)
 - [エージェントループの動作](#エージェントループの動作)
+- [SDD ツール統合](#sdd-ツール統合)
+  - [Spec Kit + artgraph でのターンの例](#spec-kit--artgraph-でのターンの例)
 - [エンドツーエンド: 仕様 → @impl → check](#エンドツーエンド-仕様--impl--check)
 - [グラフを見る](#グラフを見る)
-- [カバレッジ由来のトレーサビリティ](#カバレッジ由来のトレーサビリティ)
-- [Spec Kit + artgraph でのターンの例](#spec-kit--artgraph-でのターンの例)
 - [Skills](#skills)
-- [SDD ツール統合](#sdd-ツール統合)
 - [参照の書き方](#参照の書き方)
 - [コマンド](#コマンド)
 - [ドキュメント](#ドキュメント)
@@ -108,10 +107,10 @@ codegraph、GitNexus、Sourcegraph MCP などのコードグラフ MCP は、AI 
 
 artgraph は、そのコードの*上*にもう一段レイヤーを重ねます:
 
-- **要件・ドキュメント・コード・テストをまたぐ型付きグラフ** — すべてのエッジは決定的で、AST から取れるタグ (`@impl`、`[REQ-ID]`、`req:`)、Markdown リンク、YAML フロントマター、SDD ツールの規約、TypeScript の import、または正規化済みテスト実行トレース成果物から生成されます。グラフの生成に LLM は介在しません。埋め込みも RAG もなしです。
-- **変更単位のコンテキストルーティング** — `artgraph impact --diff` は、その変更が触れる仕様書・ドキュメント・テストだけを返します。コンテキストファイルを丸ごと渡すのではなく、*この差分に関わる範囲だけ*をエージェントに渡せます。これは 1 つの `spec.md` に複数の要件を書く構成 (Spec Kit / Kiro の標準) でも成り立ちます — 同じファイルに書かれているだけでコード依存のない兄弟要件は巻き込まれません。クラス内部でも同様です (1 クラス・複数メソッド・各メソッドが別要件を実装する OOP 標準形): symbol mode ではインライン export されたクラスの各メソッドが独立したグラフノードになるため、1 メソッドの編集が兄弟メソッドの要件を引き連れることはありません。
+- **要件 ID がプライマリキー** — 仕様書にリストされ、エージェントが `@impl` に書き、テストが角括弧で囲む。この同じ `REQ-001` という文字列が 4 層を結合します。
+- **すべてのエッジが決定的** — `@impl` タグ、`[REQ-ID]` のテスト名、Markdown リンク、YAML フロントマター、SDD ツールの規約、TypeScript の import、テスト実行トレース。グラフの生成に LLM は介在しません。埋め込みも RAG もなしです。
+- **変更単位のコンテキストルーティング** — `artgraph impact --diff` は、その変更が触れる仕様書・ドキュメント・テストだけを返します。コンテキストファイルを丸ごと渡すのではなく、*この差分に関わる範囲だけ*をエージェントに渡せます。スコープは意図的に狭く、同じ `spec.md` に書かれた兄弟要件も、同じクラスの兄弟メソッドも巻き込みません — [docs/skills-guide.md](./docs/skills-guide.md#file-mode-vs-symbol-mode) を参照。
 - **CI ゲートとしてのドリフト検出** — `artgraph check --gate` は、仕様が変わったのにコード / テストが追従していないときにビルドを落とします。実行するたびにバイト単位で同一の出力になります。
-- **要件 ID がプライマリキー** — 仕様書にリストされ、エージェントが `@impl` に書き、テストが角括弧で囲む — この同じ `REQ-001` という文字列こそが単一のキーとなり、4 層のグラフを結合可能にしています。
 
 コードグラフ MCP が答えるのは *「これはどこで使われている？」*。artgraph が答えるのは *「これはどの要件を満たしているのか、そしていまも満たせているのか？」* です。
 
@@ -258,34 +257,6 @@ artgraph scan --output ./graph-out               # 静的 HTML としてエク�
 ```
 
 `.trace.lock` がある場合はドリフト / 孤立 / 未カバーが色分けされ、無い場合はグラフの構造だけをレンダリングします。詳細は [docs/commands.md](./docs/commands.md#artgraph-scan) を参照。
-
-## カバレッジ由来のトレーサビリティ <a id="カバレッジ由来のトレーサビリティ"></a>
-
-実装シンボル一つひとつに `@impl` を手打ちしたくない場合、artgraph は代わりに**テスト実行証拠**から `req → code` エッジを導出できます。Vitest 設定に runner を追加してください:
-
-```ts
-// vitest.config.ts
-import { withTrace } from "artgraph/vitest/config";
-export default defineConfig(withTrace({ test: { /* ...既存設定... */ } }));
-```
-
-`test.runner: "artgraph/vitest"` を直接指定しても動きますが、`withTrace()` を推奨します。`withTrace()` は前回実行分の shard を削除する `globalSetup` も合わせて設定するため、証拠は実行のたびに世代置き換えされます — 素の runner 指定だけでは過去の (中断された実行を含む) shard が蓄積し、古い証拠がグラフに流れ込み続けます。
-
-あとはいつも通りテストを実行するだけ (`vitest run`) — artgraph が正規化された per-test 実行証拠を `.artgraph/trace/` に書き出します。次の `artgraph scan` で、`[REQ-NNN]` タグ付きテストの REQ から、そのテストが実際に実行したシンボルへの `exercises` エッジが埋まります。**コード側の `@impl` タグはゼロのまま** — タグゼロ・トレーサビリティです。
-
-ただし、デフォルトでは `artgraph check` はこれらの REQ を依然として `uncovered` / `untagged` と報告します — `exercised` カバレッジステータスはオプトインであり、自動では有効になりません。実行証拠をカバレッジとして扱うには `.artgraph.json` に `"trace": {"acceptExercises": true}` を追加してください(該当する場合、`check` はこのことを `HINT:` として出力します)。
-
-`artgraph trace report` は「捏造できない」ことの核となる機能です。`@impl` の主張を実行証拠と突き合わせ、REQ-001 のテストが一度も実行していないシンボルに `@impl REQ-001` が付いていれば **UNEXERCISED CLAIM**(宣言はあるが証拠がない)として検出します。逆に、`@impl` は無いが REQ のテストだけが排他的に実行しているシンボルは **SUGGESTED IMPL** として提案されます。
-
-```bash
-npx artgraph trace status               # shard 件数・鮮度率
-npx artgraph trace report --format json # 宣言 vs 証拠の突き合わせレポート
-```
-
-`artgraph impact --diff --tests` は、インパクト解析にテスト選択を追加します。全テストを回す代わりに、変更したコードを実際に実行している REQ のタグ付きテストだけを一覧できます。オプトインの `exercised` カバレッジステータスや鮮度管理を含む full reference は
-[docs/commands.md#artgraph-trace](./docs/commands.md#artgraph-trace) と
-[docs/configuration.md](./docs/configuration.md#trace--coverage-derived-traceability-spec-020)
-を参照してください。
 
 ## Skills
 
