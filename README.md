@@ -133,18 +133,6 @@ artgraph adds the layer *above* the code:
 Code-graph MCPs answer *"where is this used?"*. artgraph answers *"which
 requirement does this satisfy, and does it still?"*.
 
-### What I wanted, and where existing tools stopped
-
-| Requirement | Closest tools, and where they stopped |
-| ----------- | ------------------------------------- |
-| JS/TS native | StrictDoc, CoDD — Python-first; no deep JS/TS analysis |
-| Deterministic (no LLM in verification) | Spec Kit validation extensions, OpenSpec — LLM adjudication; the verdict can vary run to run |
-| AST-derived symbol precision (automatic edges) | ContextGit, rac-core — no AST; links are hand-maintained |
-| Four layers: req ↔ doc ↔ code ↔ test | fiberplane/drift (2 layers), code-graph MCPs (code only) |
-
-The full survey — 29 tools across five categories — is in
-[docs/architecture.md](./docs/architecture.md).
-
 ## Bootstrapping an existing project
 
 Already have code but no REQs? Ask an agent that speaks artgraph:
