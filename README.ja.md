@@ -164,13 +164,46 @@ npm install -D artgraph && npx artgraph init --agents=claude       # エージ�
 
 ## エージェントループの動作
 
-インストール後、artgraph は 3 つのタイミングでエージェントのランタイムに接続されます。おかげで `artgraph check` を自分で打つ機会はほぼなくなります:
+インストール後、artgraph は 3 つのタイミングでエージェントのランタイムに接続されます:
 
 1. **編集中 (Skills)** — エージェントが編集している最中に、`artgraph-impact` と `artgraph-plan-coverage` がエージェント自身の判断で発火し、提案された変更がどの REQ に触れるのかを *変更が適用される前に* 明らかにします。
 2. **ターン完了時 (Stop フック)** — Claude Code が `Stop` に達すると、`.claude/settings.json` のフックが `artgraph check --diff` を実行し、ドリフトが検出されればそのターンをブロックします。他の Tier 1 エージェントにも、ランタイムが許す範囲で同等のフックが用意されています。
 3. **SDD チェックポイント** — Spec Kit または Kiro が入っている場合、`artgraph integrate` が `after_tasks` / `after_implement` / 非ブロッキングの `before_implement` プレビュー (blocking ゲートは `--gate` でオプトイン) を SDD ワークフローに接続します。`tasks.md` / `plan.md` の変更は、あとでまとめてではなく、然るべきタイミングでチェックされます。
 
 どのフックも最終的には同じグラフに対する `artgraph check` に集約され、`--diff` は `.trace.lock` と比較します。このループに LLM は介在しません。
+
+## SDD ツール統合
+
+`artgraph integrate` は、scan / reconcile / check のループをすでに使っている SDD ツールに接続します。組み込みの対象は Spec Kit (`.specify/extensions/artgraph/` に `after_tasks` / `after_implement` + 非ブロッキングの `before_implement` プレビュー。blocking ゲートは `--gate` でオプトイン) と Kiro (`.kiro/steering/artgraph.md`) です。OpenSpec はまだ未対応です — 仕様が見出し駆動で、グラフの主キーにできる安定した要件 ID を持たないためで、対応は [#25](https://github.com/mori-shin-x/artgraph/issues/25) で追っています。
+
+```bash
+artgraph integrate speckit          # べき等 — .specify/ にフック
+artgraph integrate speckit --gate   # before_implement を blocking ゲートに昇格
+artgraph integrate kiro             # .kiro/steering/artgraph.md を書く
+artgraph integrate list             # ツールごとの検出/インストール状況
+```
+
+`artgraph init` は、検出されたすべての SDD ツールをデフォルトで自動統合します (Spec Kit には非ブロッキングの `before_implement` プレビューが入ります。スキップしたい場合は `--no-integrate` を渡してください)。オプトインの `--gate` は全 REQ の絶対チェックのため、新規 spec の**初回**実装直前では必ず失敗します (全 REQ 未実装のため) — これは想定内の挙動です。gating ポリシーの設計は [#178](https://github.com/mori-shin-x/artgraph/issues/178) で継続中。実際に動くサンプルは [`examples/speckit-integration/`](./examples/speckit-integration) と [`examples/kiro-integration/`](./examples/kiro-integration) にあります。詳細は [docs/sdd-integration.md](./docs/sdd-integration.md) を参照。
+
+### Spec Kit + artgraph でのターンの例
+
+`artgraph-plan-coverage` Skill が組み込まれた状態で、`/speckit-tasks` のターンがどのように進むか:
+
+```
+you> /speckit-tasks
+
+<Spec Kit が T001, T002 で REQ-003, REQ-004 を指す tasks.md を生成>
+<Stop → フックが artgraph check --diff を実行 → クリーン>
+<tasks.md が変わったので artgraph-plan-coverage が発火>
+
+agent> tasks.md には Files: src/auth.ts が列挙されていますが、このファイルは
+       REQ-001 と REQ-002 も実装しており、どちらも tasks.md / plan.md /
+       spec.md からは参照されていません。次のどれにしますか？
+       (a) REQ-001/002 のタスクを追加、(b) src/auth.ts のスコープから除外、
+       (c) 受け入れてそのまま進む
+```
+
+*どの* REQ が言及されていないのか、*なぜ* 到達可能だったのか — その根拠は、変更ファイルに対する `artgraph plan-coverage` の出力に基づいています。グラフそのものについて LLM が推論しているわけではありません — 使っているのは CLI の決定的な出力だけです。
 
 ## エンドツーエンド: 仕様 → `@impl` → `check` <a id="エンドツーエンド-仕様--impl--check"></a>
 
@@ -254,26 +287,6 @@ npx artgraph trace report --format json # 宣言 vs 証拠の突き合わせレ�
 [docs/configuration.md](./docs/configuration.md#trace--coverage-derived-traceability-spec-020)
 を参照してください。
 
-## Spec Kit + artgraph でのターンの例
-
-`artgraph-plan-coverage` Skill が組み込まれた状態で、`/speckit-tasks` のターンがどのように進むか:
-
-```
-you> /speckit-tasks
-
-<Spec Kit が T001, T002 で REQ-003, REQ-004 を指す tasks.md を生成>
-<Stop → フックが artgraph check --diff を実行 → クリーン>
-<tasks.md が変わったので artgraph-plan-coverage が発火>
-
-agent> tasks.md には Files: src/auth.ts が列挙されていますが、このファイルは
-       REQ-001 と REQ-002 も実装しており、どちらも tasks.md / plan.md /
-       spec.md からは参照されていません。次のどれにしますか？
-       (a) REQ-001/002 のタスクを追加、(b) src/auth.ts のスコープから除外、
-       (c) 受け入れてそのまま進む
-```
-
-*どの* REQ が言及されていないのか、*なぜ* 到達可能だったのか — その根拠は、変更ファイルに対する `artgraph plan-coverage` の出力に基づいています。グラフそのものについて LLM が推論しているわけではありません — 使っているのは CLI の決定的な出力だけです。
-
 ## Skills
 
 artgraph には、CLI をエージェントのワークフローに接続する 6 つの Skills が同梱されています。`--agents=<list>` で選ばれたすべてのエージェントに配布されます。
@@ -288,19 +301,6 @@ artgraph には、CLI をエージェントのワークフローに接続する 
 | `artgraph-rename`        | n/a           | ユーザーが REQ ID をリネーム/分割/マージしたいとき                                                                  |
 
 `file + symbol` の Skills は、ファイル単位・シンボル単位・クラスメソッド単位を受け付けます。後者 2 つには `.artgraph.json` の `"mode"` を `"symbol"` にする必要があります — トレードオフと `impactReqs` / `originReqs` の二軸ドリフトガイドについては [docs/skills-guide.md#file-mode-vs-symbol-mode](./docs/skills-guide.md#file-mode-vs-symbol-mode) を参照。
-
-## SDD ツール統合
-
-`artgraph integrate` は、scan / reconcile / check のループをすでに使っている SDD ツールに接続します。組み込みの対象は Spec Kit (`.specify/extensions/artgraph/` に `after_tasks` / `after_implement` + 非ブロッキングの `before_implement` プレビュー。blocking ゲートは `--gate` でオプトイン) と Kiro (`.kiro/steering/artgraph.md`) です。OpenSpec はまだ未対応です — 仕様が見出し駆動で、グラフの主キーにできる安定した要件 ID を持たないためで、対応は [#25](https://github.com/mori-shin-x/artgraph/issues/25) で追っています。
-
-```bash
-artgraph integrate speckit          # べき等 — .specify/ にフック
-artgraph integrate speckit --gate   # before_implement を blocking ゲートに昇格
-artgraph integrate kiro             # .kiro/steering/artgraph.md を書く
-artgraph integrate list             # ツールごとの検出/インストール状況
-```
-
-`artgraph init` は、検出されたすべての SDD ツールをデフォルトで自動統合します (Spec Kit には非ブロッキングの `before_implement` プレビューが入ります。スキップしたい場合は `--no-integrate` を渡してください)。オプトインの `--gate` は全 REQ の絶対チェックのため、新規 spec の**初回**実装直前では必ず失敗します (全 REQ 未実装のため) — これは想定内の挙動です。gating ポリシーの設計は [#178](https://github.com/mori-shin-x/artgraph/issues/178) で継続中。実際に動くサンプルは [`examples/speckit-integration/`](./examples/speckit-integration) と [`examples/kiro-integration/`](./examples/kiro-integration) にあります。詳細は [docs/sdd-integration.md](./docs/sdd-integration.md) を参照。
 
 ## 参照の書き方
 
