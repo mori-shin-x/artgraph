@@ -14,25 +14,53 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-**Deterministic spec-to-code context for AI coding agents — one graph linking requirements, docs, code, and tests.**
+artgraph detects drift between your specs, docs, code, and tests in TypeScript repos — deterministically, no LLM.
 
-artgraph builds a graph that links requirement IDs in your specs to the code
-that implements them (`@impl` tags) and the tests that verify them, then
-detects **drift** (spec changed but code/tests didn't), **orphans**, and
-**uncovered** requirements. Skills fire during agent conversations, a Stop
-hook fires when the agent finishes a turn, and SDD-tool hooks fire at Spec Kit
-/ Kiro workflow checkpoints — so drift is caught by the agent, not by a
-human running `check` after the fact.
+Specs go stale. An agent changes the implementation and leaves the spec
+behind; or the spec gets updated and the code never follows. artgraph links
+the requirement IDs in your specs to the code that implements them and the
+tests that verify them, hashes each side, and tells you which side moved.
+Nothing on that path calls an LLM, so the same repo state always produces the
+same output — which is what makes it usable as a CI gate and as an agent Stop
+hook.
+
+A spec says one thing:
+
+```markdown
+- REQ-001: The system rejects passwords shorter than 8 characters at signup.
+```
+
+An agent edits the implementation and leaves the spec alone:
+
+```diff
+  // @impl REQ-001
+  export function validatePassword(password: string): void {
+-   if (password.length < 8) {
++   if (password.length < 6) {
+      throw new Error("password too short");
+    }
+  }
+```
+
+`artgraph check` catches the one-sided change, at symbol granularity:
+
+```console
+$ npx artgraph check
+DRIFT:
+  symbol:src/validate-password.ts#validatePassword (symbol)
+```
+
+The spec still says 8; the code says 6. The reverse case — spec edited, code
+untouched — is detected the same way. And because `artgraph init` wires this
+same check into your agent's Stop hook, the agent hits `exit 2` when it tries
+to end its turn on a drifted repo, and goes back to fix it. It also detects
+**orphans** (`@impl` pointing at a REQ that doesn't exist) and **uncovered**
+requirements (no `@impl`, no test).
 
 ## 30-second tag-zero start
 
 Have an existing TypeScript repo? Get impact analysis in three commands — **no
 specs, no `@impl` tags, no config required**:
-
-<!-- Regenerate with: pnpm demo (build + demo:record + demo:svg) — see scripts/record-tag-zero-demo.mjs -->
-<p align="center">
-  <img src="./docs/demo/tag-zero.svg" alt="30-second tag-zero demo: artgraph init followed by artgraph impact --diff on a brownfield TS repo" />
-</p>
 
 ```bash
 npx artgraph init --agents=claude   # brownfield-safe; no specs required
@@ -48,21 +76,28 @@ npx artgraph impact --diff          # → files affected via your TS import grap
 from day one on any TS repo. Specs, `@impl` tags, and drift detection are
 opt-in — add them progressively as your project demands more traceability.
 
-## Bootstrapping an existing project
-
-Already have code but no REQs? Ask an agent that speaks artgraph:
-
-```
-you> Please bootstrap traceability for src/auth.
-```
-
-The `artgraph-bootstrap` Skill proposes `specs/auth.md` with fresh
-`REQ-NNN` entries, adds `@impl REQ-NNN` tags to the code that implements each
-one, marks the covering tests with `[REQ-NNN]`, and verifies the result with
-`artgraph scan && artgraph check` — all as a single reviewable diff. You
-review, tweak, and commit.
-
 ## Why artgraph
+
+### It's the second half of Spec Kit and Kiro
+
+Spec Kit and Kiro are good at the first half — turning a spec into code.
+Neither ships a deterministic answer for the second half: keeping the spec and
+the code in agreement *after* generation. Spec Kit's extension catalog carries
+a couple dozen validation and drift extensions, and essentially all of them
+are LLM prompt packs, which means the verdict can change between two runs on
+an unchanged repo.
+
+artgraph is built to be that second half rather than a replacement for either:
+
+```bash
+npx artgraph integrate speckit   # adds after_tasks / before_implement / after_implement hooks
+npx artgraph integrate kiro      # writes .kiro/steering/artgraph.md
+```
+
+`artgraph init` detects an installed SDD tool and wires this up
+automatically — see [SDD tool integration](#sdd-tool-integration).
+
+### Your code graph doesn't know your spec
 
 Your repo probably already has a code-graph MCP. It knows your code. It doesn't know your spec.
 
@@ -98,12 +133,38 @@ artgraph adds the layer *above* the code:
 Code-graph MCPs answer *"where is this used?"*. artgraph answers *"which
 requirement does this satisfy, and does it still?"*.
 
+### What I wanted, and where existing tools stopped
+
+| Requirement | Closest tools, and where they stopped |
+| ----------- | ------------------------------------- |
+| JS/TS native | StrictDoc, CoDD — Python-first; no deep JS/TS analysis |
+| Deterministic (no LLM in verification) | Spec Kit validation extensions, OpenSpec — LLM adjudication; the verdict can vary run to run |
+| AST-derived symbol precision (automatic edges) | ContextGit, rac-core — no AST; links are hand-maintained |
+| Four layers: req ↔ doc ↔ code ↔ test | fiberplane/drift (2 layers), code-graph MCPs (code only) |
+
+The full survey — 29 tools across five categories — is in
+[docs/architecture.md](./docs/architecture.md).
+
+## Bootstrapping an existing project
+
+Already have code but no REQs? Ask an agent that speaks artgraph:
+
+```
+you> Please bootstrap traceability for src/auth.
+```
+
+The `artgraph-bootstrap` Skill proposes `specs/auth.md` with fresh
+`REQ-NNN` entries, adds `@impl REQ-NNN` tags to the code that implements each
+one, marks the covering tests with `[REQ-NNN]`, and verifies the result with
+`artgraph scan && artgraph check` — all as a single reviewable diff. You
+review, tweak, and commit.
+
 <details>
 <summary><strong>Table of contents</strong></summary>
 
 - [30-second tag-zero start](#30-second-tag-zero-start)
-- [Bootstrapping an existing project](#bootstrapping-an-existing-project)
 - [Why artgraph](#why-artgraph)
+- [Bootstrapping an existing project](#bootstrapping-an-existing-project)
 - [Quickstart](#quickstart)
 - [How the agent loop works](#how-the-agent-loop-works)
   - [CI gate for pull requests](#ci-gate-for-pull-requests)
@@ -116,6 +177,7 @@ requirement does this satisfy, and does it still?"*.
 - [SDD tool integration](#sdd-tool-integration)
 - [How references are expressed](#how-references-are-expressed)
 - [Commands](#commands)
+- [Roadmap](#roadmap)
 - [Documentation](#documentation)
 - [Requirements](#requirements)
 - [License](#license)
@@ -127,6 +189,11 @@ requirement does this satisfy, and does it still?"*.
 > **Platforms:** macOS and Linux — including **WSL2** on Windows. Native
 > Windows (PowerShell / cmd) is not supported; see the
 > [Windows note](#windows-note).
+
+<!-- Regenerate with: pnpm demo (build + demo:record + demo:svg) — see scripts/record-tag-zero-demo.mjs -->
+<p align="center">
+  <img src="./docs/demo/tag-zero.svg" alt="30-second tag-zero demo: artgraph init followed by artgraph impact --diff on a brownfield TS repo" />
+</p>
 
 ```bash
 # Pick your package manager (npm / pnpm / Bun / Deno all supported; Yarn falls back to pnpm)
@@ -503,6 +570,13 @@ after upgrading to a version that changes symbol-extraction granularity, the
 next `reconcile` may rewrite the lock's symbol entries and `@impl`
 attributions accordingly. The 0.x series ships no migration tooling for
 this — review the `.trace.lock` diff before committing it.
+
+## Roadmap
+
+- OpenSpec support — heading-driven specs without stable requirement IDs ([#25](https://github.com/mori-shin-x/artgraph/issues/25))
+- GitHub Action on the Marketplace ([#126](https://github.com/mori-shin-x/artgraph/issues/126))
+- MCP server mode ([#143](https://github.com/mori-shin-x/artgraph/issues/143))
+- Language-agnostic file mode beyond TypeScript ([#368](https://github.com/mori-shin-x/artgraph/issues/368))
 
 ## Documentation
 

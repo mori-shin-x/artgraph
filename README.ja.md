@@ -14,18 +14,41 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](package.json)
 
-**AI コーディングエージェント向けの決定的な spec-to-code コンテキスト — 要件・ドキュメント・コード・テストを一つのグラフでつなぐ。**
+artgraph は、TypeScript リポジトリで仕様・ドキュメント・コード・テストの間のズレ（ドリフト）を検出します。検証に LLM は使いません。
 
-artgraph は、仕様書の要件 ID と、それを実装するコード（`@impl` タグ）、それを検証するテストを結びつけるグラフを構築します。そのうえで、**ドリフト**（仕様は変わったのにコード / テストが追従していない状態）、**孤立**した要件、**未カバー**の要件を検出します。エージェントの会話中には Skills が、ターン終了時には Stop フックが、Spec Kit / Kiro のワークフローのチェックポイントでは SDD ツール向けフックが発火します — 人間があとから `check` を回すのではなく、エージェント自身がドリフトに気づける仕組みです。
+仕様は古びます。エージェントが実装だけを書き換えて仕様を置き去りにする、あるいは仕様を更新したのに実装が追従しない。artgraph は仕様書の要件 ID を、それを実装するコードと検証するテストに紐づけ、それぞれをハッシュで管理して、どちら側が動いたのかを検出します。この経路に LLM は一切介在しないため、同じリポジトリ状態からは常に同じ出力になります。だからこそ、CI ゲートとしても、エージェントの Stop フックとしても使えます。
+
+仕様書にこう書いてあります。
+
+```markdown
+- REQ-001: システムは 8 文字未満のパスワードを登録時に拒否する。
+```
+
+エージェントが実装だけを書き換え、仕様書は放置します。
+
+```diff
+  // @impl REQ-001
+  export function validatePassword(password: string): void {
+-   if (password.length < 8) {
++   if (password.length < 6) {
+      throw new Error("password too short");
+    }
+  }
+```
+
+`artgraph check` は、この片側だけの変更をシンボル単位で検出します。
+
+```console
+$ npx artgraph check
+DRIFT:
+  symbol:src/validate-password.ts#validatePassword (symbol)
+```
+
+仕様は 8 文字のまま、コードは 6 文字。逆に「仕様書だけ書き換えてコードを放置した」ケースも同じ仕組みで検出されます。そして `artgraph init` はこの同じチェックをエージェントの Stop フックに配線するため、ドリフトが残ったままターンを終えようとすると `exit 2` でブロックされ、エージェント自身が直しに行きます。あわせて **孤立**（実在しない REQ を指す `@impl`）と **未カバー**（`@impl` もテストも無い要件）も検出します。
 
 ## タグゼロで 30 秒スタート
 
 既存の TypeScript リポジトリさえあれば、**仕様書も `@impl` タグも設定ファイルもなし**で、3 コマンドでインパクト解析を試せます:
-
-<!-- Regenerate with: pnpm demo (build + demo:record + demo:svg) — see scripts/record-tag-zero-demo.mjs -->
-<p align="center">
-  <img src="./docs/demo/tag-zero.svg" alt="30秒タグゼロデモ: brownfield TS リポジトリで artgraph init のあとに artgraph impact --diff" />
-</p>
 
 ```bash
 npx artgraph init --agents=claude   # brownfield 対応・仕様書不要
@@ -39,17 +62,22 @@ npx artgraph impact --diff          # → TS の import グラフから影響フ
 
 `impact --diff` は決定的な TypeScript の import グラフをたどるため、どんな TS リポジトリでも導入したその日から動きます。仕様書・`@impl` タグ・ドリフト検出はオプトインで、プロジェクトのトレーサビリティ要求が高まるにつれて段階的に追加していけます。
 
-## 既存プロジェクトのブートストラップ
-
-コードはあるけれど REQ はこれから、という場合は、artgraph を理解しているエージェントに任せてしまいましょう:
-
-```
-you> src/auth 配下のトレーサビリティをブートストラップしてください。
-```
-
-`artgraph-bootstrap` Skill が新しい `REQ-NNN` エントリつきの `specs/auth.md` を提案し、対応する実装コードに `@impl REQ-NNN` タグを付け、カバーするテストには `[REQ-NNN]` を付与します。仕上げに `artgraph scan && artgraph check` で結果を検証 — すべてがひとつのレビュー可能な diff にまとまるので、あとはレビューして、調整して、コミットするだけです。
-
 ## artgraph が必要な理由
+
+### Spec Kit と Kiro の「後半」を担う
+
+Spec Kit や Kiro が得意なのは前半 — 仕様からコードを作るところです。どちらも、生成した*あと*に仕様とコードの整合を保ち続ける後半に対して、決定的な答えを持っていません。Spec Kit の拡張カタログには検証・ドリフト系の拡張が 20 数個ありますが、そのほぼすべてが LLM プロンプト集です。つまり、リポジトリが変わっていなくても実行のたびに判定が変わりえます。
+
+artgraph は、どちらかを置き換えるものではなく、その後半を担うように作られています:
+
+```bash
+npx artgraph integrate speckit   # after_tasks / before_implement / after_implement フックを追加
+npx artgraph integrate kiro      # .kiro/steering/artgraph.md を書き出し
+```
+
+`artgraph init` は導入済みの SDD ツールを検出して自動で配線します — [SDD ツール統合](#sdd-ツール統合) を参照。
+
+### コードグラフは、あなたの仕様を知らない
 
 お使いのリポジトリには、すでにコードグラフ MCP が導入されているかもしれません。それはコードのことは知っていますが、仕様のことは知りません。
 
@@ -64,12 +92,33 @@ artgraph は、そのコードの*上*にもう一段レイヤーを重ねます
 
 コードグラフ MCP が答えるのは *「これはどこで使われている？」*。artgraph が答えるのは *「これはどの要件を満たしているのか、そしていまも満たせているのか？」* です。
 
+### 欲しかった条件と、既存ツールが止まっていた場所
+
+| 欲しかった条件 | 惜しかった候補と、外れた理由 |
+| -------------- | ---------------------------- |
+| JS/TS ネイティブ | StrictDoc、CoDD — Python 主体で、JS/TS のコードを深く解析できない |
+| 決定的（検証に LLM を使わない） | Spec Kit の検証系拡張、OpenSpec — LLM 裁定なので実行のたびに結果が変わりうる |
+| AST 由来のシンボル精度（自動エッジ） | ContextGit、rac-core — AST 解析が無く、リンクが手動 |
+| 要件 ↔ doc ↔ コード ↔ テストの 4 層 | fiberplane/drift（2 層のみ）、コードグラフ MCP 群（コードのみ） |
+
+調査した 29 ツール・5 カテゴリの全容は [docs/architecture.md](./docs/architecture.md) にあります。
+
+## 既存プロジェクトのブートストラップ
+
+コードはあるけれど REQ はこれから、という場合は、artgraph を理解しているエージェントに任せてしまいましょう:
+
+```
+you> src/auth 配下のトレーサビリティをブートストラップしてください。
+```
+
+`artgraph-bootstrap` Skill が新しい `REQ-NNN` エントリつきの `specs/auth.md` を提案し、対応する実装コードに `@impl REQ-NNN` タグを付け、カバーするテストには `[REQ-NNN]` を付与します。仕上げに `artgraph scan && artgraph check` で結果を検証 — すべてがひとつのレビュー可能な diff にまとまるので、あとはレビューして、調整して、コミットするだけです。
+
 <details>
 <summary><strong>目次</strong></summary>
 
 - [タグゼロで 30 秒スタート](#タグゼロで-30-秒スタート)
-- [既存プロジェクトのブートストラップ](#既存プロジェクトのブートストラップ)
 - [artgraph が必要な理由](#artgraph-が必要な理由)
+- [既存プロジェクトのブートストラップ](#既存プロジェクトのブートストラップ)
 - [クイックスタート](#クイックスタート)
 - [エージェントループの動作](#エージェントループの動作)
   - [Pull Request の CI ゲート](#pull-request-の-ci-ゲート)
@@ -82,6 +131,7 @@ artgraph は、そのコードの*上*にもう一段レイヤーを重ねます
 - [SDD ツール統合](#sdd-ツール統合)
 - [参照の書き方](#参照の書き方)
 - [コマンド](#コマンド)
+- [ロードマップ](#ロードマップ)
 - [ドキュメント](#ドキュメント)
 - [動作要件](#動作要件)
 - [ライセンス](#ライセンス)
@@ -91,6 +141,11 @@ artgraph は、そのコードの*上*にもう一段レイヤーを重ねます
 ## クイックスタート
 
 > **対応プラットフォーム:** macOS と Linux — Windows 上の **WSL2** を含む。ネイティブ Windows (PowerShell / cmd) は非対応です。[Windows に関する注記](#windows-に関する注記)を参照してください。
+
+<!-- Regenerate with: pnpm demo (build + demo:record + demo:svg) — see scripts/record-tag-zero-demo.mjs -->
+<p align="center">
+  <img src="./docs/demo/tag-zero.svg" alt="30秒タグゼロデモ: brownfield TS リポジトリで artgraph init のあとに artgraph impact --diff" />
+</p>
 
 ```bash
 # パッケージマネージャは好きなものを選択可 (npm / pnpm / Bun / Deno 対応。Yarn は pnpm にフォールバック)
@@ -349,6 +404,13 @@ ID の prefix は自由です (`[A-Z][A-Za-z]*-\d+`): 上の例で使ってい�
 すべてのフラグの詳細リファレンス、`scan --serve`、`doctor` の finding 分類、`rename` の split / merge にまつわる注意点は [docs/commands.md](./docs/commands.md) を参照してください。
 
 なお、`reconcile` は現在のグラフから `.trace.lock` を**完全に再構築**します。シンボル抽出の粒度が変わるバージョンへアップグレードした後は、次回の `reconcile` で lock のシンボルエントリと `@impl` の帰属が書き換わることがあります。0.x 系では移行ツールを提供しないため、`.trace.lock` の差分を確認してからコミットしてください。
+
+## ロードマップ
+
+- OpenSpec 対応 — 安定した要件 ID を持たない見出し駆動の仕様への対応（[#25](https://github.com/mori-shin-x/artgraph/issues/25)）
+- GitHub Action の Marketplace 公開（[#126](https://github.com/mori-shin-x/artgraph/issues/126)）
+- MCP サーバーモード（[#143](https://github.com/mori-shin-x/artgraph/issues/143)）
+- TypeScript 以外にも対応する言語非依存の file mode（[#368](https://github.com/mori-shin-x/artgraph/issues/368)）
 
 ## ドキュメント
 
