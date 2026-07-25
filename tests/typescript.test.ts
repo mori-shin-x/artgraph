@@ -1357,6 +1357,27 @@ describe("createTSParser (symbol mode — class-level seen-collision warnings, P
         "",
       ].join("\n"),
     );
+    // Three-way merge in the one ordering TypeScript accepts (a namespace may
+    // not precede the class it merges with — TS2434). Pins a known limitation,
+    // see the test below.
+    write(
+      "src/merge-triple.ts",
+      [
+        "// @impl REQ-951",
+        "export interface Triple {",
+        "  y: number;",
+        "}",
+        "// @impl REQ-952",
+        "export class Triple {",
+        "  m(): void {}",
+        "}",
+        "// @impl REQ-953",
+        "export namespace Triple {",
+        "  export const x = 1;",
+        "}",
+        "",
+      ].join("\n"),
+    );
   });
 
   afterAll(() => {
@@ -1477,6 +1498,23 @@ describe("createTSParser (symbol mode — class-level seen-collision warnings, P
     const result = parse();
     const implEdges = result.edges.filter((e) => e.kind === "implements" && e.target === "REQ-251");
     expect(implEdges.map((e) => e.source)).toEqual(["symbol:src/merge-tagged.ts#Tagged"]);
+  });
+
+  // KNOWN LIMITATION, pinned rather than fixed. `collisionLoser` holds one
+  // winner and one loser, so in a three-way merge the third declaration is
+  // still dropped whole — its attribution range included — and a tag above it
+  // falls back to file grain with no warning. Unchanged from before the
+  // class-wins rule (which only moved the CLASS off file grain); tracked
+  // separately. Pinned so that a future change to the demotion logic has to
+  // update this expectation deliberately.
+  it("three-way merge: the third declaration's tag still degrades to file grain", () => {
+    const result = parse();
+    const sourceFor = (req: string) =>
+      result.edges.filter((e) => e.kind === "implements" && e.target === req).map((e) => e.source);
+
+    expect(sourceFor("REQ-951")).toEqual(["symbol:src/merge-triple.ts#Triple"]); // interface (loser)
+    expect(sourceFor("REQ-952")).toEqual(["symbol:src/merge-triple.ts#Triple"]); // class (winner)
+    expect(sourceFor("REQ-953")).toEqual(["file:src/merge-triple.ts"]); // namespace — the gap
   });
 });
 
