@@ -1357,9 +1357,26 @@ describe("createTSParser (symbol mode — class-level seen-collision warnings, P
         "",
       ].join("\n"),
     );
-    // Three-way merge in the one ordering TypeScript accepts (a namespace may
-    // not precede the class it merges with — TS2434). Pins a known limitation,
-    // see the test below.
+    // Class-first two-way merge with a tag on the non-class half. Pins the
+    // same known limitation as the three-way fixture below, in its smallest
+    // reproducing shape — no third declaration required.
+    write(
+      "src/merge-classfirst-tagged.ts",
+      [
+        "// @impl REQ-961",
+        "export class CF {",
+        "  m(): void {}",
+        "}",
+        "// @impl REQ-962",
+        "export interface CF {",
+        "  y: number;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    // Three-way merge. TypeScript accepts any ordering that keeps the namespace
+    // after the class (ICN / CIN / CNI); the three namespace-first orderings are
+    // TS2434. Pins a known limitation, see the test below.
     write(
       "src/merge-triple.ts",
       [
@@ -1500,13 +1517,23 @@ describe("createTSParser (symbol mode — class-level seen-collision warnings, P
     expect(implEdges.map((e) => e.source)).toEqual(["symbol:src/merge-tagged.ts#Tagged"]);
   });
 
-  // KNOWN LIMITATION, pinned rather than fixed. `collisionLoser` holds one
-  // winner and one loser, so in a three-way merge the third declaration is
-  // still dropped whole — its attribution range included — and a tag above it
-  // falls back to file grain with no warning. Unchanged from before the
-  // class-wins rule (which only moved the CLASS off file grain); tracked
-  // separately. Pinned so that a future change to the demotion logic has to
-  // update this expectation deliberately.
+  // KNOWN LIMITATION, pinned rather than fixed — smallest reproducing shape.
+  // The demotion only fires one way (interface/namespace first, class second).
+  // When the CLASS is written first it already owns the entry, so the later
+  // half hits the original unconditional drop and loses its attribution range,
+  // sending a tag above it to file grain with no warning. Unchanged by the
+  // class-wins rule; tracked separately.
+  it("class-first merge: a tag on the non-class half degrades to file grain", () => {
+    const result = parse();
+    const sourceFor = (req: string) =>
+      result.edges.filter((e) => e.kind === "implements" && e.target === req).map((e) => e.source);
+
+    expect(sourceFor("REQ-961")).toEqual(["symbol:src/merge-classfirst-tagged.ts#CF"]); // class
+    expect(sourceFor("REQ-962")).toEqual(["file:src/merge-classfirst-tagged.ts"]); // interface
+  });
+
+  // The three-way case is the same gap with one more declaration: `collisionLoser`
+  // holds one winner and one loser, so a third declaration is dropped whole.
   it("three-way merge: the third declaration's tag still degrades to file grain", () => {
     const result = parse();
     const sourceFor = (req: string) =>
