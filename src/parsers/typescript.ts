@@ -1216,9 +1216,20 @@ type OxcComment = OxcParseResult["comments"][number];
 function extractClassMembers(
   classNode: unknown,
   classPrefix: string,
+  ambientFile: boolean,
 ): Map<string, Array<{ start: number; end: number }>> {
   const members = new Map<string, Array<{ start: number; end: number }>>();
-  if ((classNode as { declare?: boolean }).declare) return members;
+  // issue #248 — a declaration file's top-level declarations are implicitly
+  // ambient per the TS spec even without the keyword, but oxc reports
+  // `declare: false` unless it is literally written. `tsc --declaration`
+  // emits `export declare class`, so generated files were already caught by
+  // the per-node flag below; hand-written `.d.ts` in the keyword-omitting
+  // style slipped through and had its bodyless signatures symbolized as if
+  // they were real methods. Gate MEMBER extraction only: the file's top-level
+  // symbols stay registered exactly as before, because the per-node guard
+  // never touched those either and dropping them would regress the
+  // already-correct generated-file case.
+  if (ambientFile || (classNode as { declare?: boolean }).declare) return members;
   const body = (classNode as { body?: { body?: Array<Record<string, unknown>> } }).body?.body;
   if (!body) return members;
 
@@ -1281,6 +1292,10 @@ function extractSymbols(
   const entries: ExportEntry[] = [];
   const seen = new Set<string>();
   let groupCounter = 0;
+  // issue #248 — the default `include: ["src/**/*.ts"]` matches declaration
+  // files, whose top-level declarations are ambient with or without the
+  // keyword. Computed once per file and passed to `extractClassMembers`.
+  const ambientFile = /\.d\.(?:ts|mts|cts)$/.test(relPath);
   const push = (
     name: string,
     start: number,
@@ -1305,7 +1320,42 @@ function extractSymbols(
       // Exception: interface / namespace entries declaration-merge with a
       // same-name class in legal TS, so a collision where either side is
       // such an entry stays silent (`mergeableWithClass`).
-      const existing = entries.find((e) => e.name === name);
+      // Skip entries already demoted to loser: they no longer own the name.
+      const existingIdx = entries.findIndex((e) => e.name === name && !e.collisionLoser);
+      const existing = existingIdx === -1 ? undefined : entries[existingIdx];
+
+      // issue #251 — class × interface/namespace declaration merge, class
+      // written SECOND. first-registered-wins would drop the class outright,
+      // taking its member symbols with it and hashing the node off the
+      // interface/namespace text instead. TS puts the implementation on the
+      // class side, so the class has to own the node.
+      //
+      // Demote the earlier declaration to `collisionLoser` rather than
+      // discarding it: a loser still contributes its attribution RANGE under
+      // the same name (see the range loop below), so an `@impl` tag written
+      // above the interface half keeps resolving to `symbol:<path>#<name>` —
+      // which is now the class's node. Replacing the entry outright would
+      // move the attribution range onto the class's own (later) span and
+      // silently demote that tag to file grain.
+      //
+      // Class-written-FIRST is untouched: `existing` is then the class, which
+      // is not `mergeableWithClass`, so this branch does not fire and the
+      // pre-existing drop stands.
+      if (existing?.mergeableWithClass && classMembers !== undefined) {
+        entries[existingIdx] = { ...existing, collisionLoser: true };
+        entries.push({
+          name,
+          start,
+          end,
+          group,
+          attrStart,
+          attrEnd,
+          classMembers,
+          mergeableWithClass,
+        });
+        return;
+      }
+
       if (
         existing &&
         !existing.mergeableWithClass &&
@@ -1375,7 +1425,7 @@ function extractSymbols(
               // `export { Sample }` / alias exports resolve via `lookup()`
               // above and never reach this branch, so they stay
               // member-symbol-free (FR-001's "分離 export は対象外").
-              extractClassMembers(decl, className),
+              extractClassMembers(decl, className, ambientFile),
             );
           }
         } else if (decl.type === "TSInterfaceDeclaration") {
@@ -1432,7 +1482,7 @@ function extractSymbols(
           groupCounter++,
           undefined,
           undefined,
-          extractClassMembers(decl, "default"),
+          extractClassMembers(decl, "default", ambientFile),
         );
       } else if (decl.type === "TSInterfaceDeclaration") {
         push("default", stmt.start, decl.end, groupCounter++);
