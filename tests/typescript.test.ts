@@ -1341,6 +1341,60 @@ describe("createTSParser (symbol mode — class-level seen-collision warnings, P
         "",
       ].join("\n"),
     );
+    // issue #251 — an `@impl` tag above the LOSING (interface) half. The class
+    // takes over the node, but the interface must keep contributing its
+    // attribution range, or this tag silently degrades to file grain.
+    write(
+      "src/merge-tagged.ts",
+      [
+        "// @impl REQ-251",
+        "export interface Tagged {",
+        "  y: number;",
+        "}",
+        "export class Tagged {",
+        "  m(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    // Class-first two-way merge with a tag on the non-class half. Pins the
+    // same known limitation as the three-way fixture below, in its smallest
+    // reproducing shape — no third declaration required.
+    write(
+      "src/merge-classfirst-tagged.ts",
+      [
+        "// @impl REQ-961",
+        "export class CF {",
+        "  m(): void {}",
+        "}",
+        "// @impl REQ-962",
+        "export interface CF {",
+        "  y: number;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    // Three-way merge. TypeScript accepts any ordering that keeps the namespace
+    // after the class (ICN / CIN / CNI); the three namespace-first orderings are
+    // TS2434. Pins a known limitation, see the test below.
+    write(
+      "src/merge-triple.ts",
+      [
+        "// @impl REQ-951",
+        "export interface Triple {",
+        "  y: number;",
+        "}",
+        "// @impl REQ-952",
+        "export class Triple {",
+        "  m(): void {}",
+        "}",
+        "// @impl REQ-953",
+        "export namespace Triple {",
+        "  export const x = 1;",
+        "}",
+        "",
+      ].join("\n"),
+    );
   });
 
   afterAll(() => {
@@ -1416,6 +1470,156 @@ describe("createTSParser (symbol mode — class-level seen-collision warnings, P
   it("legal interface+class declaration merge does NOT warn (interface first)", () => {
     const result = parse();
     expect(result.warnings.filter((w) => w.filePath === "src/merge-iface.ts")).toEqual([]);
+  });
+
+  // issue #251 — first-registered-wins used to drop the class outright when the
+  // interface was written first, taking its member symbols with it and hashing
+  // the surviving node off the INTERFACE text. TS puts the implementation on
+  // the class, so the class has to own the node.
+  it("interface+class merge (interface first): the class wins the node and keeps member grain", () => {
+    const result = parse();
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/merge-iface.ts")
+      .map((n) => n.id)
+      .sort();
+    expect(symbolIds).toEqual([
+      "symbol:src/merge-iface.ts#MergedI",
+      "symbol:src/merge-iface.ts#MergedI.m",
+    ]);
+  });
+
+  it("interface+class merge (interface first): the node hashes the CLASS body, not the interface", () => {
+    const result = parse();
+    const node = result.nodes.find((n) => n.id === "symbol:src/merge-iface.ts#MergedI");
+    // The class declaration, verbatim — if the interface still owned the node
+    // this would be `export interface MergedI {\n  y: number;\n}`.
+    expect(node!.contentHash).toBe(hash("export class MergedI {\n  m(): void {}\n}"));
+  });
+
+  // The class-written-FIRST ordering already kept member grain before this
+  // change; pinned so the #251 branch cannot silently alter it.
+  it("class+namespace merge (class first) is unaffected by the class-wins rule", () => {
+    const result = parse();
+    const symbolIds = result.nodes
+      .filter((n) => n.kind === "symbol" && n.filePath === "src/merge-ns.ts")
+      .map((n) => n.id)
+      .sort();
+    expect(symbolIds).toEqual(["symbol:src/merge-ns.ts#Merged", "symbol:src/merge-ns.ts#Merged.m"]);
+  });
+
+  // The demoted interface keeps contributing its attribution range, so the tag
+  // resolves to `symbol:…#Tagged` — the id the class now registers. Handing the
+  // range to the class's own (later) span instead would drop this to
+  // `file:src/merge-tagged.ts` with no warning.
+  it("interface+class merge: an @impl above the losing half stays at symbol grain", () => {
+    const result = parse();
+    const implEdges = result.edges.filter((e) => e.kind === "implements" && e.target === "REQ-251");
+    expect(implEdges.map((e) => e.source)).toEqual(["symbol:src/merge-tagged.ts#Tagged"]);
+  });
+
+  // KNOWN LIMITATION, pinned rather than fixed — smallest reproducing shape.
+  // The demotion only fires one way (interface/namespace first, class second).
+  // When the CLASS is written first it already owns the entry, so the later
+  // half hits the original unconditional drop and loses its attribution range,
+  // sending a tag above it to file grain with no warning. Unchanged by the
+  // class-wins rule; tracked separately.
+  it("class-first merge: a tag on the non-class half degrades to file grain", () => {
+    const result = parse();
+    const sourceFor = (req: string) =>
+      result.edges.filter((e) => e.kind === "implements" && e.target === req).map((e) => e.source);
+
+    expect(sourceFor("REQ-961")).toEqual(["symbol:src/merge-classfirst-tagged.ts#CF"]); // class
+    expect(sourceFor("REQ-962")).toEqual(["file:src/merge-classfirst-tagged.ts"]); // interface
+  });
+
+  // The three-way case is the same gap with one more declaration: `collisionLoser`
+  // holds one winner and one loser, so a third declaration is dropped whole.
+  it("three-way merge: the third declaration's tag still degrades to file grain", () => {
+    const result = parse();
+    const sourceFor = (req: string) =>
+      result.edges.filter((e) => e.kind === "implements" && e.target === req).map((e) => e.source);
+
+    expect(sourceFor("REQ-951")).toEqual(["symbol:src/merge-triple.ts#Triple"]); // interface (loser)
+    expect(sourceFor("REQ-952")).toEqual(["symbol:src/merge-triple.ts#Triple"]); // class (winner)
+    expect(sourceFor("REQ-953")).toEqual(["file:src/merge-triple.ts"]); // namespace — the gap
+  });
+});
+
+// issue #248 — a declaration file's top-level declarations are ambient with or
+// without the keyword, but oxc only sets `declare: true` when it is literally
+// written. `tsc --declaration` emits `export declare class`, so generated files
+// were already handled; hand-written declaration files were not.
+describe("createTSParser (symbol mode — ambient declaration files, issue #248)", () => {
+  let root: string;
+
+  const write = (relPath: string, content: string): void => {
+    const abs = join(root, relPath);
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(abs, content);
+  };
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-dts-248-"));
+    write(
+      "src/hand.d.ts",
+      [
+        "export class Widget {",
+        "  method(): void;",
+        "}",
+        "export function helper(): void;",
+        "",
+      ].join("\n"),
+    );
+    write(
+      "src/gen.d.ts",
+      [
+        "export declare class Gadget {",
+        "  method(): void;",
+        "}",
+        "export declare function gadgetHelper(): void;",
+        "",
+      ].join("\n"),
+    );
+    write("src/real.ts", ["export class Real {", "  method(): void {}", "}", ""].join("\n"));
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const parse = () => createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+  const idsFor = (filePath: string) =>
+    parse()
+      .nodes.filter((n) => n.kind === "symbol" && n.filePath === filePath)
+      .map((n) => n.id)
+      .sort();
+
+  it("a hand-written .d.ts fabricates no member symbols for its bodyless signatures", () => {
+    expect(idsFor("src/hand.d.ts")).toEqual([
+      "symbol:src/hand.d.ts#Widget",
+      "symbol:src/hand.d.ts#helper",
+    ]);
+  });
+
+  // The narrow fix gates MEMBER extraction only. Skipping the whole file would
+  // also drop these top-level symbols, regressing a case that already worked.
+  it("keeps the declaration file's top-level symbols", () => {
+    expect(idsFor("src/hand.d.ts")).toContain("symbol:src/hand.d.ts#Widget");
+    expect(idsFor("src/hand.d.ts")).toContain("symbol:src/hand.d.ts#helper");
+  });
+
+  it("a tsc-generated .d.ts (explicit declare) is unchanged", () => {
+    expect(idsFor("src/gen.d.ts")).toEqual([
+      "symbol:src/gen.d.ts#Gadget",
+      "symbol:src/gen.d.ts#gadgetHelper",
+    ]);
+  });
+
+  it("an ordinary .ts file still gets member grain", () => {
+    expect(idsFor("src/real.ts")).toEqual([
+      "symbol:src/real.ts#Real",
+      "symbol:src/real.ts#Real.method",
+    ]);
   });
 });
 
