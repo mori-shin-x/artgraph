@@ -256,6 +256,137 @@ describe("renderGraphData: label fallback", () => {
     const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
     expect(out.nodes[0].label).toBe("User can log in");
   });
+
+  // issue #245 — symbol nodes used to fall through to basename(filePath), so a
+  // class and every one of its methods rendered as the same label and were
+  // indistinguishable in --serve/--output.
+  describe("symbol nodes (issue #245)", () => {
+    it("labels symbols by their symbol name, not the file basename", () => {
+      const graph = makeGraph([
+        makeNode({ id: "symbol:src/sample.ts#Sample", kind: "symbol", filePath: "src/sample.ts" }),
+        makeNode({
+          id: "symbol:src/sample.ts#Sample.methodA",
+          kind: "symbol",
+          filePath: "src/sample.ts",
+        }),
+        makeNode({
+          id: "symbol:src/sample.ts#Sample.methodB",
+          kind: "symbol",
+          filePath: "src/sample.ts",
+        }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      const byId = new Map(out.nodes.map((n) => [n.id, n]));
+      expect(byId.get("symbol:src/sample.ts#Sample")!.label).toBe("Sample");
+      expect(byId.get("symbol:src/sample.ts#Sample.methodA")!.label).toBe("Sample.methodA");
+      expect(byId.get("symbol:src/sample.ts#Sample.methodB")!.label).toBe("Sample.methodB");
+      // The point of the issue: same-file symbols must not collide.
+      expect(new Set(out.nodes.map((n) => n.label)).size).toBe(3);
+    });
+
+    // A filePath may legally contain `#`. Splitting the id on the FIRST `#`
+    // would yield `ird.ts#Odd` here; this pins the prefix-strip behaviour.
+    it("handles a filePath containing '#'", () => {
+      const graph = makeGraph([
+        makeNode({ id: "symbol:src/we#ird.ts#Odd", kind: "symbol", filePath: "src/we#ird.ts" }),
+        makeNode({
+          id: "symbol:src/we#ird.ts#Odd.doThing",
+          kind: "symbol",
+          filePath: "src/we#ird.ts",
+        }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      const byId = new Map(out.nodes.map((n) => [n.id, n]));
+      expect(byId.get("symbol:src/we#ird.ts#Odd")!.label).toBe("Odd");
+      expect(byId.get("symbol:src/we#ird.ts#Odd.doThing")!.label).toBe("Odd.doThing");
+    });
+
+    it("degrades to the full id when the id does not carry the expected prefix", () => {
+      const graph = makeGraph([
+        makeNode({ id: "symbol:mismatched", kind: "symbol", filePath: "src/other.ts" }),
+        // Empty symbol name — must not render as a blank label.
+        makeNode({ id: "symbol:src/empty.ts#", kind: "symbol", filePath: "src/empty.ts" }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      const byId = new Map(out.nodes.map((n) => [n.id, n]));
+      expect(byId.get("symbol:mismatched")!.label).toBe("symbol:mismatched");
+      expect(byId.get("symbol:src/empty.ts#")!.label).toBe("symbol:src/empty.ts#");
+    });
+
+    // PR #376 review — a non-empty check is not enough. ES2022 arbitrary module
+    // namespace names (`export { x as " " }`) make whitespace- and zero-width-
+    // only symbol names legal, and those paint a blank node. Every name here is
+    // `length >= 1`, so each one would slip through a bare emptiness guard.
+    //
+    // This asserts at `renderGraphData`, which is the single choke point every
+    // symbol node passes through regardless of which producer synthesised it
+    // (`parsers/typescript.ts`'s six sites and `graph/star-expansion.ts`'s
+    // barrel expansion alike), so the guard is covered for all of them here.
+    it.each([
+      ["single space", " "],
+      ["tab", "\t"],
+      ["newline", "\n"],
+      ["carriage return", "\r"],
+      ["multiple spaces", "   "],
+      ["non-breaking space", "\u00A0"],
+      ["ideographic space", "\u3000"],
+      ["zero-width space", "\u200B"],
+      ["zero-width non-joiner", "\u200C"],
+      ["zero-width joiner", "\u200D"],
+      ["byte order mark", "\uFEFF"],
+      ["mixed blank run", " \u200B\t"],
+    ])("degrades a symbol name that renders as nothing (%s)", (_name, raw) => {
+      const id = `symbol:src/weird.ts#${raw}`;
+      const graph = makeGraph([makeNode({ id, kind: "symbol", filePath: "src/weird.ts" })]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      expect(out.nodes[0].label).toBe(id);
+      expect(out.nodes[0].label).not.toBe(raw);
+    });
+
+    it("keeps a symbol name that does render, even alongside blank characters", () => {
+      const graph = makeGraph([
+        makeNode({ id: "symbol:src/a.ts# spaced ", kind: "symbol", filePath: "src/a.ts" }),
+        makeNode({ id: "symbol:src/a.ts#\u200Bfn", kind: "symbol", filePath: "src/a.ts" }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      const byId = new Map(out.nodes.map((n) => [n.id, n]));
+      // Not degraded: these carry visible characters, so the name is kept
+      // verbatim rather than being second-guessed by the presenter.
+      expect(byId.get("symbol:src/a.ts# spaced ")!.label).toBe(" spaced ");
+      expect(byId.get("symbol:src/a.ts#\u200Bfn")!.label).toBe("\u200Bfn");
+    });
+
+    it("still prefers node.label on a symbol node when one is set", () => {
+      const graph = makeGraph([
+        makeNode({
+          id: "symbol:src/sample.ts#Sample",
+          kind: "symbol",
+          filePath: "src/sample.ts",
+          label: "explicit",
+        }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      expect(out.nodes[0].label).toBe("explicit");
+    });
+
+    it("leaves file nodes on the basename fallback", () => {
+      const graph = makeGraph([
+        makeNode({ id: "file:src/sample.ts", kind: "file", filePath: "src/sample.ts" }),
+        makeNode({ id: "symbol:src/sample.ts#Sample", kind: "symbol", filePath: "src/sample.ts" }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      const byId = new Map(out.nodes.map((n) => [n.id, n]));
+      expect(byId.get("file:src/sample.ts")!.label).toBe("sample.ts");
+      expect(byId.get("symbol:src/sample.ts#Sample")!.label).toBe("Sample");
+    });
+  });
 });
 
 describe("renderGraphData: state precedence", () => {
