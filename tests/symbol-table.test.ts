@@ -90,3 +90,59 @@ describe("buildSymbolNameTable survives a pathologically deep-bracket-nesting fi
     });
   });
 });
+
+// issue #377 — a repo-relative path may legally contain `#`. Four sites split a
+// `symbol:<path>#<name>` id on the FIRST `#`, which cuts inside such a path.
+//
+// These four sites masked each other: `buildSymbolNameTable` corrupted the
+// candidate NAME (`ird.ts#weird` instead of `weird`), the symbol-grain lookup
+// therefore missed, and the file-grain fallback — which uses the caller's own
+// relPath and so happened to be right — covered it up. Repairing that site
+// alone makes the now-correct `symbol:` id flow into `resolveTraceGraphNodeId`,
+// which (unrepaired) computes `file:src/we` and finds nothing, dropping the
+// evidence with no warning. So these assertions belong together: they fail if
+// any one of the sites regresses on its own.
+describe("symbol id splitting with `#` in the file path (issue #377)", () => {
+  let root: string;
+  const WEIRD = "src/we#ird.ts";
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-377-"));
+    write(
+      root,
+      WEIRD,
+      ["export function weird(): void {}", "export class Odd {", "  m(): void {}", "}", ""].join(
+        "\n",
+      ),
+    );
+    write(root, "src/plain.ts", ["export function fn(): void {}", ""].join("\n"));
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("resolves a top-level symbol at symbol grain, not via the file fallback", () => {
+    const { table } = buildSymbolNameTable(root, ["src/**/*.ts"], ["tests/**/*.test.ts"]);
+    // Before the fix this was {kind: "file-fallback", id: "file:src/we#ird.ts"}
+    // — accidentally the right file, but the wrong grain, and only correct
+    // because the name had been corrupted badly enough to miss entirely.
+    expect(table.resolve(WEIRD, "weird")).toEqual({
+      kind: "symbol",
+      id: `symbol:${WEIRD}#weird`,
+    });
+  });
+
+  it("still resolves class members in such a file", () => {
+    const { table } = buildSymbolNameTable(root, ["src/**/*.ts"], ["tests/**/*.test.ts"]);
+    expect(table.resolve(WEIRD, "m")).toEqual({ kind: "symbol", id: `symbol:${WEIRD}#Odd.m` });
+  });
+
+  it("leaves paths without `#` untouched", () => {
+    const { table } = buildSymbolNameTable(root, ["src/**/*.ts"], ["tests/**/*.test.ts"]);
+    expect(table.resolve("src/plain.ts", "fn")).toEqual({
+      kind: "symbol",
+      id: "symbol:src/plain.ts#fn",
+    });
+  });
+});

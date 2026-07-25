@@ -1111,16 +1111,25 @@ export function buildGraph(
       if (edge.kind !== "imports" || !edge.target.startsWith("symbol:")) continue;
       if (nodes.has(edge.target)) continue;
       const body = edge.target.slice("symbol:".length);
+      const rel = symbolIdOwnerPath(body);
+      // Symbol name for the message below. Deliberately the same `lastIndexOf`
+      // the helper uses, so the two halves of one id can never disagree; the
+      // `-1 + 1 === 0` case keeps a `#`-less body reported whole, as before.
       const hashIdx = body.lastIndexOf("#");
-      const rel = hashIdx === -1 ? body : body.slice(0, hashIdx);
       const fileId = `file:${rel}`;
       // Source file the consumer's import lives in — the `file:<consumer>`
       // side of the edge — is the useful location for the observability
       // warning ("this file's import of X was rewritten / left dangling").
+      //
+      // issue #377 — the source side used `.split("#")[0]`, cutting at the
+      // FIRST `#`, while the target side above already used `lastIndexOf`.
+      // Nine lines apart, same function, opposite behaviour on a filePath
+      // containing `#`. Both now go through one helper so they cannot drift
+      // apart again.
       const sourceFile = edge.source.startsWith("file:")
         ? edge.source.slice("file:".length)
         : edge.source.startsWith("symbol:")
-          ? edge.source.slice("symbol:".length).split("#")[0]
+          ? symbolIdOwnerPath(edge.source.slice("symbol:".length))
           : edge.source;
       if (nodes.has(fileId)) {
         edges[i] = { ...edge, target: fileId };
@@ -1580,6 +1589,19 @@ function extractSpecDir(relFilePath: string, specDirs: string[]): string {
     }
   }
   return basename(dirname(relFilePath));
+}
+
+// The repo-relative path out of a `symbol:` id's body (the part after the
+// `symbol:` prefix). issue #377 — split on the LAST `#`: a filePath may legally
+// contain `#`, so cutting at the first one truncates the path. Symbol names
+// never contain `#` (private members are dropped by the `key.type !==
+// "Identifier"` guard in parsers/typescript.ts), which is what makes the last
+// `#` the separator. Where a node's own `filePath` is in scope, prefer
+// stripping the exact `symbol:<filePath>#` prefix instead — that depends on
+// nothing outside the call site (see graph/render.ts, trace/symbol-table.ts).
+function symbolIdOwnerPath(body: string): string {
+  const hashIdx = body.lastIndexOf("#");
+  return hashIdx === -1 ? body : body.slice(0, hashIdx);
 }
 
 function remapId(id: string, idMapping: Map<string, string>, collidingIds: Set<string>): string {

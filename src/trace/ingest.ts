@@ -407,7 +407,13 @@ export function resolveTraceGraphNodeId(
   if (nodes.has(nodeId)) return nodeId;
   if (nodeId.startsWith("symbol:")) {
     const body = nodeId.slice("symbol:".length);
-    const hashIdx = body.indexOf("#");
+    // issue #377 — split on the LAST `#`, not the first. A filePath may
+    // legally contain `#`, and cutting at the first one produces a path no
+    // node carries, so the file-grain fallback below misses and the caller
+    // drops the evidence with no warning at all. No filePath is available
+    // here — deriving one from the id is this function's whole purpose — so
+    // the prefix-strip used in trace/symbol-table.ts is not an option.
+    const hashIdx = body.lastIndexOf("#");
     const relPath = hashIdx === -1 ? body : body.slice(0, hashIdx);
     const fileId = `file:${relPath}`;
     if (nodes.has(fileId)) return fileId;

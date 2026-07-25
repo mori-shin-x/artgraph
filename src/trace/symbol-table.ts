@@ -210,10 +210,16 @@ export function buildSymbolNameTable(
   }
   for (const node of nodes) {
     if (node.kind !== "symbol") continue;
-    const hashIdx = node.id.indexOf("#");
-    if (hashIdx === -1) continue;
+    // issue #377 — strip the exact `symbol:<filePath>#` prefix instead of
+    // splitting on the first `#`. A filePath may legally contain `#`, and
+    // `indexOf` then cuts inside the path, corrupting the member name.
+    // `node.filePath` is right here, so no `#`-splitting heuristic is needed
+    // at all — the technique graph/render.ts uses, and unlike `lastIndexOf` it
+    // does not lean on symbol names never containing `#`.
+    const prefix = `symbol:${node.filePath}#`;
+    if (!node.id.startsWith(prefix)) continue;
     symbolIds.add(node.id);
-    addCandidate(node.filePath, node.id.slice(hashIdx + 1), node.id);
+    addCandidate(node.filePath, node.id.slice(prefix.length), node.id);
   }
 
   // Source 2: class member names -> the MEMBER's own symbol id when one was
