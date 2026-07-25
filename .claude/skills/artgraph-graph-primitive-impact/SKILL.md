@@ -1,6 +1,6 @@
 ---
 name: "artgraph-graph-primitive-impact"
-description: "artgraph コントリビュータ向け内部 skill。グラフ基本操作 (src/graph/traverse.ts / src/graph/builder.ts の BFS・エッジ意味論・ID 解決) や graph-core 関数 (impact() / check() / buildGraph()) を変更する issue/PR に着手する前 (Step 0-pre) に、16 チェックの shift-left インパクト調査を実行し「silent に破壊される経路」のランク付きリストを報告する。Use when starting a PR that touches src/graph/, edge semantics, or graph-core function signatures/return values."
+description: "artgraph コントリビュータ向け内部 skill。グラフ基本操作 (src/graph/traverse.ts / src/graph/builder.ts の BFS・エッジ意味論・ID 解決) や graph-core 関数 (impact() / check() / buildGraph()) を変更する issue/PR に着手する前 (Step 0-pre) に、17 チェックの shift-left インパクト調査を実行し「silent に破壊される経路」のランク付きリストを報告する。Use when starting a PR that touches src/graph/, edge semantics, or graph-core function signatures/return values."
 allowed-tools:
   - "Read"
   - "Grep"
@@ -17,7 +17,7 @@ disable-model-invocation: false
 
 **artgraph リポジトリ内部専用の dev process skill**(`templates/skills/` の一般配布ツリーには含まれない。canonical コピーは `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` のみ)。
 
-グラフ基本操作 (BFS / エッジ意味論 / ID 解決) は多数の CLI コマンドと gate 経路から間接消費されており、意味論を狭める・広げる変更は**直接の呼び出し元 grep では見えない経路を silent に壊す**。本 skill は issue 対応ループの **Step 0-pre**(設計より前)で、その経路を事前に列挙するための 16 チェック調査を定義する。
+グラフ基本操作 (BFS / エッジ意味論 / ID 解決) は多数の CLI コマンドと gate 経路から間接消費されており、意味論を狭める・広げる変更は**直接の呼び出し元 grep では見えない経路を silent に壊す**。本 skill は issue 対応ループの **Step 0-pre**(設計より前)で、その経路を事前に列挙するための 17 チェック調査を定義する。
 
 ## トリガー条件
 
@@ -34,9 +34,9 @@ disable-model-invocation: false
 サブエージェント brief テンプレ:
 
 > あなたは artgraph リポジトリの調査担当です。これから `<変更対象の primitive / 関数 / エッジ kind>` を `<変更の一行要約>` する変更を検討しています。実装はまだ存在しません。
-> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 16 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
+> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 17 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
 
-## 16 チェック
+## 17 チェック
 
 ### 1. 直接呼び出し元
 
@@ -186,6 +186,33 @@ grep -rn "<primitive 名 / 保証している挙動のキーワード>" docs/
 3. 届かない場合の補完策 (doctor 診断 / scan 時の proactive 警告 / マージ意味論への変更) を設計の検討事項として報告に含める。
 
 前例: PR #355 H1 — `DEFAULT_CONFIG.testPatterns` への `"!**/node_modules/**"` 追加はカスタム testPatterns ユーザーに届かず、vendor の偶然の `[REQ-x]` タグが REQ を静かに verified に反転、CI ゲートは構造的に検知不能だった (Step 0-pre はデフォルト側の非対称のみ検出し、伝搬ギャップを見落とした)。include 側にも #287 以来の同型ギャップがあった (issue #356)。
+
+### 17. 横断 grep のバイナリ判定による静かな脱落監査
+
+チェック 2 / 11 / 13 / 14 はいずれも「対象パターンを `src/` 配下で再帰的に grep し、ヒットした箇所を全消費者/全生成元として扱う」ことを前提にしている。この前提は、対象ファイルに生の NUL バイトが 1 バイトでも含まれていると崩れる (複合キーの衝突回避セパレータとして `` `${a}\0${b}` `` の形で意図的に埋め込まれるケースが本リポジトリに実在する)。ripgrep・git grep・Claude Code の Grep ツールは、NUL バイトを検出した時点でそのファイルを「バイナリ」として扱い、既定では通常の内容一致表示をスキップする。
+
+**脱落の可視性はツールにより異なり、最も一般的な呼び出し方 (ディレクトリ/glob 対象の再帰探索) が最も危険:**
+
+| ツール / 呼び出し方 | 挙動 |
+| --- | --- |
+| `rg <pattern> src/` (ディレクトリ/glob 再帰) | 該当ファイルは結果から**何の痕跡もなく**消える。stdout・stderr・exit code のいずれにも異常は出ない。`-l` / `-c` でも同様 |
+| `rg <pattern> <file>` (単体指定) | `binary file matches (found "\0" byte around offset N)` を出すが、既に疑わしい 1 ファイルを名指しできている場面でしか得られない |
+| Claude Code の **Grep ツール** | 無言で除外し、かつ `-a` / `--text` / `--binary` 相当のパラメータを持たない。**このツール単体では完全性を担保できない** |
+| GNU `grep -rn` (内容表示) | notice を **stderr** に出す |
+| GNU `grep -rl` (一覧モード) | 該当ファイルを正しくヒット扱いでリストする |
+| `git grep <pattern>` (内容表示) | `Binary file <file> matches` を **stdout** に出す |
+| `git grep -l` | 正しくリストする |
+
+**「grep 出力に `binary file matches` が出ていないか確認する」だけでは不十分**: 実際の横断監査で最も使われる呼び出し方 (ディレクトリ対象の `rg` / Grep ツール) では、この文字列自体が一切出力されない。「出ていない」ことは「取りこぼしがない」ことの証拠にならないため、検出トリガーではなく**予防側** (既定で `--text` を付ける) に倒すこと。
+
+監査手順:
+
+1. チェック 2 / 11 / 13 / 14 でパターン・フィールド名・ID 表現を横断 grep する際は、`-a` (GNU grep) / `--text` (ripgrep) を**既定で付ける**。Claude Code の Grep ツールにはこの手段がないため、完全性が要求される監査は Bash 経由の `rg --text` または `git grep -a` (本 skill の `allowed-tools` に既にある) に切り替える。
+2. 過去に `-a` / `--text` なしで行った監査の網羅性を事後検証する場合は、既定モードとテキスト強制モードのヒットファイル数を突き合わせる (`rg -l --glob '*.ts' src | wc -l` vs `rg -l --glob '*.ts' --text src | wc -l`)。差分がある分だけ取りこぼしがある。
+3. シェル引数には生の NUL バイトを渡せない (`$'\x00'` は空文字列に化ける) ため、NUL 保有の有無を確認する場合はシェル経由でなくファイルをバイト列として直接検査すること。
+4. 対象ファイルの NUL バイトが複合キーの衝突回避など正当な設計意図を持つ場合でも、ソース側の対処 (区切り文字の変更等) より **grep 側の頑健化を優先**する。ソース側の対処は個別のトリガーには効くが、将来別の制御文字が別の理由で混入するケースまでは防げない。
+
+前例: PR #376 — symbol ノード生成箇所の横断 grep が `src/graph/star-expansion.ts` を静かに取りこぼし、7 箇所を 6 箇所と誤って結論した。実装者本人の Step 0-pre と、独立したクリーンなメタレビュアーの双方が同じ罠にはまっており、委譲の有無では防げない。
 
 ## 出力フォーマット
 
