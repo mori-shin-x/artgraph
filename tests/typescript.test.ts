@@ -2054,3 +2054,77 @@ describe.skipIf(IS_WIN || IS_ROOT)(
     });
   },
 );
+
+// issue #161 — `lineNumberAt` recounted newlines from offset 0 on every `@impl`
+// match, so a tag-dense file cost O(matches x length). It is now a per-file
+// cursor that resumes where the last lookup stopped. The cursor is only correct
+// while offsets arrive in ascending order, and a mis-scoped or drifting cursor
+// would mis-attribute tags to the WRONG symbol rather than crash — so pin the
+// attribution itself, densely, rather than just counting edges.
+describe("createTSParser (symbol mode — dense @impl attribution, issue #161)", () => {
+  let root: string;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "artgraph-161-lines-"));
+    const abs = join(root, "src/dense.ts");
+    mkdirSync(dirname(abs), { recursive: true });
+    writeFileSync(
+      abs,
+      [
+        "// @impl REQ-911",
+        "export function first(): void {}",
+        "",
+        "/**",
+        " * A JSDoc block whose text mentions // @impl REQ-999 — must NOT count,",
+        " * because the tag has to sit in a real line comment.",
+        " */",
+        "// @impl REQ-912",
+        "export function second(): void {}",
+        "",
+        "// @impl REQ-913",
+        "export class Holder {",
+        "  // @impl REQ-914",
+        "  alpha(): void {}",
+        "",
+        "  // @impl REQ-915",
+        "  beta(): void {}",
+        "}",
+        "",
+        "// @impl REQ-916",
+        "export const third = (): void => {};",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("attributes every tag in a tag-dense file to its own symbol", () => {
+    const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    const sourceFor = (req: string) =>
+      result.edges
+        .filter((e) => e.kind === "implements" && e.target === req)
+        .map((e) => e.source)
+        .sort();
+
+    expect(sourceFor("REQ-911")).toEqual(["symbol:src/dense.ts#first"]);
+    expect(sourceFor("REQ-912")).toEqual(["symbol:src/dense.ts#second"]);
+    expect(sourceFor("REQ-913")).toEqual(["symbol:src/dense.ts#Holder"]);
+    expect(sourceFor("REQ-914")).toEqual(["symbol:src/dense.ts#Holder.alpha"]);
+    expect(sourceFor("REQ-915")).toEqual(["symbol:src/dense.ts#Holder.beta"]);
+    expect(sourceFor("REQ-916")).toEqual(["symbol:src/dense.ts#third"]);
+  });
+
+  it("still excludes an @impl that only appears inside a block comment", () => {
+    const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    expect(result.edges.filter((e) => e.target === "REQ-999")).toEqual([]);
+  });
+
+  it("is stable across repeated parses of the same file", () => {
+    const a = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    const b = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    expect(JSON.stringify(a.edges)).toBe(JSON.stringify(b.edges));
+  });
+});

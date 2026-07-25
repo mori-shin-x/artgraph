@@ -1931,3 +1931,94 @@ describe.skipIf(IS_WIN_277 || IS_ROOT_277)(
     });
   },
 );
+
+// issue #161 — `contains` generation used to rescan the whole node map once per
+// doc node; it now indexes req/task ids by `filePath` in one pass. The rewrite
+// changes edge emission ORDER, which is only safe because `buildGraph` dedups
+// and sorts before returning.
+//
+// The pre-existing double-build determinism test (spec 021 / T020(b), above)
+// cannot cover this: its fixture has no doc, req or task nodes at all, so it
+// generates zero `contains` edges. These build a fixture that actually
+// exercises the rewritten loop.
+describe("buildGraph: contains-edge generation (issue #161)", () => {
+  const containsConfig: ArtgraphConfig = {
+    include: ["src/**/*.ts"],
+    specDirs: ["specs"],
+    testPatterns: ["tests/**/*.ts"],
+    lockFile: ".trace.lock",
+    docGraph: { autoNodes: true, autoContains: true },
+  };
+
+  // One doc with several children (high fan-out), one doc whose file declares
+  // nothing (zero children — the lookup must simply find no bucket), and a
+  // third file so the per-file grouping has more than one bucket to keep apart.
+  const makeRoot = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "artgraph-161-contains-"));
+    const write = (rel: string, body: string): void => {
+      const abs = join(dir, rel);
+      mkdirSync(dirname(abs), { recursive: true });
+      writeFileSync(abs, body);
+    };
+    // No `[FR-nnn]` bracket references anywhere in these fixture strings.
+    // artgraph dogfood-scans its own `tests/`, and `testReqRe` matches that
+    // literal wherever it appears — a bracket here hangs a spurious `verifies`
+    // edge off this test file in the project's real graph. Same self-reference
+    // hazard the `"@" + "impl"` split guards against elsewhere in this file;
+    // the contains assertions below never needed the references.
+    write("specs/many.md", ["- FR-101: one", "- FR-102: two", "- FR-103: three", ""].join("\n"));
+    write(
+      "specs/empty.md",
+      ["# Just prose", "", "No requirement declarations here.", ""].join("\n"),
+    );
+    write("specs/other.md", ["- FR-201: elsewhere", ""].join("\n"));
+    // Task nodes come from `tasks.md` specifically, and the rewritten loop
+    // buckets `req` and `task` together — so cover both kinds.
+    write("specs/tasks.md", ["- [ ] T101 do it", "- [x] T102 done", ""].join("\n"));
+    return dir;
+  };
+
+  it("links each doc to exactly the req/task nodes declared in its own file", () => {
+    const root = makeRoot();
+    try {
+      const { graph } = buildGraph(root, containsConfig);
+      const contains = graph.edges
+        .filter((e) => e.kind === "contains")
+        .map((e) => `${e.source} -> ${e.target}`)
+        .sort();
+
+      expect(contains).toEqual([
+        "doc:many.md -> FR-101",
+        "doc:many.md -> FR-102",
+        "doc:many.md -> FR-103",
+        "doc:other.md -> FR-201",
+        "doc:tasks.md -> T101",
+        "doc:tasks.md -> T102",
+      ]);
+      // The child-less doc still exists as a node; it just owns no contains edge.
+      expect(graph.nodes.has("doc:empty.md")).toBe(true);
+      expect(contains.some((e) => e.startsWith("doc:empty.md"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("produces a byte-identical graph across two independent cold builds", () => {
+    const rootA = makeRoot();
+    const rootB = makeRoot();
+    try {
+      const a = buildGraph(rootA, containsConfig).graph;
+      const b = buildGraph(rootB, containsConfig).graph;
+
+      // Compare the full edge sequence, not a set — the point of the rewrite's
+      // safety argument is that the post-dedup SORT imposes the order, so the
+      // sequences have to match element for element.
+      expect(JSON.stringify(a.edges)).toBe(JSON.stringify(b.edges));
+      expect([...a.nodes.keys()]).toEqual([...b.nodes.keys()]);
+      expect(a.edges.filter((e) => e.kind === "contains").length).toBe(6);
+    } finally {
+      rmSync(rootA, { recursive: true, force: true });
+      rmSync(rootB, { recursive: true, force: true });
+    }
+  });
+});
