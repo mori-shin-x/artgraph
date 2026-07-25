@@ -90,6 +90,27 @@ export function renderGraphData(graph: ArtifactGraph, options: RenderOptions): R
       label = node.label;
     } else if (node.kind === "req") {
       label = node.id;
+    } else if (node.kind === "symbol") {
+      // issue #245 — symbol nodes never carry `node.label` (it is only set for
+      // req/doc/task nodes in parsers/markdown.ts and builder.ts), so without
+      // this branch every symbol falls through to the basename below and a
+      // class plus all of its methods render as the SAME label. spec 021's
+      // method-grain symbols multiply the collision per file.
+      //
+      // Strip the exact `symbol:<filePath>#` prefix rather than splitting on
+      // `#`. A filePath may legally contain `#`, and there `indexOf("#")`
+      // yields the wrong side: `symbol:src/we#ird.ts#Odd` -> `ird.ts#Odd`.
+      // `lastIndexOf("#")` happens to be correct today, but only because
+      // symbol NAMES never contain `#` — private members (`#m`) are dropped by
+      // the `key.type !== "Identifier"` guard in parsers/typescript.ts, an
+      // invariant owned by a different module that this presenter would then
+      // silently depend on. The prefix strip depends on nothing outside here.
+      const prefix = `symbol:${node.filePath}#`;
+      const name = node.id.startsWith(prefix) ? node.id.slice(prefix.length) : "";
+      // Degrade to the full id, never to the basename: an unexpected id shape
+      // (or an empty symbol name) should stay verbose-but-unique rather than
+      // collapse back into the ambiguity this branch exists to remove.
+      label = name.length > 0 ? name : node.id;
     } else {
       label = node.filePath.split("/").pop() ?? node.id;
     }

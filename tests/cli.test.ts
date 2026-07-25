@@ -1133,6 +1133,47 @@ describe("CLI: symbol mode", () => {
     const result = JSON.parse(stdout);
     expect(result.symbolCount).toBeGreaterThan(0);
   });
+
+  // issue #245 — the unit tests in graph-render.test.ts pin `renderGraphData`
+  // in isolation; this is the crossing cell (symbol mode x `--output` payload)
+  // that carries the fix end-to-end through the real CLI and the template
+  // injection pipeline. src/auth.ts ships three exported functions, so before
+  // the fix all three arrived labelled `auth.ts`.
+  it(
+    "T-graph-serve-6: --output labels same-file symbols distinctly",
+    { timeout: 30000 },
+    async () => {
+      const outDir = mkdtempSync(join(tmpdir(), "artgraph-symbol-label-"));
+      try {
+        const { exitCode } = await runAt(SYM_CONFIG_FIXTURE, ["scan", "--output", outDir]);
+        expect(exitCode).toBe(0);
+
+        const html = readFileSync(join(outDir, "index.html"), "utf-8");
+        const match = html.match(
+          /<script id="artgraph-data" type="application\/json">([\s\S]*?)<\/script>/,
+        );
+        expect(match).not.toBeNull();
+        const data = JSON.parse(match![1]!);
+
+        const authSymbols = (
+          data.nodes as { id: string; label: string; kind: string; filePath: string }[]
+        )
+          .filter((n) => n.kind === "symbol" && n.filePath === "src/auth.ts")
+          .sort((a, b) => (a.id < b.id ? -1 : 1));
+        expect(authSymbols.length).toBeGreaterThanOrEqual(3);
+
+        // No symbol may still be labelled with the file's basename, and the
+        // labels must be pairwise distinct.
+        for (const n of authSymbols) expect(n.label).not.toBe("auth.ts");
+        expect(new Set(authSymbols.map((n) => n.label)).size).toBe(authSymbols.length);
+        expect(authSymbols.map((n) => n.label)).toEqual(
+          expect.arrayContaining(["validateToken", "issueToken", "revokeToken"]),
+        );
+      } finally {
+        rmSync(outDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

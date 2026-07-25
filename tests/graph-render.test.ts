@@ -256,6 +256,92 @@ describe("renderGraphData: label fallback", () => {
     const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
     expect(out.nodes[0].label).toBe("User can log in");
   });
+
+  // issue #245 — symbol nodes used to fall through to basename(filePath), so a
+  // class and every one of its methods rendered as the same label and were
+  // indistinguishable in --serve/--output.
+  describe("symbol nodes (issue #245)", () => {
+    it("labels symbols by their symbol name, not the file basename", () => {
+      const graph = makeGraph([
+        makeNode({ id: "symbol:src/sample.ts#Sample", kind: "symbol", filePath: "src/sample.ts" }),
+        makeNode({
+          id: "symbol:src/sample.ts#Sample.methodA",
+          kind: "symbol",
+          filePath: "src/sample.ts",
+        }),
+        makeNode({
+          id: "symbol:src/sample.ts#Sample.methodB",
+          kind: "symbol",
+          filePath: "src/sample.ts",
+        }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      const byId = new Map(out.nodes.map((n) => [n.id, n]));
+      expect(byId.get("symbol:src/sample.ts#Sample")!.label).toBe("Sample");
+      expect(byId.get("symbol:src/sample.ts#Sample.methodA")!.label).toBe("Sample.methodA");
+      expect(byId.get("symbol:src/sample.ts#Sample.methodB")!.label).toBe("Sample.methodB");
+      // The point of the issue: same-file symbols must not collide.
+      expect(new Set(out.nodes.map((n) => n.label)).size).toBe(3);
+    });
+
+    // A filePath may legally contain `#`. Splitting the id on the FIRST `#`
+    // would yield `ird.ts#Odd` here; this pins the prefix-strip behaviour.
+    it("handles a filePath containing '#'", () => {
+      const graph = makeGraph([
+        makeNode({ id: "symbol:src/we#ird.ts#Odd", kind: "symbol", filePath: "src/we#ird.ts" }),
+        makeNode({
+          id: "symbol:src/we#ird.ts#Odd.doThing",
+          kind: "symbol",
+          filePath: "src/we#ird.ts",
+        }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      const byId = new Map(out.nodes.map((n) => [n.id, n]));
+      expect(byId.get("symbol:src/we#ird.ts#Odd")!.label).toBe("Odd");
+      expect(byId.get("symbol:src/we#ird.ts#Odd.doThing")!.label).toBe("Odd.doThing");
+    });
+
+    it("degrades to the full id when the id does not carry the expected prefix", () => {
+      const graph = makeGraph([
+        makeNode({ id: "symbol:mismatched", kind: "symbol", filePath: "src/other.ts" }),
+        // Empty symbol name — must not render as a blank label.
+        makeNode({ id: "symbol:src/empty.ts#", kind: "symbol", filePath: "src/empty.ts" }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      const byId = new Map(out.nodes.map((n) => [n.id, n]));
+      expect(byId.get("symbol:mismatched")!.label).toBe("symbol:mismatched");
+      expect(byId.get("symbol:src/empty.ts#")!.label).toBe("symbol:src/empty.ts#");
+    });
+
+    it("still prefers node.label on a symbol node when one is set", () => {
+      const graph = makeGraph([
+        makeNode({
+          id: "symbol:src/sample.ts#Sample",
+          kind: "symbol",
+          filePath: "src/sample.ts",
+          label: "explicit",
+        }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      expect(out.nodes[0].label).toBe("explicit");
+    });
+
+    it("leaves file nodes on the basename fallback", () => {
+      const graph = makeGraph([
+        makeNode({ id: "file:src/sample.ts", kind: "file", filePath: "src/sample.ts" }),
+        makeNode({ id: "symbol:src/sample.ts#Sample", kind: "symbol", filePath: "src/sample.ts" }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      const byId = new Map(out.nodes.map((n) => [n.id, n]));
+      expect(byId.get("file:src/sample.ts")!.label).toBe("sample.ts");
+      expect(byId.get("symbol:src/sample.ts#Sample")!.label).toBe("Sample");
+    });
+  });
 });
 
 describe("renderGraphData: state precedence", () => {
