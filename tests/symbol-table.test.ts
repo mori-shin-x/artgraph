@@ -94,14 +94,25 @@ describe("buildSymbolNameTable survives a pathologically deep-bracket-nesting fi
 // issue #377 — a repo-relative path may legally contain `#`. Four sites split a
 // `symbol:<path>#<name>` id on the FIRST `#`, which cuts inside such a path.
 //
-// These four sites masked each other: `buildSymbolNameTable` corrupted the
-// candidate NAME (`ird.ts#weird` instead of `weird`), the symbol-grain lookup
-// therefore missed, and the file-grain fallback — which uses the caller's own
-// relPath and so happened to be right — covered it up. Repairing that site
-// alone makes the now-correct `symbol:` id flow into `resolveTraceGraphNodeId`,
-// which (unrepaired) computes `file:src/we` and finds nothing, dropping the
-// evidence with no warning. So these assertions belong together: they fail if
-// any one of the sites regresses on its own.
+// Two of those four sites masked each other IN PRODUCTION: this file's
+// `buildSymbolNameTable` corrupted the candidate NAME (`ird.ts#weird` instead
+// of `weird`), so the symbol-grain lookup missed — and the file-grain
+// fallback (derived from the caller's own relPath, not from the corrupted
+// id, so it happened to still be right) covered the miss up. Repairing this
+// site alone would have made the now-correct `symbol:` id flow downstream
+// into `trace/ingest.ts`'s `resolveTraceGraphNodeId`, which — left
+// unrepaired — computes `file:src/we` and finds nothing, silently dropping
+// the evidence. That masking relationship is specific to the
+// symbol-table -> ingest pair; the other two sites the same bug also hit
+// (`graph/builder.ts`'s phantom-repair `sourceFile`, and `trace/report.ts`'s
+// `ownerFilePath`) are independent call sites, not links in this chain.
+//
+// Each of the four sites now has its own dedicated regression test, so
+// reverting any ONE site alone fails at least that one test: this describe
+// block for symbol-table.ts, tests/trace-ingest.test.ts's own "issue #377"
+// describe block for ingest.ts's `resolveTraceGraphNodeId` and report.ts's
+// `ownerFilePath`, and tests/barrel-reexport.test.ts's "#377
+// phantom-import-repaired sourceFile ..." describe block for builder.ts.
 describe("symbol id splitting with `#` in the file path (issue #377)", () => {
   let root: string;
   const WEIRD = "src/we#ird.ts";

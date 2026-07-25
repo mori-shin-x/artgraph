@@ -216,6 +216,14 @@ export function buildSymbolNameTable(
     // `node.filePath` is right here, so no `#`-splitting heuristic is needed
     // at all — the technique graph/render.ts uses, and unlike `lastIndexOf` it
     // does not lean on symbol names never containing `#`.
+    //
+    // Not behaviorally equivalent to the old `indexOf` split for a node whose
+    // `id` and `filePath` disagree, though: the old code was fail-OPEN (still
+    // registered a wrong candidate and added to `symbolIds`); this `continue`
+    // is fail-CLOSED (drops the node from both, silently). Unreached via the
+    // current parser API — every symbol node's `id` and `filePath` are built
+    // from the same `relPath` (parsers/typescript.ts) — so this is a latent
+    // asymmetry, not a live bug.
     const prefix = `symbol:${node.filePath}#`;
     if (!node.id.startsWith(prefix)) continue;
     symbolIds.add(node.id);
