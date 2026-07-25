@@ -1150,20 +1150,34 @@ export function buildGraph(
   // T045 / Issue #28: Generate contains edges (doc -> req|task within the same file).
   // Use autoContains alone; doc nodes with explicit node_id exist even when autoNodes=false.
   if (autoContains) {
-    const docNodes = [...nodes.values()].filter((n) => n.kind === "doc");
-    for (const doc of docNodes) {
-      for (const [childId, childNode] of nodes) {
-        if (
-          (childNode.kind === "req" || childNode.kind === "task") &&
-          childNode.filePath === doc.filePath
-        ) {
-          edges.push({
-            source: doc.id,
-            target: childId,
-            kind: "contains",
-            provenances: ["structural"],
-          });
-        }
+    // issue #161 — this used to rescan the ENTIRE node map once per doc node,
+    // i.e. O(docs x nodes). Index the req/task ids by `filePath` in one pass,
+    // then look each doc's own path up: O(nodes).
+    //
+    // Emission order changes (children now come out grouped by file rather
+    // than in whole-map order per doc), which is safe because `buildGraph`
+    // dedups and sorts every edge before returning — that post-dedup sort is
+    // the INV-L4 anchor. Both passes below iterate `nodes` in its own
+    // insertion order, so the ids within one file also keep a deterministic
+    // relative order rather than relying on the sort to impose one.
+    const childIdsByFile = new Map<string, string[]>();
+    for (const [childId, childNode] of nodes) {
+      if (childNode.kind !== "req" && childNode.kind !== "task") continue;
+      const bucket = childIdsByFile.get(childNode.filePath);
+      if (bucket) bucket.push(childId);
+      else childIdsByFile.set(childNode.filePath, [childId]);
+    }
+    for (const node of nodes.values()) {
+      if (node.kind !== "doc") continue;
+      const childIds = childIdsByFile.get(node.filePath);
+      if (!childIds) continue;
+      for (const childId of childIds) {
+        edges.push({
+          source: node.id,
+          target: childId,
+          kind: "contains",
+          provenances: ["structural"],
+        });
       }
     }
   }

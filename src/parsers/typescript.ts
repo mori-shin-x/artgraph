@@ -2797,6 +2797,7 @@ function extractImplTags(
   const fileSourceId = `file:${relPath}`;
 
   let match: RegExpExecArray | null;
+  const lineNumberAt = makeLineCounter(content);
 
   implRe.lastIndex = 0;
   while ((match = implRe.exec(content)) !== null) {
@@ -2814,7 +2815,7 @@ function extractImplTags(
     let sourceIds = [fileSourceId];
 
     if (mode === "symbol" && !isTest && symbolRanges.length > 0) {
-      const line = lineNumberAt(content, match.index);
+      const line = lineNumberAt(match.index);
       // D1: resolveSymbolsAtLine groups siblings by declaration STATEMENT and
       // returns one group. A leading tag above `export const a = 1, b = 2` /
       // `export const { a, b } = …` binds to every sibling of that one
@@ -2862,12 +2863,31 @@ function extractImplTags(
   }
 }
 
-function lineNumberAt(content: string, index: number): number {
+// issue #161 — the previous `lineNumberAt(content, index)` recounted newlines
+// from offset 0 on every call, so a tag-dense file cost O(matches x length).
+// `implRe.exec` hands matches back in ascending `match.index` order, so a
+// cursor that resumes where the last lookup stopped is enough; no newline-offset
+// array is needed.
+//
+// Returned as a closure created per file rather than module-level state: the
+// cursor is only meaningful for the `content` it was built from, and a shared
+// one would silently under-count on the next file. Out-of-order input is
+// handled by restarting rather than returning a stale line — a future caller
+// that breaks the ascending-offset contract gets a slow answer, not a wrong one.
+function makeLineCounter(content: string): (index: number) => number {
+  let scanned = 0;
   let line = 1;
-  for (let i = 0; i < index; i++) {
-    if (content[i] === "\n") line++;
-  }
-  return line;
+  return (index) => {
+    if (index < scanned) {
+      scanned = 0;
+      line = 1;
+    }
+    for (let i = scanned; i < index; i++) {
+      if (content[i] === "\n") line++;
+    }
+    scanned = index;
+    return line;
+  };
 }
 
 // The names of the symbol GROUP whose attribution range encloses `line`,
