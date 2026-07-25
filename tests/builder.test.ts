@@ -1960,12 +1960,13 @@ describe("buildGraph: contains-edge generation (issue #161)", () => {
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, body);
     };
-    write(
-      "specs/many.md",
-      ["- FR-101: one", "- FR-102: two", "- FR-103: three", "- [ ] T101 task [FR-101]", ""].join(
-        "\n",
-      ),
-    );
+    // No `[FR-nnn]` bracket references anywhere in these fixture strings.
+    // artgraph dogfood-scans its own `tests/`, and `testReqRe` matches that
+    // literal wherever it appears — a bracket here hangs a spurious `verifies`
+    // edge off this test file in the project's real graph. Same self-reference
+    // hazard the `"@" + "impl"` split guards against elsewhere in this file;
+    // the contains assertions below never needed the references.
+    write("specs/many.md", ["- FR-101: one", "- FR-102: two", "- FR-103: three", ""].join("\n"));
     write(
       "specs/empty.md",
       ["# Just prose", "", "No requirement declarations here.", ""].join("\n"),
@@ -1973,10 +1974,7 @@ describe("buildGraph: contains-edge generation (issue #161)", () => {
     write("specs/other.md", ["- FR-201: elsewhere", ""].join("\n"));
     // Task nodes come from `tasks.md` specifically, and the rewritten loop
     // buckets `req` and `task` together — so cover both kinds.
-    write(
-      "specs/tasks.md",
-      ["- [ ] T101 do it [FR-101]", "- [x] T102 done [FR-102]", ""].join("\n"),
-    );
+    write("specs/tasks.md", ["- [ ] T101 do it", "- [x] T102 done", ""].join("\n"));
     return dir;
   };
 
