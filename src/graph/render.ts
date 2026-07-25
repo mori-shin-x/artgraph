@@ -107,10 +107,20 @@ export function renderGraphData(graph: ArtifactGraph, options: RenderOptions): R
       // silently depend on. The prefix strip depends on nothing outside here.
       const prefix = `symbol:${node.filePath}#`;
       const name = node.id.startsWith(prefix) ? node.id.slice(prefix.length) : "";
-      // Degrade to the full id, never to the basename: an unexpected id shape
-      // (or an empty symbol name) should stay verbose-but-unique rather than
-      // collapse back into the ambiguity this branch exists to remove.
-      label = name.length > 0 ? name : node.id;
+      // Degrade to the full id, never to the basename: an unexpected id shape,
+      // or a name that renders as nothing, should stay verbose-but-unique
+      // rather than collapse back into the ambiguity this branch exists to
+      // remove.
+      //
+      // A non-empty check is not enough here. ES2022 arbitrary module
+      // namespace names make `export { x as " " }` legal, so a symbol name can
+      // be whitespace- or zero-width-only while still having length — it would
+      // then paint a blank node in --serve/--output. `\s` already covers the
+      // space family (TAB/LF/CR/NBSP/U+3000/BOM), but U+200B-U+200D (ZWSP,
+      // ZWNJ, ZWJ) are not whitespace to the regex engine and have to be named.
+      // A lone combining mark still passes: it does render (as a dotted
+      // circle), so it stays a visible—if odd—label rather than degrading.
+      label = /[^\s\u200B-\u200D]/.test(name) ? name : node.id;
     } else {
       label = node.filePath.split("/").pop() ?? node.id;
     }

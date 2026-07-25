@@ -316,6 +316,51 @@ describe("renderGraphData: label fallback", () => {
       expect(byId.get("symbol:src/empty.ts#")!.label).toBe("symbol:src/empty.ts#");
     });
 
+    // PR #376 review — a non-empty check is not enough. ES2022 arbitrary module
+    // namespace names (`export { x as " " }`) make whitespace- and zero-width-
+    // only symbol names legal, and those paint a blank node. Every name here is
+    // `length >= 1`, so each one would slip through a bare emptiness guard.
+    //
+    // This asserts at `renderGraphData`, which is the single choke point every
+    // symbol node passes through regardless of which producer synthesised it
+    // (`parsers/typescript.ts`'s six sites and `graph/star-expansion.ts`'s
+    // barrel expansion alike), so the guard is covered for all of them here.
+    it.each([
+      ["single space", " "],
+      ["tab", "\t"],
+      ["newline", "\n"],
+      ["carriage return", "\r"],
+      ["multiple spaces", "   "],
+      ["non-breaking space", "\u00A0"],
+      ["ideographic space", "\u3000"],
+      ["zero-width space", "\u200B"],
+      ["zero-width non-joiner", "\u200C"],
+      ["zero-width joiner", "\u200D"],
+      ["byte order mark", "\uFEFF"],
+      ["mixed blank run", " \u200B\t"],
+    ])("degrades a symbol name that renders as nothing (%s)", (_name, raw) => {
+      const id = `symbol:src/weird.ts#${raw}`;
+      const graph = makeGraph([makeNode({ id, kind: "symbol", filePath: "src/weird.ts" })]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      expect(out.nodes[0].label).toBe(id);
+      expect(out.nodes[0].label).not.toBe(raw);
+    });
+
+    it("keeps a symbol name that does render, even alongside blank characters", () => {
+      const graph = makeGraph([
+        makeNode({ id: "symbol:src/a.ts# spaced ", kind: "symbol", filePath: "src/a.ts" }),
+        makeNode({ id: "symbol:src/a.ts#\u200Bfn", kind: "symbol", filePath: "src/a.ts" }),
+      ]);
+
+      const out = renderGraphData(graph, { rootDir: ".", generatedAt: FIXED_TS });
+      const byId = new Map(out.nodes.map((n) => [n.id, n]));
+      // Not degraded: these carry visible characters, so the name is kept
+      // verbatim rather than being second-guessed by the presenter.
+      expect(byId.get("symbol:src/a.ts# spaced ")!.label).toBe(" spaced ");
+      expect(byId.get("symbol:src/a.ts#\u200Bfn")!.label).toBe("\u200Bfn");
+    });
+
     it("still prefers node.label on a symbol node when one is set", () => {
       const graph = makeGraph([
         makeNode({
