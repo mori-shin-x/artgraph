@@ -1,6 +1,6 @@
 ---
 name: "artgraph-graph-primitive-impact"
-description: "artgraph コントリビュータ向け内部 skill。グラフ基本操作 (src/graph/traverse.ts / src/graph/builder.ts の BFS・エッジ意味論・ID 解決) や graph-core 関数 (impact() / check() / buildGraph()) を変更する issue/PR に着手する前 (Step 0-pre) に、17 チェックの shift-left インパクト調査を実行し「silent に破壊される経路」のランク付きリストを報告する。Use when starting a PR that touches src/graph/, edge semantics, or graph-core function signatures/return values."
+description: "artgraph コントリビュータ向け内部 skill。グラフ基本操作 (src/graph/traverse.ts / src/graph/builder.ts の BFS・エッジ意味論・ID 解決) や graph-core 関数 (impact() / check() / buildGraph()) を変更する issue/PR に着手する前 (Step 0-pre) に、18 チェックの shift-left インパクト調査を実行し「silent に破壊される経路」のランク付きリストを報告する。Use when starting a PR that touches src/graph/, edge semantics, or graph-core function signatures/return values."
 allowed-tools:
   - "Read"
   - "Grep"
@@ -17,7 +17,7 @@ disable-model-invocation: false
 
 **artgraph リポジトリ内部専用の dev process skill**(`templates/skills/` の一般配布ツリーには含まれない。canonical コピーは `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` のみ)。
 
-グラフ基本操作 (BFS / エッジ意味論 / ID 解決) は多数の CLI コマンドと gate 経路から間接消費されており、意味論を狭める・広げる変更は**直接の呼び出し元 grep では見えない経路を silent に壊す**。本 skill は issue 対応ループの **Step 0-pre**(設計より前)で、その経路を事前に列挙するための 17 チェック調査を定義する。
+グラフ基本操作 (BFS / エッジ意味論 / ID 解決) は多数の CLI コマンドと gate 経路から間接消費されており、意味論を狭める・広げる変更は**直接の呼び出し元 grep では見えない経路を silent に壊す**。本 skill は issue 対応ループの **Step 0-pre**(設計より前)で、その経路を事前に列挙するための 18 チェック調査を定義する。
 
 ## トリガー条件
 
@@ -34,9 +34,9 @@ disable-model-invocation: false
 サブエージェント brief テンプレ:
 
 > あなたは artgraph リポジトリの調査担当です。これから `<変更対象の primitive / 関数 / エッジ kind>` を `<変更の一行要約>` する変更を検討しています。実装はまだ存在しません。
-> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 17 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
+> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 18 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
 
-## 17 チェック
+## 18 チェック
 
 ### 1. 直接呼び出し元
 
@@ -226,6 +226,26 @@ grep -rn "<primitive 名 / 保証している挙動のキーワード>" docs/
 4. 対象ファイルの NUL バイトが複合キーの衝突回避など正当な設計意図を持つ場合でも、ソース側の対処 (区切り文字の変更等) より **grep 側の頑健化を優先**する。ソース側の対処は個別のトリガーには効くが、将来別の制御文字が別の理由で混入するケースまでは防げない。
 
 前例: PR #376 — symbol ノード生成箇所の横断 grep が `src/graph/star-expansion.ts` を静かに取りこぼし、7 箇所を 6 箇所と誤って結論した (PR 本文に記録)。**クリーンなサブエージェントへ委譲しても防げない**: 脱落はツール側の挙動であって調査者の注意力の問題ではないため、同じコマンド形を使う限り誰が実行しても同じ結果になる。
+
+### 18. dogfood 自己参照汚染監査 (fixture 文字列 × 自身の scan 対象)
+
+artgraph は自身の `tests/` / `tests/fixtures/**` / `examples/**` を dogfood scan する (`include` と `testPatterns` は独立した glob プールとして union されるため、`testPatterns` の `**/*.test.ts` が全階層に効く)。設計が新規・変更の test fixture を要求する場合 (一時ディレクトリへの書き出し・commit 済み fixture プロジェクト・テストファイル自身の文字列リテラルのいずれでも):
+
+1. fixture 文字列が `@impl` / `[ID]` ブラケット / `req: "..."` のいずれの形状にもマッチしないかを確認する。`buildIdMatchers` (`src/parsers/typescript.ts`) が返す 4 つのうち、**`testReqRe` / `testAnnotationRe` には `implRe` が持つ AST 実コメント判定ガード (`matchInLineComment`) が無い** — 文字列リテラルの中でもコメントの中でも無条件にマッチする。
+2. マッチしうる形状を含み、かつその文字列が本プロジェクト自身の scan 対象パスに存在する場合 (一時ディレクトリの外)、既存の回避慣習を**その形状に効くものを選んで**適用する。形状ごとに効く慣習が違う:
+   - `@impl` 形状 → `"@" + "impl ..."` の分割 (`tests/builder.test.ts` / `tests/check-baseline-diff.test.ts`)
+   - `[ID]` ブラケット形状 → `"[" + "ID" + "]"` の分割 (`tests/parser-oxc-canary.test.ts` に前例。同ファイルのコメントがこの罠を詳述している)
+   - 形状を問わない構造的回避 → `tests/helpers.ts` への退避 (`*.test.ts` にも `src/` にもマッチしないファイル名なので、どの glob プールからも外れる)
+3. 慣習を適用した場合も、**適用した慣習が対象の形状に実際に効いているかを実測で確認する** (見た目を真似ただけで別形状に無力、というのが実際の事故の形)。`check --format json` を変更前後で実行し、以下を**すべて**突き合わせる:
+   - `orphans` の件数と要素集合
+   - **`coverage` 配列の各 REQ の `status`** — これが要。fixture の ID が**実在する REQ と衝突**した場合、生成される偽エッジは orphan にならない (ターゲットが実在するため) ので `orphans` は完全に不変のまま、その REQ の status だけが `impl-only` → `verified` に**サイレント反転**する。`uncovered` / `drifted` / `pass` / `newIssues` のどれもこの変化を映さない。しかも「改善方向」の変化なので gate も素通りする
+4. **一時ディレクトリにのみ書き出す fixture でも、それを生成するテストファイル自身のソースに同じ文字列リテラルが現れるなら同じ実害がある。** 書き出し先で区別せず確認すること — 実際の事故はこの経路で起きる。
+
+この監査が守るのは**新規混入の予防**のみで、既存の混入の発見は範囲外 (PR 起点に依存しない定期監査 / doctor 診断側の課題)。予防が効くほど新規混入という「発見の起点」が減るため、既存分は別途扱う必要がある。
+
+前例: PR #386 — 新規 fixture の `"- [ ] T101 do it [FR-101]"` が `testReqRe` にマッチし、本物のグラフに `verifies` 偽エッジ 2 本が生えた (orphans 128→130)。同ファイルには `"@" + "impl ..."` 分割が既にあったが、それは別形状に効く慣習でブラケットには無力であり、ブラケット分割の前例 (`tests/parser-oxc-canary.test.ts`) は別ファイルにあったため参照されなかった。
+
+実在 REQ との衝突が `orphans` では見えないことは実測済み: 実在する `impl-only` の REQ をブラケットで参照する fixture を足すと、`orphans` は 128 のまま集合も一致し、その REQ だけが `verified` に反転する。
 
 ## 出力フォーマット
 
