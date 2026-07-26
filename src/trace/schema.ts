@@ -360,7 +360,7 @@ function compareStrings(a: string, b: string): number {
 function normalizeHits(hits: CoverageHit[]): NormalizedHit[] {
   const seen = new Map<string, NormalizedHit>();
   for (const hit of hits) {
-    seen.set(`${hit.file} ${hit.fn}`, hit);
+    seen.set(`${hit.file}\x00${hit.fn}`, hit);
   }
   return [...seen.values()].sort(
     (a, b) => compareStrings(a.file, b.file) || compareStrings(a.fn, b.fn),
@@ -449,7 +449,7 @@ export function normalizeTrace(shards: ParsedShard[]): NormalizedTrace {
         testName: skip.testName,
         reason: skip.reason,
       };
-      skippedByKey.set(`${skip.testFile} ${skip.testName} ${skip.reason}`, normalized);
+      skippedByKey.set(`${skip.testFile}\x00${skip.testName}\x00${skip.reason}`, normalized);
     }
   }
 

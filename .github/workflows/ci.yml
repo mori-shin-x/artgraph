@@ -37,6 +37,30 @@ jobs:
 
       - run: pnpm format:check
 
+  # SKILL.md check 17 (artgraph-graph-primitive-impact) / issue-loop retro on
+  # PR #390: a git-tracked file containing a raw NUL byte is silently dropped
+  # from recursive ripgrep / Claude Code Grep-tool searches — no warning on
+  # stdout, stderr, or exit code, even in `-l`/`--files-with-matches` mode.
+  # PR #376 and PR #390 both undercounted a cross-repo grep for this exact
+  # reason, both times losing the same file (src/graph/star-expansion.ts).
+  # `\x00` (or `\0`) in a string/template literal is byte-for-byte identical
+  # at runtime to a literal embedded NUL byte — only the literal-byte form
+  # makes the source file itself binary to grep-family tools — so there is no
+  # legitimate reason for a tracked text file to carry a raw one. This job
+  # makes that a standing CI guarantee instead of something every contributor
+  # or review pass has to remember to check for by hand.
+  nul-guard:
+    name: nul-guard (no raw NUL bytes in tracked files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - run: node scripts/check-no-raw-nul.mjs
+
   build:
     name: build / knip / test (Node ${{ matrix.node }} / ${{ matrix.os }})
     runs-on: ${{ matrix.os }}

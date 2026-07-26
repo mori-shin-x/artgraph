@@ -3,7 +3,6 @@ name: "artgraph-graph-primitive-impact"
 description: "artgraph コントリビュータ向け内部 skill。グラフ基本操作 (src/graph/traverse.ts / src/graph/builder.ts の BFS・エッジ意味論・ID 解決) や graph-core 関数 (impact() / check() / buildGraph()) を変更する issue/PR に着手する前 (Step 0-pre) に、18 チェックの shift-left インパクト調査を実行し「silent に破壊される経路」のランク付きリストを報告する。Use when starting a PR that touches src/graph/, edge semantics, or graph-core function signatures/return values."
 allowed-tools:
   - "Read"
-  - "Grep"
   - "Glob"
   - "Bash(grep *)"
   - "Bash(git grep *)"
@@ -35,6 +34,10 @@ disable-model-invocation: false
 
 > あなたは artgraph リポジトリの調査担当です。これから `<変更対象の primitive / 関数 / エッジ kind>` を `<変更の一行要約>` する変更を検討しています。実装はまだ存在しません。
 > `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 18 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
+
+## 横断 grep を始める前に
+
+この調査で「全部で N 箇所」「他に無い」型の完全性を主張する横断 grep を行う場合、**check 2 / 11 / 13 に限らず調査全体を通じて**、`Bash(grep -a ...)` または `Bash(git grep ...)` を使うこと (`git grep` は `-l` 一覧モードなら既定で安全 — 詳細は check 17 の表)。`rg` そのもの、および `rg` 実装の検索ツール全般は `-l` / `-c` でも既定で NUL バイト入りファイルを無言で除外するため、完全性が要求される横断 grep には使わない。本 skill の `allowed-tools` に `Grep` ツールを含めていないのはこのため — cross-file 検索は `Bash(grep -a)` / `Bash(git grep)` のみで行う。
 
 ## 18 チェック
 
@@ -222,10 +225,10 @@ grep -rn "<primitive 名 / 保証している挙動のキーワード>" docs/
    ```
 
    **`<pattern>` を必ず渡すこと。** 省略して `rg -l --glob '*.ts' src` と書くと、ripgrep は唯一の位置引数を PATTERN として解釈し、探索対象は `src/` ではなく cwd 全体になる (`rg -l --glob '*.ts' -e src .` と同一の結果になることで確認できる)。エラーは出ず、差分も非ゼロで返るため**監査が成立したように見えてしまう** — このチェックが警告している失敗そのものが、コマンドの書き間違いでも起きる。
-3. シェル引数には生の NUL バイトを渡せない (`$'\x00'` は空文字列に化ける) ため、NUL 保有の有無を確認する場合はシェル経由でなくファイルをバイト列として直接検査すること。
-4. 対象ファイルの NUL バイトが複合キーの衝突回避など正当な設計意図を持つ場合でも、ソース側の対処 (区切り文字の変更等) より **grep 側の頑健化を優先**する。ソース側の対処は個別のトリガーには効くが、将来別の制御文字が別の理由で混入するケースまでは防げない。
+3. シェル引数には生の NUL バイトを渡せない (`$'\x00'` は空文字列に化ける) ため、NUL 保有の有無を確認する場合はシェル経由でなくファイルをバイト列として直接検査すること。`node scripts/check-no-raw-nul.mjs` (= `pnpm check:no-raw-nul`) が tracked ファイル全体に対するこの検査をすでに実装している (grep 系コマンドを一切使わない実装 — 理由は同スクリプトのヘッダ参照)。まずこれを走らせて対象が既知の NUL 保有ファイルかどうかを確認してから、シェル経由の確認に進む。
+4. 対象ファイルの NUL バイトが複合キーの衝突回避など正当な設計意図を持つ場合、**raw byte のまま埋め込まない**。`` `${a}\x00${b}` `` は実行時の値が raw byte 版と完全に同一 (`a\x00b === Buffer.from([...]).toString()` は `true`) で、挙動は変わらない。raw byte を書かないことを第一防御とし、`pnpm check:no-raw-nul` (CI: `nul-guard` job, lefthook 未導入) が tracked ファイル全体に対してこれを強制する。この防御は本リポジトリの tracked ファイルにしか及ばないため、downstream プロジェクトや外部コードを対象にした横断 grep では引き続き手順 1-3 の grep 側頑健化が必要。
 
-前例: PR #376 — symbol ノード生成箇所の横断 grep が `src/graph/star-expansion.ts` を静かに取りこぼし、7 箇所を 6 箇所と誤って結論した (PR 本文に記録)。**クリーンなサブエージェントへ委譲しても防げない**: 脱落はツール側の挙動であって調査者の注意力の問題ではないため、同じコマンド形を使う限り誰が実行しても同じ結果になる。
+前例: PR #376 — symbol ノード生成箇所の横断 grep が `src/graph/star-expansion.ts` を静かに取りこぼし、7 箇所を 6 箇所と誤って結論した (PR 本文に記録)。PR #390 — 同じ `star-expansion.ts` が同じ理由で再び脱落し (同時に `src/trace/ingest.ts` も脱落)、`lastIndexOf("#")` の該当箇所数を 6 ファイルを 5 ファイルと誤って結論した (PR 本文に記録。脱落した ingest.ts は当該 PR 自身が編集していたファイルだった)。**クリーンなサブエージェントへ委譲しても防げない**: 脱落はツール側の挙動であって調査者の注意力の問題ではないため、同じコマンド形を使う限り誰が実行しても同じ結果になる。
 
 ### 18. dogfood 自己参照汚染監査 (fixture 文字列 × 自身の scan 対象)
 
