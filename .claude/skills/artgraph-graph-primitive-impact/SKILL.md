@@ -1,6 +1,6 @@
 ---
 name: "artgraph-graph-primitive-impact"
-description: "artgraph コントリビュータ向け内部 skill。グラフ基本操作 (src/graph/traverse.ts / src/graph/builder.ts の BFS・エッジ意味論・ID 解決) や graph-core 関数 (impact() / check() / buildGraph()) を変更する issue/PR に着手する前 (Step 0-pre) に、18 チェックの shift-left インパクト調査を実行し「silent に破壊される経路」のランク付きリストを報告する。Use when starting a PR that touches src/graph/, edge semantics, or graph-core function signatures/return values."
+description: "artgraph コントリビュータ向け内部 skill。グラフ基本操作 (src/graph/traverse.ts / src/graph/builder.ts の BFS・エッジ意味論・ID 解決) や graph-core 関数 (impact() / check() / buildGraph()) を変更する issue/PR に着手する前 (Step 0-pre) に、20 チェックの shift-left インパクト調査を実行し「silent に破壊される経路」のランク付きリストを報告する。Use when starting a PR that touches src/graph/, edge semantics, or graph-core function signatures/return values."
 allowed-tools:
   - "Read"
   - "Glob"
@@ -16,7 +16,7 @@ disable-model-invocation: false
 
 **artgraph リポジトリ内部専用の dev process skill**(`templates/skills/` の一般配布ツリーには含まれない。canonical コピーは `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` のみ)。
 
-グラフ基本操作 (BFS / エッジ意味論 / ID 解決) は多数の CLI コマンドと gate 経路から間接消費されており、意味論を狭める・広げる変更は**直接の呼び出し元 grep では見えない経路を silent に壊す**。本 skill は issue 対応ループの **Step 0-pre**(設計より前)で、その経路を事前に列挙するための 18 チェック調査を定義する。
+グラフ基本操作 (BFS / エッジ意味論 / ID 解決) は多数の CLI コマンドと gate 経路から間接消費されており、意味論を狭める・広げる変更は**直接の呼び出し元 grep では見えない経路を silent に壊す**。本 skill は issue 対応ループの **Step 0-pre**(設計より前)で、その経路を事前に列挙するための 20 チェック調査を定義する。
 
 ## トリガー条件
 
@@ -33,13 +33,13 @@ disable-model-invocation: false
 サブエージェント brief テンプレ:
 
 > あなたは artgraph リポジトリの調査担当です。これから `<変更対象の primitive / 関数 / エッジ kind>` を `<変更の一行要約>` する変更を検討しています。実装はまだ存在しません。
-> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 18 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
+> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 20 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
 
 ## 横断 grep を始める前に
 
 この調査で「全部で N 箇所」「他に無い」型の完全性を主張する横断 grep を行う場合、**check 2 / 11 / 13 に限らず調査全体を通じて**、`Bash(grep -a ...)` または `Bash(git grep ...)` を使うこと (`git grep` は `-l` 一覧モードなら既定で安全 — 詳細は check 17 の表)。`rg` そのもの、および `rg` 実装の検索ツール全般は `-l` / `-c` でも既定で NUL バイト入りファイルを無言で除外するため、完全性が要求される横断 grep には使わない。本 skill の `allowed-tools` に `Grep` ツールを含めていないのはこのため — cross-file 検索は `Bash(grep -a)` / `Bash(git grep)` のみで行う。
 
-## 18 チェック
+## 20 チェック
 
 ### 1. 直接呼び出し元
 
@@ -249,6 +249,29 @@ artgraph は自身の `tests/` / `tests/fixtures/**` / `examples/**` を dogfood
 前例: PR #386 — 新規 fixture の `"- [ ] T101 do it [FR-101]"` が `testReqRe` にマッチし、本物のグラフに `verifies` 偽エッジ 2 本が生えた (orphans 128→130)。同ファイルには `"@" + "impl ..."` 分割が既にあったが、それは別形状に効く慣習でブラケットには無力であり、ブラケット分割の前例 (`tests/parser-oxc-canary.test.ts`) は別ファイルにあったため参照されなかった。
 
 実在 REQ との衝突が `orphans` では見えないことは実測済み: 実在する `impl-only` の REQ をブラケットで参照する fixture を足すと、`orphans` は 128 のまま集合も一致し、その REQ だけが `verified` に反転する。
+
+### 19. 生成値を比較キーへ昇格させる変更の環境不変性監査 (producer レシピ × 二重 materialization × SSOT pin)
+
+比較・キー化の対象が **id のみ** から **id + ハッシュ値**(または他の内容依存値)へ変わる、あるいは baseline 側 (ephemeral worktree scan) と current 側 (実 working tree scan) が**独立に生成した値同士**を等価比較するようになる場合:
+
+1. その値の**全生成箇所**をノード種別ごとに洗い出し (`grep -an "contentHash" src/parsers/*.ts` を起点に)、生成レシピ (`stripBom` の有無 / EOL 正規化の有無 / 適用順序) をパーサー間で表にして突き合わせる。非対称は BOM 軸・EOL 軸の**両方向**を見る (片方だけ正規化している、が実際の形)。
+2. 比較の両辺が**別々の materialization** から値を生成する設計なら、git が保証するのは blob 等価のみでバイト等価ではない。baseline worktree は `git worktree add` 実行時点の**現在の** git 設定でマテリアライズされ、current 側は working tree が最後にチェックアウトされた時点のバイト列を読む — 1 の非対称単体では発火せず、この checkout 時点差と組み合わさって初めて同一 blob が両側で別ハッシュになる。
+3. materialization を割る要因を横展開して列挙する: `core.autocrlf` / `.gitattributes` の `eol=`・`text`・`working-tree-encoding` / smudge filter / `core.symlinks`。`.gitattributes` への `eol=` 追加は autocrlf 無変更でも同型を再現し、既存 working tree の `git status` に痕跡を残さない — 見落としやすい経路として必ず含める。要因ごとに「偽陽性 (無編集ノードの誤検出) / 偽陰性 (実編集の過剰抑制) のどちらへ倒れるか」を新旧両方の設計で判定する。
+4. `grep -rlan "hashContent\|stripBom" tests/ specs/ src/` で、対象ハッシュ関数をバイト同一性で pin するテスト・spec (hash-equivalence 型テスト、「正規化しない」ことを意図としてピンする FR) を洗い出す。pin が存在する場合、生成側の正規化変更はその pin と**一体でしか動かせない** — 本 PR での安易な生成側修正を推奨せず、cross-spec issue として切り出す判断材料にする。
+
+前例: PR #397 (issue #383) — driftKey への currentHash 折り込みで、typescript.ts (EOL 非正規化・BOM 除去) と markdown.ts (EOL 正規化・BOM 非除去) の既存レシピ非対称が二重 materialization と組み合わさり、独立理由で drift 済みの無編集ノードが gate を落とす偽陽性経路になることが Step 4 まで検出されなかった。spec 022 FR-006 の byte-identity pin により修正は cross-spec 切り出しになった (#398)。
+
+### 20. primitive が横断する node kind / mode 変種の必須 fixture チェックリスト化 (弱)
+
+変更対象のロジックが複数の node kind (req / doc / file / symbol) や `mode: "file"|"symbol"` 分岐を横断して同一判定を適用する場合、実装前でも変種の**列挙**と**必須 fixture のチェックリスト化**はできる:
+
+1. チェック 13 の手順 1 の生成元洗い出しから、対象ロジックが実際に触れる node kind / mode の全変種を列挙する (lock 対象なら `buildLockFromGraph` の kind フィルタが正)。
+2. 列挙した変種を Step 0-pre 報告の推奨欄に「実装が満たすべき必須 fixture チェックリスト」として明記する (例: file モードの req/doc 変種だけでなく、symbol モードの symbol ノード経路も最低 1 fixture)。
+3. Step 4 (敵対的レビュー) で、新設テストの対象ノード種別を 2 のリストと突き合わせ、リストにあってテストに無い変種を差分として指摘する。
+
+該当しない PR (単一 kind しか触れないロジック) ではスキップしてよい。
+
+前例: PR #397 — 新設ユニットテスト T383-c/d/e/f は全て file モード (req/doc ノード) の drift 経路のみを検証し、symbol ノードの drift 経路はユニット層で未検証のまま Step 7 (E2E) の追加シナリオで初めて実機確認された。
 
 ## 出力フォーマット
 
