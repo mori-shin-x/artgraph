@@ -1111,16 +1111,30 @@ export function buildGraph(
       if (edge.kind !== "imports" || !edge.target.startsWith("symbol:")) continue;
       if (nodes.has(edge.target)) continue;
       const body = edge.target.slice("symbol:".length);
-      const hashIdx = body.lastIndexOf("#");
-      const rel = hashIdx === -1 ? body : body.slice(0, hashIdx);
+      // issue #377 review (finding 2) — `rel` (the file-grain degrade target,
+      // functionally load-bearing) and `symbolName` (display-only, used only
+      // in the message below) used to come from two INDEPENDENT
+      // `body.lastIndexOf("#")` calls on the same `body`. Both already agreed
+      // (both used `lastIndexOf`), but two independent computations of one
+      // split point is the same shape that let the target/source asymmetry
+      // below drift apart un-noticed before this issue's fix. Both halves now
+      // come from one `splitSymbolId` call so they cannot silently diverge if
+      // the split point itself ever changes.
+      const { ownerPath: rel, symbolName } = splitSymbolId(body);
       const fileId = `file:${rel}`;
       // Source file the consumer's import lives in — the `file:<consumer>`
       // side of the edge — is the useful location for the observability
       // warning ("this file's import of X was rewritten / left dangling").
+      //
+      // issue #377 — the source side used `.split("#")[0]`, cutting at the
+      // FIRST `#`, while the target side above already used `lastIndexOf`.
+      // Nine lines apart, same function, opposite behaviour on a filePath
+      // containing `#`. Both now go through the same helper so they cannot
+      // drift apart again.
       const sourceFile = edge.source.startsWith("file:")
         ? edge.source.slice("file:".length)
         : edge.source.startsWith("symbol:")
-          ? edge.source.slice("symbol:".length).split("#")[0]
+          ? splitSymbolId(edge.source.slice("symbol:".length)).ownerPath
           : edge.source;
       if (nodes.has(fileId)) {
         edges[i] = { ...edge, target: fileId };
@@ -1128,7 +1142,7 @@ export function buildGraph(
           type: "phantom-import-repaired",
           id: edge.target,
           files: [sourceFile],
-          message: `named import of "${body.slice(hashIdx + 1)}" through re-export barrel resolved to file grain (target file: ${rel})`,
+          message: `named import of "${symbolName}" through re-export barrel resolved to file grain (target file: ${rel})`,
         });
       } else {
         // File node itself is out of scan scope (target under an exclude
@@ -1580,6 +1594,37 @@ function extractSpecDir(relFilePath: string, specDirs: string[]): string {
     }
   }
   return basename(dirname(relFilePath));
+}
+
+// Split a `symbol:` id's body (the part after the `symbol:` prefix) into its
+// repo-relative owner path and its symbol name. issue #377 — split on the
+// LAST `#`: a filePath may legally contain `#`, so cutting at the first one
+// truncates the path. Symbol names never contain `#` (private members are
+// dropped by the `key.type !== "Identifier"` guard in parsers/typescript.ts),
+// which is what makes the last `#` the separator.
+//
+// Both halves come out of this ONE call so a caller needing both (the
+// phantom-repair warning below wants the path for the file-grain degrade AND
+// the name for its message) cannot end up computing them from two independent
+// `lastIndexOf` calls that could silently drift apart if this split point
+// ever changes — precisely how issue #377 happened in the first place.
+//
+// A `#`-less body has no separator: `ownerPath` reports the whole body
+// (pre-existing behavior, unchanged), and `symbolName` — via plain
+// `body.slice(hashIdx + 1)` where `hashIdx === -1` — happens to equal that
+// same whole body too. That fallback is a side effect of the arithmetic, not
+// a guarantee; a caller that wants a standalone symbol name for a body that
+// might lack `#` should not lean on it.
+//
+// Where a node's own `filePath` is in scope, prefer stripping the exact
+// `symbol:<filePath>#` prefix instead — that depends on nothing outside the
+// call site (see graph/render.ts, trace/symbol-table.ts).
+function splitSymbolId(body: string): { ownerPath: string; symbolName: string } {
+  const hashIdx = body.lastIndexOf("#");
+  return {
+    ownerPath: hashIdx === -1 ? body : body.slice(0, hashIdx),
+    symbolName: body.slice(hashIdx + 1),
+  };
 }
 
 function remapId(id: string, idMapping: Map<string, string>, collidingIds: Set<string>): string {

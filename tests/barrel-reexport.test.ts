@@ -649,6 +649,50 @@ describe("#189 observability: phantom-import-repaired / dangling-import warnings
 });
 
 // ---------------------------------------------------------------------------
+// issue #377 review (finding 1) — the phantom-repair pass's `sourceFile`
+// computation (builder.ts, right above `symbol-mode fail-safe repair`) has a
+// THIRD arm that only fires when the DANGLING edge's own `source` is itself a
+// `symbol:` id, not the far more common `file:` case the tests above exercise
+// (a consumer file importing from a barrel). That shape arises when the
+// dangling edge is the barrel's OWN materialized named re-export
+// (`symbol:<barrel>#name --imports--> symbol:<origin>#name`, built directly
+// by the parser for `export { name } from "./origin"`) rather than a
+// downstream consumer's import of the barrel. No test anywhere in this repo
+// exercised that arm before this one — reverting ONLY builder.ts's #377 fix
+// left the full suite green.
+// ---------------------------------------------------------------------------
+
+describe("#377 phantom-import-repaired sourceFile when the dangling edge's SOURCE is itself a symbol: id", () => {
+  it("keeps a `#`-containing barrel path intact in `files` and `.message` (not truncated at the first `#`)", () => {
+    // `src/we#ird/star.ts` re-exports a name `src/origin.ts` does not
+    // actually export, so the barrel's OWN re-export edge dangles —
+    // `symbol:src/we#ird/star.ts#missing --imports--> symbol:src/origin.ts#missing`
+    // — and its `source` is a `symbol:` id, not `file:`. Before the fix,
+    // `sourceFile` came from `edge.source.slice("symbol:".length).split("#")[0]`,
+    // which cuts at the FIRST `#` and truncates "src/we#ird/star.ts#missing"
+    // down to just "src/we".
+    const root = makeRepo({
+      "src/origin.ts": "export function real() {}\n",
+      "src/we#ird/star.ts": 'export { missing } from "../origin";\n',
+    });
+    const { warnings } = buildGraph(root, loadConfig(root));
+    const phantom = warnings.find(
+      (w: BuildWarning) =>
+        w.type === "phantom-import-repaired" && w.id === "symbol:src/origin.ts#missing",
+    );
+    expect(phantom).toBeDefined();
+    expect(phantom!.files).toEqual(["src/we#ird/star.ts"]);
+    // Also pins finding 2: `rel` (functional, the file-grain degrade target)
+    // and the symbol name (display-only, below) now come from ONE
+    // `splitSymbolId` call instead of two independent `lastIndexOf`s that
+    // could silently drift apart if the split point ever changes.
+    expect(phantom!.message).toBe(
+      'named import of "missing" through re-export barrel resolved to file grain (target file: src/origin.ts)',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
 // specs/018-reexport-symbol-precision §11 — builder-integrated star expansion.
 // Phase 1 shipped the parser (S2/S3) + `expandStarReexports` pure module +
 // `starExports` side-channel. Phase 2 wires expansion into `buildGraph` so

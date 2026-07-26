@@ -7,7 +7,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, unlinkSync } from "node:
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { loadConfig } from "../src/config.js";
-import { ingestTrace, type IngestedTrace } from "../src/trace/ingest.js";
+import { ingestTrace, resolveTraceGraphNodeId, type IngestedTrace } from "../src/trace/ingest.js";
+import { ownerFilePath } from "../src/trace/report.js";
+import type { GraphNode } from "../src/types.js";
 import { extractReqTags } from "../src/test-results.js";
 import { SCHEMA_VERSION, type ShardMetaRecord, type ShardTestRecord } from "../src/trace/schema.js";
 
@@ -462,5 +464,50 @@ describe("(f) N:M union across tests, dedup, and shuffle-determinism", () => {
         reqsByNode: [...r.reqsByNode.entries()].map(([k, v]) => [k, [...v].sort()]),
       });
     expect(serialize(forward)).toBe(serialize(reversed));
+  });
+});
+
+// issue #377 — see tests/symbol-table.test.ts for the full story. These pin the
+// two id-splitting sites that have no `filePath` in scope and therefore rely on
+// splitting at the LAST `#`.
+describe("symbol id splitting with `#` in the file path (issue #377)", () => {
+  const WEIRD = "src/we#ird.ts";
+  const fileNode = (path: string): GraphNode => ({
+    id: `file:${path}`,
+    kind: "file",
+    filePath: path,
+    contentHash: "h",
+  });
+
+  it("resolveTraceGraphNodeId falls back to the right file node", () => {
+    const nodes = new Map<string, GraphNode>([
+      [`file:${WEIRD}`, fileNode(WEIRD)],
+      ["file:src/plain.ts", fileNode("src/plain.ts")],
+    ]);
+    // Splitting at the first `#` asks for `file:src/we`, which no node carries,
+    // so this returned undefined and the caller dropped the evidence silently.
+    expect(resolveTraceGraphNodeId(`symbol:${WEIRD}#weird`, nodes)).toBe(`file:${WEIRD}`);
+    expect(resolveTraceGraphNodeId("symbol:src/plain.ts#fn", nodes)).toBe("file:src/plain.ts");
+  });
+
+  it("resolveTraceGraphNodeId still prefers an exact node match", () => {
+    const exact: GraphNode = {
+      id: `symbol:${WEIRD}#weird`,
+      kind: "symbol",
+      filePath: WEIRD,
+      contentHash: "h",
+    };
+    const nodes = new Map<string, GraphNode>([
+      [exact.id, exact],
+      [`file:${WEIRD}`, fileNode(WEIRD)],
+    ]);
+    expect(resolveTraceGraphNodeId(exact.id, nodes)).toBe(exact.id);
+  });
+
+  it("ownerFilePath returns the whole path", () => {
+    expect(ownerFilePath(`symbol:${WEIRD}#weird`)).toBe(WEIRD);
+    expect(ownerFilePath(`symbol:${WEIRD}#Odd.m`)).toBe(WEIRD);
+    expect(ownerFilePath(`file:${WEIRD}`)).toBe(WEIRD);
+    expect(ownerFilePath("symbol:src/plain.ts#fn")).toBe("src/plain.ts");
   });
 });

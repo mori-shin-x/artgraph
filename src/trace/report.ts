@@ -509,7 +509,13 @@ export function ownerFilePath(nodeId: string): string | undefined {
   if (nodeId.startsWith("file:")) return nodeId.slice("file:".length);
   if (nodeId.startsWith("symbol:")) {
     const rest = nodeId.slice("symbol:".length);
-    const hashIdx = rest.indexOf("#");
+    // issue #377 — split on the LAST `#`, not the first. A filePath may
+    // legally contain `#`, and cutting at the first one returns a truncated
+    // path, so the grain-crossing join this function exists for silently
+    // fails to match. No filePath is available here — deriving one from the
+    // id is the whole point — so the prefix-strip used in
+    // trace/symbol-table.ts is not an option.
+    const hashIdx = rest.lastIndexOf("#");
     return hashIdx === -1 ? rest : rest.slice(0, hashIdx);
   }
   return undefined;
