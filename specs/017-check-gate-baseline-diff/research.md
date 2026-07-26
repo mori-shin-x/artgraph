@@ -75,6 +75,25 @@ spec / plan の Technical Context から抽出した設計判断とその根拠�
 **Alternatives considered**:
 - *drift を hash 値まで含めてキー化*: 「base で drift、current でも drift だが別内容」を別扱いにできるが、gate 目的では「その node が新たに drift 状態に入ったか」で十分。過剰。却下。
 
+**Supersession (issue #383, 2026-07-26)**: 上記の却下は誤りだった。id-only キー
+(`drift:<nodeId>`) では「base 時点で既に drift していたノード」への実編集が
+同一キーに畳み込まれ、その後 PR がそのノードに何を行っても無期限に
+pre-existing 抑制され続ける (base 時点の drift 状態が一度 baseline 側で観測
+されると、以後そのノードの drift は形を変えても常に「既知」)。実測で確認済み
+(`tests/check-baseline-diff.test.ts` の交差セルテスト)。「その node が新たに
+drift 状態に入ったか」だけでは不十分で、「どんな内容で drift しているか」ま
+で見なければ「同じノードへの新しい編集」と「観測済みの同一 drift」を区別でき
+ない。drift のキーを `drift:${JSON.stringify([nodeId, currentHash])}` に変更
+し、hash 値をキーに含める (却下されていた代替案を採用)。`lockedHash` はキー
+に含めない — baseline 側と current 側が同一 lock オブジェクトを見る前提の下
+では nodeId から一意に定まり判別力を持たないため (この前提はコールサイト規律
+であり型では強制されない。`src/baseline.ts` の `BaselineIssues.keys` JSDoc参
+照)。プレーン文字列連結ではなく JSON エンコードを使う理由: `currentHash` は
+16-hex 固定長とは限らず、読み取り不能ファイルの sentinel (`unreadable-file:
+no-content` / `unreadable-file:cannot-hash`、いずれも `graph/builder.ts`) が
+`:` を含む文字列を取りうるため、素朴な `${nodeId}:${hash}` 連結では構造的な
+単射性を保証できない。詳細は data-model.md §3 のキー生成スニペットを参照。
+
 ---
 
 ## R5. orphan のスコープ照合を厳密 ID 一致にする (FR-006)

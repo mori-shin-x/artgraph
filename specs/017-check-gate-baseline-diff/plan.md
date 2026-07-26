@@ -37,7 +37,7 @@
 - **baseline は global に計算する**: current issue は scoped (blast radius)。baseline は base graph 全体の orphan / uncovered / drift をキー集合化。`new = current issue のうち baseline キー集合に無いもの`。base ref 側で scope を再計算しないので単純かつ漏れがない。
 - **drift の baseline は現在の lock を基準**: `.trace.lock` は gitignore で worktree に来ないため (FR-011)。base graph を現在の lock と比較して得た drift を baseline drift とする。
 - **worktree は `git worktree add --detach <tmp> <ref>` → scan → `git worktree remove --force`**: `git stash` は使わない (FR-004)。
-- **issue 同一性キー**: `drift:<nodeId>` / `orphan:<source -> target (kind)>` / `uncovered:<reqId>` / `testfail:<reqId>`。
+- **issue 同一性キー**: `drift:["<nodeId>","<currentHash>"]` (JSON ペア。issue #383 で `drift:<nodeId>` から変更 — research.md R4 の supersession 注記参照) / `orphan:<source -> target (kind)>` / `uncovered:<reqId>` / `testfail:<reqId>`。
 - **orphan 厳密化**: orphan 文字列の source を厳密に scoped node 集合と照合 (部分文字列 `includes` を廃止)。
 - **exit code**: 0 = gate pass (new ゼロ) / 2 = gate fail (new あり, `--gate` 時) / 1 = baseline 構築不能の異常系 (`--gate` 時)。
 

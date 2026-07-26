@@ -163,6 +163,14 @@ describe("computeBaselineIssues", () => {
     const staleLock = {
       "REQ-100": { contentHash: "stale-hash-value", lastReconciled: "2025-01-01T00:00:00Z" },
     };
+    // issue #383 — `driftKey` now folds `currentHash` into the key, so a
+    // placeholder value here (the old test used a bare "x") would silently
+    // stop matching: the fixture's working tree is byte-identical to HEAD (no
+    // local edits), so scanning it directly gives the exact contentHash the
+    // baseline's ephemeral HEAD worktree scan computes for REQ-100 too.
+    const { graph } = scan(dir, config);
+    const currentHash = graph.nodes.get("REQ-100")!.contentHash;
+
     const result = computeBaselineIssues(dir, "HEAD", staleLock, config);
     expect(result.status).toBe("computed");
     expect(
@@ -171,7 +179,7 @@ describe("computeBaselineIssues", () => {
           nodeId: "REQ-100",
           kind: "req",
           lockedHash: "stale-hash-value",
-          currentHash: "x",
+          currentHash,
         }),
       ),
     ).toBe(true);
@@ -203,8 +211,12 @@ describe("computeBaselineIssues", () => {
     expect(orphanKey({ source: "file:a.ts", target: "REQ-9", kind: "implements" })).toBe(
       "orphan:file:a.ts -> REQ-9 (implements)",
     );
+    // issue #383 — the key now folds in `currentHash` (JSON-pair encoded, not
+    // plain concatenation; see src/baseline.ts's `driftKey` doc comment for
+    // why) so a node's identity as an issue is tied to WHICH content it's
+    // currently drifted to, not just its nodeId.
     expect(driftKey({ nodeId: "REQ-1", kind: "req", lockedHash: "a", currentHash: "b" })).toBe(
-      "drift:REQ-1",
+      'drift:["REQ-1","b"]',
     );
   });
 });

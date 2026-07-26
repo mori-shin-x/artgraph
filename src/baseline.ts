@@ -25,6 +25,23 @@ import { getGitRenameMap } from "./diff.js";
 // see the fix markers (A1..A6, B1, B3, B8, B9) scattered through the file.
 
 export interface BaselineIssues {
+  /**
+   * issue #383 — `driftKey` folds `currentHash` into the key but deliberately
+   * leaves `lockedHash` out, which rests on an assumption this type cannot
+   * enforce by itself: the baseline side (`computeBaselineIssues`'s
+   * `currentLock` param, below) and the current side (`src/check.ts`'s own
+   * drift loop) must be evaluated against the SAME `LockFile` object for a
+   * given run. Under that assumption `lockedHash` is structurally identical
+   * for a given `nodeId` on both sides, so folding it into the key would only
+   * ever repeat information `nodeId` already carries — it has no
+   * discriminating power. `src/commands/check.ts` is the only production call
+   * site and satisfies this today (one `readLockWithMeta` call, reused for
+   * both `computeBaselineIssues` and `check()`), but that is call-site
+   * discipline, not something the type system checks: a future caller that
+   * let the two sides observe different locks would silently lose the
+   * discriminating power `currentHash` was added to restore, with no type
+   * error to catch it.
+   */
   keys: Set<string>;
   status: BaselineStatus; // "computed" | "empty" | "unavailable" (never "skipped" here)
   // spec 017 (Critical fix B1, issue #182 review) — diagnostic message
@@ -50,7 +67,35 @@ export interface BaselineIssues {
 // ── issue identity keys (SSOT, data-model §6 / R4) ──────────────────────────
 // The current-side diff calculation (src/check.ts) imports these exact
 // functions so the two sides can never disagree on how an issue is keyed.
-export const driftKey = (d: DriftEntry): string => `drift:${d.nodeId}`;
+//
+// issue #383 — `driftKey` supersedes R4's original `drift:<nodeId>` decision
+// (research.md R4 "Alternatives considered"; see that file's supersession
+// note for the full rationale). An id-only key means a node that was ALREADY
+// drifted at the base ref and is edited AGAIN by the PR keeps the exact same
+// key on both sides forever after: the pre-existing entry suppresses every
+// later edit to that node, not just the base-ref state it was actually
+// observed against. Folding `currentHash` in distinguishes "drifted like
+// THIS" from "drifted like THAT" — a genuinely new edit on a
+// pre-existing-drift node changes `currentHash`, and therefore the key, so it
+// is no longer treated as pre-existing.
+//
+// JSON-array encoding, not plain `${d.nodeId}:${d.currentHash}` concatenation:
+// `currentHash` is not always a fixed-length hex digest. An unreadable doc/
+// file/test source hashes to a sentinel string that itself contains `:`
+// (`UNREADABLE_DOC_CONTENT_HASH = "unreadable-file:no-content"` and the
+// analogous `"unreadable-file:cannot-hash"`, both in graph/builder.ts). A bare
+// template-literal join could not tell `nodeId="a:b", hash="c"` apart from
+// `nodeId="a", hash="b:c"`. None of today's concrete hash shapes actually
+// collide this way, but that is incidental — a property of what the hash
+// values happen to look like today — not a structural guarantee the key
+// format can rely on. `JSON.stringify([nodeId, currentHash])` makes the
+// encoding unambiguous by construction instead of by the current set of hash
+// shapes never colliding.
+//
+// `lockedHash` is deliberately NOT part of the key — see `BaselineIssues.keys`
+// above for why it carries no discriminating information here.
+export const driftKey = (d: DriftEntry): string =>
+  `drift:${JSON.stringify([d.nodeId, d.currentHash])}`;
 export const orphanKey = (o: OrphanEdge): string => `orphan:${formatOrphan(o)}`;
 export const uncoveredKey = (id: string): string => `uncovered:${id}`;
 export const testfailKey = (id: string): string => `testfail:${id}`;
@@ -192,6 +237,13 @@ export function resolveMergeBase(
 export function computeBaselineIssues(
   rootDir: string,
   baseRef: string,
+  // issue #383 — must be the exact same `LockFile` object/instance the caller
+  // will also pass to `check()`'s current-side drift calculation for this
+  // same run (see `BaselineIssues.keys`'s doc above). `driftKey` omits
+  // `lockedHash` from its key precisely because this coupling holds; a caller
+  // that resolved a DIFFERENT lock for the current side than the one passed
+  // here would silently break that assumption, with no type error to catch
+  // it.
   currentLock: LockFile,
   config: ArtgraphConfig,
   // spec 023 (FR-008, data-model §5 SSOT) — the rename map computed by the
@@ -313,6 +365,20 @@ export function computeBaselineIssues(
 // belong to "this test run" and can't be reconstructed from a static ref, so
 // current test failures always count as new (baseline-diff.md §1.3).
 // @impl 017-check-gate-baseline-diff/FR-011
+//
+// issue #383 — this function always computes an UNSCOPED superset: every
+// drift/orphan/uncovered issue anywhere in the base graph, never narrowed to
+// any particular scope. The current side (`src/check.ts`) is the SCOPED query
+// side — its only interaction with this set is `isPreExisting(key)`, a lookup
+// of one already-scoped issue's key. A baseline key with no matching
+// current-side issue in a given run is simply never looked up: it is inert,
+// not wrong. This asymmetry is load-bearing for the "superset" framing to
+// stay correct — if a future change made the baseline side scope-aware too
+// (e.g. to cut worktree/scan cost on a large repo), a baseline key computed
+// only for one scope could go missing for a DIFFERENT scope's query on the
+// same run, and every consumer of `keys` (starting with `driftKey`'s
+// same-lock-object assumption above) would need re-auditing against the
+// narrower contract.
 //
 // spec 017 (High fix C2, issue #182 review) — `orphanKey` embeds the
 // orphan's `source` (`file:<path>` / `symbol:<path>#<name>`), so a pure
