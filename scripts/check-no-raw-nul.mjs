@@ -1,0 +1,85 @@
+#!/usr/bin/env node
+// Fails if any git-tracked text file contains a raw NUL byte (0x00).
+//
+// Why this exists (see .claude/skills/artgraph-graph-primitive-impact/SKILL.md
+// check 17): ripgrep, the Claude Code Grep tool, and `rg`-backed tooling treat
+// any file containing a raw NUL byte as binary and SILENTLY drop it from
+// recursive/glob searches — no warning on stdout, stderr, or exit code. Two
+// separate PRs (#376, #390) undercounted cross-repo grep results because of
+// this, both times losing the same file (src/graph/star-expansion.ts).
+//
+// This repo's composite Map/Set keys that need a collision-safe separator
+// (e.g. `${file}\x00${symbolName}`) get the exact same runtime value whether
+// the NUL is written as a literal embedded byte or as the `\x00` escape
+// sequence — verified: `a\x00b` === Buffer.from([97,0,98]).toString()
+// is `true`. Only the literal-byte form makes the SOURCE FILE itself binary
+// to grep-family tools. There is therefore no reason to ever commit a raw NUL
+// byte: use the escape sequence and the runtime behavior is unchanged while
+// the file stays plain text.
+//
+// Deliberately implemented without any grep/rg/git-grep call: this script's
+// OWN job is to detect NUL bytes, so it must not inherit the same blind spot
+// it is checking for. `fs.readFileSync` has no "binary file" heuristic — it
+// just returns bytes.
+//
+// Usage: node scripts/check-no-raw-nul.mjs
+// Exit 0 if clean, exit 1 (with offending file list) otherwise.
+
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+// Extensions that are legitimately binary and exempt from this check. Keep
+// this list narrow — anything not listed here is expected to be plain text,
+// and a new false positive should be a one-line addition here, not a reason
+// to weaken the check itself.
+const BINARY_EXTENSIONS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "ico",
+  "woff",
+  "woff2",
+  "ttf",
+  "eot",
+  "zip",
+  "gz",
+  "pdf",
+]);
+
+function isExemptPath(path) {
+  const dot = path.lastIndexOf(".");
+  if (dot === -1) return false;
+  return BINARY_EXTENSIONS.has(path.slice(dot + 1).toLowerCase());
+}
+
+const lsFilesOutput = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" });
+const trackedFiles = lsFilesOutput.split("\0").filter((f) => f.length > 0);
+
+const offenders = [];
+for (const path of trackedFiles) {
+  if (isExemptPath(path)) continue;
+  let data;
+  try {
+    data = readFileSync(path);
+  } catch {
+    continue; // e.g. a symlink to a path that doesn't exist in this checkout
+  }
+  if (data.includes(0x00)) {
+    offenders.push(path);
+  }
+}
+
+if (offenders.length > 0) {
+  console.error("Raw NUL byte(s) found in tracked file(s) — grep/rg-family tools silently");
+  console.error("drop these from recursive searches (see check 17 in");
+  console.error(".claude/skills/artgraph-graph-primitive-impact/SKILL.md). Replace the raw");
+  console.error("byte with the `\\x00` escape sequence — same runtime value, plain-text file:");
+  console.error("");
+  for (const f of offenders) console.error(`  ${f}`);
+  process.exit(1);
+}
+
+console.log(
+  `check-no-raw-nul: ${trackedFiles.length} tracked files scanned, none contain a raw NUL byte.`,
+);

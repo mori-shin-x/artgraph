@@ -201,12 +201,12 @@ export function hasTraceShards(
 }
 
 function testKey(testFile: string, testName: string): string {
-  return `${testFile} ${testName}`;
+  return `${testFile}\x00${testName}`;
 }
 
 function sortedTestRefs(keys: Iterable<string>): TestRef[] {
   return [...keys].sort().map((key) => {
-    const idx = key.indexOf(" ");
+    const idx = key.indexOf("\x00");
     return { testFile: key.slice(0, idx), testName: key.slice(idx + 1) };
   });
 }
