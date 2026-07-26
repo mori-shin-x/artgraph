@@ -92,6 +92,23 @@ export interface BaselineIssues {
 // encoding unambiguous by construction instead of by the current set of hash
 // shapes never colliding.
 //
+// A second assumption this key surfaces (issue #398): both sides must compute
+// the SAME hash for the SAME git blob. symbol/file content hashes are not
+// EOL-normalized today (doc/req hashes are — parsers/markdown.ts folds CRLF
+// away before hashing), and the two sides hash two DIFFERENT checkouts of the
+// same content: the ephemeral baseline worktree materializes with today's git
+// config/attributes while the real working tree keeps the bytes of whenever
+// it was last checked out. A checkout-context change in between (a
+// `core.autocrlf` flip, a new `.gitattributes` `eol=` rule) splits the hashes
+// for an untouched file, and on a node that is ALSO already drifted for an
+// independent reason that splits this key pair and surfaces a false NEW
+// drift. (Pre-#383, the id-only key silently absorbed the same divergence —
+// and over-absorbed real edits with it. Opposite failure, same root.)
+// Normalizing the TS-side hash here is deliberately NOT done: the trace
+// engine's `hashContent` (src/trace/schema.ts) is pinned byte-identical to
+// the file hash (tests/hash-equivalence.test.ts, spec 022 FR-006), so the
+// two must move in one cross-spec change — tracked as issue #398.
+//
 // `lockedHash` is deliberately NOT part of the key — see `BaselineIssues.keys`
 // above for why it carries no discriminating information here.
 export const driftKey = (d: DriftEntry): string =>

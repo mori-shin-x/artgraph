@@ -93,6 +93,12 @@ drift 状態に入ったか」だけでは不十分で、「どんな内容で d
 no-content` / `unreadable-file:cannot-hash`、いずれも `graph/builder.ts`) が
 `:` を含む文字列を取りうるため、素朴な `${nodeId}:${hash}` 連結では構造的な
 単射性を保証できない。詳細は data-model.md §3 のキー生成スニペットを参照。
+既知の残余リスク (issue #398): symbol/file の contentHash は EOL 正規化されて
+いない (doc/req は markdown.ts で正規化済み) ため、checkout 設定の変更
+(`core.autocrlf` / `.gitattributes` の `eol=`) で baseline worktree と実
+worktree のバイト列が割れると、独立理由で drift 済みのノードに偽の新規 drift
+が出うる。TS 側ハッシュの正規化は trace/schema.ts の SSOT pin (spec 022
+FR-006) と一体で変更する必要があるため本変更には含めず、#398 で追跡する。
 
 ---
 
