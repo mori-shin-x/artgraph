@@ -117,11 +117,21 @@ export function computeBaselineIssues(
 **キー生成 (R4, SSOT)**: `src/baseline.ts` に単一の `issueKey()` 群を置き、current 側の差分計算も同じ関数を使う。
 
 ```ts
-export const driftKey = (d: DriftEntry) => `drift:${d.nodeId}`;
+export const driftKey = (d: DriftEntry) => `drift:${JSON.stringify([d.nodeId, d.currentHash])}`;
 export const orphanKey = (o: OrphanEdge) => `orphan:${formatOrphan(o)}`;
 export const uncoveredKey = (id: string) => `uncovered:${id}`;
 export const testfailKey = (id: string) => `testfail:${id}`;
 ```
+
+issue #383 (research.md R4 supersession, 2026-07-26): `driftKey` は当初の
+`drift:<nodeId>` から `nodeId`+`currentHash` の JSON ペアへ変更された —
+id-only キーでは base 時点で既に drift していたノードへの実編集が同一キーに
+畳み込まれ無期限に抑制されるバグがあったため。`lockedHash` はキーに含まない
+(baseline 側と current 側が同一 lock オブジェクトを見る前提で判別力を持たない
+— `src/baseline.ts` の `BaselineIssues.keys` JSDoc参照)。JSON エンコードにす
+る理由は、`currentHash` が常に固定長 16-hex とは限らず (読み取り不能ファイル
+の sentinel が `:` を含みうる) プレーン連結では単射性が構造的に保証できない
+ため。
 
 ---
 

@@ -1162,3 +1162,139 @@ describe("check --diff: downstream unavailable must not hide behind the not-trac
     expect(stdout).toContain("Changed files are not tracked in the graph.");
   });
 });
+
+// ---------------------------------------------------------------------------
+// issue #383 — `driftKey` folds `currentHash` into the key (was `drift:
+// <nodeId>` alone, research.md R4). An id-only key let a node's baseline-
+// observed drift state suppress EVERY later drift on that same node forever,
+// regardless of content: once a node was seen drifted at the base ref, the PR
+// could edit it again and again and the gate would keep calling it
+// "pre-existing" — the exact sticky-suppression bug this section pins the fix
+// for. research.md's R4 supersession note (2026-07-26) carries the full
+// narrative.
+// ---------------------------------------------------------------------------
+describe("check --diff --gate drift key discriminates by content, not just nodeId (issue #383)", () => {
+  // Corrupts one lock entry's contentHash in place, simulating a node that is
+  // ALREADY drifted at the base ref for some arbitrary reason — measurement-
+  // equivalent to what a hash-algorithm upgrade would produce (the lock and
+  // the base graph simply disagree, regardless of why the disagreement
+  // happened). Requires a prior reconcile so every OTHER entry stays correct
+  // and this corruption is the only intentional discrepancy in the fixture.
+  // Precedent for writing `.trace.lock` directly: tests/init.test.ts (F7 /
+  // issue #257 fixtures).
+  function stalePreExistingDrift(dir: string, nodeId: string): void {
+    const lockPath = join(dir, ".trace.lock");
+    const lock = JSON.parse(readFileSync(lockPath, "utf-8"));
+    if (!lock[nodeId]) {
+      throw new Error(`stalePreExistingDrift: no lock entry for ${nodeId} in ${lockPath}`);
+    }
+    lock[nodeId] = { ...lock[nodeId], contentHash: "stale-hash-issue-383" };
+    writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
+  }
+
+  it("(T383-c) a node already drifted at the base ref, edited again by the PR → still counted as new drift", async () => {
+    const dir = repo("artgraph-383-c-");
+    const rec = await runAt(dir, ["reconcile"]);
+    expect(rec.exitCode).toBe(0);
+    // REQ-100 is already "drifted" at HEAD relative to the (corrupted) lock —
+    // exactly the scenario an id-only key used to collapse into permanent
+    // suppression.
+    stalePreExistingDrift(dir, "REQ-100");
+
+    // The PR now makes a REAL edit to REQ-100 — a genuinely different drift
+    // than whatever was observed at the base ref.
+    writeFileSync(
+      join(dir, "specs", "debt.md"),
+      "# Debt\n\n- REQ-100: covered by the hub (edited again, issue 383)\n- REQ-200: pre-existing uncovered debt\n",
+    );
+
+    const { exitCode, json } = await checkJson(dir);
+    expect(exitCode).toBe(2);
+    expect(json.pass).toBe(false);
+    expect(json.newIssues.drifted.some((d: { nodeId: string }) => d.nodeId === "REQ-100")).toBe(
+      true,
+    );
+  });
+
+  it("(T383-d) same base-ref drift, no further edit to that node → stays suppressed (phase (i) preservation, control)", async () => {
+    const dir = repo("artgraph-383-d-");
+    const rec = await runAt(dir, ["reconcile"]);
+    expect(rec.exitCode).toBe(0);
+    stalePreExistingDrift(dir, "REQ-100");
+
+    // Pull REQ-100 into scope WITHOUT touching its own content — a harmless
+    // edit to the file that claims it, exactly like the existing "(b)
+    // harmless edit to the hub" fixture earlier in this file.
+    appendFileSync(join(dir, "src", "hub.ts"), "\n// harmless (issue 383 control)\n");
+
+    const { exitCode, json } = await checkJson(dir);
+    // Control (avoids zero discriminating power): REQ-100's drift must
+    // actually have been SCOPED and then suppressed, not merely absent from
+    // scope altogether — otherwise this test would pass trivially regardless
+    // of whether suppression works at all.
+    expect(json.drifted.some((d: { nodeId: string }) => d.nodeId === "REQ-100")).toBe(true);
+    expect(json.suppressedCount).toBeGreaterThanOrEqual(1);
+    expect(json.newIssues.drifted.some((d: { nodeId: string }) => d.nodeId === "REQ-100")).toBe(
+      false,
+    );
+    expect(exitCode).toBe(0);
+    expect(json.pass).toBe(true);
+  });
+
+  // issue #235 (doc granularity) — a doc node's contentHash hashes the WHOLE
+  // file's raw bytes (parsers/markdown.ts), so ANY edit anywhere in the file
+  // changes it, even an edit to a REQ this PR never touches. Under the
+  // pre-#383 id-only key this was accidentally neutralized: once a doc's
+  // drift was observed at the base ref, EVERY later doc-level mismatch kept
+  // matching the same `drift:<docId>` key and stayed suppressed forever, no
+  // matter which bytes actually differed. This test pins that the fix removes
+  // that accidental amnesty — this is #235's granularity noise resurfacing at
+  // the gate, not a new defect introduced here (this PR increases #235's
+  // visibility; it does not fix #235 itself — see the PR description).
+  it("(T383-e) doc already drifted at the base ref, PR edits only the OTHER req in the same file → doc still surfaces as new drift", async () => {
+    const dir = repo("artgraph-383-e-");
+    const rec = await runAt(dir, ["reconcile"]);
+    expect(rec.exitCode).toBe(0);
+    // The doc node's id strips the specDirs prefix (parsers/markdown.ts's
+    // `docRelPath`) — `specs/debt.md` becomes `doc:debt.md`, not
+    // `doc:specs/debt.md`.
+    stalePreExistingDrift(dir, "doc:debt.md");
+
+    // Only REQ-200's line changes — REQ-100 is untouched.
+    writeFileSync(
+      join(dir, "specs", "debt.md"),
+      "# Debt\n\n- REQ-100: covered by the hub\n- REQ-200: pre-existing uncovered debt (edited, issue 383)\n",
+    );
+
+    const { json } = await checkJson(dir);
+    // REQ-100's own per-requirement hash never changed — no drift on it.
+    expect(json.newIssues.drifted.some((d: { nodeId: string }) => d.nodeId === "REQ-100")).toBe(
+      false,
+    );
+    // The doc node's whole-file hash DID change (REQ-200's edit touched the
+    // same file), and it differs from whatever was staled at the base ref,
+    // so it is not suppressed — #235's granularity noise, gate-visible.
+    expect(json.newIssues.drifted.some((d: { nodeId: string }) => d.nodeId === "doc:debt.md")).toBe(
+      true,
+    );
+  });
+
+  it("(T383-f) a stale lock entry for a renamed-away id is reported as staleLockEntries, never as drift", async () => {
+    const dir = repo("artgraph-383-f-");
+    const rec = await runAt(dir, ["reconcile"]);
+    expect(rec.exitCode).toBe(0);
+    stalePreExistingDrift(dir, "doc:debt.md");
+
+    execFileSync("git", ["mv", "specs/debt.md", "specs/renamed-debt.md"], {
+      cwd: dir,
+      stdio: "pipe",
+    });
+
+    const { json } = await checkJson(dir);
+    expect(json.staleLockEntries).toContain("doc:debt.md");
+    expect(json.drifted.some((d: { nodeId: string }) => d.nodeId === "doc:debt.md")).toBe(false);
+    expect(json.newIssues.drifted.some((d: { nodeId: string }) => d.nodeId === "doc:debt.md")).toBe(
+      false,
+    );
+  });
+});
