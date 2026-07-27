@@ -38,7 +38,7 @@
     "check:no-raw-nul": "node scripts/check-no-raw-nul.mjs",
     "prepare": "lefthook install > /dev/null 2>&1 || true",
     "demo:record": "node scripts/record-tag-zero-demo.mjs",
-    "demo:svg": "svg-term --in docs/demo/tag-zero.cast --out docs/demo/tag-zero.svg --window --width 96 --height 45 --padding 12",
+    "demo:svg": "pnpm dlx svg-term-cli --in docs/demo/tag-zero.cast --out docs/demo/tag-zero.svg --window --width 96 --height 45 --padding 12",
     "demo": "pnpm build && pnpm demo:record && pnpm demo:svg",
     "prepublishOnly": "rm -rf dist && pnpm run build && pnpm check-versions && pnpm test:unit && pnpm test:e2e"
   },
@@ -90,7 +90,6 @@
     "lefthook": "^2.1.9",
     "oxfmt": "^0.55.0",
     "oxlint": "^1.70.0",
-    "svg-term-cli": "^2.1.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.9"
   },
