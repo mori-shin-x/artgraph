@@ -11,6 +11,9 @@ import {
   fencedLines,
   extOf,
   escapeRegExp,
+  detectNewline,
+  normalizeNewlines,
+  restoreNewlines,
   type RewriteChange,
   type RewriteOptions,
 } from "./rename.js";
@@ -943,16 +946,27 @@ function referencesId(line: string, id: string): boolean {
  * source's definition (issue #213) — mirroring mergeMarkdown's
  * `removedAnyDefinition` gate. Without this, every enumerated markdown file
  * received one scaffold per new ID.
+ *
+ * Normalizes CRLF/CR to LF once at this function boundary and restores the
+ * original style on the returned content — the same F4 helpers `rewriteFile`
+ * (rename.ts) uses for its own pipeline, so `specDefinitionId`'s heading
+ * branch and `expandFrontmatterDependsOn`'s `FM_BLOCK_KEY_RE` see a single
+ * `\n` regardless of how the file was checked out.
+ *
+ * Exported purely for direct unit testing of that boundary — the real
+ * caller reaches this only through `executeSplit` above.
  */
-function splitMarkdown(
+export function splitMarkdown(
   relPath: string,
   content: string,
   splitId: string,
   intoIds: string[],
   opts: RewriteOptions,
 ): { content: string; changes: RewriteChange[] } {
-  const lines = content.split("\n");
-  const fenced = fencedLines(content);
+  const originalNewline = detectNewline(content);
+  const normalized = normalizeNewlines(content);
+  const lines = normalized.split("\n");
+  const fenced = fencedLines(normalized);
   const changes: RewriteChange[] = [];
 
   const kept: string[] = [];
@@ -997,7 +1011,7 @@ function splitMarkdown(
     }
   }
 
-  return { content: next, changes };
+  return { content: restoreNewlines(next, originalNewline), changes };
 }
 
 /**
@@ -1006,8 +1020,19 @@ function splitMarkdown(
  * scaffold for intoId only when it is a brand-new requirement. Crucially the
  * definition lines are removed *instead of* being rewritten, so intoId is never
  * duplicated (C1).
+ *
+ * Normalizes CRLF/CR to LF once at this function boundary and restores the
+ * original style on the returned content — the same F4 helpers `rewriteFile`
+ * (rename.ts) uses for its own pipeline, so `specDefinitionId`'s heading
+ * branch and the `rewriteFrontmatter` calls below (via `FM_BLOCK_KEY_RE`) see
+ * a single `\n` regardless of how the file was checked out. Normalizing once
+ * here — rather than per `idsToRewrite` iteration — keeps the `rewriteFrontmatter`
+ * loop itself untouched.
+ *
+ * Exported purely for direct unit testing of that boundary — the real
+ * caller reaches this only through `executeMerge` above.
  */
-function mergeMarkdown(
+export function mergeMarkdown(
   relPath: string,
   content: string,
   idsToRewrite: string[],
@@ -1015,8 +1040,10 @@ function mergeMarkdown(
   intoIsExisting: boolean,
   opts: RewriteOptions,
 ): { content: string; changes: RewriteChange[] } {
-  const lines = content.split("\n");
-  const fenced = fencedLines(content);
+  const originalNewline = detectNewline(content);
+  const normalized = normalizeNewlines(content);
+  const lines = normalized.split("\n");
+  const fenced = fencedLines(normalized);
   const changes: RewriteChange[] = [];
   const removeSet = new Set(idsToRewrite);
 
@@ -1068,7 +1095,7 @@ function mergeMarkdown(
     next = outLines.join("\n");
   }
 
-  return { content: next, changes };
+  return { content: restoreNewlines(next, originalNewline), changes };
 }
 
 // ── Lock projection ──────────────────────────────────────────────────
