@@ -174,7 +174,7 @@ export function parseMarkdownContent(
   // Normalize line endings so downstream offsets, regexes, and hashes see a
   // single `\n` regardless of how the file was checked out (CRLF on Windows
   // git workspaces, lone CR from legacy editors). Without this, an authored
-  // `(depends_on: X)\r\n` line bypasses ANNOTATION_RE_LINE in the rewriter
+  // `(depends_on: X)\r\n` line bypasses the rewriter's annotation matcher
   // while still being parsed as an annotation here — i.e. parser/rewriter
   // parity breaks on CRLF files (meta-review additional F4).
   const raw = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n");

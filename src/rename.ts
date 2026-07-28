@@ -1,3 +1,4 @@
+import { parse as parseYaml, parseDocument, isMap, isScalar, Scalar } from "yaml";
 import type { ReqPatternConfig, TaskConventionPreset } from "./types.js";
 import {
   BUILTIN_TASK_PRESETS,
@@ -373,7 +374,6 @@ export function rewriteTestTags(content: string, oldId: string, newId: string): 
 // ── Frontmatter ──────────────────────────────────────────────────────
 
 const FM_BLOCK_KEY_RE = /^(\s*)(depends_on|derives_from)\s*:(.*)$/;
-const FM_NODE_ID_RE = /^(\s*node_id:\s*["']?)(.+?)(["']?\s*)$/;
 
 /**
  * True for a line that is part of an active `depends_on`/`derives_from` block
@@ -382,6 +382,122 @@ const FM_NODE_ID_RE = /^(\s*node_id:\s*["']?)(.+?)(["']?\s*)$/;
 function isBlockItemLine(line: string): boolean {
   const t = line.trim();
   return t === "" || t.startsWith("-");
+}
+
+// IDs whose characters are safe to embed verbatim in any of the three scalar
+// styles (nothing to escape inside quotes, no flow indicators that would end
+// a plain scalar early in `{ … }` frontmatter). Whether the *plain* style
+// additionally survives re-parsing is checked per value in requoteNodeId;
+// anything outside this set is JSON-escaped wholesale.
+const SAFE_UNQUOTED_ID_RE = /^[A-Za-z0-9_:/.-]+$/;
+
+/**
+ * Re-serialize `newId` in the scalar style `type` the author wrote, so a
+ * rename doesn't gratuitously change how the value is quoted.
+ */
+function requoteNodeId(newId: string, type: string | undefined): string {
+  if (!SAFE_UNQUOTED_ID_RE.test(newId)) return JSON.stringify(newId);
+  if (type === Scalar.QUOTE_SINGLE) return `'${newId}'`;
+  if (type === Scalar.QUOTE_DOUBLE) return `"${newId}"`;
+  // Plain style survives only when the bare text re-parses as this exact
+  // string — `123`, `1.1`, `true`, or a trailing `:` would come back as a
+  // number/bool/map, and the reader's typeof check would then drop the id.
+  try {
+    if (parseYaml(newId, { resolveKnownTags: false }) === newId) return newId;
+  } catch {
+    // fall through to quoting
+  }
+  return JSON.stringify(newId);
+}
+
+// Character offset of the start of `lines[index]` within `lines.join("\n")`.
+function lineStartOffset(lines: string[], index: number): number {
+  let offset = 0;
+  for (let i = 0; i < index; i++) offset += lines[i].length + 1;
+  return offset;
+}
+
+/**
+ * Rewrite `artgraph.node_id` inside YAML frontmatter via a structural parse
+ * (`parseDocument`, the same `resolveKnownTags: false` option as the reader's
+ * `parseFrontmatter` in src/parsers/markdown.ts) instead of a regex over the
+ * raw text. The value only lives under the `artgraph` key — the same key the
+ * reader consumes — and a frontmatter body the reader would fail to parse is
+ * left untouched here too, rather than guessing at a value inside malformed
+ * YAML (parser/rewriter parity).
+ *
+ * Returns the spliced content and, on the one rewrite path, its change
+ * record; every skip path below returns `content` untouched and `change:
+ * null`.
+ */
+function rewriteFrontmatterNodeId(
+  content: string,
+  oldId: string,
+  newId: string,
+): { content: string; change: RewriteChange | null } {
+  const bounds = findFrontmatterBounds(content);
+  if (!bounds) return { content, change: null };
+
+  const lines = content.split("\n");
+  // yamlBody is the exact frontmatter body substring of `content` (including
+  // whatever line endings it holds) — sliced from the string itself rather
+  // than lines.slice(...).join("\n"), which would drop the real "\n" that
+  // terminates the last body line, corrupting a CRLF file's last line (its
+  // trailing "\r" would dangle at the parsed string's end with no "\n" after
+  // it, which the YAML tokenizer does not accept as a line break).
+  const bodyOffset = lineStartOffset(lines, 1);
+  const fenceOffset = lineStartOffset(lines, bounds.end);
+  const yamlBody = content.slice(bodyOffset, fenceOffset);
+
+  const doc = parseDocument(yamlBody, { resolveKnownTags: false });
+  if (doc.errors.length > 0) return { content, change: null };
+
+  const root = doc.contents;
+  if (root == null || !isMap(root)) return { content, change: null };
+  const artgraphNode = root.get("artgraph", true);
+  if (!isMap(artgraphNode)) return { content, change: null };
+  const nodeIdNode = artgraphNode.get("node_id", true);
+  if (!isScalar(nodeIdNode)) return { content, change: null };
+  if (typeof nodeIdNode.value !== "string" || nodeIdNode.value !== oldId) {
+    return { content, change: null };
+  }
+
+  const type = nodeIdNode.type;
+  if (type !== Scalar.PLAIN && type !== Scalar.QUOTE_SINGLE && type !== Scalar.QUOTE_DOUBLE) {
+    // Block scalars (`|`, `>`) and anything else outside these three styles
+    // are left alone, same as the old regex (its value group couldn't
+    // produce these shapes either).
+    return { content, change: null };
+  }
+  const range = nodeIdNode.range;
+  if (!range) return { content, change: null };
+  const [rangeStart, rangeEnd] = range;
+  // A quoted scalar's raw span can itself fold across lines; skip rather than
+  // collapse that into the single-line before/after a RewriteChange assumes.
+  if (yamlBody.slice(rangeStart, rangeEnd).includes("\n")) return { content, change: null };
+
+  const spliceStart = bodyOffset + rangeStart;
+  const spliceEnd = bodyOffset + rangeEnd;
+  const replacement = requoteNodeId(newId, type);
+
+  const lineStart = content.lastIndexOf("\n", spliceStart - 1) + 1;
+  const nextNewline = content.indexOf("\n", spliceEnd);
+  const lineEnd = nextNewline === -1 ? content.length : nextNewline;
+  const before = content.slice(lineStart, lineEnd);
+  const after =
+    before.slice(0, spliceStart - lineStart) + replacement + before.slice(spliceEnd - lineStart);
+  const lineNumber = content.slice(0, lineStart).split("\n").length;
+
+  return {
+    content: content.slice(0, spliceStart) + replacement + content.slice(spliceEnd),
+    change: {
+      filePath: "",
+      line: lineNumber,
+      kind: "frontmatter-depends-on",
+      before,
+      after,
+    },
+  };
 }
 
 /**
@@ -394,12 +510,14 @@ function isBlockItemLine(line: string): boolean {
  * Body content outside the frontmatter delimiters is never touched.
  */
 export function rewriteFrontmatter(content: string, oldId: string, newId: string): RewriteResult {
-  const lines = content.split("\n");
-  const changes: RewriteChange[] = [];
-
   const bounds = findFrontmatterBounds(content);
-  if (!bounds) return { content, changes };
+  if (!bounds) return { content, changes: [] };
 
+  const changes: RewriteChange[] = [];
+  const nodeIdResult = rewriteFrontmatterNodeId(content, oldId, newId);
+  if (nodeIdResult.change) changes.push(nodeIdResult.change);
+
+  const lines = nodeIdResult.content.split("\n");
   const idRe = idBoundaryRegex(oldId);
   let inBlock = false;
 
@@ -407,22 +525,6 @@ export function rewriteFrontmatter(content: string, oldId: string, newId: string
   // sit at 1..bounds.end-1.
   for (let i = 1; i < bounds.end; i++) {
     const line = lines[i];
-
-    // node_id: "<id>"
-    const nm = line.match(FM_NODE_ID_RE);
-    if (nm && nm[2] === oldId) {
-      const before = line;
-      lines[i] = nm[1] + newId + nm[3];
-      changes.push({
-        filePath: "",
-        line: i + 1,
-        kind: "frontmatter-depends-on",
-        before,
-        after: lines[i],
-      });
-      inBlock = false;
-      continue;
-    }
 
     // depends_on: / derives_from: key (with optional inline value)
     const bm = line.match(FM_BLOCK_KEY_RE);
@@ -466,6 +568,11 @@ export function rewriteFrontmatter(content: string, oldId: string, newId: string
       }
     }
   }
+
+  // The node_id change (found via a standalone parse, not the line-ordered
+  // loop above) can land anywhere in the frontmatter body, so re-sort by line
+  // to preserve the ascending-line-number order callers rely on.
+  changes.sort((a, b) => a.line - b.line);
 
   return { content: lines.join("\n"), changes };
 }
@@ -548,7 +655,114 @@ export function expandFrontmatterDependsOn(
 // a paren expression outside those positions is harmless because the parser
 // won't have emitted an edge for it anyway, and duplicating the position
 // gate in the rewriter would mean two sources of truth.
-const ANNOTATION_RE_LINE = /(\(\s*(?:depends_on|derives_from)\s*:\s*)([^()]*?)(\s*\))/g;
+
+// `\s` exactly as the regex engine's character class defines it (including
+// the Unicode whitespace it covers) — tested one character at a time so
+// findNextAnnotationMatch agrees with the grammar below byte-for-byte without
+// re-deriving that class by hand.
+function isRegexSpace(ch: string): boolean {
+  return /\s/.test(ch);
+}
+
+// A single `(depends_on: …)` / `(derives_from: …)` match within one line —
+// the (head, body, tail, start, end) a callback would receive from
+// `line.replace(/(\(\s*(?:depends_on|derives_from)\s*:\s*)([^()]*?)(\s*\))/g, cb)`.
+interface AnnotationMatch {
+  head: string;
+  body: string;
+  tail: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * Find the next depends_on/derives_from annotation in `line` at or after
+ * `from`, or null if there is none. Linear-time replacement for the regex
+ * above: its `[^()]*?` lazy body backtracking against `\s*` runs on both
+ * sides was ReDoS-able on an adversarial (e.g. unclosed) annotation.
+ *
+ * - From a candidate `(`: skip `\s*`, match the `depends_on`/`derives_from`
+ *   keyword, skip `\s*`, require `:`, then skip `\s*` greedily — that span is
+ *   `head`. A failure at any of these steps means this `(` cannot start a
+ *   match; retry from the character right after it (so `((depends_on: X)`
+ *   still matches starting at the second `(`).
+ * - From the end of `head`, scan forward for `(`, `)`, or end of line —
+ *   there is no `[^()]` alternative that reaches a close paren once another
+ *   `(` (or the line end) is hit, so that also fails the candidate and
+ *   retries the same way.
+ * - Hitting `)` completes the match. The run of whitespace directly before it
+ *   is `tail` (mirrors `(\s*\))`); everything between `head` and that run is
+ *   `body`.
+ */
+function findNextAnnotationMatch(line: string, from: number): AnnotationMatch | null {
+  let searchFrom = from;
+  while (true) {
+    const open = line.indexOf("(", searchFrom);
+    if (open === -1) return null;
+
+    let p = open + 1;
+    while (p < line.length && isRegexSpace(line[p])) p++;
+    let keyword: string | null = null;
+    if (line.startsWith("depends_on", p)) keyword = "depends_on";
+    else if (line.startsWith("derives_from", p)) keyword = "derives_from";
+    if (keyword === null) {
+      searchFrom = open + 1;
+      continue;
+    }
+    p += keyword.length;
+    while (p < line.length && isRegexSpace(line[p])) p++;
+    if (line[p] !== ":") {
+      searchFrom = open + 1;
+      continue;
+    }
+    p += 1;
+    while (p < line.length && isRegexSpace(line[p])) p++;
+    const headEnd = p;
+
+    let q = headEnd;
+    while (q < line.length && line[q] !== "(" && line[q] !== ")") q++;
+    if (q >= line.length || line[q] === "(") {
+      searchFrom = open + 1;
+      continue;
+    }
+
+    let tailStart = q;
+    while (tailStart > headEnd && isRegexSpace(line[tailStart - 1])) tailStart--;
+
+    return {
+      head: line.slice(open, headEnd),
+      body: line.slice(headEnd, tailStart),
+      tail: line.slice(tailStart, q + 1),
+      start: open,
+      end: q + 1,
+    };
+  }
+}
+
+/**
+ * `line.replace(<the annotation regex>, cb)` reimplemented over
+ * findNextAnnotationMatch: same left-to-right, non-overlapping match
+ * semantics (each match's end becomes the next search start) and the same
+ * (match, head, body, tail, offset) callback shape.
+ */
+function replaceAnnotations(
+  line: string,
+  cb: (match: string, head: string, body: string, tail: string, offset: number) => string,
+): string {
+  let out = "";
+  let cursor = 0;
+  let searchFrom = 0;
+  while (true) {
+    const m = findNextAnnotationMatch(line, searchFrom);
+    if (!m) break;
+    out += line.slice(cursor, m.start);
+    out += cb(line.slice(m.start, m.end), m.head, m.body, m.tail, m.start);
+    cursor = m.end;
+    searchFrom = m.end;
+  }
+  out += line.slice(cursor);
+  return out;
+}
 
 export function rewriteAnnotationIds(
   content: string,
@@ -592,7 +806,7 @@ export function rewriteAnnotationIds(
     // masked copy at each match position to decide whether the match sits
     // inside a protected span.
     const masked = maskInlineProtectedSpans(original);
-    const rewritten = original.replace(ANNOTATION_RE_LINE, (match, head, body, tail, offset) => {
+    const rewritten = replaceAnnotations(original, (match, head, body, tail, offset) => {
       const slice = masked.slice(offset, offset + match.length);
       // If the same span in the masked copy is entirely whitespace, the
       // match overlaps a protected region — leave it untouched.
