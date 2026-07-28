@@ -13,6 +13,7 @@ import {
   rewriteFile,
 } from "../src/rename.js";
 import { buildGraph } from "../src/graph/builder.js";
+import { executeMerge } from "../src/rename-executor.js";
 import type { ArtgraphConfig } from "../src/types.js";
 import { renameLockKey, splitLockKey, mergeLockKeys } from "../src/rename-lock.js";
 import { isValidTargetId } from "../src/rename-validate-id.js";
@@ -187,11 +188,162 @@ describe("rewriteTestTags", () => {
 
 describe("rewriteFrontmatter", () => {
   it("rewrites node_id inside frontmatter", () => {
-    const input = ["---", 'node_id: "doc:old"', "---", "# Body content"].join("\n");
+    // Contract shape (specs/008-document-graph/contracts/frontmatter-schema.md):
+    // `node_id` lives under the `artgraph` key — the reader (markdown.ts)
+    // only ever consumes `frontmatter.artgraph.node_id`.
+    const input = ["---", "artgraph:", '  node_id: "doc:old"', "---", "# Body content"].join("\n");
     const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
-    expect(content).toBe(["---", 'node_id: "doc:new"', "---", "# Body content"].join("\n"));
+    expect(content).toBe(
+      ["---", "artgraph:", '  node_id: "doc:new"', "---", "# Body content"].join("\n"),
+    );
     expect(changes).toHaveLength(1);
     expect(changes[0].kind).toBe("frontmatter-depends-on");
+  });
+
+  it("preserves node_id scalar style (plain / single-quoted / double-quoted) across the rewrite", () => {
+    for (const [before, after] of [
+      ["node_id: doc:old", "node_id: doc:new"],
+      ["node_id: 'doc:old'", "node_id: 'doc:new'"],
+      ['node_id: "doc:old"', 'node_id: "doc:new"'],
+    ]) {
+      const input = ["---", "artgraph:", `  ${before}`, "---"].join("\n");
+      const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
+      expect(content).toBe(["---", "artgraph:", `  ${after}`, "---"].join("\n"));
+      expect(changes).toHaveLength(1);
+    }
+  });
+
+  it("quotes a plain-style rewrite when the bare newId would re-parse as a non-string (number / bool / trailing colon)", () => {
+    for (const [newId, expected] of [
+      ["123", '"123"'],
+      ["1.1", '"1.1"'],
+      ["true", '"true"'],
+      ["doc:", '"doc:"'],
+    ]) {
+      const input = ["---", "artgraph:", "  node_id: doc:old", "---"].join("\n");
+      const { content, changes } = rewriteFrontmatter(input, "doc:old", newId);
+      // Bare, these would come back from YAML as 123 / 1.1 / true / { doc: null }
+      // and the reader's typeof check would drop the id entirely.
+      expect(content).toBe(["---", "artgraph:", `  node_id: ${expected}`, "---"].join("\n"));
+      expect(changes).toHaveLength(1);
+    }
+  });
+
+  it("leaves an explicitly tagged or anchored node_id scalar alone (the old regex never unwrapped these)", () => {
+    const tagged = ["---", "artgraph:", '  node_id: !!str "doc:old"', "---"].join("\n");
+    const anchored = ["---", "artgraph:", "  node_id: &keep doc:old", "---"].join("\n");
+    for (const input of [tagged, anchored]) {
+      const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
+      expect(content).toBe(input);
+      expect(changes).toHaveLength(0);
+    }
+    // Positive control: the same document shape minus the tag/anchor rewrites,
+    // so the skips above exercise the guard rather than a failed parse.
+    const plain = ["---", "artgraph:", "  node_id: doc:old", "---"].join("\n");
+    expect(rewriteFrontmatter(plain, "doc:old", "doc:new").content).toContain("node_id: doc:new");
+  });
+
+  it("rewrites node_id with a trailing inline comment, preserving the comment", () => {
+    const input = ["---", "artgraph:", "  node_id: doc:old # keep me", "---"].join("\n");
+    const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
+    expect(content).toBe(["---", "artgraph:", "  node_id: doc:new # keep me", "---"].join("\n"));
+    expect(changes).toHaveLength(1);
+  });
+
+  it("rewrites node_id written as a flow map (`artgraph: { node_id: ... }`)", () => {
+    const input = ["---", "artgraph: { node_id: doc:old, depends_on: [] }", "---"].join("\n");
+    const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
+    expect(content).toContain("node_id: doc:new");
+    expect(changes).toHaveLength(1);
+  });
+
+  it("does NOT rewrite a top-level (non-artgraph-nested) node_id — only frontmatter.artgraph.node_id is a reference", () => {
+    // Positive control (artgraph.node_id below) proves the parse path is
+    // actually reached; the top-level key sitting right next to it is the
+    // negative assertion.
+    const input = ["---", "node_id: doc:old", "artgraph:", "  node_id: doc:old", "---"].join("\n");
+    const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
+    expect(content).toBe(
+      ["---", "node_id: doc:old", "artgraph:", "  node_id: doc:new", "---"].join("\n"),
+    );
+    expect(changes).toHaveLength(1);
+  });
+
+  it("does NOT rewrite node_id inside YAML the reader would fail to parse, but the depends_on loop still runs (parity)", () => {
+    // node_id: "doc:old' — asymmetric quotes; parseDocument reports an error
+    // (unterminated double-quoted scalar), matching parseFrontmatter's own
+    // throw-and-ignore-whole-frontmatter behaviour for this file.
+    // Positive control: the depends_on block below is untouched by the
+    // node_id logic (#403 scope) and must still be rewritten, proving the
+    // loop ran rather than bailing out entirely.
+    const input = [
+      "---",
+      "artgraph:",
+      "  node_id: \"doc:old'",
+      "depends_on:",
+      "  - doc:old",
+      "---",
+    ].join("\n");
+    const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
+    expect(content).toBe(
+      ["---", "artgraph:", "  node_id: \"doc:old'", "depends_on:", "  - doc:new", "---"].join("\n"),
+    );
+    expect(changes).toHaveLength(1);
+    expect(changes[0].before).toBe("  - doc:old");
+  });
+
+  // CRLF regression pin (mergeMarkdown calls rewriteFrontmatter directly on
+  // un-normalized, CRLF-terminated content — see rewriteFile's own F4 comment
+  // for the *other* rewriters, which normalize first; this path does not).
+  // Must keep working exactly as it did on the old regex: node_id is
+  // rewritten and every "\r\n" survives untouched.
+  it("CRLF: rewrites an artgraph-nested node_id and preserves \\r\\n line endings (merge-path parity)", () => {
+    for (const [before, after] of [
+      ["node_id: doc:old", "node_id: doc:new"],
+      ['node_id: "doc:old"', 'node_id: "doc:new"'],
+    ]) {
+      const input = ["---", "artgraph:", `  ${before}`, "---", "# Body"].join("\r\n") + "\r\n";
+      const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
+      expect(content).toBe(
+        ["---", "artgraph:", `  ${after}`, "---", "# Body"].join("\r\n") + "\r\n",
+      );
+      expect(content).toContain("\r\n");
+      // No line ending was silently converted to a bare LF anywhere.
+      expect(/[^\r]\n/.test(content)).toBe(false);
+      expect(changes).toHaveLength(1);
+    }
+  });
+
+  // Wiring test: the same CRLF node_id rewrite, exercised through the real
+  // executeMerge -> mergeMarkdown call chain (src/rename-executor.ts), which
+  // reads the file as-is off disk and calls rewriteFrontmatter on that raw,
+  // un-normalized content — unlike rewriteFile's other callers.
+  it("CRLF via executeMerge/mergeMarkdown: node_id rewrite lands on disk with \\r\\n preserved", () => {
+    const tmpRoot = mkdtempSync(resolve(tmpdir(), "artgraph-rename-crlf-merge-"));
+    try {
+      mkdirSync(resolve(tmpRoot, "specs"), { recursive: true });
+      const specPath = resolve(tmpRoot, "specs", "a.md");
+      const original =
+        ["---", "artgraph:", "  node_id: doc:old", "---", "# A"].join("\r\n") + "\r\n";
+      writeFileSync(specPath, original);
+
+      const result = executeMerge({
+        dryRun: false,
+        format: "json",
+        rootDir: tmpRoot,
+        mergeIds: ["doc:old"],
+        intoId: "doc:new",
+      });
+
+      expect(result.changes.some((c) => c.kind === "frontmatter-depends-on")).toBe(true);
+      const written = readFileSync(specPath, "utf-8");
+      expect(written).toBe(
+        ["---", "artgraph:", "  node_id: doc:new", "---", "# A"].join("\r\n") + "\r\n",
+      );
+      expect(/[^\r]\n/.test(written)).toBe(false);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
   });
 
   it("rewrites id inside depends_on in frontmatter", () => {
@@ -262,7 +414,7 @@ describe("rewriteFrontmatter", () => {
   });
 
   it("still accepts trailing whitespace on fences (gray-matter parity)", () => {
-    const input = ["--- ", 'node_id: "doc:old"', "---\t", "# Body"].join("\n");
+    const input = ["--- ", "artgraph:", '  node_id: "doc:old"', "---\t", "# Body"].join("\n");
     const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
     expect(content).toContain('node_id: "doc:new"');
     expect(changes).toHaveLength(1);
@@ -833,6 +985,49 @@ describe("rewriteAnnotationIds", () => {
     const input = "- X: y (depends_on: AUTH-0010)";
     const { content } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
     expect(content).toBe(input);
+  });
+
+  // Linear-scanner equivalence edge cases (the scanner replaces a ReDoS-able
+  // regex — see the perf suite below — so these pin the same behaviour the
+  // old regex had, fixed via direct comparison against it before the swap).
+  it("double-paren: the outer `(` fails to open an annotation, the inner one succeeds", () => {
+    const input = "- X: y ((depends_on: AUTH-001))";
+    const { content, changes } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe("- X: y ((depends_on: AUTH-100))");
+    expect(changes).toHaveLength(1);
+  });
+
+  it("empty body is a no-op (no ID token for idTokenRE to match)", () => {
+    const input = "- X: y (depends_on: )";
+    const { content, changes } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe(input);
+    expect(changes).toHaveLength(0);
+  });
+
+  it("an unclosed annotation (no closing paren) is left unchanged", () => {
+    const input = "- X: y (depends_on: AUTH-001";
+    const { content, changes } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe(input);
+    expect(changes).toHaveLength(0);
+  });
+
+  it("tab whitespace around the keyword/colon/close-paren is preserved", () => {
+    const input = "- X: y (depends_on\t:\tAUTH-001\t)";
+    const { content } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe("- X: y (depends_on\t:\tAUTH-100\t)");
+  });
+
+  it("extra spaces around the keyword/colon are preserved", () => {
+    const input = "- X: y (   depends_on   :   AUTH-001   )";
+    const { content } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe("- X: y (   depends_on   :   AUTH-100   )");
+  });
+
+  it("two separate annotations on one line: only the one containing oldId changes", () => {
+    const input = "- X: y (depends_on: AUTH-002) and (depends_on: AUTH-001)";
+    const { content, changes } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
+    expect(content).toBe("- X: y (depends_on: AUTH-002) and (depends_on: AUTH-100)");
+    expect(changes).toHaveLength(1);
   });
 });
 
