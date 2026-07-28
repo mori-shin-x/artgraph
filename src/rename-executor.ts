@@ -839,7 +839,10 @@ export function executeMerge(
       }
     } else {
       // Code/test files: collapse @impl and test references onto intoId.
-      let next = content;
+      // Same normalize/restore boundary as mergeMarkdown, so the change
+      // records stay \r-free and the on-disk style survives untouched.
+      const originalNewline = detectNewline(content);
+      let next = normalizeNewlines(content);
       const fileChanges: RewriteChange[] = [];
       for (const oldId of idsToRewrite) {
         const implRes = rewriteImplTags(next, oldId, intoId);
@@ -853,7 +856,7 @@ export function executeMerge(
       }
       if (fileChanges.length > 0) {
         allChanges.push(...fileChanges);
-        filesToWrite.set(absPath, next);
+        filesToWrite.set(absPath, restoreNewlines(next, originalNewline));
       }
     }
   }
@@ -963,6 +966,11 @@ export function splitMarkdown(
   intoIds: string[],
   opts: RewriteOptions,
 ): { content: string; changes: RewriteChange[] } {
+  // executeSplit validates this before scanning; repeated here so a direct
+  // caller can't remove a definition line without leaving any replacement.
+  if (intoIds.length === 0) {
+    throw new Error(`splitMarkdown requires at least one target ID.`);
+  }
   const originalNewline = detectNewline(content);
   const normalized = normalizeNewlines(content);
   const lines = normalized.split("\n");

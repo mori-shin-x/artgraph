@@ -858,6 +858,48 @@ describe("CRLF: mergeMarkdown/splitMarkdown normalize/restore boundary", () => {
       rmSync(tmpRoot, { recursive: true, force: true });
     }
   });
+
+  it("executeMerge wiring: a CRLF code file keeps \\r\\n on disk while its impl/test-tag change records are \\r-free (same contract as the .md branch)", () => {
+    const tmpRoot = mkdtempSync(resolve(tmpdir(), "artgraph-rename-crlf-merge-code-"));
+    try {
+      mkdirSync(resolve(tmpRoot, "specs"), { recursive: true });
+      mkdirSync(resolve(tmpRoot, "src"), { recursive: true });
+      const aPath = resolve(tmpRoot, "specs", "a.md");
+      const fPath = resolve(tmpRoot, "src", "f.ts");
+      writeFileSync(aPath, ["---", "artgraph:", "  node_id: x", "---", "# A"].join("\n") + "\n");
+      writeFileSync(fPath, ["// @impl x", "export const a = 1;"].join("\r\n") + "\r\n");
+
+      const result = executeMerge({
+        dryRun: false,
+        format: "json",
+        rootDir: tmpRoot,
+        mergeIds: ["x"],
+        intoId: "doc:y",
+      });
+
+      const codeChanges = result.changes.filter((c) => c.filePath.endsWith("f.ts"));
+      expect(codeChanges.length).toBeGreaterThanOrEqual(1);
+      for (const c of codeChanges) {
+        expect(c.before).not.toContain("\r");
+        expect(c.after).not.toContain("\r");
+      }
+      const written = readFileSync(fPath, "utf-8");
+      expect(written).toBe(["// @impl doc:y", "export const a = 1;"].join("\r\n") + "\r\n");
+      expect(written).not.toContain("\r\r\n");
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("splitMarkdown called directly with no target IDs throws instead of deleting a definition without replacement", () => {
+    const input = ["# Spec", "", "- REQ-001: user login flow"].join("\n") + "\n";
+    expect(() => splitMarkdown("specs/spec.md", input, "REQ-001", [], {})).toThrow(
+      /at least one target ID/,
+    );
+    // Positive control: the same call with a target rewrites normally.
+    const ok = splitMarkdown("specs/spec.md", input, "REQ-001", ["REQ-101"], {});
+    expect(ok.changes.length).toBeGreaterThanOrEqual(1);
+  });
 });
 
 // ── renameLockKey ───────────────────────────────────────────────────
