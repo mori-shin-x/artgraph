@@ -458,6 +458,11 @@ function rewriteFrontmatterNodeId(
   if (!isMap(artgraphNode)) return { content, change: null };
   const nodeIdNode = artgraphNode.get("node_id", true);
   if (!isScalar(nodeIdNode)) return { content, change: null };
+  // An explicit tag (`!!str "…"`) or anchor (`&a …`) sits between the key and
+  // the value, so the scalar's range covers the value token only — a splice
+  // would keep the tag/anchor while swapping the text under it. The old regex
+  // never extracted a bare value from these shapes either; leave them alone.
+  if (nodeIdNode.tag != null || nodeIdNode.anchor != null) return { content, change: null };
   if (typeof nodeIdNode.value !== "string" || nodeIdNode.value !== oldId) {
     return { content, change: null };
   }

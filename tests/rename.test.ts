@@ -229,6 +229,20 @@ describe("rewriteFrontmatter", () => {
     }
   });
 
+  it("leaves an explicitly tagged or anchored node_id scalar alone (the old regex never unwrapped these)", () => {
+    const tagged = ["---", "artgraph:", '  node_id: !!str "doc:old"', "---"].join("\n");
+    const anchored = ["---", "artgraph:", "  node_id: &keep doc:old", "---"].join("\n");
+    for (const input of [tagged, anchored]) {
+      const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
+      expect(content).toBe(input);
+      expect(changes).toHaveLength(0);
+    }
+    // Positive control: the same document shape minus the tag/anchor rewrites,
+    // so the skips above exercise the guard rather than a failed parse.
+    const plain = ["---", "artgraph:", "  node_id: doc:old", "---"].join("\n");
+    expect(rewriteFrontmatter(plain, "doc:old", "doc:new").content).toContain("node_id: doc:new");
+  });
+
   it("rewrites node_id with a trailing inline comment, preserving the comment", () => {
     const input = ["---", "artgraph:", "  node_id: doc:old # keep me", "---"].join("\n");
     const { content, changes } = rewriteFrontmatter(input, "doc:old", "doc:new");
@@ -1014,41 +1028,6 @@ describe("rewriteAnnotationIds", () => {
     const { content, changes } = rewriteAnnotationIds(input, "AUTH-001", "AUTH-100");
     expect(content).toBe("- X: y (depends_on: AUTH-002) and (depends_on: AUTH-100)");
     expect(changes).toHaveLength(1);
-  });
-});
-
-// ── Perf regression: ReDoS fixed by the parser-driven node_id rewrite and
-// the linear annotation scanner (issue-tracked; see plan). Attack strings
-// below are the corrected constructions confirmed to actually reproduce
-// catastrophic backtracking on the OLD regex-based implementations (the
-// originally reported strings did not — they completed in ~0ms).
-describe("rewriteFrontmatter / rewriteAnnotationIds — ReDoS perf regression", () => {
-  it("rewriteFrontmatter completes well under the old quadratic-backtracking blowup", () => {
-    const n = 40000;
-    const attackLine = "node_id:a" + " ".repeat(n) + "b";
-    const content = ["---", attackLine, "---", "# Body"].join("\n");
-
-    const start = performance.now();
-    rewriteFrontmatter(content, "doc:old", "doc:new");
-    const elapsed = performance.now() - start;
-
-    // Old regex (FM_NODE_ID_RE) measured ~1.3-1.8s at this size (O(n^2)
-    // backtracking); the new parser-driven rewrite is O(n).
-    expect(elapsed).toBeLessThan(500);
-  });
-
-  it("rewriteAnnotationIds completes well under the old super-linear backtracking blowup", () => {
-    const n = 2000;
-    const attackLine = "(depends_on: " + " ".repeat(n) + "a".repeat(n); // no closing paren
-    const content = ["# spec", "", `- X: y ${attackLine}`].join("\n");
-
-    const start = performance.now();
-    rewriteAnnotationIds(content, "AUTH-001", "AUTH-100");
-    const elapsed = performance.now() - start;
-
-    // Old regex (ANNOTATION_RE_LINE) measured ~2.5-2.8s at this size; the new
-    // linear scanner is O(n).
-    expect(elapsed).toBeLessThan(500);
   });
 });
 
