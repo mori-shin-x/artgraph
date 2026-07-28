@@ -845,6 +845,34 @@ export function rewriteAnnotationIds(
   return { content: lines.join("\n"), changes };
 }
 
+/**
+ * The line-ending style `content` was written with: `"\r\n"` if it contains
+ * at least one CRLF pair, `"\n"` otherwise (a file with only lone `\r` is
+ * treated as LF, matching `normalizeNewlines`'s own handling of stray `\r`
+ * below). Pair with `normalizeNewlines`/`restoreNewlines` to round-trip a
+ * rewrite pipeline through a single line ending regardless of how the file
+ * was checked out.
+ */
+export function detectNewline(content: string): "\r\n" | "\n" {
+  return content.includes("\r\n") ? "\r\n" : "\n";
+}
+
+/**
+ * Collapse CRLF and lone CR to LF so line-based regexes and annotation
+ * matching behave identically across platforms (see `rewriteFile` below).
+ */
+export function normalizeNewlines(content: string): string {
+  return content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+/**
+ * Undo `normalizeNewlines`, converting every `\n` back to `newline`. A no-op
+ * when `newline` is already `"\n"`.
+ */
+export function restoreNewlines(content: string, newline: "\r\n" | "\n"): string {
+  return newline === "\n" ? content : content.replace(/\n/g, newline);
+}
+
 export function rewriteFile(
   filePath: string,
   content: string,
@@ -859,9 +887,11 @@ export function rewriteFile(
   // and annotation matching behave identically across platforms. Restore the
   // original newline style at the end (meta-review additional F4 — without
   // this, the rewriter no-ops on Windows-checked-out spec files while the
-  // parser still produces edges).
-  const originalNewline = content.includes("\r\n") ? "\r\n" : "\n";
-  let current = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  // parser still produces edges). mergeMarkdown/splitMarkdown
+  // (rename-executor.ts) share this same normalize/restore boundary via the
+  // three helpers above.
+  const originalNewline = detectNewline(content);
+  let current = normalizeNewlines(content);
 
   const apply = (fn: (c: string) => RewriteResult) => {
     const result = fn(current);
@@ -883,9 +913,5 @@ export function rewriteFile(
     change.filePath = filePath;
   }
 
-  if (originalNewline !== "\n") {
-    current = current.replace(/\n/g, originalNewline);
-  }
-
-  return { content: current, changes: allChanges };
+  return { content: restoreNewlines(current, originalNewline), changes: allChanges };
 }

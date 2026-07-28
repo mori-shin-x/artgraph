@@ -13,7 +13,13 @@ import {
   rewriteFile,
 } from "../src/rename.js";
 import { buildGraph } from "../src/graph/builder.js";
-import { executeMerge } from "../src/rename-executor.js";
+import {
+  executeMerge,
+  executeSplit,
+  executeRename,
+  mergeMarkdown,
+  splitMarkdown,
+} from "../src/rename-executor.js";
 import type { ArtgraphConfig } from "../src/types.js";
 import { renameLockKey, splitLockKey, mergeLockKeys } from "../src/rename-lock.js";
 import { isValidTargetId } from "../src/rename-validate-id.js";
@@ -292,9 +298,12 @@ describe("rewriteFrontmatter", () => {
     expect(changes[0].before).toBe("  - doc:old");
   });
 
-  // CRLF regression pin (mergeMarkdown calls rewriteFrontmatter directly on
-  // un-normalized, CRLF-terminated content — see rewriteFile's own F4 comment
-  // for the *other* rewriters, which normalize first; this path does not).
+  // CRLF regression pin: calls rewriteFrontmatter directly on raw,
+  // un-normalized CRLF content, bypassing the F4 normalize/restore boundary
+  // rewriteFile applies around its own rewriters (see rewriteFile's own F4
+  // comment) — mergeMarkdown/splitMarkdown now share that same boundary too
+  // (see the wiring test below), but this pins that rewriteFrontmatter's
+  // node_id path is CRLF-tolerant even called unwrapped.
   // Must keep working exactly as it did on the old regex: node_id is
   // rewritten and every "\r\n" survives untouched.
   it("CRLF: rewrites an artgraph-nested node_id and preserves \\r\\n line endings (merge-path parity)", () => {
@@ -315,9 +324,11 @@ describe("rewriteFrontmatter", () => {
   });
 
   // Wiring test: the same CRLF node_id rewrite, exercised through the real
-  // executeMerge -> mergeMarkdown call chain (src/rename-executor.ts), which
-  // reads the file as-is off disk and calls rewriteFrontmatter on that raw,
-  // un-normalized content — unlike rewriteFile's other callers.
+  // executeMerge -> mergeMarkdown call chain (src/rename-executor.ts).
+  // mergeMarkdown normalizes/restores around its rewriteFrontmatter calls at
+  // its own function boundary (the same F4 helpers rewriteFile uses), so
+  // this pins the end-to-end on-disk result rather than the unwrapped
+  // function call above.
   it("CRLF via executeMerge/mergeMarkdown: node_id rewrite lands on disk with \\r\\n preserved", () => {
     const tmpRoot = mkdtempSync(resolve(tmpdir(), "artgraph-rename-crlf-merge-"));
     try {
@@ -542,6 +553,352 @@ describe("rewriteFile", () => {
     const { content, changes } = rewriteFile("data/config.yaml", input, "REQ-001", "REQ-100");
     expect(content).toBe(input);
     expect(changes).toHaveLength(0);
+  });
+});
+
+// ── CRLF: mergeMarkdown/splitMarkdown share rewriteFile's F4 boundary ──
+//
+// Before this wiring, mergeMarkdown/splitMarkdown (rename-executor.ts) never
+// normalized CRLF/CR to LF before their own line-based passes, so
+// FM_BLOCK_KEY_RE (depends_on/derives_from) and specDefinitionId's heading
+// branch — both anchored with an un-flagged `$` — silently failed to match a
+// CRLF-terminated line. Both functions now normalize/restore once at their
+// own function boundary via the same detectNewline/normalizeNewlines/
+// restoreNewlines helpers rewriteFile (rename.ts) uses.
+
+describe("CRLF: mergeMarkdown/splitMarkdown normalize/restore boundary", () => {
+  it("mergeMarkdown: rewrites a CRLF artgraph-nested depends_on item and preserves \\r\\n", () => {
+    const input =
+      ["---", "artgraph:", "  depends_on:", "    - x", "---", "# B"].join("\r\n") + "\r\n";
+    const { content, changes } = mergeMarkdown("specs/b.md", input, ["x"], "doc:y", false, {});
+    const expected =
+      ["---", "artgraph:", "  depends_on:", "    - doc:y", "---", "# B"].join("\r\n") + "\r\n";
+    expect(content).toBe(expected);
+    expect(/[^\r]\n/.test(content)).toBe(false);
+    // candidate-B kill: restoring inside mergeMarkdown must not double up on
+    // rewriteFile's own restore (no path currently wraps both, but pinned so
+    // a future refactor can't reintroduce it silently).
+    expect(content.includes("\r\r\n")).toBe(false);
+    expect(changes.some((c) => c.kind === "frontmatter-depends-on")).toBe(true);
+    // RewriteChange contract (report §3): merge's before/after no longer
+    // carry \r, matching rewriteFile's own (rename-path) contract.
+    expect(changes.every((c) => !c.before.includes("\r") && !c.after.includes("\r"))).toBe(true);
+  });
+
+  it("derives_from sibling: mergeMarkdown rewrites a CRLF artgraph-nested derives_from item", () => {
+    const input =
+      ["---", "artgraph:", "  derives_from:", "    - x", "---", "# B"].join("\r\n") + "\r\n";
+    const { content, changes } = mergeMarkdown("specs/b.md", input, ["x"], "doc:y", false, {});
+    const expected =
+      ["---", "artgraph:", "  derives_from:", "    - doc:y", "---", "# B"].join("\r\n") + "\r\n";
+    expect(content).toBe(expected);
+    expect(/[^\r]\n/.test(content)).toBe(false);
+    expect(content.includes("\r\r\n")).toBe(false);
+    expect(changes.some((c) => c.kind === "frontmatter-depends-on")).toBe(true);
+  });
+
+  it("lone-CR-only file: detectNewline reports LF, so the merge output is silently normalized to LF (rewriteFile parity)", () => {
+    const input = ["---", "artgraph:", "  depends_on:", "    - x", "---", "# B"].join("\r");
+    const { content, changes } = mergeMarkdown("specs/b.md", input, ["x"], "doc:y", false, {});
+    expect(content).toBe(
+      ["---", "artgraph:", "  depends_on:", "    - doc:y", "---", "# B"].join("\n"),
+    );
+    // Intentional (pre-existing rewriteFile behaviour, now shared by
+    // mergeMarkdown too): a file with no real "\r\n" pair is treated as LF,
+    // so every lone "\r" is silently dropped rather than restored.
+    expect(content.includes("\r")).toBe(false);
+    expect(changes.some((c) => c.kind === "frontmatter-depends-on")).toBe(true);
+  });
+
+  it("splitMarkdown: expands a CRLF artgraph-nested depends_on item into the new IDs", () => {
+    const input =
+      ["---", "artgraph:", "  depends_on:", "    - REQ-001", "---", "# Spec"].join("\r\n") + "\r\n";
+    const { content, changes } = splitMarkdown(
+      "specs/spec.md",
+      input,
+      "REQ-001",
+      ["REQ-101", "REQ-102"],
+      {},
+    );
+    const expected =
+      ["---", "artgraph:", "  depends_on:", "    - REQ-101", "    - REQ-102", "---", "# Spec"].join(
+        "\r\n",
+      ) + "\r\n";
+    expect(content).toBe(expected);
+    expect(/[^\r]\n/.test(content)).toBe(false);
+    expect(content.includes("\r\r\n")).toBe(false);
+    expect(changes.some((c) => c.kind === "frontmatter-depends-on")).toBe(true);
+    expect(changes.every((c) => !c.before.includes("\r") && !c.after.includes("\r"))).toBe(true);
+  });
+
+  it("executeMerge wiring: a CRLF depends_on reference across two files is rewritten and no orphan-doc warning remains (issue scenario)", () => {
+    const tmpRoot = mkdtempSync(resolve(tmpdir(), "artgraph-rename-crlf-merge-depends-"));
+    try {
+      mkdirSync(resolve(tmpRoot, "specs"), { recursive: true });
+      const aPath = resolve(tmpRoot, "specs", "a.md");
+      const bPath = resolve(tmpRoot, "specs", "b.md");
+      writeFileSync(
+        aPath,
+        ["---", "artgraph:", "  node_id: x", "---", "# A"].join("\r\n") + "\r\n",
+      );
+      writeFileSync(
+        bPath,
+        ["---", "artgraph:", "  depends_on:", "    - x", "---", "# B"].join("\r\n") + "\r\n",
+      );
+
+      const result = executeMerge({
+        dryRun: false,
+        format: "json",
+        rootDir: tmpRoot,
+        mergeIds: ["x"],
+        intoId: "doc:y",
+      });
+
+      expect(result.changes.length).toBeGreaterThanOrEqual(2);
+
+      const writtenA = readFileSync(aPath, "utf-8");
+      const writtenB = readFileSync(bPath, "utf-8");
+      expect(writtenA).toBe(
+        ["---", "artgraph:", "  node_id: doc:y", "---", "# A"].join("\r\n") + "\r\n",
+      );
+      expect(writtenB).toBe(
+        ["---", "artgraph:", "  depends_on:", "    - doc:y", "---", "# B"].join("\r\n") + "\r\n",
+      );
+      for (const written of [writtenA, writtenB]) {
+        expect(/[^\r]\n/.test(written)).toBe(false);
+        expect(written.includes("\r\r\n")).toBe(false);
+      }
+
+      const cfg: ArtgraphConfig = {
+        include: [],
+        specDirs: ["specs"],
+        testPatterns: [],
+        lockFile: ".trace.lock",
+      };
+      const { warnings } = buildGraph(tmpRoot, cfg);
+      expect(warnings.filter((w) => w.type === "orphan-doc")).toHaveLength(0);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("executeSplit wiring: a CRLF same-file depends_on reference expands to the new IDs alongside the list-item split", () => {
+    const tmpRoot = mkdtempSync(resolve(tmpdir(), "artgraph-rename-crlf-split-depends-"));
+    try {
+      mkdirSync(resolve(tmpRoot, "specs"), { recursive: true });
+      const specPath = resolve(tmpRoot, "specs", "spec.md");
+      writeFileSync(
+        specPath,
+        [
+          "---",
+          "artgraph:",
+          "  depends_on:",
+          "    - REQ-001",
+          "---",
+          "# Spec",
+          "",
+          "- REQ-001: user login flow",
+        ].join("\r\n") + "\r\n",
+      );
+
+      const result = executeSplit({
+        dryRun: false,
+        format: "json",
+        rootDir: tmpRoot,
+        splitId: "REQ-001",
+        intoIds: ["REQ-101", "REQ-102"],
+      });
+
+      expect(result.changes.length).toBeGreaterThan(0);
+      const written = readFileSync(specPath, "utf-8");
+      expect(written).not.toContain("REQ-001");
+      expect(written).toContain("    - REQ-101");
+      expect(written).toContain("    - REQ-102");
+      expect(written).toContain("- REQ-101: (TODO: describe this requirement)");
+      expect(written).toContain("- REQ-102: (TODO: describe this requirement)");
+      expect(/[^\r]\n/.test(written)).toBe(false);
+      expect(written.includes("\r\r\n")).toBe(false);
+      // RewriteChange contract (report §3): split's before/after no longer
+      // carry \r either.
+      expect(result.changes.every((c) => !c.before.includes("\r") && !c.after.includes("\r"))).toBe(
+        true,
+      );
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("heading landmine: a CRLF heading definition (`### Requirement N: ...`) now splits instead of throwing 'ID not found'", () => {
+    const tmpRoot = mkdtempSync(resolve(tmpdir(), "artgraph-rename-crlf-split-heading-"));
+    try {
+      mkdirSync(resolve(tmpRoot, "specs"), { recursive: true });
+      const specPath = resolve(tmpRoot, "specs", "spec.md");
+      writeFileSync(
+        specPath,
+        [
+          "# Kiro spec",
+          "",
+          "### Requirement 1: user login flow",
+          "",
+          "Some description text.",
+        ].join("\r\n") + "\r\n",
+      );
+
+      const result = executeSplit({
+        dryRun: false,
+        format: "json",
+        rootDir: tmpRoot,
+        splitId: "Requirement-1",
+        intoIds: ["Requirement-2", "Requirement-3"],
+      });
+
+      expect(result.changes.length).toBeGreaterThan(0);
+      const written = readFileSync(specPath, "utf-8");
+      expect(written).not.toContain("Requirement 1");
+      expect(written).toContain("- Requirement-2: (TODO: describe this requirement)");
+      expect(written).toContain("- Requirement-3: (TODO: describe this requirement)");
+      expect(written).toContain("Some description text.");
+      expect(/[^\r]\n/.test(written)).toBe(false);
+      expect(written.includes("\r\r\n")).toBe(false);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("executeRename wiring (candidate-A regression guard): a CRLF file's node_id + depends_on + annotation all rewrite and \\r\\n survives", () => {
+    const tmpRoot = mkdtempSync(resolve(tmpdir(), "artgraph-rename-crlf-rename-"));
+    try {
+      mkdirSync(resolve(tmpRoot, "specs"), { recursive: true });
+      const aPath = resolve(tmpRoot, "specs", "a.md");
+      const bPath = resolve(tmpRoot, "specs", "b.md");
+      writeFileSync(
+        aPath,
+        ["---", "artgraph:", "  node_id: doc:old", "---", "# A"].join("\r\n") + "\r\n",
+      );
+      writeFileSync(
+        bPath,
+        [
+          "---",
+          "artgraph:",
+          "  depends_on:",
+          "    - doc:old",
+          "---",
+          "# B",
+          "",
+          "- REQ-001: something (depends_on: doc:old)",
+        ].join("\r\n") + "\r\n",
+      );
+
+      const result = executeRename({
+        dryRun: false,
+        format: "json",
+        rootDir: tmpRoot,
+        from: "doc:old",
+        to: "doc:new",
+      });
+
+      expect(result.changes.length).toBeGreaterThanOrEqual(3);
+
+      const writtenA = readFileSync(aPath, "utf-8");
+      const writtenB = readFileSync(bPath, "utf-8");
+      expect(writtenA).toBe(
+        ["---", "artgraph:", "  node_id: doc:new", "---", "# A"].join("\r\n") + "\r\n",
+      );
+      expect(writtenB).toBe(
+        [
+          "---",
+          "artgraph:",
+          "  depends_on:",
+          "    - doc:new",
+          "---",
+          "# B",
+          "",
+          "- REQ-001: something (depends_on: doc:new)",
+        ].join("\r\n") + "\r\n",
+      );
+      for (const written of [writtenA, writtenB]) {
+        expect(/[^\r]\n/.test(written)).toBe(false);
+        expect(written.includes("\r\r\n")).toBe(false);
+      }
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("executeMerge wiring: a file with no match to the merge source is left byte-for-byte untouched even though normalize+restore alone would change its bytes (changes-count write predicate)", () => {
+    const tmpRoot = mkdtempSync(resolve(tmpdir(), "artgraph-rename-crlf-merge-nomatch-"));
+    try {
+      mkdirSync(resolve(tmpRoot, "specs"), { recursive: true });
+      const aPath = resolve(tmpRoot, "specs", "a.md");
+      const dPath = resolve(tmpRoot, "specs", "d.md");
+      writeFileSync(
+        aPath,
+        ["---", "artgraph:", "  node_id: x", "---", "# A"].join("\r\n") + "\r\n",
+      );
+      // Mixed EOL, no reference to "x" anywhere: normalizeNewlines+restoreNewlines
+      // alone (with zero substantive changes) would silently turn the lone "\r"
+      // below into "\r\n" if this file were written. Pins that the executor's
+      // write predicate is `changes.length > 0`, not a content comparison, so a
+      // file with nothing to rewrite is never even considered for writing.
+      const dOriginal =
+        ["---", "artgraph:", "  depends_on:", "    - unrelated", "---"].join("\r\n") +
+        "\r\n# D\rBody with a lone CR line break.\r\n";
+      writeFileSync(dPath, dOriginal);
+
+      executeMerge({
+        dryRun: false,
+        format: "json",
+        rootDir: tmpRoot,
+        mergeIds: ["x"],
+        intoId: "doc:y",
+      });
+
+      expect(readFileSync(dPath, "utf-8")).toBe(dOriginal);
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("executeMerge wiring: a CRLF code file keeps \\r\\n on disk while its impl/test-tag change records are \\r-free (same contract as the .md branch)", () => {
+    const tmpRoot = mkdtempSync(resolve(tmpdir(), "artgraph-rename-crlf-merge-code-"));
+    try {
+      mkdirSync(resolve(tmpRoot, "specs"), { recursive: true });
+      mkdirSync(resolve(tmpRoot, "src"), { recursive: true });
+      const aPath = resolve(tmpRoot, "specs", "a.md");
+      const fPath = resolve(tmpRoot, "src", "f.ts");
+      writeFileSync(aPath, ["---", "artgraph:", "  node_id: x", "---", "# A"].join("\n") + "\n");
+      writeFileSync(fPath, ["// @impl x", "export const a = 1;"].join("\r\n") + "\r\n");
+
+      const result = executeMerge({
+        dryRun: false,
+        format: "json",
+        rootDir: tmpRoot,
+        mergeIds: ["x"],
+        intoId: "doc:y",
+      });
+
+      const codeChanges = result.changes.filter((c) => c.filePath.endsWith("f.ts"));
+      expect(codeChanges.length).toBeGreaterThanOrEqual(1);
+      for (const c of codeChanges) {
+        expect(c.before).not.toContain("\r");
+        expect(c.after).not.toContain("\r");
+      }
+      const written = readFileSync(fPath, "utf-8");
+      expect(written).toBe(["// @impl doc:y", "export const a = 1;"].join("\r\n") + "\r\n");
+      expect(written).not.toContain("\r\r\n");
+    } finally {
+      rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("splitMarkdown called directly with no target IDs throws instead of deleting a definition without replacement", () => {
+    const input = ["# Spec", "", "- REQ-001: user login flow"].join("\n") + "\n";
+    expect(() => splitMarkdown("specs/spec.md", input, "REQ-001", [], {})).toThrow(
+      /at least one target ID/,
+    );
+    // Positive control: the same call with a target rewrites normally.
+    const ok = splitMarkdown("specs/spec.md", input, "REQ-001", ["REQ-101"], {});
+    expect(ok.changes.length).toBeGreaterThanOrEqual(1);
   });
 });
 
