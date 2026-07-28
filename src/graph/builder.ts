@@ -569,6 +569,26 @@ export function buildGraph(
     idMapping.set(`${req.specDir}/${req.id}`, finalId);
   }
 
+  // Reverse view of `idMapping` for the suffix lookups the edge remaps below
+  // need. A qualified key ends with `/<suffix>` exactly when `<suffix>` starts
+  // right after one of that key's slashes, so indexing EVERY slash boundary
+  // (the specDir separator and any slash the raw ID carries itself, e.g. a
+  // `reqPatterns` grammar that admits `mod/FR-1`) yields the same candidates a
+  // full `endsWith` scan of `idMapping` collects — in the same registration
+  // order, so a suffix claimed by several keys still resolves to the first one.
+  // Built from `idMapping`, not from `collected`, so a raw ID registered twice
+  // under one specDir stays the single entry the scan would have seen.
+  const reverseIndex = new Map<string, string[]>();
+  for (const [qualifiedKey, finalId] of idMapping) {
+    for (let i = 0; i < qualifiedKey.length; i++) {
+      if (qualifiedKey.charCodeAt(i) !== 0x2f /* "/" */) continue;
+      const suffix = qualifiedKey.slice(i + 1);
+      const bucket = reverseIndex.get(suffix);
+      if (bucket) bucket.push(finalId);
+      else reverseIndex.set(suffix, [finalId]);
+    }
+  }
+
   // Pass 2b: register nodes and emit edges with collision-aware remapping for
   // BOTH source and target. Task-emitted edges (e.g. `T001 @impl(REQ-001)`)
   // live in `req.edges`, so without this they would stay pointing at the raw
@@ -603,7 +623,13 @@ export function buildGraph(
         // must bind to authA/FR-001 when FR-001 also exists in exportB, and
         // an ambiguous task→colliding-req with no same-dir match is dropped
         // (instead of leaking as a bare-ID orphan edge — meta-review #3).
-        const resolved = resolveAnnotationTarget(edge.target, req.specDir, idMapping, collidingIds);
+        const resolved = resolveAnnotationTarget(
+          edge.target,
+          req.specDir,
+          idMapping,
+          collidingIds,
+          reverseIndex,
+        );
         if (resolved.ambiguous) {
           // research.md R6 / meta-review #3: ambiguous targets do NOT produce
           // an edge. Emitting `ambiguous-id` warning is sufficient — a stray
@@ -628,7 +654,7 @@ export function buildGraph(
 
   // Remap non-req edge targets that reference colliding IDs
   for (const edge of nonReqEdges) {
-    const remappedTarget = remapId(edge.target, idMapping, collidingIds);
+    const remappedTarget = remapId(edge.target, reverseIndex, collidingIds);
     if (collidingIds.has(edge.target) && remappedTarget === edge.target) {
       const dirs = idToDirs.get(edge.target) ?? new Set<string>();
       warnings.push({
@@ -1627,16 +1653,15 @@ function splitSymbolId(body: string): { ownerPath: string; symbolName: string } 
   };
 }
 
-function remapId(id: string, idMapping: Map<string, string>, collidingIds: Set<string>): string {
+function remapId(
+  id: string,
+  reverseIndex: Map<string, string[]>,
+  collidingIds: Set<string>,
+): string {
   if (!collidingIds.has(id)) return id;
 
   // Try to find a unique mapping
-  const matches: string[] = [];
-  for (const [qualifiedKey, finalId] of idMapping) {
-    if (qualifiedKey.endsWith(`/${id}`)) {
-      matches.push(finalId);
-    }
-  }
+  const matches = reverseIndex.get(id) ?? [];
 
   // If ambiguous, return as-is (warning already emitted or will be)
   return matches.length === 1 ? matches[0] : id;
@@ -1651,6 +1676,7 @@ function resolveAnnotationTarget(
   reqSpecDir: string,
   idMapping: Map<string, string>,
   collidingIds: Set<string>,
+  reverseIndex: Map<string, string[]>,
 ): { target: string; ambiguous: boolean } {
   const sameDirFinal = idMapping.get(`${reqSpecDir}/${target}`);
   if (collidingIds.has(target)) {
@@ -1658,10 +1684,10 @@ function resolveAnnotationTarget(
     return { target, ambiguous: true };
   }
   if (sameDirFinal) return { target: sameDirFinal, ambiguous: false };
-  // Not colliding, not in same specDir — find the unique mapping anywhere.
-  for (const [key, finalId] of idMapping) {
-    if (key.endsWith(`/${target}`)) return { target: finalId, ambiguous: false };
-  }
+  // Not colliding, not in same specDir — take the mapping registered first
+  // under this suffix anywhere.
+  const matches = reverseIndex.get(target);
+  if (matches && matches.length > 0) return { target: matches[0], ambiguous: false };
   // Not registered at all → leave as-is; orphan-edge will be raised downstream.
   return { target, ambiguous: false };
 }
