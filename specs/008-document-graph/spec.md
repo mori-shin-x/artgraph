@@ -128,7 +128,7 @@ Acceptance Scenarios:
 
 ### Key Entities
 
-- doc ノード: Markdown ファイルを表すグラフノード。frontmatter の有無に関わらず各 md ファイルに 1 個生成される。ファイル全体のハッシュを contentHash として保持し、ドキュメント変更の drift 検知に使用する
+- doc ノード: Markdown ファイルを表すグラフノード。frontmatter の有無に関わらず各 md ファイルに 1 個生成される。ファイル全体のハッシュを contentHash として保持し、ドキュメント変更の drift 検知に使用する。ハッシュ前に GFM task-list checkbox の状態文字（`[x]` / `[X]`）は `[ ]` へ正規化される（checkbox の状態は doc の content ではない）
 - contains エッジ: doc ノードとその中で定義された req ノードの間の所属関係を表すエッジ。doc グラフと req/実装グラフを接続する役割を持つ
 - derives_from エッジ: 下流ドキュメントから上流ドキュメントへの派生関係（例: design.md が requirements.md から派生）。frontmatter の `artgraph.derives_from` キーで定義する
 - depends_on エッジ: ドキュメント間の一般的な依存関係。frontmatter の `artgraph.depends_on` キーで定義する
@@ -144,7 +144,7 @@ Acceptance Scenarios:
 - SC-004: `artgraph graph` コマンドの text / JSON 出力が依存構造を正しく表現する
 - SC-005: 依存先の存在しないドキュメント参照に対して `orphan-doc` 警告が出力される
 - SC-006: req ID の予約プレフィクス使用に対して名前空間衝突の警告が出力される
-- SC-007: doc ノードの contentHash はファイル全体で計算され、散文変更時に doc のみ drift し req は独立して drift 検知される
+- SC-007: doc ノードの contentHash はファイル全体（GFM task-list checkbox の状態文字は正規化）で計算され、散文変更時に doc のみ drift し req は独立して drift 検知される
 
 ## Assumptions
 

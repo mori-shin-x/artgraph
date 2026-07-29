@@ -91,6 +91,44 @@ describe("buildGraph: doc node auto-generation (US1)", () => {
     const node = graph.nodes.get("doc:prose-only.md")!;
     expect(node.kind).toBe("doc");
   });
+
+  // issue #235 — a doc that survives `autoNodes: false` is the one remaining
+  // shape a doc node can take (a frontmatter `node_id` instead of the
+  // auto-generated `doc:<relPath>`). Its contentHash comes off the same parser
+  // path, so the task-list checkbox canonicalization has to hold there too.
+  it("a frontmatter-node_id doc keeps checkbox state out of its hash under autoNodes=false", () => {
+    const dir = mkdtempSync(join(tmpdir(), "artgraph-235-autonodes-"));
+    try {
+      mkdirSync(join(dir, "specs"), { recursive: true });
+      const write = (state: string, text = "wire the hub") =>
+        writeFileSync(
+          join(dir, "specs", "tasks.md"),
+          [
+            "---",
+            "artgraph:",
+            '  node_id: "doc:custom-tasks"',
+            "---",
+            "# Tasks",
+            "",
+            `- [${state}] T001 ${text}`,
+            "",
+          ].join("\n"),
+        );
+      const noAutoConfig: ArtgraphConfig = { ...config, docGraph: { autoNodes: false } };
+      const hashOf = (state: string, text?: string): string => {
+        write(state, text);
+        const node = buildGraph(dir, noAutoConfig).graph.nodes.get("doc:custom-tasks");
+        if (!node) throw new Error("custom-node_id doc node was filtered out");
+        return node.contentHash;
+      };
+
+      expect(hashOf("x")).toBe(hashOf(" "));
+      // Control: the task text is still content.
+      expect(hashOf("x")).not.toBe(hashOf("x", "wire the login hub"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("buildGraph: doc->doc dependency chain (US2)", () => {

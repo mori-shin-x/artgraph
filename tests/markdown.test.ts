@@ -1,8 +1,10 @@
 import { describe, it, expect, afterAll } from "vitest";
 import { resolve } from "node:path";
-import { writeFileSync, unlinkSync, mkdirSync, rmdirSync, rmSync } from "node:fs";
+import { writeFileSync, unlinkSync, mkdirSync, rmdirSync, rmSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import {
   parseMarkdown,
+  parseMarkdownContent,
   parseFrontmatter,
   findFrontmatterBounds,
   stripAnnotations,
@@ -145,14 +147,20 @@ describe("parseMarkdown", () => {
   });
 
   describe("T022: doc node contentHash", () => {
-    it("should compute contentHash from entire file content", () => {
-      const result = parseMarkdown(resolve(FIXTURE_DIR, "specs/prose-only.md"), {
-        rootDir: FIXTURE_DIR,
-      });
+    it("should hash the entire file, byte for byte, when it carries no task-list checkbox", () => {
+      const file = resolve(FIXTURE_DIR, "specs/prose-only.md");
+      const result = parseMarkdown(file, { rootDir: FIXTURE_DIR });
       const doc = result.nodes.find((n) => n.kind === "doc");
 
-      expect(doc?.contentHash).toBeDefined();
-      expect(doc!.contentHash.length).toBe(16);
+      // Pin the VALUE, not just the shape: a file with no GFM task-list
+      // checkbox has to hash exactly the way it always has — the checkbox
+      // canonicalization (see the doc-contentHash suite at the end of this
+      // file) is the identity on such a file. Asserting only
+      // `contentHash.length === 16` here would also hold for `hash("")`.
+      const raw = readFileSync(file, "utf-8");
+      expect(raw).not.toContain("\r"); // LF-only fixture: the EOL normalization is a no-op
+      expect(raw).not.toMatch(/\[[xX ]\]/); // and there is no checkbox to canonicalize
+      expect(doc!.contentHash).toBe(createHash("sha256").update(raw).digest("hex").slice(0, 16));
     });
   });
 
@@ -1455,4 +1463,204 @@ describe("parseFrontmatter / findFrontmatterBounds parity (#44)", () => {
       expect(lines.slice(fb.end + 1).join("\n")).toBe(pf.content);
     },
   );
+});
+
+// ── doc contentHash: a GFM task-list checkbox's state is not doc content ──
+//
+// The state character of every GFM task-list checkbox (`[x]` / `[X]`) is
+// canonicalized to `[ ]` before the doc node's contentHash is taken, so
+// ticking a box does not read as a document change. This is a property of the
+// file's shape, not of any config: it covers `tasks.md` task lists and the
+// review checklists under `specs/*/checklists/` alike. Everything else — the
+// task text after the box, and any bracket state that is not a GFM checkbox
+// (`[-]`, `[~]`, `[P]`) — still hashes verbatim.
+describe("parseMarkdownContent — doc contentHash and task-list checkbox state", () => {
+  const root = resolve(import.meta.dirname, "fixtures");
+
+  // Parse `source` as if it lived at `<fixtures>/specs/feat/<stem>.md`.
+  // Nothing is written to disk: the path only decides the doc node's id and
+  // which task-convention presets apply (the `tasks` stem activates
+  // spec-kit's `T\d+`, so the fixtures below produce task nodes too).
+  function parse(source: string, stem = "tasks") {
+    return parseMarkdownContent(source, resolve(root, "specs", "feat", `${stem}.md`), {
+      rootDir: root,
+      specDirPrefix: "specs",
+    });
+  }
+
+  function docHash(source: string, stem = "tasks"): string {
+    const doc = parse(source, stem).nodes.find((n) => n.kind === "doc");
+    if (!doc) throw new Error("no doc node in parsed result");
+    return doc.contentHash;
+  }
+
+  function taskNode(source: string, id: string, stem = "tasks") {
+    return parse(source, stem).nodes.find((n) => n.kind === "task" && n.id === id);
+  }
+
+  const taskDoc = (lines: string[]): string => ["# Tasks", "", ...lines, ""].join("\n");
+
+  it("ticks do not move the doc hash, prose edits do, and the task node still sees the box", () => {
+    const unchecked = taskDoc(["- [ ] T001 wire the login handler", "- [ ] T002 add the store"]);
+    const checked = unchecked.replace("- [ ] T001", "- [x] T001");
+    const proseEdited = unchecked.replace("login handler", "logout handler");
+
+    expect(docHash(checked)).toBe(docHash(unchecked));
+    // Control — without it the assertion above is also satisfied by an
+    // implementation that discards the body before hashing.
+    expect(docHash(proseEdited)).not.toBe(docHash(unchecked));
+    // The canonicalization feeds the hash call ONLY; the text every other
+    // consumer reads is untouched. A task node hashes its own checkbox on
+    // purpose (see the task branch in src/parsers/markdown.ts) and its label
+    // still quotes the box as authored.
+    const before = taskNode(unchecked, "T001")!;
+    const after = taskNode(checked, "T001")!;
+    expect(before.label).toContain("[ ]");
+    expect(after.label).toContain("[x]");
+    expect(after.contentHash).not.toBe(before.contentHash);
+  });
+
+  it("treats a checkbox inside a fenced code block as content", () => {
+    const src = (state: string) =>
+      [
+        "# Tasks",
+        "",
+        "```sh",
+        `- [${state}] T900 documented example`,
+        "```",
+        "",
+        "- [ ] T001 real task",
+        "",
+      ].join("\n");
+    expect(docHash(src("x"))).not.toBe(docHash(src(" ")));
+    // The fence really is a fence: the quoted line is not a list item at all,
+    // which is why the canonicalization never reaches it.
+    expect(taskNode(src("x"), "T900")).toBeUndefined();
+    expect(taskNode(src("x"), "T001")).toBeDefined();
+  });
+
+  it("treats a checkbox inside an indented code block as content", () => {
+    const src = (state: string) =>
+      [
+        "# Tasks",
+        "",
+        "Example:",
+        "",
+        `    - [${state}] T901 indented example`,
+        "",
+        "- [ ] T001 real task",
+        "",
+      ].join("\n");
+    expect(docHash(src("x"))).not.toBe(docHash(src(" ")));
+    expect(taskNode(src("x"), "T901")).toBeUndefined();
+    expect(taskNode(src("x"), "T001")).toBeDefined();
+  });
+
+  it("treats a YAML flow sequence in the frontmatter as content", () => {
+    const src = (state: string) =>
+      ["---", "tags:", `  - [${state}]`, "---", "# Tasks", "", "- [ ] T001 real task", ""].join(
+        "\n",
+      );
+    expect(docHash(src("x"))).not.toBe(docHash(src(" ")));
+    expect(taskNode(src("x"), "T001")).toBeDefined();
+  });
+
+  it("canonicalizes a checkbox inside a blockquote", () => {
+    const src = (state: string) => taskDoc([`> - [${state}] T010 quoted task`]);
+    expect(docHash(src("x"))).toBe(docHash(src(" ")));
+    // Reachability: the quoted item IS a task list item, so the two hashes can
+    // only agree because the canonicalization descended into the blockquote.
+    expect(taskNode(src("x"), "T010")).toBeDefined();
+    // Control: the quoted text is still content.
+    expect(docHash(src("x"))).not.toBe(docHash(taskDoc(["> - [x] T010 quoted task, reworded"])));
+  });
+
+  // Every list-item shape the parser accepts as a task must also be reached by
+  // the canonicalization — a shape it misses puts the checkbox noise straight
+  // back into the doc hash.
+  const markerVariants: Array<{ name: string; lines: (state: string) => string[]; id: string }> = [
+    { name: "dash marker", lines: (s) => [`- [${s}] T801 variant`], id: "T801" },
+    { name: "star marker", lines: (s) => [`* [${s}] T802 variant`], id: "T802" },
+    { name: "plus marker", lines: (s) => [`+ [${s}] T803 variant`], id: "T803" },
+    { name: "ordered dot marker", lines: (s) => [`1. [${s}] T804 variant`], id: "T804" },
+    { name: "ordered paren marker", lines: (s) => [`2) [${s}] T805 variant`], id: "T805" },
+    {
+      name: "three-space nesting",
+      lines: (s) => ["- [ ] T800 parent", `   - [${s}] T806 variant`],
+      id: "T806",
+    },
+    {
+      name: "four-space nesting",
+      lines: (s) => ["- [ ] T800 parent", `    - [${s}] T807 variant`],
+      id: "T807",
+    },
+    { name: "tab after the box", lines: (s) => [`- [${s}]\tT808 variant`], id: "T808" },
+    { name: "double space after the marker", lines: (s) => [`-  [${s}] T809 variant`], id: "T809" },
+    {
+      name: "no-break space after the box",
+      lines: (s) => [`- [${s}]\u00a0T810 variant`],
+      id: "T810",
+    },
+  ];
+
+  it.each(markerVariants)("canonicalizes the state with a $name", ({ lines, id }) => {
+    const checked = taskDoc(lines("x"));
+    expect(docHash(checked)).toBe(docHash(taskDoc(lines(" "))));
+    // Reachability: this shape really is a task list item.
+    expect(taskNode(checked, id)).toBeDefined();
+    // Control: the text after the box is still content.
+    expect(docHash(checked)).not.toBe(docHash(checked.replace("variant", "variant, reworded")));
+  });
+
+  it("leaves bracket states that are not GFM checkboxes verbatim", () => {
+    const src = (state: string) => taskDoc([`- [${state}] T001 in progress`]);
+    // `[-]`, `[~]` and `[P]` carry project-specific meaning in this repo's own
+    // specs; swapping one for another is a content change.
+    expect(docHash(src("-"))).not.toBe(docHash(src("~")));
+    expect(docHash(src("P"))).not.toBe(docHash(src("Q")));
+    // ...and none of them collapses onto the canonical empty box.
+    expect(docHash(src("-"))).not.toBe(docHash(src(" ")));
+    expect(docHash(src("~"))).not.toBe(docHash(src(" ")));
+    expect(docHash(src("P"))).not.toBe(docHash(src(" ")));
+    // A marker needs whitespace after it, so a one-character link text is not
+    // a checkbox: `[x](/href)` and `[x][ref]` are links, `[x]tight` is text.
+    const linked = (state: string) => taskDoc([`- [${state}](/notes) release notes`]);
+    const reffed = (state: string) => taskDoc([`- [${state}][notes] release notes`]);
+    const tight = (state: string) => taskDoc([`- [${state}]tight`]);
+    expect(docHash(linked("x"))).not.toBe(docHash(linked(" ")));
+    expect(docHash(reffed("x"))).not.toBe(docHash(reffed(" ")));
+    expect(docHash(tight("x"))).not.toBe(docHash(tight(" ")));
+    // Control: the two states that ARE GFM checkbox states do collapse.
+    expect(docHash(src("x"))).toBe(docHash(src(" ")));
+    expect(docHash(src("X"))).toBe(docHash(src(" ")));
+  });
+
+  it("canonicalizes EOL style and checkbox state together, whichever way the file is written", () => {
+    const lf = taskDoc(["- [ ] T001 wire the login handler"]);
+    const crlfTicked = taskDoc(["- [x] T001 wire the login handler"]).replace(/\n/g, "\r\n");
+    expect(docHash(crlfTicked)).toBe(docHash(lf));
+    // Control: prose still survives both normalizations.
+    const crlfEdited = taskDoc(["- [x] T001 wire the logout handler"]).replace(/\n/g, "\r\n");
+    expect(docHash(crlfEdited)).not.toBe(docHash(lf));
+  });
+
+  it("handles degenerate checkbox and file shapes", () => {
+    // A box with nothing after it is still a box.
+    expect(docHash(taskDoc(["- [x]"]))).toBe(docHash(taskDoc(["- [ ]"])));
+    // No trailing newline at EOF.
+    expect(docHash("- [x] T001 tail")).toBe(docHash("- [ ] T001 tail"));
+    // A two-character state is not a state — the closing bracket is not where
+    // a checkbox has to put it, so both spellings stay verbatim.
+    expect(docHash(taskDoc(["- [xx] T001 tail"]))).not.toBe(docHash(taskDoc(["- [Xx] T001 tail"])));
+    // Truncated at EOF: nothing to read where the closing bracket would be.
+    expect(() => docHash("- [x")).not.toThrow();
+    // Frontmatter and nothing else — the body is the empty string, where the
+    // splice back into the file has to be the identity.
+    const frontmatterOnly = ["---", "title: empty", "---", ""].join("\n");
+    expect(docHash(frontmatterOnly)).toBe(
+      createHash("sha256").update(frontmatterOnly).digest("hex").slice(0, 16),
+    );
+    // Empty file.
+    expect(docHash("")).toBe(createHash("sha256").update("").digest("hex").slice(0, 16));
+  });
 });

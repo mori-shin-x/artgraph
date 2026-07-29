@@ -303,6 +303,25 @@ queries are stripped; links inside code fences and inline code are ignored. A
 frontmatter relation (`derives_from` / `depends_on`) on the same `(source, target)`
 pair always wins over an inline link.
 
+### Doc drift and task-list checkbox state
+
+A doc node's `contentHash` covers the whole file, so any prose edit drifts it.
+One thing is deliberately excluded: the state character of a GFM task-list
+checkbox is canonicalized to `[ ]` before hashing, so ticking a box is not a
+document change. This is a property of the file's shape, not of
+`taskConventions` — it applies to every `- [x]` list item in a file under
+`specDirs`, whether that is a `tasks.md` task or a review checklist. The text
+after the box is still content: reword the task and the doc drifts as usual.
+
+#### Upgrade note
+
+Docs that already contain a ticked box hash to a new value once, so the first
+`artgraph check` after upgrading reports them as drifted. `check --diff --gate`
+(the Stop hook / CI PR gate) is not affected — it is scoped to the diff, and a
+doc that does land in the diff hashes identically on both sides of the
+comparison and is suppressed as pre-existing. Only an unscoped `check --gate`
+surfaces it. Run `artgraph reconcile` to refresh the lock baseline.
+
 ### Opting out
 
 ```jsonc

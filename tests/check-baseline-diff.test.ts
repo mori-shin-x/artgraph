@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import { runAt } from "./helpers.js";
 import {
   makeRepoWithBaseBranch,
@@ -1241,16 +1242,17 @@ describe("check --diff --gate drift key discriminates by content, not just nodeI
     expect(json.pass).toBe(true);
   });
 
-  // issue #235 (doc granularity) — a doc node's contentHash hashes the WHOLE
-  // file's raw bytes (parsers/markdown.ts), so ANY edit anywhere in the file
-  // changes it, even an edit to a REQ this PR never touches. Under the
+  // Doc granularity — a doc node's contentHash covers the WHOLE file (its
+  // EOL-normalized text, with GFM task-list checkbox state canonicalized; see
+  // parsers/markdown.ts), so ANY other edit anywhere in the file changes it,
+  // even an edit to a REQ this PR never touches. The fixture's `specs/debt.md`
+  // has no checkbox, so its hash here is the plain whole-file one. Under the
   // pre-#383 id-only key this was accidentally neutralized: once a doc's
   // drift was observed at the base ref, EVERY later doc-level mismatch kept
   // matching the same `drift:<docId>` key and stayed suppressed forever, no
   // matter which bytes actually differed. This test pins that the fix removes
-  // that accidental amnesty — this is #235's granularity noise resurfacing at
-  // the gate, not a new defect introduced here (this PR increases #235's
-  // visibility; it does not fix #235 itself — see the PR description).
+  // that accidental amnesty — whole-file granularity noise resurfacing at the
+  // gate, not a new defect introduced here.
   it("(T383-e) doc already drifted at the base ref, PR edits only the OTHER req in the same file → doc still surfaces as new drift", async () => {
     const dir = repo("artgraph-383-e-");
     const rec = await runAt(dir, ["reconcile"]);
@@ -1296,5 +1298,116 @@ describe("check --diff --gate drift key discriminates by content, not just nodeI
     expect(json.newIssues.drifted.some((d: { nodeId: string }) => d.nodeId === "doc:debt.md")).toBe(
       false,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// issue #235 — a GFM task-list checkbox's state is not doc content. Ticking a
+// box in tasks.md used to flip the doc node's whole-file contentHash and fail
+// `check --diff --gate` with exit 2, on what is the most ordinary SDD
+// operation there is. These pin the gate-level contract: the tick is
+// invisible, everything else in the file still is not, and a lock written
+// before the canonicalization existed migrates without ever touching the
+// standard gate.
+// ---------------------------------------------------------------------------
+describe("check --gate and task-list checkbox state (issue #235)", () => {
+  const TASKS_REL = join("specs", "tasks.md");
+  const tasksMd = (state: string, text = "wire the hub"): string =>
+    ["# Tasks", "", `- [${state}] T001 ${text}`, "- [ ] T002 pay the debt", ""].join("\n");
+  const driftedIds = (entries: Array<{ nodeId: string }>): string[] => entries.map((d) => d.nodeId);
+
+  function repoWithTasks(prefix: string): string {
+    const dir = repo(prefix);
+    writeFileSync(join(dir, TASKS_REL), tasksMd(" "));
+    gitCommitAll(dir, "add tasks.md");
+    return dir;
+  }
+
+  // The debt fixture above always fails an UNSCOPED gate on its pre-existing
+  // uncovered REQ, which would mask the drift signal the migration test is
+  // about. This one is issue-free at HEAD, so `check --gate` (no `--diff`)
+  // reads exit 0 / exit 2 as "the doc drifted" and nothing else.
+  function cleanRepoWithTasks(prefix: string): string {
+    const dir = track(mkdtempSync(join(tmpdir(), prefix)));
+    writeFileSync(join(dir, ".gitignore"), ".trace.lock\nnode_modules/\n");
+    writeFileSync(
+      join(dir, ".artgraph.json"),
+      JSON.stringify({
+        include: ["src/**/*.ts"],
+        specDirs: ["specs"],
+        testPatterns: ["tests/**/*.ts"],
+        lockFile: ".trace.lock",
+      }),
+    );
+    mkdirSync(join(dir, "specs"), { recursive: true });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "specs", "spec.md"), "# Spec\n\n- REQ-001: covered requirement\n");
+    writeFileSync(join(dir, "src", "impl.ts"), "// @impl REQ-001\nexport const impl = 1;\n");
+    writeFileSync(join(dir, TASKS_REL), tasksMd(" "));
+    gitInit(dir);
+    gitCommitAll(dir, "init, no outstanding issues");
+    return dir;
+  }
+
+  it("a tick passes the gate; the same tick plus one word of task text fails it", async () => {
+    const dir = repoWithTasks("artgraph-235-gate-");
+    expect((await runAt(dir, ["reconcile"])).exitCode).toBe(0);
+
+    writeFileSync(join(dir, TASKS_REL), tasksMd("x"));
+    const ticked = await checkJson(dir);
+    expect(ticked.exitCode).toBe(0);
+    expect(ticked.json.pass).toBe(true);
+    expect(driftedIds(ticked.json.drifted)).not.toContain("doc:tasks.md");
+    // Reachability: the tick really did land in the diff. An empty diff would
+    // short-circuit to `baselineStatus: "skipped"` and pass for free.
+    expect(ticked.json.baselineStatus).toBe("computed");
+
+    // Control — the SAME tick, plus one word of T001's text. Only the prose
+    // differs from the passing case above, so this is what separates "the
+    // state character is not content" from "the file is not content".
+    writeFileSync(join(dir, TASKS_REL), tasksMd("x", "wire the login hub"));
+    const edited = await checkJson(dir);
+    expect(edited.exitCode).toBe(2);
+    expect(driftedIds(edited.json.newIssues.drifted)).toContain("doc:tasks.md");
+  });
+
+  it("a lock predating the canonicalization is out of scope for --diff --gate and clears with one reconcile", async () => {
+    const dir = cleanRepoWithTasks("artgraph-235-migrate-");
+    // Commit the file WITH the box ticked, so the pre-canonicalization hash
+    // and the current one actually differ.
+    writeFileSync(join(dir, TASKS_REL), tasksMd("x"));
+    gitCommitAll(dir, "tick T001");
+    expect((await runAt(dir, ["reconcile"])).exitCode).toBe(0);
+    const absoluteGate = async (): Promise<{ exitCode: number; drifted: string[] }> => {
+      const { stdout, exitCode } = await runAt(dir, ["check", "--gate", "--format", "json"]);
+      return { exitCode, drifted: driftedIds(JSON.parse(stdout).drifted) };
+    };
+    // Baseline: with a lock this CLI wrote, the unscoped gate is clean.
+    expect(await absoluteGate()).toEqual({ exitCode: 0, drifted: [] });
+
+    // Rewrite that one entry to the value the pre-canonicalization whole-file
+    // hash produced — exactly what an in-place upgrade leaves behind.
+    const lockPath = join(dir, ".trace.lock");
+    const lock = JSON.parse(readFileSync(lockPath, "utf-8"));
+    const preCanonical = createHash("sha256")
+      .update(readFileSync(join(dir, TASKS_REL), "utf-8"))
+      .digest("hex")
+      .slice(0, 16);
+    expect(lock["doc:tasks.md"].contentHash).not.toBe(preCanonical);
+    lock["doc:tasks.md"] = { ...lock["doc:tasks.md"], contentHash: preCanonical };
+    writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
+
+    // The standard gate is scoped to the diff and the working tree is clean,
+    // so the stale entry is never asked about mid-PR.
+    const gated = await checkJson(dir);
+    expect(gated.exitCode).toBe(0);
+    expect(gated.json.pass).toBe(true);
+
+    // The whole-repo gate does surface it — once.
+    expect(await absoluteGate()).toEqual({ exitCode: 2, drifted: ["doc:tasks.md"] });
+
+    // ...and one reconcile is the whole migration.
+    expect((await runAt(dir, ["reconcile"])).exitCode).toBe(0);
+    expect(await absoluteGate()).toEqual({ exitCode: 0, drifted: [] });
   });
 });
