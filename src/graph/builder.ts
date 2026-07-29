@@ -571,21 +571,35 @@ export function buildGraph(
 
   // Reverse view of `idMapping` for the suffix lookups the edge remaps below
   // need. A qualified key ends with `/<suffix>` exactly when `<suffix>` starts
-  // right after one of that key's slashes, so indexing EVERY slash boundary
-  // (the specDir separator and any slash the raw ID carries itself, e.g. a
+  // right after one of that key's slashes, so indexing slash boundaries (the
+  // specDir separator and any slash the raw ID carries itself, e.g. a
   // `reqPatterns` grammar that admits `mod/FR-1`) yields the same candidates a
   // full `endsWith` scan of `idMapping` collects — in the same registration
   // order, so a suffix claimed by several keys still resolves to the first one.
-  // Built from `idMapping`, not from `collected`, so a raw ID registered twice
-  // under one specDir stays the single entry the scan would have seen.
+  // Within one key every boundary yields a distinct-length suffix, so a key
+  // contributes at most one entry per bucket and the iteration direction here
+  // does not affect any bucket's order.
+  //
+  // Only the last MAX_INDEXED_SUFFIXES boundaries of a key are indexed (walking
+  // from the end = shortest suffix first); deeper queries fall back to the
+  // uncapped scan. See `suffixMatches` for the cap and why it is exact.
+  //
+  // Built from `idMapping`, not from `collected`: it makes the loop mirror the
+  // scan it replaces one-for-one. Registering a raw ID twice under one specDir
+  // would only duplicate an entry inside a bucket, and bucket multiplicity is
+  // never observable (both readers look at `matches[0]` or at a `.length` that
+  // `remapId`'s colliding precondition already forces above 1), so this is a
+  // readability choice, not a behavioral one.
   const reverseIndex = new Map<string, string[]>();
   for (const [qualifiedKey, finalId] of idMapping) {
-    for (let i = 0; i < qualifiedKey.length; i++) {
+    let indexed = 0;
+    for (let i = qualifiedKey.length - 1; i >= 0; i--) {
       if (qualifiedKey.charCodeAt(i) !== 0x2f /* "/" */) continue;
       const suffix = qualifiedKey.slice(i + 1);
       const bucket = reverseIndex.get(suffix);
       if (bucket) bucket.push(finalId);
       else reverseIndex.set(suffix, [finalId]);
+      if (++indexed >= MAX_INDEXED_SUFFIXES) break;
     }
   }
 
@@ -654,7 +668,7 @@ export function buildGraph(
 
   // Remap non-req edge targets that reference colliding IDs
   for (const edge of nonReqEdges) {
-    const remappedTarget = remapId(edge.target, reverseIndex, collidingIds);
+    const remappedTarget = remapId(edge.target, reverseIndex, idMapping, collidingIds);
     if (collidingIds.has(edge.target) && remappedTarget === edge.target) {
       const dirs = idToDirs.get(edge.target) ?? new Set<string>();
       warnings.push({
@@ -1653,17 +1667,63 @@ function splitSymbolId(body: string): { ownerPath: string; symbolName: string } 
   };
 }
 
+// How many slash boundaries of one `idMapping` key the reverse index above
+// holds, counted from the end of the key. Indexing every boundary costs
+// `O(Σ_key Σ_slash suffix-length)`, which stays invisible under the default
+// grammar (a key is `specDir/BARE-ID`, so one boundary) but turns quadratic
+// once a custom `reqPatterns.listItem` admits `/` inside the raw ID: one
+// pasted line carrying thousands of slashes then adds minutes to every
+// `artgraph scan` / `check`, twice over for `check --diff --base`. Real
+// namespaced IDs sit at 2-3 segments; 32 leaves that untouched while capping
+// the per-key work at a constant.
+const MAX_INDEXED_SUFFIXES = 32;
+
+// Every `finalId` whose `idMapping` key ends in `/<id>`, in key registration
+// order — exactly what a full `endsWith` scan of `idMapping` produces, which
+// is what the first-match tie-breaks in the two callers below depend on.
+//
+// A query of `s` slash-separated segments can only ever be the suffix that
+// starts at a key's s-th slash boundary counted from the end, so the capped
+// index answers it in full whenever `s <= MAX_INDEXED_SUFFIXES`. Queries at or
+// past that depth run the uncapped scan the index replaced, which is the
+// pre-index behavior verbatim — `s === MAX_INDEXED_SUFFIXES` is still indexed
+// and takes the scan anyway, one boundary of margin so that this guard and the
+// cap cannot drift into an off-by-one.
+function suffixMatches(
+  id: string,
+  reverseIndex: Map<string, string[]>,
+  idMapping: Map<string, string>,
+): string[] {
+  let slashes = 0;
+  for (let i = 0; i < id.length; i++) {
+    if (id.charCodeAt(i) !== 0x2f /* "/" */) continue;
+    if (++slashes < MAX_INDEXED_SUFFIXES - 1) continue;
+    const needle = "/" + id;
+    const scanned: string[] = [];
+    for (const [key, finalId] of idMapping) {
+      if (key.endsWith(needle)) scanned.push(finalId);
+    }
+    return scanned;
+  }
+  return reverseIndex.get(id) ?? [];
+}
+
 function remapId(
   id: string,
   reverseIndex: Map<string, string[]>,
+  idMapping: Map<string, string>,
   collidingIds: Set<string>,
 ): string {
   if (!collidingIds.has(id)) return id;
 
   // Try to find a unique mapping
-  const matches = reverseIndex.get(id) ?? [];
+  const matches = suffixMatches(id, reverseIndex, idMapping);
 
-  // If ambiguous, return as-is (warning already emitted or will be)
+  // If ambiguous, return as-is (warning already emitted or will be). The
+  // `=== 1` arm is unreachable in practice and kept only as a safety net:
+  // `id` collides, so two distinct specDirs `d1`/`d2` both registered a key
+  // `d/id`, and each of those keys ends in `/id` — the candidate list is
+  // therefore always ≥2 and this function is the identity.
   return matches.length === 1 ? matches[0] : id;
 }
 
@@ -1686,8 +1746,8 @@ function resolveAnnotationTarget(
   if (sameDirFinal) return { target: sameDirFinal, ambiguous: false };
   // Not colliding, not in same specDir — take the mapping registered first
   // under this suffix anywhere.
-  const matches = reverseIndex.get(target);
-  if (matches && matches.length > 0) return { target: matches[0], ambiguous: false };
+  const matches = suffixMatches(target, reverseIndex, idMapping);
+  if (matches.length > 0) return { target: matches[0], ambiguous: false };
   // Not registered at all → leave as-is; orphan-edge will be raised downstream.
   return { target, ambiguous: false };
 }
