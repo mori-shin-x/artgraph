@@ -345,8 +345,9 @@ describe("buildGraph: annotation and task-tag target resolution", () => {
     // `SUP-100` is unique, so its node keeps the bare ID and the qualified form
     // the task wrote is not a key of anything. Only a key's *proper* trailing
     // segments are candidates — the whole key is not one of them — so the
-    // reference stays verbatim and surfaces downstream as an orphan edge
-    // instead of quietly binding to the bare node.
+    // reference stays verbatim as a dangling edge instead of quietly binding
+    // to the bare node. (Nothing downstream reports that dangling today:
+    // orphan-edge warnings are annotation-provenance only.)
     setupTmp({
       "specs/010-a/spec.md": "- SUP-100: only here\n",
       "specs/010-c/tasks.md": `- T001 qualified ref ${tag("010-a/SUP-100")}\n`,
