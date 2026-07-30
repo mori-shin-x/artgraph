@@ -68,14 +68,14 @@ Independent Test: frontmatter を含まない散文のみの md ファイルを�
 
 - [ ] T020 [US1] `tests/markdown.test.ts` に doc ノード自動生成テストを追加する: frontmatter なしの `prose-only.md` をパースし `{ id: "doc:prose-only.md", kind: "doc" }` ノードが返ること
 - [ ] T021 [P] [US1] `tests/markdown.test.ts` に frontmatter `node_id` 指定テストを追加する: `artgraph.node_id: "custom-id"` が指定された場合に `{ id: "custom-id", kind: "doc" }` ノードが返ること
-- [ ] T022 [P] [US1] `tests/markdown.test.ts` に doc ノードの contentHash テストを追加する: ファイル全体のハッシュが doc ノードの contentHash に設定されること
+- [ ] T022 [P] [US1] `tests/markdown.test.ts` に doc ノードの contentHash テストを追加する: ファイル全体のハッシュが doc ノードの contentHash に設定されること（ハッシュ前に GFM task-list checkbox の状態文字は `[ ]` へ正規化される — spec.md Key Entities / SC-007 参照）
 - [ ] T023 [P] [US1] `tests/markdown.test.ts` に doc + req 併存テストを追加する: 要求 ID を含む md から doc ノードと req ノードの両方が返ること
 - [ ] T024 [P] [US1] `tests/builder.test.ts` に `docGraph.autoNodes: false` テストを追加する: 設定で無効化時に frontmatter `node_id` がない md からは doc ノードが生成されないこと
 - [ ] T025 [P] [US1] `tests/builder.test.ts` に doc ノード ID 自動採番テストを追加する: `doc:<specDir からの相対パス>` 形式で ID が生成されること
 
 ### Implementation for User Story 1
 
-- [ ] T026 [US1] `src/parsers/markdown.ts` の `parseMarkdown` を変更し、全ての md ファイルで doc ノードを常時生成する: frontmatter `artgraph.node_id` がある場合はその値を ID に、無い場合は `doc:<relPath>` を ID にする。contentHash はファイル全体のハッシュ
+- [ ] T026 [US1] `src/parsers/markdown.ts` の `parseMarkdown` を変更し、全ての md ファイルで doc ノードを常時生成する: frontmatter `artgraph.node_id` がある場合はその値を ID に、無い場合は `doc:<relPath>` を ID にする。contentHash はファイル全体のハッシュ（ハッシュ前に GFM task-list checkbox の状態文字は `[ ]` へ正規化される — spec.md Key Entities / SC-007 参照）
 - [ ] T027 [US1] `src/graph/builder.ts` の `buildGraph` に `docGraph.autoNodes` 設定チェックを追加する: `autoNodes === false` かつ frontmatter `node_id` が無い場合、doc ノードを除外する
 - [ ] T028 [US1] `src/graph/builder.ts` に `reserved-prefix` 警告を追加する: req ID が `doc:` / `file:` / `test:` / `symbol:` で始まる場合に `BuildWarning` を発行する
 

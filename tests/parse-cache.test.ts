@@ -249,7 +249,33 @@ describe("parse cache", () => {
     expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp, symbolCfg));
   });
 
-  it("rejects a cache file with a stale schemaVersion (SCHEMA_VERSION was bumped 7→8 in issues #323/#333)", () => {
+  // issue #235 — the doc node's contentHash now canonicalizes GFM task-list
+  // checkbox state, but the cache key stays the file's RAW bytes. That split is
+  // what makes a tick observable exactly where it should be: the fragment is
+  // invalidated (so the task node, which hashes its checkbox on purpose, is
+  // re-derived instead of served stale) while the doc node's hash comes out
+  // unchanged. Keying the cache on the canonicalized text instead would stop a
+  // tick from busting the fragment at all, and a warm build would keep
+  // replaying the pre-tick task hash and label forever.
+  it("issue #235: a checkbox tick invalidates the fragment — the task hash moves, the doc hash does not", () => {
+    const tasksMd = (state: string) =>
+      ["# Tasks", "", `- [${state}] T001 wire the login handler`, ""].join("\n");
+    const tasksPath = join(tmp, "specs", "feat", "tasks.md");
+
+    writeFileSync(tasksPath, tasksMd(" "));
+    const first = buildGraph(tmp, config).graph; // cold: populates the cache
+    const taskBefore = first.nodes.get("T001")!.contentHash;
+    const docBefore = first.nodes.get("doc:feat/tasks.md")!.contentHash;
+
+    writeFileSync(tasksPath, tasksMd("x"));
+    const { graph } = buildGraph(tmp, config); // warm
+    expect(graph.nodes.get("T001")!.contentHash).not.toBe(taskBefore);
+    expect(graph.nodes.get("doc:feat/tasks.md")!.contentHash).toBe(docBefore);
+    // ...and the warm rebuild is still indistinguishable from a cold one.
+    expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp));
+  });
+
+  it("rejects a cache file with a stale schemaVersion (SCHEMA_VERSION was bumped 8→9 in issue #235)", () => {
     // spec 021 (T016, issue #218) bumped 4→5 for class-method-grain symbols;
     // PR #242 review A bumped 5→6 when `TsFragment` gained the `warnings`
     // field (a v5 fragment has no `warnings` key at all, so a warm hit on it
@@ -262,25 +288,29 @@ describe("parse cache", () => {
     // so a pre-fix fragment's `kind` may not match what the new logic would
     // produce, and (b) the parser now emits `unresolved-reexport` /
     // `unresolved-import` warnings a pre-fix fragment's `warnings` field
-    // never recorded. Populate the cache normally, then hand-edit its
-    // schemaVersion down to the previous value. `readParseCache` must reject
-    // it and force a cold path — otherwise a warm build could serve a
-    // fragment that predates the current parser output, silently diverging
-    // from a cold rebuild (INV-L4 breach).
+    // never recorded; issue #235 bumped 8→9 because an `MdFragment` carries
+    // its doc node's `contentHash` verbatim while the cache key is the file's
+    // raw bytes — an untouched file HITS, so a pre-#235 fragment would keep
+    // replaying the old whole-file hash (checkbox state included) forever.
+    // Populate the cache normally, then hand-edit its schemaVersion down to
+    // the previous value. `readParseCache` must reject it and force a cold
+    // path — otherwise a warm build could serve a fragment that predates the
+    // current parser output, silently diverging from a cold rebuild (INV-L4
+    // breach).
     buildGraph(tmp, config); // populate cache
     const rawPath = join(tmp, CACHE_REL);
     const cache = JSON.parse(readFileSync(rawPath, "utf-8"));
-    expect(cache.schemaVersion).toBe(8);
-    cache.schemaVersion = 7;
+    expect(cache.schemaVersion).toBe(9);
+    cache.schemaVersion = 8;
     writeFileSync(rawPath, JSON.stringify(cache));
 
     // The next build sees a schema-mismatched cache and must fall back to
     // a cold parse. Behaviorally identical to a cache-disabled build.
     const { graph } = buildGraph(tmp, config);
     expect(snapshotGraph(graph)).toBe(buildWithoutCache(tmp));
-    // The rewritten cache carries the current schemaVersion (=8).
+    // The rewritten cache carries the current schemaVersion (=9).
     const rewritten = JSON.parse(readFileSync(rawPath, "utf-8"));
-    expect(rewritten.schemaVersion).toBe(8);
+    expect(rewritten.schemaVersion).toBe(9);
   });
 
   // PR #242 review A — the headline fix: the class-member collision warning

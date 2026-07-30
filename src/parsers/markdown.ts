@@ -212,7 +212,17 @@ export function parseMarkdownContent(
   const edges: GraphEdge[] = [];
   const warnings: ParseWarning[] = [];
 
-  const fileHash = hash(raw);
+  // The doc node's hash is the only place task-list checkbox state is
+  // canonicalized: `raw`, `content` and `tree` stay exactly as parsed, so a
+  // task node still hashes (and labels) its own checkbox. The canonicalized
+  // body is spliced back at the offset it came from, which keeps a file with
+  // no checkbox hashing byte-identically to `hash(raw)`. The splice requires
+  // `content` to be a suffix of `raw`: that is how `parseFrontmatter` returns
+  // it, and the parse-error fallback above sets `content` to `raw` itself.
+  const bodyOffset = raw.length - content.length;
+  const fileHash = raw.endsWith(content)
+    ? hash(raw.slice(0, bodyOffset) + canonicalizeTaskCheckboxes(content, tree))
+    : hash(raw);
 
   const VALID_ARTGRAPH_KEYS = new Set(["node_id", "derives_from", "depends_on"]);
 
@@ -371,6 +381,9 @@ export function parseMarkdownContent(
           // req と揃え、listItem subtree 全体をハッシュ化する。
           // labelText だけだと `_Requirements:` / `@impl(...)` の差替えが
           // hash に反映されず、グラフ/lock diff から消える。
+          // Verbatim, checkbox included: ticking a box IS a change to the
+          // task. Only the doc node's hash canonicalizes that state
+          // (`canonicalizeTaskCheckboxes`).
           contentHash: hash(toString(node)),
         });
 
@@ -759,6 +772,59 @@ function extractFirstParagraphAfterHeading(
 
 function hash(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+
+// Rewrite the state character of every GFM task-list checkbox in `body` to the
+// canonical `[ ]`, so a doc's `contentHash` treats "this box is ticked" as
+// state rather than as document content — the same reason `stripAnnotations`
+// runs before a req is hashed. Only the single character between the brackets
+// is touched; the task text after it, and every other byte, still hashes
+// verbatim. The result has the same length as `body`, so a caller can splice
+// it back at the offset `body` came from.
+//
+// The positions come from the parsed `tree`, not from a line regex, because
+// "is this line a task-list item?" is a block-structure question and the mdast
+// is where that answer already lives. A `- [x]` written inside a fenced or
+// indented code block is not a list item and has to keep hashing as the
+// content it is, while an item nested under another one — or quoted inside a
+// blockquote — is one and must not. A `^[ \t]*[-*+]`-shaped regex gets both
+// families wrong, in opposite directions, and would also reach into the
+// frontmatter this function never sees.
+//
+// `body` is the post-frontmatter text `tree` was parsed from, so mdast offsets
+// index straight into it (they count UTF-16 code units, like a JS string
+// index). `[-]` / `[~]` / `[P]` are not GFM checkbox states and are left
+// alone — this repo's own specs give them meanings of their own.
+function canonicalizeTaskCheckboxes(body: string, tree: any): string {
+  const offsets: number[] = [];
+  visit(tree, "listItem", (node: any) => {
+    // The marker has to OPEN the list item, so only a leading paragraph child
+    // qualifies — deliberately `children[0]`, not the `find(paragraph)` label
+    // extraction uses, which would also accept a later paragraph that happens
+    // to begin with `[x]` as running text.
+    const first = node.children?.[0];
+    if (first?.type !== "paragraph") return;
+    const off = first.position?.start?.offset;
+    if (off == null) return;
+    if (body[off] !== "[" || body[off + 2] !== "]") return;
+    const state = body[off + 1];
+    if (state !== "x" && state !== "X") return;
+    // A checkbox is followed by whitespace (or ends the item). A `[x]` that
+    // runs straight into the next character is link text — `- [x](/href)` and
+    // `- [x][ref]` are links whose text happens to be one `x`.
+    const after = body[off + 3];
+    if (after !== undefined && !/\s/.test(after)) return;
+    offsets.push(off + 1);
+  });
+  if (offsets.length === 0) return body;
+  offsets.sort((a, b) => a - b);
+  let out = "";
+  let prev = 0;
+  for (const off of offsets) {
+    out += body.slice(prev, off) + " ";
+    prev = off + 1;
+  }
+  return out + body.slice(prev);
 }
 
 // Remove inline req→req annotations from `text`, normalising the whitespace

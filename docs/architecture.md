@@ -209,6 +209,8 @@ lock ファイル（`.trace.lock`, JSON）— 承認済み状態
 
 drift = 現在の hash ≠ lock の hash。
 
+hash 前の正規化（NON-NEGOTIABLE 原則 I のノイズ抑制、上記の `stripAnnotations` と同じ狙い）: req は注釈括弧を除去し、doc は GFM task-list checkbox の状態文字（`[x]` / `[X]`）を `[ ]` に正規化する。checkbox の状態は doc の content ではないので、tasks.md やレビュー用 checklist のチェックを付ける操作だけでは **doc ノードは** drift しない（チェック行の文面を変えれば drift する）。正規化が掛かるのは doc ノードの hash だけで、req ノードは自分の subtree / 節を（注釈括弧の除去以外は）逐語ハッシュするため、req 配下にネストした checkbox は tick だけで **req ノードを** drift させる（粒度間の既知の非対称。本リポジトリの spec.md には該当形が無く、下流プロジェクトで起こりうる形として #418 で追跡）。
+
 ## 7. CLI / MCP サーフェス
 
 | コマンド                                                            | 役割                                                                                                  |
@@ -302,7 +304,7 @@ MVP: データモデルは最初から型付きアーティファクトグラフ
 - リンクの自己申告問題: エージェントが `@impl` を自己 claim する。緩和 = 仕様所有 ID（捏造不可）＋ drift ハッシュ＋ impl＋通るテスト＋意味は人（D5）。ここが設計の根。
 - doc エッジも自己申告: `depends_on` は著者/エージェント宣言。貼り忘れ＝見えない影響。緩和は `@impl` と同じ（解決と drift を検証）。「prose で REQ/doc に言及あるが `depends_on` 無し→提案」lint は任意・既定オフ。
 - barrel / re-export の symbol 解決の残存課題。named / aliased / type / `default as` の barrel は PR #180（issue #177）で per-symbol 解決済み、`export * from` (#179) と `export default <ImportedName>` / `import { x } from "./m"; export { x };` (#188) は specs/018 で per-symbol 化済み（parser が S2/S3 を実体化 / builder が star を展開）。残る fail-safe 依存: (a) 曖昧 star（同名を供給する star が複数）、(b) diamond 束縛同一性の非比較（究極 origin が同一でも 2 直近供給元があれば drop）、(c) `export =` origin（#187、file 粒度確定）、(d) fatal syntax error ファイル内の star、(e) exclude glob で origin が scan 外、(f) `// @impl REQ` を `export * from "./o"` 直上に配置した場合（`@impl` は symbol 本体内配置でしか symbol に付かないため、star statement 直上に書いても file 到達しかしない。init 既定 symbol + bootstrap 上配置で全 named import が fail-open する原因 — 詳細は #177 project memory と #197 の修正結果）、(g) ~~parser-side unresolved-reexport の silent skip~~（#189 partial の残項目 — **#333 で解消**。`export { x } from "./missing"` 等の specifier 解決失敗時、parser が `unresolved-reexport` / `unresolved-import` 型の `TsParseWarning` を発火するようになった。`scan --format json` の `warnings[]` で観測（SILENT_WARNING_TYPES 登録のためデフォルト stdout は抑制）。`phantom-import-repaired` / `dangling-import` は builder 側で発火する既存経路のまま）。いずれも file 粒度 fail-safe で REQ 到達は保つ（fail-open にはならない）が per-symbol 精度は失う。詳細は specs/018 §10 と設計 doc を参照。
-- drift 粒度: doc/仕様を丸ごとハッシュは小編集で全下流点灯（ノイズ）、節単位は安定アンカーが要る。まず丸ごと、後で節単位（コードの file/symbol と同じ綱引きが一段上で再現）。
+- drift 粒度: doc/仕様を丸ごとハッシュは小編集で全下流点灯（ノイズ）、節単位は安定アンカーが要る。まず丸ごと、後で節単位（コードの file/symbol と同じ綱引きが一段上で再現）。粒度とは別の第三の軸として「hash 前の正規化」がある: content ではない差分（GFM checkbox の状態など）は粒度を細かくせずに正規化で落とす。節単位化は未着手のまま残っている。
 - PreToolUse のレイテンシ予算（デーモン必須）。
 - 未カバー = TODO か漏れか: 未カバーは Plan 信号に留め、ゲートは変更一貫性のみ。
 - 既存プロジェクトへの導入（ブラウンフィールド）: `@impl` タグが無い既存プロジェクトにどう導入するか。調査で判明した重要知見: 仕様を書く文化自体が未定着のプロジェクトが多数派。→ タグゼロでも import グラフだけで file-level impact は出せる設計にし、`@impl` タグは段階的に付与していける必要がある。新しく書く Spec から徐々に入れる段階的導入 ＋ それ用の Skill 提供が鍵。

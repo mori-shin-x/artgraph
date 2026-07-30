@@ -134,7 +134,16 @@ export interface ParseCacheData {
 //       `warnings` field — reusing it on a warm hit would silently keep
 //       hiding the same unresolved specifier forever, diverging from a cold
 //       rebuild on the new code (INV-L4), exactly like v7's rationale above.
-const SCHEMA_VERSION = 8;
+// v9 (issue #235): a doc node's `contentHash` now canonicalizes GFM task-list
+// checkbox state before hashing, and an `MdFragment` carries that hash
+// verbatim. The md cache key is the file's RAW bytes, so an untouched file
+// HITS — a pre-fix fragment would keep replaying the old whole-file hash
+// (checkbox state and all) for as long as the file is not edited, diverging
+// from a cold rebuild of the very same content (INV-L4), exactly like v7/v8.
+// `computeCacheFingerprint` folds in `artgraphVersion()`, but that only
+// cold-invalidates across a release: within one package version (a PR's own
+// dogfood runs, CI vs. a local checkout) nothing else would.
+const SCHEMA_VERSION = 9;
 const CACHE_RELDIR = join("node_modules", ".cache", "artgraph");
 const CACHE_FILENAME = "parse-cache.json";
 
