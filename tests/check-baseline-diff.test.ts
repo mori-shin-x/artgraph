@@ -1307,13 +1307,14 @@ describe("check --diff --gate drift key discriminates by content, not just nodeI
 // `check --diff --gate` with exit 2, on what is the most ordinary SDD
 // operation there is. These pin the gate-level contract: the tick is
 // invisible, everything else in the file still is not, and a lock written
-// before the canonicalization existed migrates without ever touching the
-// standard gate.
+// before the canonicalization existed migrates without ever failing the
+// standard gate — whether the doc stays out of the diff or lands in it and is
+// suppressed as pre-existing.
 // ---------------------------------------------------------------------------
 describe("check --gate and task-list checkbox state (issue #235)", () => {
   const TASKS_REL = join("specs", "tasks.md");
-  const tasksMd = (state: string, text = "wire the hub"): string =>
-    ["# Tasks", "", `- [${state}] T001 ${text}`, "- [ ] T002 pay the debt", ""].join("\n");
+  const tasksMd = (state: string, text = "wire the hub", state2 = " "): string =>
+    ["# Tasks", "", `- [${state}] T001 ${text}`, `- [${state2}] T002 pay the debt`, ""].join("\n");
   const driftedIds = (entries: Array<{ nodeId: string }>): string[] => entries.map((d) => d.nodeId);
 
   function repoWithTasks(prefix: string): string {
@@ -1402,6 +1403,11 @@ describe("check --gate and task-list checkbox state (issue #235)", () => {
     const gated = await checkJson(dir);
     expect(gated.exitCode).toBe(0);
     expect(gated.json.pass).toBe(true);
+    // ...and pin what that pass does NOT mean. With an empty diff no baseline
+    // is built at all, so the stale entry went unlooked-at rather than looked
+    // at and forgiven — "suppressed as pre-existing" is the next test's job.
+    expect(gated.json.baselineStatus).toBe("skipped");
+    expect(gated.json.suppressedCount).toBe(0);
 
     // The whole-repo gate does surface it — once.
     expect(await absoluteGate()).toEqual({ exitCode: 2, drifted: ["doc:tasks.md"] });
@@ -1409,5 +1415,48 @@ describe("check --gate and task-list checkbox state (issue #235)", () => {
     // ...and one reconcile is the whole migration.
     expect((await runAt(dir, ["reconcile"])).exitCode).toBe(0);
     expect(await absoluteGate()).toEqual({ exitCode: 0, drifted: [] });
+  });
+
+  it("a lock predating the canonicalization is suppressed as pre-existing when the doc DOES land in the diff", async () => {
+    const dir = cleanRepoWithTasks("artgraph-235-migrate-scoped-");
+    writeFileSync(join(dir, TASKS_REL), tasksMd("x"));
+    gitCommitAll(dir, "tick T001");
+    expect((await runAt(dir, ["reconcile"])).exitCode).toBe(0);
+
+    // Same in-place-upgrade shape as the test above: that one lock entry now
+    // holds the value the pre-canonicalization whole-file hash produced.
+    const lockPath = join(dir, ".trace.lock");
+    const lock = JSON.parse(readFileSync(lockPath, "utf-8"));
+    const preCanonical = createHash("sha256")
+      .update(readFileSync(join(dir, TASKS_REL), "utf-8"))
+      .digest("hex")
+      .slice(0, 16);
+    expect(lock["doc:tasks.md"].contentHash).not.toBe(preCanonical);
+    lock["doc:tasks.md"] = { ...lock["doc:tasks.md"], contentHash: preCanonical };
+    writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
+
+    // Tick the OTHER box. That edit is what drags tasks.md into the diff, so
+    // the stale entry is compared and does mismatch — and then has to be
+    // forgiven: the base ref canonicalizes to the same value, so #397's
+    // content-bearing drift key matches and the drift is pre-existing debt.
+    writeFileSync(join(dir, TASKS_REL), tasksMd("x", "wire the hub", "x"));
+    const scoped = await checkJson(dir);
+    expect(scoped.exitCode).toBe(0);
+    expect(scoped.json.pass).toBe(true);
+    expect(scoped.json.baselineStatus).toBe("computed");
+    // Seen and forgiven, not skipped — this is the assertion the sibling test
+    // structurally cannot make.
+    expect(driftedIds(scoped.json.drifted)).toEqual(["doc:tasks.md"]);
+    expect(driftedIds(scoped.json.newIssues.drifted)).toEqual([]);
+    expect(scoped.json.suppressedCount).toBe(1);
+
+    // Control — reword T001 on top of the very same stale lock entry. The
+    // mismatch now carries bytes the base ref does not have, so the drift key
+    // differs, nothing is suppressed, and the gate fails.
+    writeFileSync(join(dir, TASKS_REL), tasksMd("x", "wire the login hub"));
+    const edited = await checkJson(dir);
+    expect(edited.exitCode).toBe(2);
+    expect(driftedIds(edited.json.newIssues.drifted)).toEqual(["doc:tasks.md"]);
+    expect(edited.json.suppressedCount).toBe(0);
   });
 });

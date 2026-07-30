@@ -308,10 +308,27 @@ pair always wins over an inline link.
 A doc node's `contentHash` covers the whole file, so any prose edit drifts it.
 One thing is deliberately excluded: the state character of a GFM task-list
 checkbox is canonicalized to `[ ]` before hashing, so ticking a box is not a
-document change. This is a property of the file's shape, not of
-`taskConventions` — it applies to every `- [x]` list item in a file under
-`specDirs`, whether that is a `tasks.md` task or a review checklist. The text
-after the box is still content: reword the task and the doc drifts as usual.
+document change. Unticking one is not either — clearing a signed-off review
+checklist is as invisible to `check` as filling it in. This is a property of the
+file's shape, not of `taskConventions`: it applies to `- [x]` list items in any
+file under `specDirs`, whether that is a `tasks.md` task or a review checklist,
+and there is no key that turns it off. The text after the box is still content:
+reword the task and the doc drifts as usual.
+
+Two limits are worth knowing:
+
+- **A leading byte-order mark disables it.** A `U+FEFF` at the very start of the
+  file shifts every parsed offset by one, and the canonicalization becomes a
+  no-op for that whole file — a tick drifts the doc the way it did before this
+  behaviour existed. Write spec markdown without a BOM.
+- **Nothing else records the state.** A checklist with no task IDs in it (e.g.
+  `specs/<feature>/checklists/requirements.md` under Spec Kit) produces only a
+  doc node, and the lock stores `req` / `doc` / `symbol` entries only — so for
+  such a file the checkbox state is not tracked anywhere in the graph. Where a
+  `tasks.md` task ID *is* present, the task node still hashes its own checkbox
+  verbatim (that is what makes `- [ ] T001` → `- [x] T001` a change to the
+  task), but task nodes are not written to the lock either, so no `check`
+  verdict consumes it.
 
 #### Upgrade note
 
@@ -320,7 +337,13 @@ Docs that already contain a ticked box hash to a new value once, so the first
 (the Stop hook / CI PR gate) is not affected — it is scoped to the diff, and a
 doc that does land in the diff hashes identically on both sides of the
 comparison and is suppressed as pre-existing. Only an unscoped `check --gate`
-surfaces it. Run `artgraph reconcile` to refresh the lock baseline.
+surfaces it — including the Spec Kit `before_implement` gate, if you enabled
+blocking gates via `artgraph integrate speckit --gate`.
+
+Run `artgraph check` first and confirm the drifted list contains only docs whose
+tick state you expect to have changed, then `artgraph reconcile` to refresh the
+lock baseline. `reconcile` rebuilds the whole lock, so it also approves any
+unrelated drift that happened to be pending.
 
 ### Opting out
 

@@ -209,7 +209,7 @@ lock ファイル（`.trace.lock`, JSON）— 承認済み状態
 
 drift = 現在の hash ≠ lock の hash。
 
-hash 前の正規化（NON-NEGOTIABLE 原則 I のノイズ抑制、上記の `stripAnnotations` と同じ狙い）: req は注釈括弧を除去し、doc は GFM task-list checkbox の状態文字（`[x]` / `[X]`）を `[ ]` に正規化する。checkbox の状態は doc の content ではないので、tasks.md やレビュー用 checklist のチェックを付ける操作だけでは drift しない（チェック行の文面を変えれば drift する）。
+hash 前の正規化（NON-NEGOTIABLE 原則 I のノイズ抑制、上記の `stripAnnotations` と同じ狙い）: req は注釈括弧を除去し、doc は GFM task-list checkbox の状態文字（`[x]` / `[X]`）を `[ ]` に正規化する。checkbox の状態は doc の content ではないので、tasks.md やレビュー用 checklist のチェックを付ける操作だけでは **doc ノードは** drift しない（チェック行の文面を変えれば drift する）。正規化が掛かるのは doc ノードの hash だけで、req ノードは自分の subtree / 節を（注釈括弧の除去以外は）逐語ハッシュするため、req 配下にネストした checkbox は tick だけで **req ノードを** drift させる（粒度間の既知の非対称。本リポジトリの spec.md には該当形が無く、下流プロジェクトで起こりうる形として #418 で追跡）。
 
 ## 7. CLI / MCP サーフェス
 

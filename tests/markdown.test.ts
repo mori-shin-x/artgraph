@@ -1575,9 +1575,13 @@ describe("parseMarkdownContent — doc contentHash and task-list checkbox state"
     expect(docHash(src("x"))).not.toBe(docHash(taskDoc(["> - [x] T010 quoted task, reworded"])));
   });
 
-  // Every list-item shape the parser accepts as a task must also be reached by
-  // the canonicalization — a shape it misses puts the checkbox noise straight
-  // back into the doc hash.
+  // Every shape in which the marker OPENS a list item must be reached by the
+  // canonicalization — one it misses puts the checkbox noise straight back into
+  // the doc hash. That is narrower than "every shape the parser calls a task":
+  // task detection reads the first paragraph found ANYWHERE in the item, so an
+  // item that opens with some other block still yields a task node while the
+  // canonicalization correctly declines it (next test). The looseness is on the
+  // detection side and predates this behaviour.
   const markerVariants: Array<{ name: string; lines: (state: string) => string[]; id: string }> = [
     { name: "dash marker", lines: (s) => [`- [${s}] T801 variant`], id: "T801" },
     { name: "star marker", lines: (s) => [`* [${s}] T802 variant`], id: "T802" },
@@ -1610,6 +1614,25 @@ describe("parseMarkdownContent — doc contentHash and task-list checkbox state"
     expect(taskNode(checked, id)).toBeDefined();
     // Control: the text after the box is still content.
     expect(docHash(checked)).not.toBe(docHash(checked.replace("variant", "variant, reworded")));
+  });
+
+  it("leaves a marker that opens a LATER block of the item as content", () => {
+    // The item opens with an HTML comment, so the `[x]` lands in the item's
+    // second block. GFM only calls the FIRST block's leading marker a checkbox,
+    // which is why the canonicalization reads `children[0]` and not the first
+    // paragraph it can find anywhere in the item.
+    const src = (state: string) =>
+      taskDoc(["- <!-- planning note -->", "", `  [${state}] T820 after the comment`]);
+    expect(docHash(src("x"))).not.toBe(docHash(src(" ")));
+    // Reachability: nothing here went unrecognized — task detection IS the
+    // looser `find(paragraph)` and mints a task node for this very shape, so
+    // the hashes differ because the canonicalization declined it, not because
+    // the parser saw no task.
+    expect(taskNode(src("x"), "T820")).toBeDefined();
+    // Control: move the same marker into the item's first block and it is a
+    // checkbox again — which block it opens is the only difference.
+    const opens = (state: string) => taskDoc([`- [${state}] T820 after the comment`]);
+    expect(docHash(opens("x"))).toBe(docHash(opens(" ")));
   });
 
   it("leaves bracket states that are not GFM checkboxes verbatim", () => {
@@ -1647,11 +1670,26 @@ describe("parseMarkdownContent — doc contentHash and task-list checkbox state"
   it("handles degenerate checkbox and file shapes", () => {
     // A box with nothing after it is still a box.
     expect(docHash(taskDoc(["- [x]"]))).toBe(docHash(taskDoc(["- [ ]"])));
+    // ...including when the FILE ends at the closing bracket, so there is no
+    // following character at all for the "whitespace after the box" rule to
+    // read. That rule has to treat "end of item" as a pass, not a reject.
+    expect(docHash("- [x]")).toBe(docHash("- [ ]"));
     // No trailing newline at EOF.
     expect(docHash("- [x] T001 tail")).toBe(docHash("- [ ] T001 tail"));
     // A two-character state is not a state — the closing bracket is not where
     // a checkbox has to put it, so both spellings stay verbatim.
     expect(docHash(taskDoc(["- [xx] T001 tail"]))).not.toBe(docHash(taskDoc(["- [Xx] T001 tail"])));
+    // Same rule, but resting on the closing bracket ALONE: `[x  ]` is followed
+    // by whitespace, so only "is `]` the third character?" can reject it. Take
+    // that half away and every spelling here collapses onto `[   ]`.
+    const wide = (state: string) => taskDoc([`- [${state}  ] T001 tail`]);
+    expect(docHash(wide("x"))).not.toBe(docHash(wide("X")));
+    expect(docHash(wide("x"))).not.toBe(docHash(wide(" ")));
+    // Reachability of that rejection: artgraph's own task preset requires
+    // `[xX ]` between the brackets too, so it mints no task node for `[x  ]`
+    // while the same line with a real box does.
+    expect(taskNode(wide("x"), "T001")).toBeUndefined();
+    expect(taskNode(taskDoc(["- [x] T001 tail"]), "T001")).toBeDefined();
     // Truncated at EOF: nothing to read where the closing bracket would be.
     expect(() => docHash("- [x")).not.toThrow();
     // Frontmatter and nothing else — the body is the empty string, where the
