@@ -80,6 +80,49 @@ describe("oxc-parser canary (issue #246): fatal syntax errors yield an EMPTY pro
 });
 
 // ---------------------------------------------------------------------------
+// #387 — the comment-span shape extractImplTags's "does the tag OPEN this
+// comment?" guard is built on. Direct parseSync probes, no artgraph code
+// involved: the guard slices `content` from `comment.start` up to the `@` of
+// the tag and demands that only the comment's own slashes plus in-line
+// whitespace sit in between, so it is only correct as long as oxc keeps
+// reporting Line-comment spans that INCLUDE the leading `//`. If oxc ever
+// starts excluding the slashes (start pointing at the comment TEXT), this
+// canary goes red — which is the signal to re-derive that guard rather than
+// letting every genuine tag silently stop registering.
+// ---------------------------------------------------------------------------
+
+describe("oxc-parser canary (issue #387): Line comment spans include the leading `//`", () => {
+  // Written split so this file's own source never contains a contiguous
+  // `// @impl` inside one of its OWN comments — see the `fixtureTestTag`
+  // note further down for the same reasoning applied to bracket tags.
+  const IMPL = "@" + "impl";
+
+  it.each<[name: string, source: string, expectedPrefix: string]>([
+    ["a tag that opens the comment", `// ${IMPL} REQ-001\n`, "// "],
+    ["an indented tag (indent is OUTSIDE the span)", `  // ${IMPL} REQ-002\n`, "// "],
+    ["a triple-slash tag", `/// ${IMPL} REQ-003\n`, "/// "],
+    ["a no-space tag", `//${IMPL} REQ-004\n`, "//"],
+    [
+      "a backtick-quoted tag in prose",
+      `// Issue #214: \`// ${IMPL} REQ-005\` used to drop IDs\n`,
+      "// Issue #214: `// ",
+    ],
+  ])("%s", (_name, source, expectedPrefix) => {
+    const result = oxcParseSync("comment-canary.ts", source);
+    expect(result.comments).toHaveLength(1);
+    const c = result.comments[0];
+    expect(c.type).toBe("Line");
+    // The span starts at the first `/` of the comment (NOT at its text) and
+    // ends before the newline.
+    expect(source.slice(c.start, c.start + 2)).toBe("//");
+    expect(source.slice(c.start, c.end)).toBe(source.trimStart().replace(/\n$/, ""));
+    // What the guard actually inspects: comment start → the tag's `@`.
+    const tagIndex = source.indexOf(IMPL);
+    expect(source.slice(c.start, tagIndex)).toBe(expectedPrefix);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // maxBracketNestingDepth — pure-function accuracy, including the documented
 // over-approximation (string-literal brackets are counted too).
 // ---------------------------------------------------------------------------
@@ -332,7 +375,7 @@ describe("integration: createTSParser survives a pathological file in the scan s
 // Pin: a pathological file's OWN text-scanned tags (PR #261 review).
 // extractImplTags is a plain-text regex scan over `content`, entirely
 // independent of the AST — it runs unconditionally regardless of whether
-// safeParseSync actually parsed the file. These three cases pin exactly what
+// safeParseSync actually parsed the file. These four cases pin exactly what
 // that means for a depth-guard-skipped file ITSELF (not an importER of one,
 // which the block above already covers):
 //
@@ -344,7 +387,7 @@ describe("integration: createTSParser survives a pathological file in the scan s
 //   3. A FAKE `// @impl` tag sitting inside a STRING LITERAL (not a real
 //      comment) ALSO produces an edge when the file is depth-guard-skipped —
 //      a documented fail-open. The D6 "is this really a `//` comment" guard
-//      (`matchInLineComment`) needs `parsed.comments` from a successful
+//      (`matchOpensLineComment`) needs `parsed.comments` from a successful
 //      parse to reject a string-literal false match; a depth-guard-skipped
 //      file has no `comments` at all (`parsed` is undefined), so
 //      extractImplTags falls back to its pre-D6 regex-only behavior (see the
@@ -352,6 +395,13 @@ describe("integration: createTSParser survives a pathological file in the scan s
 //      file would correctly reject this same fake tag. Pinned here as
 //      documented CURRENT behavior, not a guarantee — if this is ever
 //      tightened, this test should fail and force a deliberate update.
+//   4. Same fail-open for issue #387's stricter "does the tag OPEN the
+//      comment?" half of that guard: a tag quoted INSIDE a line comment of a
+//      depth-guard-skipped file still produces an edge. This is the isolating
+//      input for the guard's `comments !== undefined` conjunct — it is the
+//      only case whose verdict is decided by that conjunct alone, so it pins
+//      that #387 tightened the ordinarily-parsed path WITHOUT narrowing the
+//      pathological path's documented fail-open.
 // ---------------------------------------------------------------------------
 
 describe("pin: a pathological file's own @impl / test-title tags (PR #261 review)", () => {
@@ -400,6 +450,20 @@ describe("pin: a pathological file's own @impl / test-title tags (PR #261 review
         "",
       ].join("\n"),
     );
+    // Same split convention as `fixtureTestTag` above, for the same reason:
+    // this fixture's tag sits in a real LINE comment, so writing it
+    // contiguously in this file's own comments would register a genuine code
+    // tag on this test file under issue #387's tightened guard.
+    const quotedTag = "@" + "impl CANARY-005";
+    write(
+      root,
+      "src/pathological-quoted-tag.ts",
+      [
+        `// docs: \`// ${quotedTag}\` is prose about the syntax, not a claim`,
+        `export const alsoPathological = ${"(".repeat(2000)}1${")".repeat(2000)};`,
+        "",
+      ].join("\n"),
+    );
   });
 
   afterAll(() => {
@@ -443,6 +507,25 @@ describe("pin: a pathological file's own @impl / test-title tags (PR #261 review
           e.kind === "implements" &&
           e.source === "file:src/pathological-fake-tag.ts" &&
           e.target === "CANARY-004",
+      ),
+    ).toBe(true);
+  });
+
+  it("documented current fail-open (#387): a tag QUOTED inside a line comment still produces an edge for a depth-guard-skipped file", () => {
+    const result = createTSParser(root, ["src/**/*.ts"], "symbol").parse();
+    // Isolating input for the guard's `comments !== undefined` conjunct: an
+    // ordinarily-parsed file rejects this exact shape (see
+    // tests/barrel-reexport.test.ts's #387 block), and the ONLY reason it
+    // survives here is that the depth guard left `parsed` undefined. The
+    // positive control in the same fixture set — CANARY-002's genuine
+    // comment-leading tag, asserted above — keeps this from passing for a
+    // build that simply stopped filtering anything at all.
+    expect(
+      result.edges.some(
+        (e) =>
+          e.kind === "implements" &&
+          e.source === "file:src/pathological-quoted-tag.ts" &&
+          e.target === "CANARY-005",
       ),
     ).toBe(true);
   });

@@ -11,7 +11,10 @@
   "testPatterns": [
     "**/*.test.ts",
     "**/*.spec.ts",
-    "**/*.test.tsx"
+    "**/*.test.tsx",
+    "!**/node_modules/**",
+    "!tests/fixtures/**",
+    "!examples/**"
   ],
   "lockFile": ".trace.lock",
   "packageManager": "pnpm"

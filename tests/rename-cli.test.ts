@@ -238,7 +238,11 @@ describe("CLI: rename --split/--into", () => {
     expect(spec).toContain("REQ-101");
     expect(spec).toContain("REQ-102");
 
-    // @impl REQ-001 should NOT be rewritten (manual assignment needed).
+    // The code-side tag in src/feature.ts must NOT be rewritten (splitting one
+    // ID into two needs a manual re-assignment decision), so it still names the
+    // old ID. Phrased without the tag notation on purpose: this comment opens a
+    // line comment, so writing the notation here would register a real code tag
+    // on this test file in artgraph's own self-scan (issue #387).
     const src = readFileSync(resolve(tmp, "src/feature.ts"), "utf-8");
     expect(src).toContain("@impl REQ-001");
     expect(stdout + stderr).toMatch(/manual.*assignment|WARNING/i);

@@ -258,6 +258,53 @@ Rules:
   is why nothing is excluded by default and `artgraph integrate speckit` does
   not write this setting for you.
 
+## Code tags — where an `@impl` counts <a id="code-tags-where-an-impl-counts"></a>
+
+**An `@impl` is a tag only when it opens a line comment (issue #387).** The
+comment may start with any number of slashes and the tag may be preceded by
+in-line whitespace, so all of these register:
+
+```ts
+// @impl REQ-001
+//@impl REQ-002
+/// @impl REQ-003
+  // @impl REQ-004      ← indentation is fine; it is outside the comment
+```
+
+Everything else that merely *contains* the same characters does not:
+
+```ts
+const doc = "// @impl REQ-900";                  // string / template / JSX text
+/* @impl REQ-901 */                              // block & JSDoc comments
+// Issue #214: `// @impl A, B` used to drop B    // prose quoting the syntax
+// TODO: @impl REQ-902                           // tag not at the comment start
+```
+
+The reasoning is that a tag is a *claim about this file*, while a sentence
+that quotes the notation is *documentation about the notation*. Without the
+distinction, every code comment, test fixture, and doc snippet that spells out
+the syntax silently became a claim.
+
+One exception, by design: a file artgraph could not hand to the parser at all
+(`pathological-bracket-nesting`) has no comment spans to check, so its tags are
+still text-scanned as before — a documented fail-open, not a guarantee.
+
+### Upgrade note
+
+If a tag was written part-way through a comment — `// TODO: @impl REQ-001`,
+or a tag appended after prose — it no longer registers. Move it to the start of
+its own comment line:
+
+```diff
+-// TODO: @impl REQ-001
++// @impl REQ-001
++// TODO: …
+```
+
+This change is **fail-loud**: a requirement that loses its only claim this way
+shows up in `artgraph check`'s `UNCOVERED:` list and turns `check --gate` red,
+so it cannot pass unnoticed.
+
 ## `docGraph` — doc nodes and their relations
 
 Doc nodes (one per markdown file under `specDirs`) and their relations can be

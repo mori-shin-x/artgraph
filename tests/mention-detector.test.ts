@@ -11,6 +11,17 @@
 import { describe, it, expect } from "vitest";
 import { detectMentions } from "../src/plan-coverage/mention.js";
 
+// issue #387 — artgraph scans itself, and its test-tag regex reads a test
+// file's RAW TEXT, not just its titles. Writing REQ-3 in brackets anywhere in
+// this file therefore emitted a `verifies` edge to the REAL `REQ-3` node
+// (`specs/014-reinvent-impact-cli/contracts/mention-semantics.md`), polluting
+// `impact` output and `.trace.lock` with a test that never tested it. Assemble
+// the bracketed form at runtime instead: the strings `detectMentions` sees are
+// byte-identical, this file's own source no longer contains the tag. (This
+// comment deliberately spells out neither form contiguously, for the same
+// reason.)
+const BRACKETED_REQ3 = "[" + "REQ-3" + "]";
+
 describe("detectMentions — basic match (戦略 1)", () => {
   it("plain REQ-3 occurrence in tasks is mentioned", () => {
     const result = detectMentions(["REQ-3"], { tasks: "We touch REQ-3 here." });
@@ -43,7 +54,7 @@ describe("detectMentions — false-positive guards (戦略 2)", () => {
 
 describe("detectMentions — boundary variations (戦略 3)", () => {
   it.each([
-    ["[REQ-3] markdown bracket", "see [REQ-3] for details"],
+    [`${BRACKETED_REQ3} markdown bracket`, `see ${BRACKETED_REQ3} for details`],
     ["(REQ-3) parens", "we considered (REQ-3) in the audit"],
     ["<REQ-3> angle brackets", "tracked <REQ-3>"],
     ["`REQ-3` inline code", "the requirement `REQ-3` applies"],
@@ -118,7 +129,7 @@ describe("detectMentions — case sensitivity (戦略 6)", () => {
 
 describe("detectMentions — multiple matches collapse to one (戦略 7)", () => {
   it("a REQ that appears N times is mentioned exactly once", () => {
-    const text = "REQ-3 here, [REQ-3] there, and Considered: REQ-3 again.";
+    const text = `REQ-3 here, ${BRACKETED_REQ3} there, and Considered: REQ-3 again.`;
     const result = detectMentions(["REQ-3"], { tasks: text });
     expect(result.mentioned.has("REQ-3")).toBe(true);
     // The Set has size 1 even though there are 3 textual hits — proves

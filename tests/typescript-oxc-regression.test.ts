@@ -809,6 +809,19 @@ describe("oxc regression: BOM / export-from / syntax errors (R9–R11)", () => {
       "src/broken.test.ts",
       'import { t } from "./target.js";\ndescribe("[BRK-001] broken", () => {\nconst y = ;\n',
     );
+    // issue #387 — the OTHER "the AST is unusable" state. A syntax error
+    // empties `program.body` but oxc still hands back `comments`, so unlike a
+    // depth-guard skip (see tests/parser-oxc-canary.test.ts) the tag guard
+    // DOES run here and must reject a quoted tag while keeping the genuine
+    // one. Split-written for the same dogfood reason as elsewhere.
+    const implTag = "@" + "impl";
+    write(
+      root,
+      "src/broken-prose.ts",
+      `// docs: \`// ${implTag} BRK-902\` is prose about the syntax\n` +
+        `// ${implTag} BRK-901\n` +
+        'import { t } from "./target.js";\nexport function ok() {}\nconst x = ;\n',
+    );
   });
 
   afterAll(() => {
@@ -880,6 +893,17 @@ describe("oxc regression: BOM / export-from / syntax errors (R9–R11)", () => {
         provenances: ["code-tag"],
       },
     ]);
+  });
+
+  it("still applies the opens-the-comment tag guard to a file with a syntax error (#387)", () => {
+    // `program.body` is empty here (issue #246), but `comments` is not — so
+    // the quoted BRK-902 must be rejected while the genuine BRK-901 survives.
+    // Both halves matter: dropping only the first assertion would pass for a
+    // build with no guard, dropping only the second would pass for a build
+    // that fails CLOSED on any file it could not fully parse.
+    const parsed = parseOne("src/broken-prose.ts", "file");
+    const targets = parsed.edges.filter((e) => e.kind === "implements").map((e) => e.target);
+    expect(targets).toEqual(["BRK-901"]);
   });
 
   it("emits NO symbol nodes for a broken file in symbol mode (known limit, R11)", () => {
