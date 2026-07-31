@@ -1,6 +1,6 @@
 ---
 name: "artgraph-graph-primitive-impact"
-description: "artgraph コントリビュータ向け内部 skill。グラフ基本操作 (src/graph/traverse.ts / src/graph/builder.ts の BFS・エッジ意味論・ID 解決) や graph-core 関数 (impact() / check() / buildGraph()) を変更する issue/PR に着手する前 (Step 0-pre) に、23 チェックの shift-left インパクト調査を実行し「silent に破壊される経路」のランク付きリストを報告する。Use when starting a PR that touches src/graph/, edge semantics, or graph-core function signatures/return values."
+description: "artgraph コントリビュータ向け内部 skill。グラフ基本操作 (src/graph/traverse.ts / src/graph/builder.ts の BFS・エッジ意味論・ID 解決) や graph-core 関数 (impact() / check() / buildGraph()) を変更する issue/PR に着手する前 (Step 0-pre) に、24 チェックの shift-left インパクト調査を実行し「silent に破壊される経路」のランク付きリストを報告する。Use when starting a PR that touches src/graph/, edge semantics, or graph-core function signatures/return values."
 allowed-tools:
   - "Read"
   - "Glob"
@@ -16,7 +16,7 @@ disable-model-invocation: false
 
 **artgraph リポジトリ内部専用の dev process skill**(`templates/skills/` の一般配布ツリーには含まれない。canonical コピーは `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` のみ)。
 
-グラフ基本操作 (BFS / エッジ意味論 / ID 解決) は多数の CLI コマンドと gate 経路から間接消費されており、意味論を狭める・広げる変更は**直接の呼び出し元 grep では見えない経路を silent に壊す**。本 skill は issue 対応ループの **Step 0-pre**(設計より前)で、その経路を事前に列挙するための 23 チェック調査を定義する。
+グラフ基本操作 (BFS / エッジ意味論 / ID 解決) は多数の CLI コマンドと gate 経路から間接消費されており、意味論を狭める・広げる変更は**直接の呼び出し元 grep では見えない経路を silent に壊す**。本 skill は issue 対応ループの **Step 0-pre**(設計より前)で、その経路を事前に列挙するための 24 チェック調査を定義する。
 
 ## トリガー条件
 
@@ -33,7 +33,7 @@ disable-model-invocation: false
 サブエージェント brief テンプレ:
 
 > あなたは artgraph リポジトリの調査担当です。これから `<変更対象の primitive / 関数 / エッジ kind>` を `<変更の一行要約>` する変更を検討しています。実装はまだ存在しません。
-> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 23 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
+> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 24 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
 
 ## 横断 grep を始める前に
 
@@ -41,7 +41,7 @@ disable-model-invocation: false
 
 加えて、**探索範囲を絞る pathspec に `'src/**/*.ts'` 形の複合 glob を使わない**。git は既定でこれを「中間ディレクトリを 1 段以上挟むもの」に解釈し、ディレクトリ直下のファイルを無言で全部落とす (ripgrep や bash の同名パターンとは意味論が違う — check 17 B)。pathspec はディレクトリ止め (`-- src`) にすること。
 
-## 23 チェック
+## 24 チェック
 
 ### 1. 直接呼び出し元
 
@@ -72,6 +72,8 @@ done
 
 ### 4. Gate クリティカル経路
 
+#### 4-A. gate 経路の到達可能性
+
 fail の見逃しが最も高コストな経路を個別に追う:
 
 - `check --diff --gate`(AGENTS.md の標準ゲート)
@@ -80,6 +82,22 @@ fail の見逃しが最も高コストな経路を個別に追う:
 - CI の `check --diff --base origin/<base> --gate`
 
 これらの入口関数から変更対象への到達可能性を追い、「gate が誤って green になる」パターンがあれば **HIGH** として報告する。
+
+#### 4-B. fail-loud / fail-closed 主張の全ゲート実測
+
+変更の正当化に「この方向は fail-loud だ」「劣化すればゲートが赤くなる」型の主張を使う場合、**採用する案について**、artgraph が実際に配線する全ゲート経路で個別に実測する。4-A が「gate が誤って green になる経路はあるか」を問うのに対し、4-B は「**red になると主張した経路は本当に red になるか**」を問う — 別の問いなので 4-A の結果は 4-B の証拠にならない。
+
+1. **配線されるゲートを grep で全列挙する** (テンプレート由来のものを含む。手で思い出さない):
+
+   ```bash
+   git grep -n 'check --gate\|check --diff\|plan-coverage --gate' -- templates AGENTS.md .github docs
+   ```
+
+   2026-07 時点の実体: Stop hook (claude / codex / kiro) = `check --gate --diff` / CI レシピ (`AGENTS.md`, `templates/agent-context/`, `templates/skills/artgraph-verify/`) = `check --diff --base origin/<base> --gate` / speckit の opt-in blocking hook = 素の `check --gate`。**`init` が既定で配線する経路は全部 `--diff` 系**であり、素の `check --gate` は opt-in の 1 経路しかない。
+2. 各経路について「変更前バイナリで green → 変更後バイナリで red」を最小プロジェクトで**実測して表にする**。`--diff` 系の baseline は `src/baseline.ts` が **ephemeral worktree を現在のバイナリ・現在の config で cold scan** して作るので、意味論を変える PR は base 側も新意味論になり、失われた signal は `newIssues` に載らず `suppressedCount` に落ちる。**これは既定の全経路に当てはまる構造的性質**であって、設計案ごとに変わらない。
+3. **調査段階で棄却した案について取った測定は、採用案へ自動的には引き継がれない。** 棄却案で「gate 不可視」「lock churn」「blast radius」を実測したなら、**採用案でも同じ測定を 1 回やり直す**。報告では各測定に「どの案について取った測定か」と「採用案でも成立するか」を明記する。
+
+前例: PR #423 (issue #387) — チェック 15 が**棄却した候補について**「`--diff` 系ゲートは baseline を同一バイナリ・同一 config で再スキャンするので両側とも新意味論になる」を `--diff --base HEAD~1 --gate` exit 0 として実測していた。この性質は案に依存しないのに、採用した候補の設計文書がゲート経路を限定せず「この方向は fail-loud」と断定し、その文言が `docs/configuration.md` の Upgrade note まで到達した。実測では素の `check --gate` だけが exit 2 で、`init` が配線する 2 経路と CI レシピは**移行後も恒久的に exit 0**。E2E が 3 プロジェクト × 3 経路を再実測して確定した。step 3 の問い 1 回で潰れていた。
 
 ### 5. Cross-cutting config 交差
 
@@ -137,6 +155,8 @@ gate 判定に関与するコマンドへ**値必須オプションを追加・�
 
 ### 11. 判定材料 (node kind 等) の生成元 × config 整合 + 全消費者トレース
 
+#### 11-A. 生成元 × config 整合 + 全消費者トレース
+
 変更対象のロジックが特定の **node kind / boolean 分類** (例: `kind === "test"`, `isTest`) をガード条件として参照する場合:
 
 1. 分類の計算箇所を特定する: `grep -rn "isTest\|kind.*===.*\"test\"" src/`
@@ -144,7 +164,29 @@ gate 判定に関与するコマンドへ**値必須オプションを追加・�
 3. チェック 2 の要領で、その分類結果 (boolean / kind 文字列) の**全消費者**を関数名でなく値/フィールド名で grep し、変更対象のロジックが触れていない箇所 (例: 別のタグ抽出関数) でも同じ判定材料に依存していないかを洗い出す。
 4. 乖離や把握漏れの消費者が見つかった場合、本 PR の適用範囲外でも pre-existing の同根問題として MEDIUM 以上で報告し、別 issue 切り出しを推奨する。
 
-### 12. docs/ 内の不変条件記述の逆引き (チェック 6 の docs 拡張)
+#### 11-B. recognize ↔ rewrite/validate パリティ監査
+
+11-A は「分類変数名」を起点に消費者を追う。変更が「ある**構文**を認識する規則」を狭める / 広げる場合はこれでは届かない — 同じ構文を**書き換える・検証する**側は分類変数を経由せず、構文リテラルを自前で綴り直しているためである。以下を追加で実行する:
+
+```bash
+git grep -n '@impl' -- src | grep -v '^src/parsers/'
+git grep -n 'req:'  -- src
+git grep -n '\[' -- src/rename.ts src/rename-executor.ts
+```
+
+1. 「認識する側 / 書き換える側 / 検証する側」の 3 列表を作る。各行に**正規表現リテラルを逐語で**入れる (チェック 21 step 2-B-0 の差分計算がそのまま使える)。
+2. **適用スコープも比較する。** 正規表現が同形でも、片方がファイル全体・片方が `content.split("\n")` の行単位、という食い違いは表に出ない。「何を 1 単位として適用するか」を列に足す。
+3. 各対について「認識する集合 ⊖ 書き換える集合」に落ちる入力を最小プロジェクトで**実機 CLI**で構成し、`scan` / `check` / `rename --dry-run` の 3 点で観測する。
+4. **タグ種別を網羅する** — code の `@impl` / code の `[ID]` / code の `req:` / **markdown の task-tag** / spec の list item / frontmatter。片方向しか無い種別 (認識するが書き換えない、等) は、それ自体が finding。
+5. **乖離が pre-existing でも報告する。** 本 PR が認識集合を狭める / 広げるなら、乖離の**大きさ**は変わる。「pre-existing だから無関係」ではない。
+
+`src/grammar/tokens.ts:1-8` が「discovery と rewriting が drift しないよう定数を共有する」をリポジトリ自身の不変条件として明記している。乖離を見つけたときの修正方向はまずこれ。
+
+前例: PR #423 (issue #387) — パーサは「タグがコメントを**開いて**いるか」に変わったのに、`src/rename.ts:302` / `src/rename-executor.ts:689` は「その**行**のどこかに `//…@impl` があるか」のまま残った。結果 (a) claim が 1 本も無い散文を `rename` が書き換える、(b) `rename --split` が実在しない claim に `manual-assignment-needed` 警告を出し、`rename-executor.ts` の安全弁 (`allChanges.length === 0 && warnings.length === 0` で throw) を偽の警告で満たす。メタレビューの横展開でさらに 4 件が出た — `req:` annotation は `\s*` で改行を跨ぐが rewriter は行単位 / **`tasks.md` の task-tag は一切書き換えられず、しかも `findOrphans` の task スキップ (`src/graph/traverse.ts:697`) と結合して rename 後の宙づりエッジが完全沈黙する (最も深刻)** / 順序付きリストの req 定義が書き換えられない / インデントコードブロック内の擬似定義が書き換えられる。5 件まとめて #426。1 チェックあたりの finding 数が最大だった。
+
+### 12. docs/ 内の不変条件記述の逆引き + PR が新規に書く断定文の監査 (チェック 6 の docs 拡張)
+
+#### 12-A. 既存記述の点検
 
 チェック 6 は `specs/*/spec.md` のみを対象とするが、`docs/` 配下のユーザー向けガイドも同種の断定表現 (「常に」「必ず」「保証される」「混入しません」等) を含みうる。
 
@@ -153,6 +195,24 @@ grep -rn "<primitive 名 / 保証している挙動のキーワード>" docs/
 ```
 
 該当箇所を列挙し、変更後も文言が成立するかを判定する。不成立なら doc 更新を本 PR のスコープに含めるか、caveat 追記を推奨する。
+
+**grep 対象には、変更する config キー名そのものも含める。** `.artgraph.json` のキーを触る変更では、そのキーの docs 記述が本 PR の射程外の機能 (`rename` の書き換えスコープ等) への影響を既に明文化していることがある。
+
+#### 12-B. PR が新規に書く断定文の粒度限定子とテスト対応
+
+12-A (既存記述の点検) と対称に、**この PR が新しく書く**文にも同じ検査を掛ける。対象は `docs/` / `specs/` の追加行、upgrade note、PR 本文、テストコメント。抽出はこの 1 コマンドで足りる:
+
+```bash
+git diff -U0 origin/main -- docs specs | grep '^+' | grep -v '^+++'
+```
+
+1. **結論節に粒度限定子を置く。** 変更が単一の node kind / grain / 入力形状にスコープされている場合 (チェック 20 の列挙結果が正)、新規の断定文は**結論節に**そのスコープを明記する。理由節だけに書いても、周辺に粒度非依存の定義 (「drift = 現在の hash ≠ lock の hash」等) があると無限定に読める。判定オラクル: 抽出した各文について「この文の主語の kind を 1 語で答えられるか」。答えられない文は書き直す。
+2. **`every` / `always` / `never` / 「常に」「必ず」を新規に書く場合は、反例クラスを 1 つ以上探してから書く。** チェック 19 step 5 (prefix 変種) とチェック 21 の conjunct 台帳が反例の供給源。**例示を書く場合はその例示自体を 1 回実物に食わせる** — 挙動の説明としては正しくても、例に選んだ入力がそもそも対象の正規表現にマッチしない、という形の誤りが起きる。反例が見つかったら限定するか、限界として同じ段落に書く。
+3. **新規に文書化した契約は 1 文ごとにテスト ID を対応させる。** 対応が無い文は PR 本文に「未 pin」と明記する。とくに**移行契約** (アップグレード後に何が起きるか) は、Step 0-pre が既に実測値を持っているなら**必ず**テストにする — 「テスト化は任意」への降格を許さない。判定オラクル: その契約が破れる mutant (suppress 機構の無効化、gate 判定の反転) を当てて、対応テストだけが落ちること。
+4. **案内する CLI コマンドのスコープを確認する。** upgrade note で既存の定型句 (「`artgraph reconcile` を実行して lock baseline を更新」等) を流用する場合、その定型句が呼ぶコマンドが path / node-id / kind のスコープ引数を取るかを確認する。取らないなら、note に「まず `artgraph check` の drifted 一覧を確認し、想定内のものだけであることを確かめる」というレビュー手順を必ず含める。定型句を逐語コピーすると、そのコマンドの blast radius も逐語で継承される。
+5. **Step 0-pre 報告で確立した事実を新規散文へ機械的に突き合わせる。** 突き合わせ対象は 4-A の CLI マトリクス (gate 経路の全行)、チェック 20 の kind 変種、不可能性・恒等の証明。マトリクスに載っていて移行案内の blast radius 文に出てこない gate 経路があれば、それは記述漏れ。
+
+前例: PR #417 (issue #235) — (i) `docs/architecture.md` の追加文が理由節だけを doc kind に限定し結論節に主語が無く、req grain の反例で崩れた。(ii) 新規に書いた `every - [x] list item` が BOM 付きファイルで偽になった (#420)。(iii) Step 0-pre が行番号付きで名指しした `specs/008/tasks.md:71,78` が計画段階で「確認する」に弱められ、実装では触られず、レビューで再指摘された。(iv) **新規に謳った移行契約にテストが 0 本**で、既存の移行テストは clean worktree = 空 diff のため `baselineStatus: "skipped"` で短絡していた。(v) upgrade note が `artgraph reconcile` の定型句を逐語コピーし、意図せず「pending な drift 全部を承認せよ」になった (#421)。(vi) マトリクスに載っていた `integrate speckit --gate` (blocking, unscoped) が移行案内の blast radius 文から漏れた。PR #423 (issue #387) — upgrade note が「壊れる例」として挙げた `// TODO: @impl REQ-001` は、そもそも変更前の `implRe` (`//` と `@impl` の間に空白しか許さない) にマッチしない入力で、**存在しない破壊を告知していた**。
 
 ### 13. ID 表現粒度の生成元 × 全消費者比較監査 (チェック 11 の ID 版)
 
@@ -266,11 +326,13 @@ git grep -la 'export' -- src           | wc -l   # 81
 2. component 単位の glob がどうしても要る場合は `:(glob)` magic を明示する。`:(glob)src/**/*.ts` は `**/` が「0 段以上」になり直下も含む — **magic を付けると範囲が狭まるのではなく広がる**方向なので、直感と逆であることに注意 (上表と self-check で確認できる)。
 3. 完全性を主張する前に、必ず**ディレクトリ止めとの件数差**を取る。差が 0 でなければその分だけ脱落している。
 
-### 18. dogfood 自己参照汚染監査 (fixture 文字列 × 自身の scan 対象)
+### 18. dogfood 自己参照汚染監査 (A: fixture 文字列 × 自身の scan 対象 / B: 実リポを対象にするテストの副作用)
+
+#### 18-A. fixture 文字列 × 自身の scan 対象
 
 artgraph は自身の `tests/` / `tests/fixtures/**` / `examples/**` を dogfood scan する (`include` と `testPatterns` は独立した glob プールとして union されるため、`testPatterns` の `**/*.test.ts` が全階層に効く)。設計が新規・変更の test fixture を要求する場合 (一時ディレクトリへの書き出し・commit 済み fixture プロジェクト・テストファイル自身の文字列リテラルのいずれでも):
 
-1. fixture 文字列が `@impl` / `[ID]` ブラケット / `req: "..."` のいずれの形状にもマッチしないかを確認する。`buildIdMatchers` (`src/parsers/typescript.ts`) が返す 4 つのうち、**`testReqRe` / `testAnnotationRe` には `implRe` が持つ AST 実コメント判定ガード (`matchInLineComment`) が無い** — 文字列リテラルの中でもコメントの中でも無条件にマッチする。
+1. fixture 文字列が `@impl` / `[ID]` ブラケット / `req: "..."` のいずれの形状にもマッチしないかを確認する。`buildIdMatchers` (`src/parsers/typescript.ts`) が返す 4 つのうち、**`testReqRe` / `testAnnotationRe` には `implRe` が持つ AST 実コメント判定ガード (`matchOpensLineComment`) が無い** — 文字列リテラルの中でもコメントの中でも無条件にマッチする。
 2. マッチしうる形状を含み、かつその文字列が本プロジェクト自身の scan 対象パスに存在する場合 (一時ディレクトリの外)、既存の回避慣習を**その形状に効くものを選んで**適用する。形状ごとに効く慣習が違う:
    - `@impl` 形状 → `"@" + "impl ..."` の分割 (`tests/builder.test.ts` / `tests/check-baseline-diff.test.ts`)
    - `[ID]` ブラケット形状 → `"[" + "ID" + "]"` の分割 (`tests/parser-oxc-canary.test.ts` に前例。同ファイルのコメントがこの罠を詳述している)
@@ -292,6 +354,31 @@ artgraph は自身の `tests/` / `tests/fixtures/**` / `examples/**` を dogfood
 
 実在 REQ との衝突が `orphans` では見えないことは実測済み: 実在する `impl-only` の REQ をブラケットで参照する fixture を足すと、`orphans` は 128 のまま集合も一致し、その REQ だけが `verified` に反転する。
 
+#### 18-B. 実リポジトリを対象にする dogfood テストの副作用監査
+
+18-A が扱うのは fixture **文字列**の汚染だが、`buildGraph` / `runPlanCoverage` / `runDoctor` など production の入口を**リポジトリルートに対して**呼ぶテストには、それとは独立に**書き込み**の問題がある。新設・変更する場合:
+
+1. **到達する書き込み I/O を列挙する。** 呼ぶ関数名ではなく **I/O 名**で grep し、対象関数の到達範囲に入るものを抜く (チェック 2 / 14 と同じ原則):
+
+   ```bash
+   git grep -n 'writeFileSync\|mkdirSync\|rmSync\|renameSync\|writeParseCache' -- src
+   ```
+
+   テスト側の列挙も**引数の値**で行う: `git grep -n 'REPO_ROOT\|repoRoot' -- tests`。`buildGraph(REPO_ROOT` だけで grep すると `runPlanCoverage({ repoRoot: REPO_ROOT … })` が落ちる — 実際に落ちた。
+2. **副作用ゼロを実測する** (推測しない):
+
+   ```bash
+   rm -rf node_modules/.cache/artgraph
+   npx vitest run <その 1 ファイルだけ>
+   ls node_modules/.cache && git status --porcelain
+   ```
+
+   判定オラクル: `node_modules/.cache/artgraph` が**生成されないこと**と `git status` が**クリーン**であること。
+3. 副作用が消せない場合、**「テストスイート (`src` ビルド) が書いた成果物を CLI (`dist` ビルド) が読む」経路**が開かないかを判定する。キャッシュのキーに「どのビルドが作ったか」が入っていなければ **HIT する** (`computeCacheFingerprint` は `SCHEMA_VERSION` + `artgraphVersion()` + config のみで、`artgraphVersion()` は src 実行時も dist 実行時も同じ `package.json` を読む)。
+4. 抑止は**そのファイル内に限定**する。グローバルに `ARTGRAPH_CACHE=0` を立てるとキャッシュファイルの存在を前提にする既存テスト (`tests/barrel-reexport.test.ts` の INV-L4 2 件) が落ちる。`beforeAll` で旧値を退避し `afterAll` で戻す。
+
+前例: PR #423 (issue #387) — 新設した dogfood テストが `buildGraph(REPO_ROOT)` を呼び、リポジトリの実 `node_modules/.cache/artgraph/parse-cache.json` (745 KB) を生成した。**同じ PR が `SCHEMA_VERSION` を bump してまで潰した「warm ≠ cold」汚染チャネルを、別方向に開けていた** — 修正前パーサで温めたキャッシュを修正後バイナリが warm 読みすると orphans 118 / cold は 110 (実測)。さらに step 1 の grep 漏れにより、**同じチャネルが `tests/plan-coverage-dogfood.test.ts` (PR #362 由来) で以前から開いていた**ことが後段で判明した (#427)。事後監査は grep 3 本で全数済んだ = 事前化のコストは実質ゼロだった。
+
 ### 19. 生成値を比較キーへ昇格させる変更の環境不変性監査 (producer レシピ × 二重 materialization × SSOT pin)
 
 比較・キー化の対象が **id のみ** から **id + ハッシュ値**(または他の内容依存値)へ変わる、あるいは baseline 側 (ephemeral worktree scan) と current 側 (実 working tree scan) が**独立に生成した値同士**を等価比較するようになる場合:
@@ -301,9 +388,21 @@ artgraph は自身の `tests/` / `tests/fixtures/**` / `examples/**` を dogfood
 3. materialization を割る要因を横展開して列挙する: `core.autocrlf` / `.gitattributes` の `eol=`・`text`・`working-tree-encoding` / smudge filter / `core.symlinks`。`.gitattributes` への `eol=` 追加は autocrlf 無変更でも同型を再現し、既存 working tree の `git status` に痕跡を残さない — 見落としやすい経路として必ず含める。要因ごとに「偽陽性 (無編集ノードの誤検出) / 偽陰性 (実編集の過剰抑制) のどちらへ倒れるか」を新旧両方の設計で判定する。
 4. `grep -rlan "hashContent\|stripBom" tests/ specs/ src/` で、対象ハッシュ関数をバイト同一性で pin するテスト・spec (hash-equivalence 型テスト、「正規化しない」ことを意図としてピンする FR) を洗い出す。pin が存在する場合、生成側の正規化変更はその pin と**一体でしか動かせない** — 本 PR での安易な生成側修正を推奨せず、cross-spec issue として切り出す判断材料にする。
 
+変更が「**hash の引数に新しい正規化・除去・canonical 化を挿入する**」形 (`stripAnnotations` / checkbox の canonical 化 / BOM 除去 / EOL 正規化) の場合、step 1-4 に加えて以下を実行する。step 1-4 は「同じ入力が 2 箇所で別の値になるか」を問うが、step 5-7 は「**新しい正規化そのものが、その入力で本当に動くか / 動きすぎないか**」を問う — 別の問いなので片方の答えは他方の証拠にならない。
+
+5. **parser の position / offset を文字列添字として使うなら、「parser が消費した文字列」と「自分が添字する文字列」の同一性を prefix 変種で実測する。** parser は先頭で無言に読み飛ばす prefix を持ちうる (micromark は U+FEFF を preprocess で捨てる)。列挙する prefix: BOM (U+FEFF)、前置の空行 / 空白、frontmatter の前後、shebang 相当。各変種で `body[off]` が**期待するトークン文字**であることを assert する。
+
+   **正規化が発火しなかったことを安全と読まない。** この形の測定は「バイト変化 0 件」を安全の証拠にしがちだが、同じ 0 件は「その入力クラスでは修正が一切効いていない」ことの証拠でもある。プローブは「壊れていない」ではなく「**発火した**」を assert する (置換件数 > 0、または返り値 ≠ 入力)。発火 0 件の入力クラスは、それ自体を fail として報告する。
+6. **衝突空間を軸ごとに列挙する (many-to-one 方向)。** 正規化は多対一写像なので、**別々の文書が同じ hash に落ちる**組が新設される。形状述語の conjunct を 1 つずつ緩め (チェック 21 step 2-B の台帳と同じ表)、「その conjunct が無ければ衝突する 2 入力」を構成して、意図した衝突 (`[x]` ↔ `[X]`) と意図しない衝突 (`- [x](/href)` ↔ `- [ ](/href)`) を表にする。**入力内の差分を測る fuzz (「置換は常に 1 文字」「長さは保存」) はこの性質を原理的に見られない** — 見るべきは入力**間**の像の一致であって、1 入力の前後差ではない。
+7. **恒等方向を旧アルゴリズムとの一致で pin する。** 対象形状を 1 つも含まない入力について、新 hash が**旧実装の値とバイト一致**することを assert する (「変わらない」を入出力恒等で書くと判別力ゼロ — チェック 21 step 3)。
+
 前例: PR #397 (issue #383) — driftKey への currentHash 折り込みで、typescript.ts (EOL 非正規化・BOM 除去) と markdown.ts (EOL 正規化・BOM 非除去) の既存レシピ非対称が二重 materialization と組み合わさり、独立理由で drift 済みの無編集ノードが gate を落とす偽陽性経路になることが Step 4 まで検出されなかった。spec 022 FR-006 の byte-identity pin により修正は cross-spec 切り出しになった (#398)。
 
+step 5-7 の前例: PR #417 (issue #235) — (i) mdast offset を post-frontmatter 文字列の添字として使う設計で、先頭 U+FEFF があると micromark 側だけが 1 文字読み飛ばし、全 offset が 1 ずれて**ファイル全体で正規化が no-op** になった (#420)。Step 0-pre は「`markdown.ts` は BOM を除去しない」ことを明記し、`raw.endsWith(content)` プローブでは **BOM 入力を実際に構成していた**が、その入力を offset 写像の健全性側へ sweep しなかった。offset の健全性は emoji / CJK (= 文字幅の軸) だけで検証され、prefix 読み飛ばしの軸が空だった。レビューが投じた 5,880 形 + 4,000 ランダム入力は「バイト変化 0 件」を安全の根拠にしたが、**その 0 件が症状そのものだった**。(ii) 初版の形状述語は `]` の後続文字を見ておらず、`- [x](/href)` / `- [x][ref]` / `- [x]tight` を canonical 化して `[ ]` 綴りと hash 衝突させていた (実測: 両者が同一ハッシュ `59268fd05d24d1d2`)。fixture 表は over-broad を state 文字の軸 (`[-]`/`[~]`/`[P]`) でしか考えていなかった。実装者が自力で発見し「計画外なので実装せず報告」した。
+
 ### 20. primitive が横断する node kind / mode 変種の必須 fixture チェックリスト化 (弱)
+
+#### 20-A. node kind / mode 変種の列挙
 
 変更対象のロジックが複数の node kind (req / doc / file / symbol) や `mode: "file"|"symbol"` 分岐を横断して同一判定を適用する場合、実装前でも変種の**列挙**と**必須 fixture のチェックリスト化**はできる:
 
@@ -315,15 +414,59 @@ artgraph は自身の `tests/` / `tests/fixtures/**` / `examples/**` を dogfood
 
 前例: PR #397 — 新設ユニットテスト T383-c/d/e/f は全て file モード (req/doc ノード) の drift 経路のみを検証し、symbol ノードの drift 経路はユニット層で未検証のまま Step 7 (E2E) の追加シナリオで初めて実機確認された。
 
+#### 20-B. 変種は「原因」ではなく「述語が読む観測値の値域」で列挙する
+
+20-A の変種表が「parse 状態」「エラー種別」「実行モード」のように**原因**で並んでいる場合、述語が実際に読む値 (`comments`, `program.body`, `errors`, `matches`, …) ごとに**値域の表へ変換し直す**:
+
+| 観測値 | 取りうる値 | それを作る入力 (逐語) | 述語の verdict | fail-open / closed |
+| --- | --- | --- | --- | --- |
+
+1. 値域は「その値を読むコードが分岐しうる粒度」で切る。配列なら最低 `undefined` / `[]` / 非空 の 3 値 (`x && …` では `[]` が truthy 側に落ちるため、この 3 値を 2 値に潰すと必ず穴が空く)。
+2. **空セルは「探しに行く」。** 原因側の変種からその値が出てこないなら、その値を出す入力を別途構成する。**見つからなければ「到達不能」と根拠つきで書く** — 空欄のまま残さない。
+3. 各セルの fail-open / fail-closed を判定し、**docs に「例外は N 個」と書く場合は N をこの表から数える** (チェック 12-B step 2)。
+
+前例: PR #423 (issue #387) — 新設述語が読むのは oxc の `comments`。原因側で並べた 4 変種 (正常 / 構文エラー / 深度ガード skip / ロード失敗) は `undefined` と 非空 の 2 値にしか写らず、**`[]` のセルが空のまま残った**。実際には未終端ブロックコメント・未終端文字列・未終端テンプレート・hashbang と同一行のタグで oxc は成功しつつ `comments: []` を返し、**そのファイルの全タグが黙って落ちる**。main でも同一挙動なので回帰ではないが、本 PR が「例外は 1 つだけ」と新規に断定したため記述が偽になった。E2E が最終的に 9 入力を実機で測って確定させており、**その作業は Step 0-pre でもまったく同じコストで実行できた**。
+
 ### 21. 必須 fixture の判別力設計 (分岐台帳 × 判別オラクル × 自証明との突き合わせ)
 
 チェック 20 が出す「必須 fixture チェックリスト」は**経路の列挙**であって検出力の保証ではない。**挙動保存 (equivalence) を契約とする変更** (性能リファクタ、データ構造の差し替え) では、経路を通るだけの fixture は新旧どちらの実装でも同じ値を返すため、実装が誤っていても緑のままになりやすい。チェック 20 を実行した場合は続けて以下を行い、報告のチェックリストを判別力つきに格上げする:
 
 1. **分岐台帳を作る。** 変更対象の関数について、**変更しない分岐も含めた**全 tier / 早期 return / fallback / 非マッチ時 return を列挙する。挙動保存 PR は「この関数の未 fixture 経路に初めて fixture を付けた」と主張しがちで、レビューはその主張を分岐単位ではなく**関数全体**に対して評価する。
 2. **台帳の全件について既存検出力を実測する。** 分岐ごとに到達カウンタのプローブを仕込み、全スイートを 1 回走らせて「到達 0 / 到達するが出力を変えない / 出力を変える」に分類する。**変更予定の分岐だけでなく台帳全件**を同じ 1 回の走査で取ること (追加コストはほぼゼロ)。到達 0 の分岐は、その分岐を丸ごと削除する mutant が全スイートで survive する状態 = silent な誤解決・誤リンクが無防備であることを意味するので、隣接分岐であっても本 PR の fixture 対象に含めるか別 issue に切り出すかを判断する。
+
+   **2-B. ガード述語の conjunct 台帳。** 新設・変更するのが「入力形状を判定する述語」(複数の条件を `&&` / `||` / 連続する早期 return で連ねたもの) の場合、その述語は step 1 の分岐台帳に 1 行としか現れない。台帳を**述語内部まで下ろす**:
+
+   - **2-B-0. 各 conjunct について「上流の何を再検証しているか」を先に埋める。** ガード述語の conjunct には 2 種類ある — (i) 新しい事実を判定するもの、(ii) **上流のマッチャ / パーサが既に判定した事実を、自分の綴りで再検証するもの**。(ii) は台帳に「上流の出典 (`file:line`) / 上流の受理集合 (逐語) / 自分の受理集合 (逐語) / 包含関係」を書く。
+     1. 上流を 1 つ名指しできない conjunct は (i)。名指しできるなら (ii) — **リテラルを 2 つ並べる**。同一の綴りでなければ、それだけで FAIL 扱いにして先へ進まない。「同じ意味のつもり」は根拠にならない。
+     2. 綴りが違うのに「包含する」と主張する場合は、**差分集合を実際に計算する**。文字クラスなら数ミリ秒で全数出せる:
+
+        ```bash
+        node -e '
+          const UP = /^[^\S\n]$/;    // 上流 (implRe の区切り)
+          const GUARD = /^[ \t]$/;   // 下流 (新設ガードの区切り)
+          const out = [];
+          for (let c = 0; c <= 0xFFFF; c++) {
+            const s = String.fromCharCode(c);
+            if (UP.test(s) !== GUARD.test(s)) out.push("U+" + c.toString(16).toUpperCase().padStart(4, "0"));
+          }
+          console.log(out.length, out.join(" "));
+        '
+        ```
+
+        **判定オラクル: 出力が空でなければ、その差分は「上流が受理し下流が落とす入力」= サイレントな喪失。** 空でないまま進めてはならない。
+     3. 包含が崩れているときの修正は**定数の共有**にする (`src/grammar/tokens.ts:1-8` がこのリポジトリの確立したイディオム)。リテラルを 2 箇所に持つ限り同じ drift が再発する。
+     4. **同じ差分計算を 1 段外側にも当てる。** 共有した定数が、さらに上流 (パーサの字句定義、言語仕様) の受理集合と矛盾しないかを同じ形で確かめる。
+   - **2-B-1.** conjunct を 1 行 1 件で列挙する (例: `body[off] === "["` / `body[off+2] === "]"` / `state ∈ {x,X}` / `after が undefined か空白` = 4 件)。
+   - **2-B-2.** 各 conjunct について「**その conjunct だけが reject し、他の conjunct は全部 accept する**」入力を 1 つ構成する。これがその conjunct の唯一の判別 fixture。
+   - **2-B-3.** 判定オラクルは「HEAD では reject、その conjunct を落とした mutant では **ACCEPT**」。HEAD でも mutant でも reject な入力は、**別の conjunct のおかげで通っているだけで判別力ゼロ**。述語だけを別ファイルへ写して全 conjunct × 全候補入力の表を 1 回で出すのが最も安い (実行時間はミリ秒、全スイート実行は不要)。
+   - **2-B-4. redundant 判定は isolating 入力だけで下さない。** isolating 入力を構成できない conjunct を **redundant** と書く前に、その conjunct を落とした mutant を**フルスイート**に当てる。conjunct は述語の受理集合だけでなく**ループ制御 (早期 `return` / `continue` / `break`)** とも結合しうるため、受理集合の観点では冗長でも制御フローの観点では load-bearing でありうる。落ちるテストが 0 のときだけ redundant と書け、その場合は削除するか「他 conjunct に包含される防御的重複」と 1 行残す。**mutation の測定範囲 (対象ファイル集合) を必ず併記する。**
+   - **2-B-5.** **述語に conjunct を 1 つ追加したら、全 conjunct について 2-B-2/3 をやり直す。** 追加した conjunct が、既存テストが別 conjunct に対して持っていた判別力を**無言で奪う**。テストは緑のままなので、この失効を告げるシグナルは存在しない。
+   - **2-B-6. accept 側も列挙する。** 「reject すべきなのに accept している」入力は 2-B-2/3 の手順では出ない。述語が accept する入力形状を列挙し、各形状について「これを accept して意味論的に正しいか」を判定する (正規化を伴う述語ではチェック 19 step 6 の衝突表がこの列挙を兼ねる)。
+
+   前例: PR #417 (issue #235) — 4 conjunct のうち **2 つに isolating fixture が無かった**。(i) 閉じ括弧 conjunct: 既存の `- [xx]` assertion がそれを pin していると設計時点で想定されていたが、後から追加された後続空白 conjunct が先に弾くため、閉じ括弧 conjunct を削除する mutant が全スイート緑で生存した。isolating 入力は `- [x  ] a`。(ii) `after === undefined` 分岐: 既存の assertion がヘルパ経由で末尾改行を付けており `after === "\n"` を通っていた。isolating 入力は末尾改行なしで `]` で終わるファイル。(iii) accept 側の列挙 (2-B-6) が無かったため、`- [x](/href)` を accept してしまう 4 番目の conjunct の欠落が実装段階まで発見されなかった。PR #423 (issue #387) — **台帳を作り、コンパイル済み `dist` から conjunct を個別に外した 5 ビルドで mutation まで実測したうえで**、2-B-0 が無いために回帰が通り抜けた。新設ガードは `implRe` が既に受理した区切り空白を再検証する述語だったが、上流 `[^\S\n]` に対して `[ \t]` と綴られ、**22 コードポイント** (NBSP U+00A0、全角スペース U+3000、FF、VT、CR、U+2028/2029、U+FEFF ほか) で受理集合が狭かった。日本語コメント主体の下流では現実的に踏む形状で、しかも 4-B の性質により**恒久的にゲートから見えない**。`[ \t]` を pin するテストは 0 件で、`[^\S\n]` に mutate しても 124 ファイル全 pass だった。共有定数化した後に 2-B-0 step 4 を当てると、その定数が oxc の**行終端** `U+000D` / `U+2028` / `U+2029` を含むことも出る。さらに containment conjunct は isolating 入力では「反転せず」に見えたためコードコメントに「冗長」と書かれたが、実際は削除すると**最初の Line コメントで `return`** してしまい後続コメントの本物のタグが全滅する false-negative 方向の load-bearing で、フルスイートでは **68 テスト / 17 ファイル**が赤になった (isolating 入力だけで測った「20 件」は parser 系 5 ファイルに限った数字だった)。
 3. **各必須 fixture に判別オラクルを 1 行で明記する。** 「どの経路を通るか」ではなく「**実装が誤っていたら、どの観測値がどう変わるか**」を書く。書けないものは smoke test であって pin ではないと明示する。検証は mutant を実際に当てて kill されるかで行うのが最も確実 (索引を空にする / tie-break を反転する / 境界を 1 つ落とす / 分岐を削除する)。
    **入力と出力が恒等になるケースは原理的に判別力ゼロ**: 「解決に成功した」場合と「解決されず素通しした」場合が同じ値を返す入力 (衝突していない ID など) は、経路に到達しても何も pin しない。経路到達を根拠に必須リストへ入れてはならない。
-4. **報告自身が確立した恒等・到達不能証明を、報告内の全下流成果物に機械的に突き合わせる。** 同じ調査で「この分岐は到達不能」「この関数は恒等写像」を証明したなら:
+4. **報告自身が確立した恒等・到達不能証明を、報告内の全下流成果物に機械的に突き合わせる。** 突き合わせ対象は fixture と正当化コメントだけでなく、**`docs/` / `specs/` の新規散文・upgrade note・PR 本文**を含む (チェック 12-B step 5)。同じ調査で「この分岐は到達不能」「この関数は恒等写像」を証明したなら:
    - その関数の本体を通す必須 fixture は判別オラクルを持てない → リストから外すか「判別力なしの regression guard」と明示する
    - 設計の正当化が dead な分岐の挙動を根拠にしていないか (「この構成にしないと `matches.length` の判定が壊れる」等) を再検査する。dead な分岐は壊れようがないので、その正当化は成立しない
    - 証明はコード側の当該行にも 1 行残す。報告と PR 本文にしかないと、次の読者はその分岐を生きているものとして読む
@@ -349,6 +492,20 @@ artgraph は自身の `tests/` / `tests/fixtures/**` / `examples/**` を dogfood
 
 パターンを実際にロードして ACCEPTED / REJECTED を確認し、結果を Step 0-pre 報告と PR 本文の該当箇所に書く。regex を新規に考案する場面では、`(?:[a-z]+/){1,2}` のような「内側の量指定子 + 外側の量指定子」の形は ReDoS 検出に弾かれるため、素直な文字クラス 1 個 (`^([A-Za-z0-9/_-]+):` 等) の方が通る。
 
+### 24. 抑制する signal の retention 監査 (どこにも残らない入力クラスの数え上げ)
+
+変更の目的が「ノイズの抑制」(hash 前の正規化・除去、drift の suppress、警告の間引き、免除述語の導入) である場合、抑制は**情報の削除**でもある。チェック 4 は gate が誤って green になる経路を追い、チェック 2 は消費側の意味論を問うが、どちらも「消した signal がどこにも残らない入力クラスがあるか」を問わない。以下を実行する:
+
+1. **抑制する signal を 1 語で定義する** (例: 「GFM checkbox の状態」)。
+2. **変更後にその signal を保持する場所を全部列挙する。** ノード種別 × lock エントリ × 出力面 (JSON / serve / text) の表にする。「別のノードに残る」型の緩和を主張する場合は、**そのノードが lock 対象か**をチェック 2 の結果 (`buildLockFromGraph` の kind フィルタが正) で確認する — lock に乗らないノードは drift 経路に現れないので、drift の代替にはならない。
+3. **どこにも残らない入力クラスを構成して数える。** step 2 の表が全部 × になる入力形状を実際に作り、実コーパスでの件数を測る。判定オラクル: その入力クラスで signal を変えて `check --format json` を取り、`drifted` / `newIssues` / `coverage[].status` / `orphans` のどれも動かないことを確認する (= 完全な沈黙)。**この判定は「signal を 1 つ失った」形だけでなく「同じ対象に別の signal がまだ残っている」形にも当てる** — 冗長性があるとその 1 件の喪失はどの出力面にも現れない。
+4. **両方向で測る。** 抑制は対称なので、signal を「付ける」方向だけでなく「**外す**」方向も測る (サインオフ済みチェックリストを全部空にする、タグを外す)。旧挙動で検知されていた信号が消える方向の方が実害が大きい。
+5. 空になった入力クラスがあれば、(a) docs で開示する、(b) opt-out を用意するか「無い」と明記する、(c) 抑制の適用範囲をそのクラスだけ狭める、のいずれかを設計判断として選び、根拠を書く。
+
+抑制を導入しない変更ではスキップしてよい。
+
+前例: PR #417 (issue #235) — doc hash から checkbox 状態を落とす緩和で、「状態は task ノードで見える」が緩和の根拠に使われた。しかし task ノードは lock エントリにならない (`src/lock.ts:288` が `req`/`doc`/`symbol` 以外を skip) ため、drift 経路には元から現れない。さらに `specs/*/checklists/requirements.md` のような **task ID を持たないチェックリストは doc ノードしか生成しない**ので、その状態はグラフと lock のどこにも残らない — サインオフ済みチェックリストを全部 untick しても `check` が完全に無反応になる。本リポジトリで影響を受ける 36 doc のうち 15 件がこの形。Step 0-pre は構成要素 (task は lock 対象外 / チェックリストが最多) を両方**独立に実測していた**が、合成して「どこにも残らないクラス」を数えていなかった。PR #423 (issue #387) — upgrade note が「`@impl` claim を 1 つ失えば `check` の `UNCOVERED:` に出る」と書いたが、`uncovered` の条件は `implFiles.length === 0` (`src/coverage.ts:112-116`) なので、**同じ requirement に別の claim が残っていれば `check` はまったく反応しない**。step 3 の判定オラクルを「その REQ に別の claim がある」入力クラスへ当てれば出た。この行は Step 0-pre 報告が既に逐語で引用していた。
+
 ## 出力フォーマット
 
 「この primitive を変えると SILENT に破壊される経路」の**ランク付きリスト** (HIGH / MEDIUM / LOW)。各項目:
@@ -364,6 +521,19 @@ artgraph は自身の `tests/` / `tests/fixtures/**` / `examples/**` を dogfood
 **「未実測」のまま breaking change の説明・regression guard テスト・正当化コメントの根拠に使ってはならない。Step 0 (設計) に進む前に fixture による実測へ格上げすること。**
 
 ランクの目安: gate の fail 見逃し = HIGH、非 gate 出力の誤り = MEDIUM、メッセージ/ヒントの劣化 = LOW。
+
+### 主張の記述規約 (全チェック共通)
+
+**(f) 形状主張には fixture の逐語バイト列と、形状の正の対照を付ける。**
+「形状 X は Y する / しない」型の主張には、(i) 使った入力の**逐語バイト列** (改行・空白を含む)、(ii) その入力が本当に X を構成していることの**正の対照 assert** を併記する。例: 「listItem の `children[0]` が paragraph でない形」なら、`children[0].type !== "paragraph"` を実際に assert する。この対照が無い主張は、後段が「同じ形状」を別の綴りで測って正反対の結論を出し、しかもどちらの測定も正しい、という事故を起こす。
+
+**(g) 定量主張には計数定義・測定範囲・再導出コマンド・測定時点を付ける。**
+「N 箇所」「N 件」型の主張には (i) **何を 1 件と数えたか**の定義 (マッチ数 / エッジ数 / ファイル数 は別物)、(ii) **測定範囲** (対象ファイル集合。フルスイートか、特定サブシステムか)、(iii) 再導出できるコマンド or スクリプトのパス、(iv) 測定時点の commit を付ける。定義や範囲の違う数字が「訂正」として上書きされるのを防ぐ。
+
+**(h) 外部標準の名前を判定基準に使わない。**
+「GFM strict」「POSIX 準拠」のような外部標準を基準として書く場合、その標準の実装がこのリポジトリに**存在するか**を先に確認する (`package.json` の依存、実際に有効なプラグイン)。存在しないなら、基準はリポジトリ内の**実際の判定器** (preset 正規表現、既存の述語) の名前で書く。存在しない標準を基準にすると、後段のレビューがその標準への準拠を欠陥として報告し、メタレビューで撤回されるという往復が発生する。
+
+前例: PR #417 (issue #235) — (i) 「listItem の先頭子が paragraph でない形」の再現数が段ごとに 6 → 6 → 4 → 5 と動いた。あるレビュー段は thematic break を `- ***` で測り (task ノードが生成される = 形状成立)、別の段は `- ---` で測って「再現しない」と報告したが、`- ---` は 4 ダッシュ = **root 直下の thematic break** で list item にすらならない (形状を構成していない fixture)。結果、誤った訂正が issue #420 の authoritative な NOTE として一度公開された。(ii) 「正規化が発火した箇所数」が 744 / 743 / 737 と 3 通り公表された。事後の独立測定では行 regex 形の ticked list item が 743、実際のガード発火が 737 (差 6 = fenced code 内)、bracket-state 総数が 1063 — **744 はどの定義とも一致しない**。結論 (全部同じ扱い) は正しかったため、計数の誤りは 3 段すべてを素通りした。(iii) 「GFM strict」を無定義で使ったため、後段が「JS の `\s` は GFM より緩い」を欠陥として報告し、メタレビューが「remark-gfm は未使用なので GFM はこのパーサの契約ではない」と全面撤回する往復が発生した。PR #423 (issue #387) — 「62 マッチ = 52 + 10」がマッチ数とエッジ数を混ぜており、正しくは 63 マッチ (53 + 10) / 62 エッジ (52 + 2 + 8)。conjunct mutation の「20 件」と「68 件」の食い違いも、両者の**測定範囲**が parser 系 5 ファイルとフルスイートで違っただけだった。
 
 ## フィードバックループ (Step 9 retro との接続)
 
