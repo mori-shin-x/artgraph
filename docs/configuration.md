@@ -258,6 +258,89 @@ Rules:
   is why nothing is excluded by default and `artgraph integrate speckit` does
   not write this setting for you.
 
+## Code tags — where an `@impl` counts <a id="code-tags-where-an-impl-counts"></a>
+
+**An `@impl` is a tag only when it opens a line comment (issue #387).** The
+comment may start with any number of slashes and the tag may be preceded by
+in-line whitespace, so all of these register:
+
+```ts
+// @impl REQ-001
+//@impl REQ-002
+/// @impl REQ-003
+  // @impl REQ-004      ← indentation is fine; it is outside the comment
+```
+
+Everything else that merely *contains* the same characters does not:
+
+```ts
+const doc = "// @impl REQ-900";                  // string / template / JSX text
+/* @impl REQ-901 */                              // block & JSDoc comments
+// Issue #214: `// @impl A, B` used to drop B    // prose quoting the syntax
+// TODO: @impl REQ-902                           // tag not at the comment start
+```
+
+The reasoning is that a tag is a *claim about this file*, while a sentence
+that quotes the notation is *documentation about the notation*. Without the
+distinction, every code comment, test fixture, and doc snippet that spells out
+the syntax silently became a claim.
+
+This rule can only be applied where artgraph actually has comment spans, and
+there are two ways it ends up without any. A file that is never handed to the
+parser (`pathological-bracket-nesting`, which is skipped deliberately) and a
+file whose parse throws both fall back to the plain text scan, so their tags
+register as they did before. That is a documented **fail-open**, not a
+guarantee.
+
+The opposite case exists too and predates this rule: for a few inputs the
+parser returns successfully but reports *no comments at all* — an unterminated
+block comment, string, or template literal, or a tag sharing its line with a
+hashbang. An empty comment list is still a list, so the rule does run, finds no
+comment to open, and every tag in that file is rejected. That **fail-closed**
+behaviour is unchanged by the rule above (it is the same before and after) and
+is tracked separately.
+
+### Upgrade note
+
+A tag that used to be picked up out of the *middle* of a comment no longer is.
+Concretely, that means a comment that opens with prose and then quotes the
+notation:
+
+```diff
+-// see below // @impl REQ-001
++// @impl REQ-001
++// see below
+```
+
+(A tag merely preceded by prose with no second `//` — `// TODO: @impl REQ-001`
+— is unaffected, because it never registered: `@impl` is recognized only
+immediately after a `//`.)
+
+How loudly a lost claim surfaces depends on whether the requirement had
+another one. If it was the requirement's **only** claim, the requirement turns
+up in `artgraph check`'s `UNCOVERED:` list and a plain `artgraph check --gate`
+— the blocking Spec Kit `before_implement` hook, if you opted into it — goes
+red. If the requirement is claimed somewhere else too, `check` reports nothing
+at all: coverage still says `impl-only`, the lock does not drift, and the only
+visible trace is that `artgraph impact <file>` on the file that lost the tag no
+longer reaches that requirement.
+
+Note also that the gates `artgraph init` wires up by default stay green either
+way: the agent Stop hook (`check --gate --diff`) and the CI recipe
+(`check --diff --base origin/<base> --gate`) both exclude pre-existing debt
+from the verdict, and a claim lost to this upgrade is pre-existing debt
+relative to the change being judged.
+
+So do not rely on a gate to find these. Grep for the shape directly — a
+comment with a second `//` before the tag is the only one affected:
+
+```console
+$ git grep -nE '//.*//[^\S\n]*@impl'
+```
+
+then run a plain `artgraph check` to see which of the requirements involved
+lost their last claim.
+
 ## `docGraph` — doc nodes and their relations
 
 Doc nodes (one per markdown file under `specDirs`) and their relations can be

@@ -155,6 +155,17 @@ interface IdMatchers {
   testAnnotationRe: RegExp;
 }
 
+// Single source of truth for "in-line whitespace" — any whitespace except a
+// newline. `implRe` (below) and `TAG_COMMENT_PREFIX_RE` (issue #387, near
+// `matchOpensLineComment`) MUST share it: the prefix guard re-validates the
+// exact separator `implRe` already accepted, so a narrower class there
+// (`[ \t]`, say) silently drops tags that genuinely DO open their comment —
+// `//<U+00A0>@impl REQ-1` and `//<U+3000>@impl REQ-1` are the measured cases.
+// Same discovery/rewriting-parity idiom as src/grammar/tokens.ts.
+// `docs/configuration.md`'s "the tag may be preceded by in-line whitespace"
+// is this class, verbatim.
+const INLINE_WS = "[^\\S\\n]";
+
 // For codeId, the whole match is the ID, so the constructed matchers below rely
 // on the token having no significance beyond what it matches.
 //
@@ -168,7 +179,10 @@ interface IdMatchers {
 function buildIdMatchers(codeId?: string): IdMatchers {
   const token = codeId ?? NAMESPACED_ID_TOKEN;
   return {
-    implRe: new RegExp(`//[^\\S\\n]*@impl[^\\S\\n]+((?:(?:${token})(?:[^\\S\\n]|,)*)+)`, "gm"),
+    implRe: new RegExp(
+      `//${INLINE_WS}*@impl${INLINE_WS}+((?:(?:${token})(?:${INLINE_WS}|,)*)+)`,
+      "gm",
+    ),
     reqIdRe: new RegExp(token, "g"),
     testReqRe: new RegExp(`\\[(?:${token})]`, "g"),
     testAnnotationRe: new RegExp(`req:\\s*["']?(${token})["']?`, "g"),
@@ -1030,7 +1044,9 @@ function parseTSFile(
         `pathological bracket nesting depth ${depth} exceeds ${limit}; skipped parsing ` +
         `"${relPath}" to avoid a native oxc-parser crash (issue #247). No symbols or imports ` +
         "were extracted from this file; text-scanned tags (`@impl` comments, `[REQ-…]` test " +
-        "titles) are still honored.",
+        "titles) are still honored — including ones an ordinarily-parsed file would reject " +
+        "(a quoted `@impl` in a string or mid-comment), since the comment spans needed to tell " +
+        "them apart are exactly what the skipped parse would have produced.",
     });
   }
 
@@ -2801,13 +2817,18 @@ function extractImplTags(
 
   implRe.lastIndex = 0;
   while ((match = implRe.exec(content)) !== null) {
-    // D6: a `// @impl …` counts only when its `//` is a REAL line comment. The
+    // D6: a `// @impl …` counts only when it OPENS a REAL line comment. The
     // same text inside a string / template / JSX attribute (no comment span at
     // all) or inside a block/JSDoc comment (e.g. a backtick-quoted `// @impl`
-    // in docs, type "Block") is not a tag and must not emit an edge. `comments`
-    // is undefined only for pathological unparseable input; there we keep the
+    // in docs, type "Block") is not a tag and must not emit an edge; neither is
+    // one quoted PART-WAY THROUGH a line comment (issue #387). `comments` is
+    // undefined only for pathological unparseable input; there we keep the
     // regex-only behavior so a broken file's tags still survive.
-    if (comments && !matchInLineComment(comments, match.index)) continue;
+    //
+    // `match.index` is the `//` the regex itself matched; the tag proper starts
+    // at the first `@` of that match (the ID grammar contains no `@`).
+    const tagIndex = match.index + match[0].indexOf("@");
+    if (comments && !matchOpensLineComment(comments, content, match.index, tagIndex)) continue;
 
     const reqIds = match[1].match(reqIdRe);
     if (!reqIds) continue;
@@ -2920,13 +2941,56 @@ function resolveSymbolsAtLine(ranges: SymbolRange[], line: number): string[] {
     .map((r) => r.name);
 }
 
-// True when `index` (the `//` offset of an @impl match) lands inside a real
-// LINE comment. Block/JSDoc comments (type "Block") and string / template /
-// JSX-attribute literals (no comment span covering the offset) are excluded,
-// so a `// @impl` appearing there is not treated as a tag (D6).
-function matchInLineComment(comments: readonly OxcComment[], index: number): boolean {
+// issue #387 — what may sit between a line comment's start and the `@` of a
+// tag that OPENS it: the comment's own slashes and in-line whitespace, nothing
+// else. oxc reports a `Line` comment span STARTING at its first `/` (pinned by
+// tests/parser-oxc-canary.test.ts), so `// @impl X` yields the prefix `"// "`,
+// `///` yields `"/// "` and `//@impl X` yields `"//"` — all tags — while
+// prose quoting the syntax (`// Issue #214: \`// @impl X\` used to …`) yields a
+// prefix containing that prose and is rejected. Any leading indentation is
+// OUTSIDE the span and therefore never part of the prefix.
+//
+// The whitespace class is `INLINE_WS`, the same constant `implRe` is built
+// from, and it has to stay that way: this guard re-validates the very
+// separator `implRe` already matched, so anything narrower here rejects tags
+// that DO open their comment (`//<U+00A0>@impl X`, `//<U+3000>@impl X` — both
+// `[^\S\n]`, neither ` ` nor `\t`; pinned in tests/barrel-reexport.test.ts).
+const TAG_COMMENT_PREFIX_RE = new RegExp(`^//+${INLINE_WS}*$`);
+
+// True when the @impl tag at `tagIndex` OPENS a real LINE comment — i.e. the
+// comment containing `matchIndex` (the `//` the regex matched) is of type
+// "Line" and only that comment's own slashes/whitespace precede the tag.
+//
+// Block/JSDoc comments (type "Block") and string / template / JSX-attribute
+// literals (no comment span covering the offset at all) are excluded, so a
+// `// @impl` appearing there is not a tag (D6). A tag quoted mid-comment is
+// excluded too (#387): it is documentation ABOUT the syntax, not a claim about
+// this file. Comment spans never overlap, so the first `Line` comment
+// containing `matchIndex` is the only candidate — its verdict is final.
+//
+// Only the `type !== "Line"` conjunct is currently redundant: a Block
+// comment's prefix starts `/*`, so the prefix test rejects it anyway (measured
+// — deleting that conjunct leaves the whole suite green). It is kept because
+// it states the intent the prefix test only implies, and it is what keeps this
+// correct if that regex is ever relaxed.
+//
+// The CONTAINMENT conjunct is load-bearing, and in the false-NEGATIVE
+// direction: this loop `return`s on the first comment that passes the filter,
+// so without containment every tag in the file is judged against the FIRST
+// `Line` comment instead of its own. The slice then spans from that comment's
+// start all the way to the tag, dragging the intervening source into the
+// prefix, and every genuine tag in a later comment is rejected. Measured:
+// deleting it reddens tests across the parser, check, impact, plan-coverage
+// and trace suites.
+function matchOpensLineComment(
+  comments: readonly OxcComment[],
+  content: string,
+  matchIndex: number,
+  tagIndex: number,
+): boolean {
   for (const c of comments) {
-    if (c.type === "Line" && index >= c.start && index < c.end) return true;
+    if (c.type !== "Line" || matchIndex < c.start || matchIndex >= c.end) continue;
+    return TAG_COMMENT_PREFIX_RE.test(content.slice(c.start, tagIndex));
   }
   return false;
 }

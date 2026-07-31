@@ -143,7 +143,17 @@ export interface ParseCacheData {
 // `computeCacheFingerprint` folds in `artgraphVersion()`, but that only
 // cold-invalidates across a release: within one package version (a PR's own
 // dogfood runs, CI vs. a local checkout) nothing else would.
-const SCHEMA_VERSION = 9;
+// v10 (issue #387): an `@impl` now counts only when it OPENS a line comment,
+// so a tag QUOTED mid-comment (`// Issue #214: \`// @impl A, B\` used to …`)
+// no longer emits an `implements` edge. A pre-fix fragment for such a file
+// carries those edges baked in, and the md/ts cache key is the file's own
+// content hash — an untouched file HITS, replaying the phantom claims for as
+// long as it is not edited. Measured on this repository: a cache warmed by the
+// pre-fix build and then read by the fixed build reproduced all 8 stale edges
+// (118 orphans) where a cold rebuild of the identical tree yields 110 — the
+// warm ≡ cold divergence (INV-L4) this counter exists to prevent, same
+// rationale as v7/v8/v9.
+const SCHEMA_VERSION = 10;
 const CACHE_RELDIR = join("node_modules", ".cache", "artgraph");
 const CACHE_FILENAME = "parse-cache.json";
 

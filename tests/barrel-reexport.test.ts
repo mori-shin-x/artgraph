@@ -199,6 +199,94 @@ describe("#177 (D6) @impl in strings / templates / JSX / block comments is not a
 });
 
 // ---------------------------------------------------------------------------
+// (issue #387) a tag counts only when it OPENS the line comment
+// ---------------------------------------------------------------------------
+
+// The `@impl` token, assembled at runtime. Written split so THIS file's own
+// source never contains a contiguous `@impl` preceded by `//` inside one of
+// its OWN comments: artgraph dogfoods itself, and such a comment would now
+// register as a real code tag on this test file (that is exactly the
+// self-pollution issue #387 is about). Same split convention as
+// tests/parser-oxc-canary.test.ts's `fixtureTestTag`.
+const IMPL = "@" + "impl";
+
+describe("#387 @impl counts only when it opens the line comment", () => {
+  it("ignores a quoted tag INSIDE a line comment but keeps one that opens a comment", () => {
+    // The dogfood shape this guard exists for: prose documenting the tag
+    // syntax lives in a real `Line` comment, so "is this a line comment?"
+    // alone accepts it and registers REQ-920 / REQ-921 as claims about this
+    // file. Only "does the tag OPEN the comment?" rejects it.
+    //
+    // The second line is the mandatory positive control: a genuine tag in the
+    // very same file must survive. Without it the first two assertions would
+    // also pass for a guard that rejects every tag unconditionally.
+    makeRepo({
+      "src/prose.ts":
+        `// Issue #214: \`// ${IMPL} REQ-920, REQ-921\` used to register only the FIRST ID\n` +
+        `// ${IMPL} REQ-922\n` +
+        "export function real() {\n  return 1;\n}\n",
+    });
+    const frag = parseOne("src/prose.ts");
+    expect(implSourcesFor(frag, "REQ-920")).toEqual([]);
+    expect(implSourcesFor(frag, "REQ-921")).toEqual([]);
+    expect(implSourcesFor(frag, "REQ-922")).toEqual(["symbol:src/prose.ts#real"]);
+  });
+
+  it("accepts `///`, no-space and indented/tabbed tags; rejects a second `//` mid-comment", () => {
+    // Boundary sweep over what may precede the tag inside the comment span.
+    // oxc's `Line` comment span STARTS at the first `/`, so the only thing a
+    // genuine tag may have in front of it is the comment's own slashes plus
+    // in-line whitespace: `///` (triple slash) and `//@impl` (no space) are
+    // ordinary tags and must keep working, while a second `//` further along
+    // the same comment is prose quoting the syntax and must not.
+    makeRepo({
+      "src/forms.ts":
+        `/// ${IMPL} REQ-930\n` +
+        "export function tripleSlash() {\n  return 1;\n}\n\n" +
+        `//${IMPL} REQ-931\n` +
+        "export function noSpace() {\n  return 1;\n}\n\n" +
+        `  //\t${IMPL} REQ-932\n` +
+        "export function tabbed() {\n  return 1;\n}\n\n" +
+        `// see below // ${IMPL} REQ-933\n` +
+        "export function proseOnly() {\n  return 1;\n}\n",
+    });
+    const frag = parseOne("src/forms.ts");
+    expect(implSourcesFor(frag, "REQ-930")).toEqual(["symbol:src/forms.ts#tripleSlash"]);
+    expect(implSourcesFor(frag, "REQ-931")).toEqual(["symbol:src/forms.ts#noSpace"]);
+    expect(implSourcesFor(frag, "REQ-932")).toEqual(["symbol:src/forms.ts#tabbed"]);
+    expect(implSourcesFor(frag, "REQ-933")).toEqual([]);
+  });
+
+  it("accepts every in-line whitespace `implRe` accepts (NBSP, ideographic space) yet still rejects prose", () => {
+    // The separator class is a SHARED invariant: `implRe` matches `//` +
+    // `[^\S\n]*` + the tag, so a prefix guard that re-validates that same
+    // separator with a NARROWER class (e.g. `[ \t]`) silently drops tags that
+    // genuinely DO open their comment. Written with `\u…` escapes so the
+    // fixture's exact bytes are visible in the source:
+    //   U+00A0 NO-BREAK SPACE, U+3000 IDEOGRAPHIC SPACE.
+    // Both are `[^\S\n]` but neither is ` ` or `\t`.
+    //
+    // The third line is the contrast that keeps the first two honest: a guard
+    // widened all the way to "anything" would accept REQ-940/941 AND the prose
+    // line, so REQ-942 must stay rejected — the #387 narrowing is unaffected
+    // by which whitespace class the guard uses.
+    makeRepo({
+      "src/ws.ts":
+        `//\u00A0${IMPL} REQ-940\n` +
+        "export function nbsp() {\n  return 1;\n}\n\n" +
+        `//\u3000${IMPL} REQ-941\n` +
+        "export function ideographic() {\n  return 1;\n}\n\n" +
+        `// see also //\u00A0${IMPL} REQ-942\n` +
+        "export function proseWithNbsp() {\n  return 1;\n}\n",
+    });
+    const frag = parseOne("src/ws.ts");
+    expect(implSourcesFor(frag, "REQ-940")).toEqual(["symbol:src/ws.ts#nbsp"]);
+    expect(implSourcesFor(frag, "REQ-941")).toEqual(["symbol:src/ws.ts#ideographic"]);
+    expect(implSourcesFor(frag, "REQ-942")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (D1) a leading tag binds to EVERY sibling binding of one declaration
 // ---------------------------------------------------------------------------
 
