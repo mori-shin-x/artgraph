@@ -316,15 +316,30 @@ notation:
 — is unaffected, because it never registered: `@impl` is recognized only
 immediately after a `//`.)
 
-How loudly a lost claim surfaces depends on **which** gate you run. It always
-appears in `artgraph check`'s `UNCOVERED:` list, and a plain
-`artgraph check --gate` — the blocking Spec Kit `before_implement` hook, if you
-opted into it — goes red. The gates `artgraph init` wires up by default do
-**not**: the agent Stop hook (`check --gate --diff`) and the CI recipe
+How loudly a lost claim surfaces depends on whether the requirement had
+another one. If it was the requirement's **only** claim, the requirement turns
+up in `artgraph check`'s `UNCOVERED:` list and a plain `artgraph check --gate`
+— the blocking Spec Kit `before_implement` hook, if you opted into it — goes
+red. If the requirement is claimed somewhere else too, `check` reports nothing
+at all: coverage still says `impl-only`, the lock does not drift, and the only
+visible trace is that `artgraph impact <file>` on the file that lost the tag no
+longer reaches that requirement.
+
+Note also that the gates `artgraph init` wires up by default stay green either
+way: the agent Stop hook (`check --gate --diff`) and the CI recipe
 (`check --diff --base origin/<base> --gate`) both exclude pre-existing debt
 from the verdict, and a claim lost to this upgrade is pre-existing debt
-relative to the change being judged, so they stay green. Run a plain
-`artgraph check` once after upgrading rather than relying on the wired gates.
+relative to the change being judged.
+
+So do not rely on a gate to find these. Grep for the shape directly — a
+comment with a second `//` before the tag is the only one affected:
+
+```console
+$ git grep -nE '//.*//[^\S\n]*@impl'
+```
+
+then run a plain `artgraph check` to see which of the requirements involved
+lost their last claim.
 
 ## `docGraph` — doc nodes and their relations
 
