@@ -256,6 +256,34 @@ describe("#387 @impl counts only when it opens the line comment", () => {
     expect(implSourcesFor(frag, "REQ-932")).toEqual(["symbol:src/forms.ts#tabbed"]);
     expect(implSourcesFor(frag, "REQ-933")).toEqual([]);
   });
+
+  it("accepts every in-line whitespace `implRe` accepts (NBSP, ideographic space) yet still rejects prose", () => {
+    // The separator class is a SHARED invariant: `implRe` matches `//` +
+    // `[^\S\n]*` + the tag, so a prefix guard that re-validates that same
+    // separator with a NARROWER class (e.g. `[ \t]`) silently drops tags that
+    // genuinely DO open their comment. Written with `\u…` escapes so the
+    // fixture's exact bytes are visible in the source:
+    //   U+00A0 NO-BREAK SPACE, U+3000 IDEOGRAPHIC SPACE.
+    // Both are `[^\S\n]` but neither is ` ` or `\t`.
+    //
+    // The third line is the contrast that keeps the first two honest: a guard
+    // widened all the way to "anything" would accept REQ-940/941 AND the prose
+    // line, so REQ-942 must stay rejected — the #387 narrowing is unaffected
+    // by which whitespace class the guard uses.
+    makeRepo({
+      "src/ws.ts":
+        `//\u00A0${IMPL} REQ-940\n` +
+        "export function nbsp() {\n  return 1;\n}\n\n" +
+        `//\u3000${IMPL} REQ-941\n` +
+        "export function ideographic() {\n  return 1;\n}\n\n" +
+        `// see also //\u00A0${IMPL} REQ-942\n` +
+        "export function proseWithNbsp() {\n  return 1;\n}\n",
+    });
+    const frag = parseOne("src/ws.ts");
+    expect(implSourcesFor(frag, "REQ-940")).toEqual(["symbol:src/ws.ts#nbsp"]);
+    expect(implSourcesFor(frag, "REQ-941")).toEqual(["symbol:src/ws.ts#ideographic"]);
+    expect(implSourcesFor(frag, "REQ-942")).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

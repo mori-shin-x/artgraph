@@ -809,11 +809,18 @@ describe("oxc regression: BOM / export-from / syntax errors (R9–R11)", () => {
       "src/broken.test.ts",
       'import { t } from "./target.js";\ndescribe("[BRK-001] broken", () => {\nconst y = ;\n',
     );
-    // issue #387 — the OTHER "the AST is unusable" state. A syntax error
-    // empties `program.body` but oxc still hands back `comments`, so unlike a
-    // depth-guard skip (see tests/parser-oxc-canary.test.ts) the tag guard
-    // DOES run here and must reject a quoted tag while keeping the genuine
-    // one. Split-written for the same dogfood reason as elsewhere.
+    // issue #387 — the OTHER "the AST is unusable" state. For THIS fixture's
+    // error (`const x = ;`, a bad expression discovered after every comment
+    // has already been lexed) oxc empties `program.body` yet still hands back
+    // `comments`, so unlike a depth-guard skip (see
+    // tests/parser-oxc-canary.test.ts) the tag guard DOES run here and must
+    // reject a quoted tag while keeping the genuine one.
+    //
+    // Not a general property of syntax errors: an error that breaks LEXING
+    // instead — an unterminated block comment / string / template literal —
+    // makes oxc return `comments: []`, and the guard then rejects every tag in
+    // that file (docs/configuration.md, "Code tags — where an `@impl`
+    // counts"). Split-written for the same dogfood reason as elsewhere.
     const implTag = "@" + "impl";
     write(
       root,

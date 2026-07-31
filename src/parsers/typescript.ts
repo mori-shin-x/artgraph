@@ -155,6 +155,17 @@ interface IdMatchers {
   testAnnotationRe: RegExp;
 }
 
+// Single source of truth for "in-line whitespace" — any whitespace except a
+// newline. `implRe` (below) and `TAG_COMMENT_PREFIX_RE` (issue #387, near
+// `matchOpensLineComment`) MUST share it: the prefix guard re-validates the
+// exact separator `implRe` already accepted, so a narrower class there
+// (`[ \t]`, say) silently drops tags that genuinely DO open their comment —
+// `//<U+00A0>@impl REQ-1` and `//<U+3000>@impl REQ-1` are the measured cases.
+// Same discovery/rewriting-parity idiom as src/grammar/tokens.ts.
+// `docs/configuration.md`'s "the tag may be preceded by in-line whitespace"
+// is this class, verbatim.
+const INLINE_WS = "[^\\S\\n]";
+
 // For codeId, the whole match is the ID, so the constructed matchers below rely
 // on the token having no significance beyond what it matches.
 //
@@ -168,7 +179,10 @@ interface IdMatchers {
 function buildIdMatchers(codeId?: string): IdMatchers {
   const token = codeId ?? NAMESPACED_ID_TOKEN;
   return {
-    implRe: new RegExp(`//[^\\S\\n]*@impl[^\\S\\n]+((?:(?:${token})(?:[^\\S\\n]|,)*)+)`, "gm"),
+    implRe: new RegExp(
+      `//${INLINE_WS}*@impl${INLINE_WS}+((?:(?:${token})(?:${INLINE_WS}|,)*)+)`,
+      "gm",
+    ),
     reqIdRe: new RegExp(token, "g"),
     testReqRe: new RegExp(`\\[(?:${token})]`, "g"),
     testAnnotationRe: new RegExp(`req:\\s*["']?(${token})["']?`, "g"),
@@ -2935,7 +2949,13 @@ function resolveSymbolsAtLine(ranges: SymbolRange[], line: number): string[] {
 // prose quoting the syntax (`// Issue #214: \`// @impl X\` used to …`) yields a
 // prefix containing that prose and is rejected. Any leading indentation is
 // OUTSIDE the span and therefore never part of the prefix.
-const TAG_COMMENT_PREFIX_RE = /^\/\/+[ \t]*$/;
+//
+// The whitespace class is `INLINE_WS`, the same constant `implRe` is built
+// from, and it has to stay that way: this guard re-validates the very
+// separator `implRe` already matched, so anything narrower here rejects tags
+// that DO open their comment (`//<U+00A0>@impl X`, `//<U+3000>@impl X` — both
+// `[^\S\n]`, neither ` ` nor `\t`; pinned in tests/barrel-reexport.test.ts).
+const TAG_COMMENT_PREFIX_RE = new RegExp(`^//+${INLINE_WS}*$`);
 
 // True when the @impl tag at `tagIndex` OPENS a real LINE comment — i.e. the
 // comment containing `matchIndex` (the `//` the regex matched) is of type
@@ -2948,11 +2968,20 @@ const TAG_COMMENT_PREFIX_RE = /^\/\/+[ \t]*$/;
 // this file. Comment spans never overlap, so the first `Line` comment
 // containing `matchIndex` is the only candidate — its verdict is final.
 //
-// The `type`/containment tests are deliberately kept even though the prefix
-// test alone now decides every case measured (a Block comment's prefix starts
-// `/*` and a tag outside the span drags the intervening text into the prefix,
-// so both are already rejected): they state the intent the prefix test only
-// implies, and they are what keeps this correct if that regex is ever relaxed.
+// Only the `type !== "Line"` conjunct is currently redundant: a Block
+// comment's prefix starts `/*`, so the prefix test rejects it anyway (measured
+// — deleting that conjunct leaves the whole suite green). It is kept because
+// it states the intent the prefix test only implies, and it is what keeps this
+// correct if that regex is ever relaxed.
+//
+// The CONTAINMENT conjunct is load-bearing, and in the false-NEGATIVE
+// direction: this loop `return`s on the first comment that passes the filter,
+// so without containment every tag in the file is judged against the FIRST
+// `Line` comment instead of its own. The slice then spans from that comment's
+// start all the way to the tag, dragging the intervening source into the
+// prefix, and every genuine tag in a later comment is rejected. Measured:
+// deleting it reddens tests across the parser, check, impact, plan-coverage
+// and trace suites.
 function matchOpensLineComment(
   comments: readonly OxcComment[],
   content: string,

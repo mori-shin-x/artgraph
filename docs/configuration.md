@@ -285,25 +285,46 @@ that quotes the notation is *documentation about the notation*. Without the
 distinction, every code comment, test fixture, and doc snippet that spells out
 the syntax silently became a claim.
 
-One exception, by design: a file artgraph could not hand to the parser at all
-(`pathological-bracket-nesting`) has no comment spans to check, so its tags are
-still text-scanned as before — a documented fail-open, not a guarantee.
+This rule can only be applied where artgraph actually has comment spans, and
+there are two ways it ends up without any. A file that is never handed to the
+parser (`pathological-bracket-nesting`, which is skipped deliberately) and a
+file whose parse throws both fall back to the plain text scan, so their tags
+register as they did before. That is a documented **fail-open**, not a
+guarantee.
+
+The opposite case exists too and predates this rule: for a few inputs the
+parser returns successfully but reports *no comments at all* — an unterminated
+block comment, string, or template literal, or a tag sharing its line with a
+hashbang. An empty comment list is still a list, so the rule does run, finds no
+comment to open, and every tag in that file is rejected. That **fail-closed**
+behaviour is unchanged by the rule above (it is the same before and after) and
+is tracked separately.
 
 ### Upgrade note
 
-If a tag was written part-way through a comment — `// TODO: @impl REQ-001`,
-or a tag appended after prose — it no longer registers. Move it to the start of
-its own comment line:
+A tag that used to be picked up out of the *middle* of a comment no longer is.
+Concretely, that means a comment that opens with prose and then quotes the
+notation:
 
 ```diff
--// TODO: @impl REQ-001
+-// see below // @impl REQ-001
 +// @impl REQ-001
-+// TODO: …
++// see below
 ```
 
-This change is **fail-loud**: a requirement that loses its only claim this way
-shows up in `artgraph check`'s `UNCOVERED:` list and turns `check --gate` red,
-so it cannot pass unnoticed.
+(A tag merely preceded by prose with no second `//` — `// TODO: @impl REQ-001`
+— is unaffected, because it never registered: `@impl` is recognized only
+immediately after a `//`.)
+
+How loudly a lost claim surfaces depends on **which** gate you run. It always
+appears in `artgraph check`'s `UNCOVERED:` list, and a plain
+`artgraph check --gate` — the blocking Spec Kit `before_implement` hook, if you
+opted into it — goes red. The gates `artgraph init` wires up by default do
+**not**: the agent Stop hook (`check --gate --diff`) and the CI recipe
+(`check --diff --base origin/<base> --gate`) both exclude pre-existing debt
+from the verdict, and a claim lost to this upgrade is pre-existing debt
+relative to the change being judged, so they stay green. Run a plain
+`artgraph check` once after upgrading rather than relying on the wired gates.
 
 ## `docGraph` — doc nodes and their relations
 

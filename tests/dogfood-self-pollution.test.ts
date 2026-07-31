@@ -28,15 +28,51 @@
 // intentional pairs, say) rather than deleted — the point is that a leak has
 // to be argued for, not merely not-noticed.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { resolve } from "node:path";
 import { buildGraph } from "../src/graph/builder.js";
 import { loadConfig } from "../src/config.js";
+import type { ArtifactGraph } from "../src/types.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 
+// This builds the graph of the REPOSITORY ITSELF, which means it would also
+// write the repository's real `node_modules/.cache/artgraph/parse-cache.json`.
+// That cache is keyed by file content, not by which binary produced the
+// fragment, so a cache warmed by the test run (`src/`, via vite-node) is then
+// READ by the CLI (`dist/`) — the same src-vs-dist replay hazard (INV-L4) that
+// made issue #387 bump SCHEMA_VERSION.
+//
+// Disable the cache for the duration of THIS FILE only: vitest reuses a worker
+// process across files, and several suites (tests/barrel-reexport.test.ts's
+// INV-L4 pair among them) require the cache to be live, so the flag is
+// restored in `afterAll` rather than left set.
+//
+// This is not the only self-scanning suite — tests/plan-coverage-dogfood.test.ts
+// builds the repo graph too and still warms that cache (measured). Closing
+// that one is out of scope here; it predates issue #387.
+let previousCacheEnv: string | undefined;
+
 describe("dogfood self-pollution (#387)", () => {
-  const { graph } = buildGraph(REPO_ROOT, loadConfig(REPO_ROOT));
+  let graph: ArtifactGraph;
+
+  // Built in `beforeAll`, not in the describe body: at collection time a throw
+  // from `loadConfig` / `buildGraph` is reported as a FILE-COLLECTION error
+  // rather than a test failure, which hides which invariant broke.
+  beforeAll(() => {
+    previousCacheEnv = process.env.ARTGRAPH_CACHE;
+    process.env.ARTGRAPH_CACHE = "0";
+    graph = buildGraph(REPO_ROOT, loadConfig(REPO_ROOT)).graph;
+    // Cheap insurance that the build below is a real one. The per-test
+    // preconditions are about specific edge kinds; this one catches the case
+    // where the scan pool collapsed entirely.
+    expect(graph.nodes.size).toBeGreaterThan(0);
+  });
+
+  afterAll(() => {
+    if (previousCacheEnv === undefined) delete process.env.ARTGRAPH_CACHE;
+    else process.env.ARTGRAPH_CACHE = previousCacheEnv;
+  });
 
   it("no code-tag `verifies` edge resolves to a real requirement node", () => {
     const codeTagVerifies = graph.edges.filter(
