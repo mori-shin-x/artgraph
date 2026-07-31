@@ -59,6 +59,11 @@ describe("dogfood self-pollution (#387)", () => {
   // Built in `beforeAll`, not in the describe body: at collection time a throw
   // from `loadConfig` / `buildGraph` is reported as a FILE-COLLECTION error
   // rather than a test failure, which hides which invariant broke.
+  // The explicit timeout is required, not defensive: `testTimeout: 30000` in
+  // vitest.config.ts does not cover hooks, which keep vitest's 10s default.
+  // Scanning this whole repository cold takes a few seconds locally and 13s+ on
+  // a loaded CI runner, so the default kills this hook there while every local
+  // run passes. Same trap vitest.e2e.config.ts documents for its own hooks.
   beforeAll(() => {
     previousCacheEnv = process.env.ARTGRAPH_CACHE;
     process.env.ARTGRAPH_CACHE = "0";
@@ -67,7 +72,7 @@ describe("dogfood self-pollution (#387)", () => {
     // preconditions are about specific edge kinds; this one catches the case
     // where the scan pool collapsed entirely.
     expect(graph.nodes.size).toBeGreaterThan(0);
-  });
+  }, 120_000);
 
   afterAll(() => {
     if (previousCacheEnv === undefined) delete process.env.ARTGRAPH_CACHE;
