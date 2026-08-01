@@ -112,7 +112,10 @@ export type DoctorFindingKind =
   /**
    * issue #422 — an SDD tool keeps its specs in a directory (`.kiro/specs`,
    * `.specify/specs`) that exists on disk but that no `specDirs` entry
-   * covers, so every requirement in it is invisible to `scan` / `check`.
+   * covers, so any requirement under it that no entry reaches is invisible to
+   * `scan` / `check`. An entry naming a SUBdirectory of it counts as
+   * uncovered, and correctly so — that configuration scans one spec and
+   * silently drops its siblings.
    * `init` seeds the entry for new projects, but `init --force` deliberately
    * MERGES an existing config rather than re-deriving `specDirs` (that is
    * what preserves hand-edited values), so a project initialized before
@@ -441,7 +444,13 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
         path: ".artgraph.json",
         expected: `"specDirs" covering ${tool.specDir}`,
         actual: `specDirs = ${JSON.stringify(config.specDirs)}`,
-        message: `${tool.name} keeps its specs in ${tool.specDir}/, but no "specDirs" entry in .artgraph.json covers it — those requirements are invisible to \`artgraph scan\` / \`check\`. Add "${tool.specDir}" to "specDirs" (\`init\` seeds it for new projects; \`init --force\` preserves an existing specDirs, so this one needs the edit by hand). Those requirements arrive untagged, so a plain \`check --gate\` can go from 0 to 2 on the next run — see "Behavior change on upgrade" in docs/configuration.md for which gates that reaches. See issue #422.`,
+        // "not fully reachable", not "invisible": an entry naming a
+        // SUBdirectory (`.kiro/specs/auth`) leaves that one spec scanned and
+        // its siblings unscanned, and `specDirsCover` — exact match or
+        // ancestor — correctly reports the tool's directory as uncovered in
+        // that case too. Claiming the requirements are invisible would be
+        // false for the specs that are configured.
+        message: `${tool.name} keeps its specs in ${tool.specDir}/, but no "specDirs" entry in .artgraph.json covers that directory — any requirement under it that no entry reaches is invisible to \`artgraph scan\` / \`check\`. Add "${tool.specDir}" to "specDirs" (\`init\` seeds it for new projects; \`init --force\` preserves an existing specDirs, so this one needs the edit by hand). Requirements that appear this way arrive untagged, so a plain \`check --gate\` can go from 0 to 2 on the next run — see "Behavior change on upgrade" in docs/configuration.md for which gates that reaches. See issue #422.`,
       });
     }
   }

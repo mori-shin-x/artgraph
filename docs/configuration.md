@@ -326,9 +326,18 @@ what one of them rewrites the others delete and scaffold.
 Recognition is looser than that, because it reads the parsed heading rather
 than the line: an indented, blockquoted or list-nested `###`, a setext heading
 (`Requirement 1` over `---`), an emphasis-wrapped title (`### **Requirement
-1**`) and a title carrying an HTML entity or comment are all requirements to
-`scan` / `check`, but `rename` leaves them untouched and reports success. None
-of these shapes occurred in the 62-file, 551-heading corpus behind the
+1**`) and an HTML entity or comment inside the `Requirement <n>` part itself
+are all requirements to `scan` / `check`, but `rename` will not rewrite them.
+(An entity later in the *title* — `### Requirement 1: Caf&eacute; login` — is
+rewritten normally; only the ID part matters.)
+
+What `rename` does when it skips one depends on where else the ID appears. If
+the ID also has `@impl` tags in code, the run exits 0 having rewritten those
+and left the definition behind, which turns the requirement into an orphan. If
+the ID exists only in the spec, there is nothing left to rewrite and the run
+exits 1 (`… was not found in any of the N files matched by …`).
+
+None of these shapes occurred in the 62-file, 551-heading corpus behind the
 percentages above; if you write one by hand, edit it and its `@impl` tags
 together.
 
@@ -661,8 +670,18 @@ picks up the bare ones:
 }
 ```
 
-Three things about that snippet are easy to get wrong:
+Four things about that snippet are easy to get wrong:
 
+- **The `verifies` edges a Kiro `tasks.md` produces point at task IDs, not at
+  requirement IDs.** `_Requirements: 1.1, 1.2_` names entries in
+  `requirements.md`'s own numbering, and those numbers collide with the task
+  numbers in the same directory — so on a standard Kiro spec the edges come out
+  as self-loops (`1 -> 1`, `2 -> 2`) or point at nodes that do not exist. That
+  is the built-in preset's behavior too, not something this recipe introduces:
+  `examples/kiro-integration/` ships the same edges and its README calls them
+  planning metadata that is intentionally not reconciled. Seeding `.kiro/specs`
+  into `specDirs` is what makes them show up by default, so expect them in
+  `scan --format json` and do not read them as spec-to-code coverage.
 - **You need `verifiesTagRe` too, not just `taskIdRe`.** Tag regexes are
   per-preset: a task discovered by your preset is scanned with *your* preset's
   tags, so leaving `verifiesTagRe` out gives the checkbox-less lines task nodes
