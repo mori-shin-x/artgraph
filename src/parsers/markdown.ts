@@ -47,9 +47,22 @@ export const BUILTIN_TASK_PRESETS: TaskConventionPreset[] = [
     verifiesTagRe: `\\[((?:REQ-[\\w/-]+)|(?:${NAMESPACED_ID_TOKEN}))\\]`,
   },
   {
-    // Kiro tasks.md: require the checkbox prefix so ordinary numbered prose
-    // (`- 1 release shipped`) doesn't false-match as a task. Users with a
-    // checkbox-less Kiro variant can override via `.artgraph.json` `taskConventions`.
+    // Kiro tasks.md: the `[ ]`/`[x]` checkbox prefix is required, and it does
+    // two jobs at once.
+    //   1. False-positive guard — ordinary numbered prose (`- 1 release
+    //      shipped`) does not become a task.
+    //   2. Load-bearing on the markdown shape — with the checkbox in front,
+    //      the `1.` in `- [x] 1. Do the thing` stays TEXT. Without it,
+    //      CommonMark reads `- 1. Do the thing` as a nested ordered list and
+    //      `toString` drops the marker, so the ID is not in the string
+    //      `taskIdRe` sees no matter what `taskIdRe` says.
+    // A checkbox-less Kiro variant therefore needs an ADDITIONAL preset, not
+    // a copy of this one with the checkbox deleted: `loadConfig`'s
+    // nested-quantifier guard rejects the `(\d+(?:\.\d+)*)` spelling below in
+    // a user-supplied preset, and even once that is re-spelled, job 2 above
+    // still costs the `- N. …` / `- N) …` forms. See docs/configuration.md
+    // "Kiro `tasks.md` without checkboxes (issue #419)" for the recipe and
+    // its limits.
     name: "kiro",
     fileStems: ["tasks"],
     taskIdRe: "^\\[[xX ]\\][\\s\\u00A0]+(\\d+(?:\\.\\d+)*)\\.?[\\s\\u00A0]",

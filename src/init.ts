@@ -1,4 +1,4 @@
-import { existsSync, rmdirSync, unlinkSync } from "node:fs";
+import { existsSync, rmdirSync, statSync, unlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
   DEFAULT_CONFIG,
@@ -144,14 +144,52 @@ export interface InitResult {
   hooksInstall?: { perAgent: HookOutcome[]; anyFailure: boolean };
 }
 
+/**
+ * `existsSync` narrowed to directories. Total like `existsSync` — a missing
+ * path, a broken symlink or an unreadable parent all answer `false` rather
+ * than throwing, so callers keep treating the probe as a plain predicate.
+ * Symlinks are followed (`statSync`, not `lstatSync`): a `.kiro/specs` that
+ * points at a real directory is one artgraph can enumerate.
+ */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false;
+  } catch {
+    return false;
+  }
+}
+
 export function detectProject(rootDir: string): DetectionResult {
   const abs = resolve(rootDir);
   const sddTools: SddToolInfo[] = [];
+  // issue #422 — the `specDir` probe keys on the tool's SPECS directory, not
+  // on `marker`. `init --agents=kiro` creates `.kiro/hooks/` and
+  // `.kiro/skills/` itself, so a later `detectProject` run sees `.kiro/` on
+  // disk purely because artgraph ran before; feeding `.kiro` into specDirs
+  // would then pull artgraph's own distributed SKILL.md files in as `doc`
+  // nodes (measured: 11 of them), so every artgraph upgrade that touches a
+  // Skill would show up as lock drift in every downstream project.
+  //
+  // The probe is `isDirectory()`, not the bare `existsSync` the sibling
+  // `hasSpecs` / `hasDocs` / `marker` checks use, because this is the only one
+  // of them whose answer is WRITTEN INTO specDirs. A regular file named
+  // `.kiro/specs` is not the harmless no-op it looks like: the builder feeds
+  // every specDirs entry to `listFilesGuarded(resolve(root, entry, "**/*.md"))`,
+  // which raises `ENOTDIR` on a file, so `init` aborts before writing
+  // `.artgraph.json` at all and every later `scan` exits 1 (measured). A
+  // directory that merely holds no `.md` files IS the harmless case, and it
+  // still reaches specDirs.
+  //
+  // The push conditions themselves are unchanged: `sddTools` still keys on
+  // `marker` alone, so which tools are reported as "detected" and which
+  // integrations run are exactly what they were before.
   if (existsSync(resolve(abs, ".specify"))) {
-    sddTools.push({ name: "Spec Kit", marker: ".specify" });
+    const specDir = isDirectory(resolve(abs, ".specify/specs")) ? ".specify/specs" : undefined;
+    sddTools.push({ name: "Spec Kit", marker: ".specify", specDir });
   }
   if (existsSync(resolve(abs, ".kiro"))) {
-    sddTools.push({ name: "Kiro", marker: ".kiro" });
+    const specDir = isDirectory(resolve(abs, ".kiro/specs")) ? ".kiro/specs" : undefined;
+    sddTools.push({ name: "Kiro", marker: ".kiro", specDir });
   }
 
   // FR-019: share the `detect` / `isInstalled` logic with `integrate` by
@@ -176,12 +214,23 @@ export function generateConfig(detection: DetectionResult): ArtgraphConfig {
     ? [...DEFAULT_CONFIG.include]
     : ["**/*.ts", "**/*.tsx", "!**/node_modules/**"];
 
-  // "specs" and "docs" are always siblings, never parent/child, so this can't
-  // produce the parent+child specDirs shape loadConfig's validateSpecDirs
-  // filters (issue #234).
+  // "specs", "docs", ".kiro/specs" and ".specify/specs" are all siblings of
+  // one another, never parent/child, so this can't produce the parent+child
+  // specDirs shape loadConfig's validateSpecDirs filters (issue #234).
   const specDirs: string[] = [];
   if (detection.hasSpecs) specDirs.push("specs");
   if (detection.hasDocs) specDirs.push("docs");
+  // issue #422 — an SDD tool that keeps specs outside `specs/` needs its own
+  // directory in the list, or the very first scan finds zero reqs and the
+  // init summary says "no matching specs yet" — the opposite of the truth.
+  // Appended, never substituted: a Kiro project with a `docs/` tree still
+  // wants `docs/` scanned.
+  for (const tool of detection.sddTools) {
+    if (tool.specDir && !specDirs.includes(tool.specDir)) specDirs.push(tool.specDir);
+  }
+  // The fallback runs LAST, after the SDD append, so a repo whose only spec
+  // tree is `.kiro/specs/` gets `[".kiro/specs"]` rather than two entries
+  // (`specs`, `docs`) that enumerate nothing plus the one that does.
   if (specDirs.length === 0) specDirs.push(...DEFAULT_CONFIG.specDirs);
 
   return {

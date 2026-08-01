@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { writeFileSync, existsSync, unlinkSync, mkdirSync, rmSync } from "node:fs";
 import { loadConfig } from "../src/config.js";
 import { scan } from "../src/scan.js";
+import { BUILTIN_TASK_PRESETS } from "../src/parsers/markdown.js";
 
 const TMP_DIR = resolve(import.meta.dirname, "fixtures/config-test");
 const CONFIG_PATH = resolve(TMP_DIR, ".artgraph.json");
@@ -440,6 +441,81 @@ describe("loadConfig", () => {
         }),
       );
       expect(() => loadConfig(TMP_DIR)).toThrow("implementsTagRe: must not be empty");
+    });
+
+    // issue #419 — the built-in presets and the user-supplied ones are NOT
+    // held to the same standard, and nothing said so out loud before this.
+    //
+    // `BUILTIN_TASK_PRESETS` is compiled directly into the parser and never
+    // travels through `validateTaskConventions`, so the built-in `kiro`
+    // preset is free to spell the hierarchical task number as
+    // `(\d+(?:\.\d+)*)` — a shape `detectReDoSRisk` rejects outright in a
+    // user preset. The practical consequence is issue #419's report: a user
+    // with a checkbox-less Kiro `tasks.md` copies the built-in value, deletes
+    // the checkbox prefix, and gets a hard `loadConfig` error rather than a
+    // working override. It bites BOTH regex fields, and `verifiesTagRe`
+    // matters as much as `taskIdRe` because tag regexes are per-preset — a
+    // preset without one produces task nodes with no `_Requirements:` edges.
+    //
+    // This test pins the asymmetry as it stands today rather than asserting
+    // it is fine. `docs/configuration.md` carries the working recipe. If the
+    // validator is ever relaxed (or the built-ins re-spelled to pass it),
+    // this is the test that flips first.
+    describe("built-in presets vs. the user-preset validator (issue #419)", () => {
+      const feed = (preset: Record<string, unknown>) => {
+        mkdirSync(TMP_DIR, { recursive: true });
+        writeFileSync(CONFIG_PATH, JSON.stringify({ taskConventions: [preset] }));
+        return () => loadConfig(TMP_DIR);
+      };
+
+      const builtin = (name: string) => {
+        const p = BUILTIN_TASK_PRESETS.find((x) => x.name === name);
+        expect(p, `built-in preset "${name}" disappeared`).toBeDefined();
+        return p!;
+      };
+
+      it("accepts the spec-kit preset's own values verbatim", () => {
+        const p = builtin("spec-kit");
+        expect(
+          feed({
+            name: "spec-kit-copy",
+            fileStems: [...p.fileStems],
+            taskIdRe: p.taskIdRe,
+            implementsTagRe: p.implementsTagRe,
+            verifiesTagRe: p.verifiesTagRe,
+          }),
+        ).not.toThrow();
+      });
+
+      it("rejects the kiro preset's own taskIdRe, and its verifiesTagRe too", () => {
+        const p = builtin("kiro");
+
+        expect(
+          feed({ name: "kiro-copy", fileStems: [...p.fileStems], taskIdRe: p.taskIdRe }),
+        ).toThrow("taskIdRe: nested quantifiers");
+
+        // Same defect in the other field — masked above because `taskIdRe` is
+        // validated first, so it needs its own valid-taskIdRe carrier.
+        expect(
+          feed({
+            name: "kiro-copy",
+            fileStems: [...p.fileStems],
+            taskIdRe: "^(K-\\d+)",
+            verifiesTagRe: p.verifiesTagRe,
+          }),
+        ).toThrow("verifiesTagRe: nested quantifiers");
+      });
+
+      it("accepts the checkbox-less Kiro recipe documented in docs/configuration.md", () => {
+        expect(
+          feed({
+            name: "kiro-no-checkbox",
+            fileStems: ["tasks"],
+            taskIdRe: "^(\\d+|\\d+\\.\\d+|\\d+\\.\\d+\\.\\d+)\\.?[\\s\\u00A0]",
+            verifiesTagRe: "(?<=Requirements:[\\s\\d.,]*)(\\d+\\.\\d+|\\d+)",
+          }),
+        ).not.toThrow();
+      });
     });
   });
 
