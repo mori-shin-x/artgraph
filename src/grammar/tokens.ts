@@ -40,9 +40,18 @@ export const NAMESPACED_ID_TOKEN = `(?:[\\w-]+/)?(?:${REQ_ID_TOKEN})`;
 // `- **FR-2**: ...`. Group 1 is the bare ID.
 export const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
 
-// A Kiro-style requirement heading, e.g. `### Requirement 1: ...`. Group 1 is
-// the number; consumers canonicalize it to `Requirement-<n>`.
-export const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*:/;
+// A Kiro-style requirement heading. Both spellings occur in real Kiro output
+// and neither is rare — measured over 549 requirement headings in 62 files
+// across 26 repositories with `.kiro/specs/` committed: 41.5% bare
+// (`### Requirement 1`), 58.5% titled (`### Requirement 1: Some Title`).
+// Four repositories use both, and one file uses both. Kiro's own spec-agent
+// prompt templates the bare form; the model adds titles anyway.
+//
+// The alternative is `$`, NOT `:?` — `:?` would also accept prose headings
+// like `### Requirement 1 is important`, which are not requirement
+// definitions. Group 1 is the number; consumers canonicalize it to
+// `Requirement-<n>`.
+export const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*(?::|$)/;
 
 // Bare code-side ID shape (no namespace, whole-string match) used to validate
 // annotation targets when no custom `reqPatterns.codeId` is set.

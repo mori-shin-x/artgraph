@@ -28,7 +28,13 @@ import {
 import { buildAgentsMdBody, inspectMarkerBlock } from "./agents/agent-context.js";
 import { detectPackageManager } from "./package-manager.js";
 import { readSkillSource, type SkillSource } from "./agents/source.js";
-import { loadConfig, missingNodeModulesProtection, formatPoolProtectionMessage } from "./config.js";
+import {
+  loadConfig,
+  missingNodeModulesProtection,
+  formatPoolProtectionMessage,
+  specDirsCover,
+} from "./config.js";
+import { detectProject } from "./init.js";
 
 /** Skip files larger than this when hashing / walking (C-adj-1). Prevents an
  * accidentally-planted multi-GB file inside a Skills dir from OOM-ing the
@@ -102,7 +108,22 @@ export type DoctorFindingKind =
    * distribution, no config findings → clean empty report) intact; see the
    * gate's own comment at the `runDoctor` call site for why.
    */
-  | "config-pool-protection-asymmetry";
+  | "config-pool-protection-asymmetry"
+  /**
+   * issue #422 — an SDD tool keeps its specs in a directory (`.kiro/specs`,
+   * `.specify/specs`) that exists on disk but that no `specDirs` entry
+   * covers, so every requirement in it is invisible to `scan` / `check`.
+   * `init` seeds the entry for new projects, but `init --force` deliberately
+   * MERGES an existing config rather than re-deriving `specDirs` (that is
+   * what preserves hand-edited values), so a project initialized before
+   * that fix is only reachable through this advisory. Advisory only
+   * (severity `pass`) — never flips the doctor exit code. Structural
+   * (Principle V): one `existsSync` plus a path-prefix comparison against
+   * `config.specDirs`. Gated on at least one Tier 1 agent being detected,
+   * the same gate `config-missing-agents-field` uses — see that gate's
+   * comment for why the empty-report short-circuit must stay intact.
+   */
+  | "config-specdir-missing-sdd-tool";
 
 export interface DoctorFinding {
   severity: DoctorFindingSeverity;
@@ -385,6 +406,34 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
     });
   }
 
+  // issue #422 — SDD-tool spec directory that `specDirs` does not cover.
+  // Gated on `detectedDescriptors.length > 0` for the same reason
+  // `config-pool-protection-asymmetry` above is: firing it on a project with
+  // no Tier 1 distribution would bypass the empty-report short-circuit below
+  // and drag Step 4's AGENTS.md check (a real FAIL) in with it.
+  //
+  // `detectProject` is the same probe `init` uses to decide what to seed, so
+  // the advisory can never name a directory `init` itself would not write —
+  // `specDir` is populated only when the tool's SPECS directory exists, which
+  // is why an `.kiro/` that only holds artgraph's own `skills/` + `hooks/`
+  // (created by `init --agents=kiro`) produces no finding here.
+  const specDirFindings: DoctorFinding[] = [];
+  if (detectedDescriptors.length > 0) {
+    for (const tool of detectProject(rootAbs).sddTools) {
+      if (!tool.specDir) continue;
+      if (specDirsCover(config.specDirs, tool.specDir)) continue;
+      specDirFindings.push({
+        severity: "pass",
+        agent: null,
+        kind: "config-specdir-missing-sdd-tool",
+        path: ".artgraph.json",
+        expected: `"specDirs" covering ${tool.specDir}`,
+        actual: `specDirs = ${JSON.stringify(config.specDirs)}`,
+        message: `${tool.name} keeps its specs in ${tool.specDir}/, but no "specDirs" entry in .artgraph.json covers it — those requirements are invisible to \`artgraph scan\` / \`check\`. Add "${tool.specDir}" to "specDirs" (\`init\` seeds it for new projects; \`init --force\` preserves an existing specDirs, so this one needs the edit by hand). See issue #422.`,
+      });
+    }
+  }
+
   if (
     detectedDescriptors.length === 0 &&
     absentDescriptors.length === 0 &&
@@ -432,6 +481,10 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   // (gated on `detectedDescriptors.length > 0`, same as
   // `config-missing-agents-field`).
   findings.push(...poolProtectionFindings);
+
+  // issue #422 — config-specdir-missing-sdd-tool advisory, computed above
+  // (same gate).
+  findings.push(...specDirFindings);
 
   // Step 3 — per-agent Skills + extraneous-file diagnostics.
   for (const descriptor of detectedDescriptors) {
@@ -915,10 +968,13 @@ export function formatDoctorReportText(report: DoctorReport): string {
   // NOTICE line (mirrors the agents-md-body-stale NOTICE convention).
   // issue #356 — `config-pool-protection-asymmetry` joins the same NOTICE
   // treatment: same shape (agent: null, severity: "pass", config-only).
+  // issue #422 — so does `config-specdir-missing-sdd-tool`.
   const configLevelFindings = report.findings.filter(
     (f) =>
       f.agent === null &&
-      (f.kind === "config-missing-agents-field" || f.kind === "config-pool-protection-asymmetry"),
+      (f.kind === "config-missing-agents-field" ||
+        f.kind === "config-pool-protection-asymmetry" ||
+        f.kind === "config-specdir-missing-sdd-tool"),
   );
   for (const f of configLevelFindings) {
     lines.push(`NOTICE: ${f.message}`);

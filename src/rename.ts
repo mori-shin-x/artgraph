@@ -248,7 +248,28 @@ export function rewriteSpecHeading(
     const oldNum = oldMatch[1];
     const newNum = newMatch[1];
 
-    const re = new RegExp(`^(#+\\s+)Requirement\\s+${escapeRegExp(oldNum)}(\\s*:)`);
+    // Kept in lockstep with KIRO_HEADING_RE's own separator alternation
+    // (grammar/tokens.ts) — this regex re-spells what that one already
+    // accepted, so a narrower class here would recognize a heading as a
+    // requirement and then silently refuse to rename it. `usingDefault`
+    // above only pins the RECOGNITION regex; this rewrite pattern is spelled
+    // separately and has to be widened with it.
+    //
+    // `\s*$` (end of the raw line) stands in for KIRO_HEADING_RE's `$` (end
+    // of the mdast heading TEXT); the trailing run it captures is replayed
+    // verbatim into group 2, so `### Requirement 1   ` keeps its padding.
+    //
+    // The optional `#+` inside that branch is what makes the two sides agree
+    // on an ATX *closing sequence* (`### Requirement 1 ###`). mdast strips it
+    // before KIRO_HEADING_RE ever sees the text, so recognition accepts the
+    // heading; matching the raw line here without allowing for it would
+    // recognize that heading and then refuse to rename it. It cannot widen
+    // the match into prose: `### Requirement 1 is important` still fails both
+    // branches, because `#+` is only reachable with the line ending right
+    // after it.
+    const re = new RegExp(
+      `^(#+\\s+)Requirement\\s+${escapeRegExp(oldNum)}(\\s*:|\\s*(?:#+\\s*)?$)`,
+    );
     for (let i = 0; i < lines.length; i++) {
       if (fenced.has(i)) continue;
       const match = lines[i].match(re);

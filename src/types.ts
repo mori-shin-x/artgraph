@@ -344,6 +344,20 @@ export interface ScanSummary {
 export interface SddToolInfo {
   name: string;
   marker: string;
+  /**
+   * Directory this SDD tool keeps its specs in, relative to the repo root —
+   * present only when that directory actually exists on disk.
+   *
+   * Deliberately NOT derived from `marker`: `init --agents=kiro` itself
+   * creates `.kiro/hooks/` and `.kiro/skills/`, so `.kiro/` existing proves
+   * only that artgraph has run before, not that the project has specs. The
+   * specDirs decision has to key on the specs directory itself.
+   *
+   * Optional to preserve back-compat for callers that construct
+   * SddToolInfo literals (tests) — same reason DetectionResult.integrations
+   * is optional.
+   */
+  specDir?: string;
 }
 
 export interface DetectionResult {

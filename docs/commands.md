@@ -798,12 +798,25 @@ artgraph doctor --agents=claude,codex      # restrict scope
 artgraph doctor --format json              # machine-readable
 ```
 
-`doctor` also runs one config-only diagnostic, scoped to projects where at
-least one Tier 1 agent distribution is already detected (same gate as the
-`agents`-field advisory findings): `config-pool-protection-asymmetry`
-(issue #356, judgment updated by PR #359) — advisory (severity `pass`, never
-affects the exit code) — fires when `.artgraph.json`'s `include` and
-`testPatterns` disagree on whether they effectively exclude node_modules at
+`doctor` also runs two config-only diagnostics, both scoped to projects where
+at least one Tier 1 agent distribution is already detected (same gate as the
+`agents`-field advisory findings), and both advisory (severity `pass`, never
+affects the exit code).
+
+`config-specdir-missing-sdd-tool` (issue #422) fires when a detected SDD
+tool's spec directory exists on disk — `.kiro/specs/` for Kiro,
+`.specify/specs/` for Spec Kit — but no `specDirs` entry covers it, which
+means `scan` / `check` never see any of that tool's requirements. `init`
+seeds the entry for new projects; `init --force` merges an existing config
+instead of re-deriving `specDirs`, so a project initialized before that fix
+needs the entry added by hand. An ancestor entry counts as covering
+(`specDirs: [".kiro"]` covers `.kiro/specs`), and the probe is for the specs
+directory itself, so a `.kiro/` holding only artgraph's own `skills/` and
+`hooks/` never triggers it.
+
+`config-pool-protection-asymmetry` (issue #356, judgment updated by PR #359)
+fires when `.artgraph.json`'s `include` and `testPatterns`
+disagree on whether they effectively exclude node_modules at
 every nesting depth (checked via real glob matching against representative
 synthetic paths, not a string heuristic), or when a pool's negative pattern
 mentions node_modules but doesn't actually cover every depth (a "broken

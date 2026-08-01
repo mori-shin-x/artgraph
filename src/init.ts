@@ -147,11 +147,31 @@ export interface InitResult {
 export function detectProject(rootDir: string): DetectionResult {
   const abs = resolve(rootDir);
   const sddTools: SddToolInfo[] = [];
+  // issue #422 — the `specDir` probe keys on the tool's SPECS directory, not
+  // on `marker`. `init --agents=kiro` creates `.kiro/hooks/` and
+  // `.kiro/skills/` itself, so a later `detectProject` run sees `.kiro/` on
+  // disk purely because artgraph ran before; feeding `.kiro` into specDirs
+  // would then pull artgraph's own distributed SKILL.md files in as `doc`
+  // nodes (measured: 11 of them), so every artgraph upgrade that touches a
+  // Skill would show up as lock drift in every downstream project.
+  //
+  // `existsSync` (not `statSync().isDirectory()`) on purpose: it is the same
+  // probe the sibling `hasSpecs` / `hasDocs` / `marker` checks use, and the
+  // worst case for the odd shape it lets through (a regular FILE named
+  // `.kiro/specs`) is a specDirs entry that enumerates nothing — the same
+  // no-op the `["specs","docs"]` fallback already produces on a repo that has
+  // neither directory.
+  //
+  // The push conditions themselves are unchanged: `sddTools` still keys on
+  // `marker` alone, so which tools are reported as "detected" and which
+  // integrations run are exactly what they were before.
   if (existsSync(resolve(abs, ".specify"))) {
-    sddTools.push({ name: "Spec Kit", marker: ".specify" });
+    const specDir = existsSync(resolve(abs, ".specify/specs")) ? ".specify/specs" : undefined;
+    sddTools.push({ name: "Spec Kit", marker: ".specify", specDir });
   }
   if (existsSync(resolve(abs, ".kiro"))) {
-    sddTools.push({ name: "Kiro", marker: ".kiro" });
+    const specDir = existsSync(resolve(abs, ".kiro/specs")) ? ".kiro/specs" : undefined;
+    sddTools.push({ name: "Kiro", marker: ".kiro", specDir });
   }
 
   // FR-019: share the `detect` / `isInstalled` logic with `integrate` by
@@ -176,12 +196,23 @@ export function generateConfig(detection: DetectionResult): ArtgraphConfig {
     ? [...DEFAULT_CONFIG.include]
     : ["**/*.ts", "**/*.tsx", "!**/node_modules/**"];
 
-  // "specs" and "docs" are always siblings, never parent/child, so this can't
-  // produce the parent+child specDirs shape loadConfig's validateSpecDirs
-  // filters (issue #234).
+  // "specs", "docs", ".kiro/specs" and ".specify/specs" are all siblings of
+  // one another, never parent/child, so this can't produce the parent+child
+  // specDirs shape loadConfig's validateSpecDirs filters (issue #234).
   const specDirs: string[] = [];
   if (detection.hasSpecs) specDirs.push("specs");
   if (detection.hasDocs) specDirs.push("docs");
+  // issue #422 — an SDD tool that keeps specs outside `specs/` needs its own
+  // directory in the list, or the very first scan finds zero reqs and the
+  // init summary says "no matching specs yet" — the opposite of the truth.
+  // Appended, never substituted: a Kiro project with a `docs/` tree still
+  // wants `docs/` scanned.
+  for (const tool of detection.sddTools) {
+    if (tool.specDir && !specDirs.includes(tool.specDir)) specDirs.push(tool.specDir);
+  }
+  // The fallback runs LAST, after the SDD append, so a repo whose only spec
+  // tree is `.kiro/specs/` gets `[".kiro/specs"]` rather than two entries
+  // (`specs`, `docs`) that enumerate nothing plus the one that does.
   if (specDirs.length === 0) specDirs.push(...DEFAULT_CONFIG.specDirs);
 
   return {

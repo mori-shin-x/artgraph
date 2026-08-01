@@ -188,6 +188,34 @@ Three intentional, backward-incompatible behavior changes come with this:
   collision may differ from a pre-upgrade scan, but it is now the same on
   every machine and every run.
 
+### What `artgraph init` seeds (issue #422)
+
+`init` writes `specDirs` from what it finds on disk: `specs/` and `docs/` when
+those directories exist, plus the spec directory of any detected SDD tool —
+`.kiro/specs` for Kiro, `.specify/specs` for Spec Kit. It falls back to
+`["specs", "docs"]` when none of the four exist.
+
+The SDD entry is **appended**, not substituted: a Kiro project that also keeps
+a `docs/` tree gets `["docs", ".kiro/specs"]`, and both are scanned. All four
+candidates are siblings of one another — never parent/child — so none of them
+is dropped by the redundant-descendant filtering `loadConfig` applies to
+`specDirs` (issue #234).
+
+Two limits worth knowing:
+
+- The probe is for the tool's **specs directory** (`.kiro/specs`), not for its
+  marker directory (`.kiro`). `init --agents=kiro` creates `.kiro/skills/` and
+  `.kiro/hooks/` itself, so `.kiro/` alone proves only that artgraph has run
+  before. Putting `.kiro` in `specDirs` would additionally pull artgraph's own
+  distributed `SKILL.md` files into the graph as `doc` nodes, so every artgraph
+  upgrade that edits a Skill would register as lock drift.
+- `init --force` over an existing `.artgraph.json` **merges** your config and
+  does not re-derive `specDirs` (that is what preserves hand-edited values).
+  A project that ran `init` before this version therefore keeps its old
+  `specDirs`; add the entry by hand. `artgraph doctor` reports the gap as a
+  `config-specdir-missing-sdd-tool` NOTICE (advisory — it does not change the
+  exit code).
+
 ## `reqPatterns` — requirement ID grammar
 
 By default artgraph recognizes `REQ-001`, `auth/FR-2`, and `Requirement-3`.
@@ -216,6 +244,46 @@ meaning, so `REQ-001`, `FR-001`, `AUTH-2`, and `US-12` all work with **zero
 configuration**. In particular, Spec Kit's spec-template generates `FR-NNN`
 (Functional Requirements) by default: keep them as-is; there is no need to
 rename them to the `REQ-` prefix used in this documentation's examples.
+
+### Kiro headings — the title after the number is optional
+
+A markdown heading whose text reads `Requirement <n>` defines the requirement
+`Requirement-<n>`. Both spellings Kiro emits are recognized, at any heading
+level:
+
+```md
+### Requirement 1: Federated authentication
+### Requirement 2
+```
+
+What ends the match is either a `:` after the number (spaces allowed in
+between) or the end of the heading text — nothing else. A heading that carries
+on into prose defines nothing:
+
+```md
+### Requirement 1 is important
+```
+
+`artgraph rename Requirement-1 Requirement-9` rewrites both spellings of an
+ATX (`#`-prefixed) heading.
+
+> **Behavior change on upgrade.** Only the `:` spelling used to be recognized.
+> Upgrading a repository whose `requirements.md` uses the bare form adds req
+> nodes that were not in the graph before, and those reqs start out
+> `uncovered`. Where that surfaces:
+>
+> - **`artgraph reconcile`, or a first `artgraph init`** — the new reqs enter
+>   the lock, and `artgraph check` lists the uncovered ones.
+> - **plain `artgraph check --gate`** (no `--diff`) — judges the whole graph
+>   against the lock, so newly recognized uncovered reqs can turn it into an
+>   exit `2`.
+> - **`--diff` gates** — not affected the same way. `check --diff` builds its
+>   baseline by scanning the base ref with the *current* binary and the
+>   *current* config, so the base side is re-read under the new grammar too
+>   and the newly recognized reqs do not appear in `newIssues`. Both wirings
+>   `init` installs by default — the Stop hook (`check --gate --diff`) and the
+>   CI recipe (`check --diff --base origin/<base> --gate`) — are `--diff`
+>   gates, so they stay exit `0` across this upgrade.
 
 ## `ignoreIdPrefixes` — exclude specific ID prefixes from tracking
 
@@ -470,7 +538,9 @@ Notes:
 - `doc → contains → task` edges are emitted under `docGraph.autoContains` (the
   same flag that drives `doc → req`).
 - Kiro's `tasks.md` requires the `[ ]`/`[x]` checkbox on each task line — bare
-  numbered lists like `- 1 release shipped` are not treated as tasks.
+  numbered lists like `- 1 release shipped` are not treated as tasks. See
+  [Kiro `tasks.md` without checkboxes](#kiro-tasksmd-without-checkboxes-issue-419)
+  for the override, and for what the override cannot reach.
 - For nested Kiro tasks (`- [x] 1.1 ...` indented under `- [x] 1. ...`), each
   level's `_Requirements:` lists attach to its own task only; parents do not
   inherit child requirements.
@@ -500,6 +570,58 @@ All three regex fields are validated the same way `reqPatterns` is
 (≤ 200 chars, nested-quantifier rejection, capture-group required, valid regex).
 Omit `implementsTagRe` or `verifiesTagRe` if your tool doesn't have that edge
 kind (Kiro omits `implementsTagRe`).
+
+### Kiro `tasks.md` without checkboxes (issue #419) <a id="kiro-tasksmd-without-checkboxes-issue-419"></a>
+
+Kiro sometimes emits a `tasks.md` whose task lines carry no `[ ]`/`[x]`
+checkbox. The built-in `kiro` preset requires one, so those lines produce no
+task nodes. Add a second preset alongside it — built-ins stay active, so
+checkbox-prefixed lines keep working through the built-in and the new preset
+picks up the bare ones:
+
+```jsonc
+// .artgraph.json
+{
+  "taskConventions": [
+    {
+      "name": "kiro-no-checkbox",
+      "fileStems": ["tasks"],
+      "taskIdRe": "^(\\d+|\\d+\\.\\d+|\\d+\\.\\d+\\.\\d+)\\.?[\\s\\u00A0]",
+      "verifiesTagRe": "(?<=Requirements:[\\s\\d.,]*)(\\d+\\.\\d+|\\d+)"
+    }
+  ]
+}
+```
+
+Three things about that snippet are easy to get wrong:
+
+- **You need `verifiesTagRe` too, not just `taskIdRe`.** Tag regexes are
+  per-preset: a task discovered by your preset is scanned with *your* preset's
+  tags, so leaving `verifiesTagRe` out gives you task nodes with no
+  `_Requirements:` edges at all (measured: task nodes appear, zero `verifies`
+  edges).
+- **You cannot copy the built-in `kiro` values and delete the checkbox part.**
+  Both built-in patterns spell the hierarchical number as `(\d+(?:\.\d+)*)`,
+  and `loadConfig`'s nested-quantifier guard rejects that shape in a
+  user-supplied preset — for `taskIdRe` *and* for `verifiesTagRe`. The
+  enumerated alternation above (`\d+|\d+\.\d+|\d+\.\d+\.\d+`, longest-first in
+  the `verifiesTagRe` case) passes the guard and covers up to three levels.
+- **Prefer the enumerated alternation over `[\d.]+`.** A character class also
+  passes validation but matches non-numbers: on a fixture holding
+  `- . lone dot`, `- 1.. double dot` and `- 1.2.3.4 deep numeric`, `[\d.]+`
+  created a task node for each of the three; the alternation above created
+  none of them. Neither form can tell `- 3 workers were provisioned` from a
+  real task — that false positive is exactly what the built-in preset's
+  checkbox requirement was buying you, and dropping the checkbox gives it up.
+
+**What no override can reach.** When the number is followed by `.` or `)` and a
+space, CommonMark consumes it as an *ordered-list marker* rather than as text,
+so by the time `taskIdRe` runs the ID is not in the string at all. Measured on
+one fixture: `- 3. Ordered-list dot form`, `- 4) Paren form` and a top-level
+`5. Ordered list` produced no task node under any of the patterns tried, while
+`- 1 Set up`, `- 1.1 Nested numeric` and the checkbox forms did. Only the
+checkbox spelling (`- [x] 3. Something`) survives the marker rule, because the
+`[x]` comes first.
 
 ### Upgrade note
 

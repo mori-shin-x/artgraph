@@ -420,6 +420,26 @@ function isAncestorOf(ancestor: string, descendant: string): boolean {
   return descendant.startsWith(ancestor + "/") || descendant.startsWith(ancestor + "\\");
 }
 
+/**
+ * issue #422 — true when `dir` (a repo-root-relative POSIX path) would be
+ * enumerated by one of `specDirs`: either an entry names it exactly, or an
+ * entry is one of its ancestors (`specDirs: [".kiro"]` covers `.kiro/specs`).
+ *
+ * Exported for `doctor`'s `config-specdir-missing-sdd-tool` advisory, which
+ * has to answer exactly this question about `.kiro/specs` / `.specify/specs`.
+ * It lives here so the answer is computed with the SAME normalization
+ * `validateSpecDirs` applies when it loads the field — a doctor that compared
+ * raw strings would advise adding `.kiro/specs` to a config that already has
+ * `"./.kiro/specs/"`.
+ */
+export function specDirsCover(specDirs: readonly string[], dir: string): boolean {
+  const target = normalizeSpecDir(dir);
+  return specDirs.some((entry) => {
+    const normalized = normalizeSpecDir(entry);
+    return normalized === target || isAncestorOf(normalized, target);
+  });
+}
+
 function validateSpecDirs(value: unknown): string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) {
