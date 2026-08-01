@@ -118,10 +118,11 @@ export type DoctorFindingKind =
    * what preserves hand-edited values), so a project initialized before
    * that fix is only reachable through this advisory. Advisory only
    * (severity `pass`) — never flips the doctor exit code. Structural
-   * (Principle V): one `existsSync` plus a path-prefix comparison against
-   * `config.specDirs`. Gated on at least one Tier 1 agent being detected,
-   * the same gate `config-missing-agents-field` uses — see that gate's
-   * comment for why the empty-report short-circuit must stay intact.
+   * (Principle V): one `statSync` plus a path-prefix comparison against
+   * `config.specDirs`. Gated on at least one Tier 1 agent being detected —
+   * the same condition its two config-level siblings use, so all three
+   * NOTICEs cover the same set of projects. See the gate's own comment at the
+   * `runDoctor` call site for what that gate does and does not buy.
    */
   | "config-specdir-missing-sdd-tool";
 
@@ -407,10 +408,21 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
   }
 
   // issue #422 — SDD-tool spec directory that `specDirs` does not cover.
-  // Gated on `detectedDescriptors.length > 0` for the same reason
-  // `config-pool-protection-asymmetry` above is: firing it on a project with
-  // no Tier 1 distribution would bypass the empty-report short-circuit below
-  // and drag Step 4's AGENTS.md check (a real FAIL) in with it.
+  // Gated on `detectedDescriptors.length > 0` to keep this advisory's scope
+  // identical to its two config-level siblings (`config-missing-agents-field`,
+  // `config-pool-protection-asymmetry`), which are the findings it shares the
+  // NOTICE rendering with: all three speak about a project doctor already has
+  // Tier 1 distribution context for.
+  //
+  // The gate is NOT what protects the empty-report short-circuit below —
+  // measured by removing it: output and `failCount` come back byte-identical
+  // on a project with no Tier 1 distribution. That short-circuit reads
+  // `configFindings`, and `specDirFindings` is a separate array appended after
+  // it, so dropping the gate could not break it. What dropping the gate WOULD
+  // change is reach: `--agents=<csv>` naming an uninstalled agent gets past the
+  // short-circuit via `absentDescriptors`, and the advisory would then fire
+  // there too. Keeping the three siblings on one condition is the reason to
+  // hold the line, not a short-circuit that this finding cannot reach.
   //
   // `detectProject` is the same probe `init` uses to decide what to seed, so
   // the advisory can never name a directory `init` itself would not write —
@@ -429,7 +441,7 @@ export function runDoctor(opts: DoctorOptions): DoctorReport {
         path: ".artgraph.json",
         expected: `"specDirs" covering ${tool.specDir}`,
         actual: `specDirs = ${JSON.stringify(config.specDirs)}`,
-        message: `${tool.name} keeps its specs in ${tool.specDir}/, but no "specDirs" entry in .artgraph.json covers it — those requirements are invisible to \`artgraph scan\` / \`check\`. Add "${tool.specDir}" to "specDirs" (\`init\` seeds it for new projects; \`init --force\` preserves an existing specDirs, so this one needs the edit by hand). See issue #422.`,
+        message: `${tool.name} keeps its specs in ${tool.specDir}/, but no "specDirs" entry in .artgraph.json covers it — those requirements are invisible to \`artgraph scan\` / \`check\`. Add "${tool.specDir}" to "specDirs" (\`init\` seeds it for new projects; \`init --force\` preserves an existing specDirs, so this one needs the edit by hand). Those requirements arrive untagged, so a plain \`check --gate\` can go from 0 to 2 on the next run — see "Behavior change on upgrade" in docs/configuration.md for which gates that reaches. See issue #422.`,
       });
     }
   }

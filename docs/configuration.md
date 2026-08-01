@@ -201,7 +201,7 @@ candidates are siblings of one another — never parent/child — so none of the
 is dropped by the redundant-descendant filtering `loadConfig` applies to
 `specDirs` (issue #234).
 
-Two limits worth knowing:
+Three limits worth knowing:
 
 - The probe is for the tool's **specs directory** (`.kiro/specs`), not for its
   marker directory (`.kiro`). `init --agents=kiro` creates `.kiro/skills/` and
@@ -215,6 +215,58 @@ Two limits worth knowing:
   `specDirs`; add the entry by hand. `artgraph doctor` reports the gap as a
   `config-specdir-missing-sdd-tool` NOTICE (advisory — it does not change the
   exit code).
+- The probe answers "is this a directory?", not "does this path exist?".
+  A regular file named `.kiro/specs` is skipped: a `specDirs` entry pointing at
+  a file makes markdown enumeration fail with `ENOTDIR`, which would abort
+  `init` before it wrote `.artgraph.json` at all. An empty `.kiro/specs`
+  directory is seeded normally.
+
+Adding the entry by hand to an existing project makes requirements visible that
+were not in the graph before, and they arrive `uncovered` — the same shape as
+the grammar widening below, with the same consequences per gate. See
+[Behavior change on upgrade](#kiro-headings--the-title-after-the-number-is-optional)
+for which of them that reaches.
+
+### Kiro numbers requirements per spec, so a second spec qualifies every ID
+
+This is a property of Kiro's own output, not of any artgraph version. Kiro
+starts each spec's `requirements.md` at `Requirement 1`, so the moment a
+project has two of them the same ID is defined twice:
+
+```text
+.kiro/specs/auth/requirements.md      ### Requirement 1
+.kiro/specs/billing/requirements.md   ### Requirement 1
+```
+
+artgraph resolves that collision by qualifying each ID with its spec
+directory — `auth/Requirement-1` and `billing/Requirement-1` — the same
+namespacing it applies to any ID defined in more than one spec (see
+[architecture.md](./architecture.md)). An unqualified `// @impl Requirement-1`
+then matches both, so it is **ambiguous and the edge is dropped**, with a
+`WARNING: ambiguous ID "Requirement-1" (candidates: auth, billing)` naming the
+candidates. The requirements themselves are reported `uncovered`.
+
+The fix is on the annotation side: qualify each tag with the spec directory
+its requirement lives in.
+
+```ts
+// @impl auth/Requirement-1
+```
+
+Do this with an editor, not with `rename`: by the time the second spec exists
+there is no `Requirement-1` node left to rename, so
+`rename --from Requirement-1 --to auth/Requirement-1` exits 1 with `ID
+"Requirement-1" does not exist in the project`.
+
+`artgraph reconcile` does not resolve it either — reconcile updates the lock to
+match the graph, and an ambiguous tag leaves the requirement genuinely
+untagged, so a plain `check --gate` stays at exit `2` until the tags carry the
+prefix. Once every tag is qualified, `check` reports each requirement covered
+and the gate goes back to exit `0` (measured on a two-spec fixture).
+
+This is not a rare shape: of 26 surveyed repositories with `.kiro/specs/`
+committed, 9 had two or more specs, and every one of those started every spec
+at `Requirement 1`.
 
 ## `reqPatterns` — requirement ID grammar
 
@@ -264,8 +316,21 @@ on into prose defines nothing:
 ### Requirement 1 is important
 ```
 
-`artgraph rename Requirement-1 Requirement-9` rewrites both spellings of an
-ATX (`#`-prefixed) heading.
+`artgraph rename Requirement-1 Requirement-9` rewrites both spellings when the
+heading is an unadorned ATX line — one to six `#`s, no indentation, and the
+requirement text starting right after them. A trailing ATX closing sequence
+(`### Requirement 1 ###`) is fine and is preserved. `rename`, `rename --split`
+and `rename --merge` all read the raw line through the same normalization, so
+what one of them rewrites the others delete and scaffold.
+
+Recognition is looser than that, because it reads the parsed heading rather
+than the line: an indented, blockquoted or list-nested `###`, a setext heading
+(`Requirement 1` over `---`), an emphasis-wrapped title (`### **Requirement
+1**`) and a title carrying an HTML entity or comment are all requirements to
+`scan` / `check`, but `rename` leaves them untouched and reports success. None
+of these shapes occurred in the 62-file, 551-heading corpus behind the
+percentages above; if you write one by hand, edit it and its `@impl` tags
+together.
 
 > **Behavior change on upgrade.** Only the `:` spelling used to be recognized.
 > Upgrading a repository whose `requirements.md` uses the bare form adds req
@@ -283,7 +348,10 @@ ATX (`#`-prefixed) heading.
 >   and the newly recognized reqs do not appear in `newIssues`. Both wirings
 >   `init` installs by default — the Stop hook (`check --gate --diff`) and the
 >   CI recipe (`check --diff --base origin/<base> --gate`) — are `--diff`
->   gates, so they stay exit `0` across this upgrade.
+>   gates, so this upgrade does not by itself turn them non-zero. A `--diff`
+>   gate that cannot establish a baseline at all still fails closed with exit
+>   `1` (not a git repository, or a shallow clone without the base ref) — that
+>   is unrelated to the grammar change and is unchanged by it.
 
 ## `ignoreIdPrefixes` — exclude specific ID prefixes from tracking
 
@@ -597,9 +665,12 @@ Three things about that snippet are easy to get wrong:
 
 - **You need `verifiesTagRe` too, not just `taskIdRe`.** Tag regexes are
   per-preset: a task discovered by your preset is scanned with *your* preset's
-  tags, so leaving `verifiesTagRe` out gives you task nodes with no
-  `_Requirements:` edges at all (measured: task nodes appear, zero `verifies`
-  edges).
+  tags, so leaving `verifiesTagRe` out gives the checkbox-less lines task nodes
+  with no `_Requirements:` edges of their own (measured on an all-checkbox-less
+  fixture: task nodes appear, zero `verifies` edges). In a file that mixes both
+  spellings the checkbox lines still get their edges from the built-in preset,
+  so the count is not zero — it is missing exactly the lines your preset
+  discovered.
 - **You cannot copy the built-in `kiro` values and delete the checkbox part.**
   Both built-in patterns spell the hierarchical number as `(\d+(?:\.\d+)*)`,
   and `loadConfig`'s nested-quantifier guard rejects that shape in a

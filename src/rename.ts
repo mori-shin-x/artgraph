@@ -5,7 +5,7 @@ import {
   findFrontmatterBounds,
   maskInlineProtectedSpans,
 } from "./parsers/markdown.js";
-import { LIST_ITEM_RE, KIRO_HEADING_RE } from "./grammar/tokens.js";
+import { LIST_ITEM_RE, KIRO_HEADING_RE, splitAtxHeading } from "./grammar/tokens.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -136,6 +136,14 @@ export function fencedLines(content: string): Set<number> {
  * parser would turn into a req node), return that requirement's ID; otherwise
  * null. Mirrors the parser's list-item / heading grammar so split/merge can
  * remove the exact lines the parser treats as definitions.
+ *
+ * The heading branch goes through `splitAtxHeading` rather than its own ATX
+ * pattern so its acceptance set is identical to `rewriteSpecHeading`'s below.
+ * They must not be spelled separately: when only the rewriter learned about
+ * ATX closing sequences, `rename --merge` on `### Requirement 1 ###` /
+ * `### Requirement 2` removed the second definition, rewrote both `@impl`
+ * tags onto the merge target and reported success — leaving the first heading
+ * behind as an orphan and turning a green `check --gate` into exit 2.
  */
 export function specDefinitionId(line: string, opts?: RewriteOptions): string | null {
   const pm = line.match(/^(\s*[-*]\s+)/);
@@ -146,10 +154,10 @@ export function specDefinitionId(line: string, opts?: RewriteOptions): string | 
       if (m && m[1] != null) return m[1];
     }
   }
-  const hm = line.match(/^(#+\s+)(.*)$/);
-  if (hm) {
+  const heading = splitAtxHeading(line);
+  if (heading) {
     const headRe = headingRegex(opts);
-    const m = hm[2].match(headRe);
+    const m = heading.text.match(headRe);
     if (m && m[1] != null) {
       return headRe.source === KIRO_HEADING_RE.source ? `Requirement-${m[1]}` : m[1];
     }
@@ -248,34 +256,26 @@ export function rewriteSpecHeading(
     const oldNum = oldMatch[1];
     const newNum = newMatch[1];
 
-    // Kept in lockstep with KIRO_HEADING_RE's own separator alternation
-    // (grammar/tokens.ts) — this regex re-spells what that one already
-    // accepted, so a narrower class here would recognize a heading as a
-    // requirement and then silently refuse to rename it. `usingDefault`
-    // above only pins the RECOGNITION regex; this rewrite pattern is spelled
-    // separately and has to be widened with it.
+    // Matched against the heading TEXT `splitAtxHeading` hands back, which is
+    // the same string the recognition side gets from mdast — so this pattern
+    // only has to re-spell KIRO_HEADING_RE's separator alternation, not the
+    // ATX shape around it. `usingDefault` above pins the RECOGNITION regex
+    // only; this one is spelled separately and has to be widened with it.
     //
-    // `\s*$` (end of the raw line) stands in for KIRO_HEADING_RE's `$` (end
-    // of the mdast heading TEXT); the trailing run it captures is replayed
-    // verbatim into group 2, so `### Requirement 1   ` keeps its padding.
-    //
-    // The optional `#+` inside that branch is what makes the two sides agree
-    // on an ATX *closing sequence* (`### Requirement 1 ###`). mdast strips it
-    // before KIRO_HEADING_RE ever sees the text, so recognition accepts the
-    // heading; matching the raw line here without allowing for it would
-    // recognize that heading and then refuse to rename it. It cannot widen
-    // the match into prose: `### Requirement 1 is important` still fails both
-    // branches, because `#+` is only reachable with the line ending right
-    // after it.
-    const re = new RegExp(
-      `^(#+\\s+)Requirement\\s+${escapeRegExp(oldNum)}(\\s*:|\\s*(?:#+\\s*)?$)`,
-    );
+    // `\s*$` here is KIRO_HEADING_RE's own `$` (end of the heading text): the
+    // trailing run it captures is replayed verbatim into group 1, so
+    // `### Requirement 1   ` keeps its padding, and a closing sequence rides
+    // along untouched in `suffix`.
+    const re = new RegExp(`^Requirement\\s+${escapeRegExp(oldNum)}(\\s*:|\\s*$)`);
     for (let i = 0; i < lines.length; i++) {
       if (fenced.has(i)) continue;
-      const match = lines[i].match(re);
+      const heading = splitAtxHeading(lines[i]);
+      if (!heading) continue;
+      const match = heading.text.match(re);
       if (!match) continue;
       const before = lines[i];
-      lines[i] = match[1] + "Requirement " + newNum + match[2] + lines[i].slice(match[0].length);
+      const text = "Requirement " + newNum + match[1] + heading.text.slice(match[0].length);
+      lines[i] = heading.prefix + text + heading.suffix;
       changes.push({
         filePath: "",
         line: i + 1,
@@ -287,20 +287,23 @@ export function rewriteSpecHeading(
     return { content: lines.join("\n"), changes };
   }
 
-  // Custom heading grammar: heading text after the leading `#`s is matched by
-  // headRe; capture group 1 holds the verbatim ID.
-  const headingLineRe = /^(#+\s+)(.*)$/;
+  // Custom heading grammar: the heading text `splitAtxHeading` returns is
+  // matched by headRe; capture group 1 holds the verbatim ID. Same helper as
+  // the default branch and as `specDefinitionId`, so a custom grammar cannot
+  // drift from them either.
   for (let i = 0; i < lines.length; i++) {
     if (fenced.has(i)) continue;
-    const hm = lines[i].match(headingLineRe);
-    if (!hm) continue;
-    const m = hm[2].match(headRe);
+    const heading = splitAtxHeading(lines[i]);
+    if (!heading) continue;
+    const m = heading.text.match(headRe);
     if (!m || m[1] !== oldId) continue;
     const idOffsetInMatch = m[0].indexOf(m[1]);
     if (idOffsetInMatch === -1) continue;
-    const idStart = hm[1].length + (m.index ?? 0) + idOffsetInMatch;
+    const idStart = (m.index ?? 0) + idOffsetInMatch;
     const before = lines[i];
-    lines[i] = lines[i].slice(0, idStart) + newId + lines[i].slice(idStart + oldId.length);
+    const text =
+      heading.text.slice(0, idStart) + newId + heading.text.slice(idStart + oldId.length);
+    lines[i] = heading.prefix + text + heading.suffix;
     changes.push({
       filePath: "",
       line: i + 1,

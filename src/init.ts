@@ -1,4 +1,4 @@
-import { existsSync, rmdirSync, unlinkSync } from "node:fs";
+import { existsSync, rmdirSync, statSync, unlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
   DEFAULT_CONFIG,
@@ -144,6 +144,21 @@ export interface InitResult {
   hooksInstall?: { perAgent: HookOutcome[]; anyFailure: boolean };
 }
 
+/**
+ * `existsSync` narrowed to directories. Total like `existsSync` — a missing
+ * path, a broken symlink or an unreadable parent all answer `false` rather
+ * than throwing, so callers keep treating the probe as a plain predicate.
+ * Symlinks are followed (`statSync`, not `lstatSync`): a `.kiro/specs` that
+ * points at a real directory is one artgraph can enumerate.
+ */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path, { throwIfNoEntry: false })?.isDirectory() ?? false;
+  } catch {
+    return false;
+  }
+}
+
 export function detectProject(rootDir: string): DetectionResult {
   const abs = resolve(rootDir);
   const sddTools: SddToolInfo[] = [];
@@ -155,22 +170,25 @@ export function detectProject(rootDir: string): DetectionResult {
   // nodes (measured: 11 of them), so every artgraph upgrade that touches a
   // Skill would show up as lock drift in every downstream project.
   //
-  // `existsSync` (not `statSync().isDirectory()`) on purpose: it is the same
-  // probe the sibling `hasSpecs` / `hasDocs` / `marker` checks use, and the
-  // worst case for the odd shape it lets through (a regular FILE named
-  // `.kiro/specs`) is a specDirs entry that enumerates nothing — the same
-  // no-op the `["specs","docs"]` fallback already produces on a repo that has
-  // neither directory.
+  // The probe is `isDirectory()`, not the bare `existsSync` the sibling
+  // `hasSpecs` / `hasDocs` / `marker` checks use, because this is the only one
+  // of them whose answer is WRITTEN INTO specDirs. A regular file named
+  // `.kiro/specs` is not the harmless no-op it looks like: the builder feeds
+  // every specDirs entry to `listFilesGuarded(resolve(root, entry, "**/*.md"))`,
+  // which raises `ENOTDIR` on a file, so `init` aborts before writing
+  // `.artgraph.json` at all and every later `scan` exits 1 (measured). A
+  // directory that merely holds no `.md` files IS the harmless case, and it
+  // still reaches specDirs.
   //
   // The push conditions themselves are unchanged: `sddTools` still keys on
   // `marker` alone, so which tools are reported as "detected" and which
   // integrations run are exactly what they were before.
   if (existsSync(resolve(abs, ".specify"))) {
-    const specDir = existsSync(resolve(abs, ".specify/specs")) ? ".specify/specs" : undefined;
+    const specDir = isDirectory(resolve(abs, ".specify/specs")) ? ".specify/specs" : undefined;
     sddTools.push({ name: "Spec Kit", marker: ".specify", specDir });
   }
   if (existsSync(resolve(abs, ".kiro"))) {
-    const specDir = existsSync(resolve(abs, ".kiro/specs")) ? ".kiro/specs" : undefined;
+    const specDir = isDirectory(resolve(abs, ".kiro/specs")) ? ".kiro/specs" : undefined;
     sddTools.push({ name: "Kiro", marker: ".kiro", specDir });
   }
 

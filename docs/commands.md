@@ -809,10 +809,15 @@ tool's spec directory exists on disk — `.kiro/specs/` for Kiro,
 means `scan` / `check` never see any of that tool's requirements. `init`
 seeds the entry for new projects; `init --force` merges an existing config
 instead of re-deriving `specDirs`, so a project initialized before that fix
-needs the entry added by hand. An ancestor entry counts as covering
-(`specDirs: [".kiro"]` covers `.kiro/specs`), and the probe is for the specs
-directory itself, so a `.kiro/` holding only artgraph's own `skills/` and
-`hooks/` never triggers it.
+needs the entry added by hand. Adding it makes those requirements visible for
+the first time, and they arrive uncovered — see the behavior-change note in
+`docs/configuration.md` for which gates that reaches.
+
+An ancestor entry counts as covering (`specDirs: [".kiro"]` covers
+`.kiro/specs`). The probe is for the specs directory itself and requires it to
+be a directory, so neither a `.kiro/` holding only artgraph's own `skills/` and
+`hooks/` nor a regular file named `.kiro/specs` ever triggers it — the advisory
+never names a path that would break `scan`.
 
 `config-pool-protection-asymmetry` (issue #356, judgment updated by PR #359)
 fires when `.artgraph.json`'s `include` and `testPatterns`

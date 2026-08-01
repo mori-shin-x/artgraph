@@ -22,12 +22,13 @@
 // deliberately preserves rather than re-derives.
 
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { detectProject, generateConfig, runInit } from "../src/init.js";
 import { loadConfig } from "../src/config.js";
 import { parseMarkdownContent } from "../src/parsers/markdown.js";
-import { rewriteSpecHeading } from "../src/rename.js";
+import { rewriteSpecHeading, specDefinitionId } from "../src/rename.js";
+import { mergeMarkdown, splitMarkdown } from "../src/rename-executor.js";
 import { runDoctor, type DoctorFinding } from "../src/doctor.js";
 import { createFreshProject, type FreshProject } from "./agents/helpers.js";
 import type { DetectionResult } from "../src/types.js";
@@ -137,6 +138,28 @@ describe("issue #422 — generateConfig seeds an SDD tool's spec directory", () 
     mkdirp(proj.dir, KIRO_SPECS);
     const config = generateConfig(detectProject(proj.dir));
     expect(config.specDirs).toEqual([SPECIFY_SPECS, KIRO_SPECS]);
+  });
+
+  // The probe has to be `isDirectory()`, not a bare `existsSync`: a regular
+  // file named `.kiro/specs` is the one odd shape that must NOT reach
+  // specDirs. The builder globs `<entry>/**/*.md` under every entry, and on a
+  // file that raises ENOTDIR — `init` then aborts before writing
+  // `.artgraph.json` at all, and every later `scan` exits 1. The positive
+  // control in the same test is an EMPTY directory, which is the genuinely
+  // harmless case and still has to be seeded.
+  it("a regular file named .kiro/specs is not seeded, while an empty .kiro/specs directory is", () => {
+    write(proj.dir, KIRO_SPECS, "this is a file, not a directory\n");
+    const asFile = detectProject(proj.dir);
+    expect(asFile.sddTools.map((t) => t.name)).toContain("Kiro");
+    expect(asFile.sddTools.find((t) => t.name === "Kiro")!.specDir).toBeUndefined();
+    expect(generateConfig(asFile).specDirs).toEqual(["specs", "docs"]);
+
+    // Same tree, `.kiro/specs` replaced by an empty directory: seeded.
+    unlinkSync(join(proj.dir, ".kiro", "specs"));
+    mkdirp(proj.dir, KIRO_SPECS);
+    const asDir = detectProject(proj.dir);
+    expect(asDir.sddTools.find((t) => t.name === "Kiro")!.specDir).toBe(KIRO_SPECS);
+    expect(generateConfig(asDir).specDirs).toEqual([KIRO_SPECS]);
   });
 
   // F6 — back-compat for hand-built literals: `integrations` and the new
@@ -264,13 +287,14 @@ describe("issue #422 — init's first scan sees a Kiro project's requirements", 
 // (2) heading grammar — the bare spelling
 // ---------------------------------------------------------------------------
 
-describe("issue #422 — Kiro heading grammar accepts a bare number", () => {
-  function reqIdsOf(markdown: string): string[] {
-    return parseMarkdownContent(markdown, "requirements.md")
-      .nodes.filter((n) => n.kind === "req")
-      .map((n) => n.id);
-  }
+/** The requirement IDs the RECOGNITION side derives from `markdown`. */
+function reqIdsOf(markdown: string): string[] {
+  return parseMarkdownContent(markdown, "requirements.md")
+    .nodes.filter((n) => n.kind === "req")
+    .map((n) => n.id);
+}
 
+describe("issue #422 — Kiro heading grammar accepts a bare number", () => {
   // F10 + F11 + F12 in one test: the widening, its positive control, and the
   // prose heading that must stay OUT. The three belong together — the
   // narrower `:?` spelling of the same widening would pass F10 and F11 while
@@ -348,18 +372,26 @@ describe("issue #422 — rename rewrites both heading spellings", () => {
 
   it("rewrites a heading closed with an ATX closing sequence", () => {
     // mdast strips a closing `###` before the recognition regex sees the
-    // text, so `### Requirement 1 ###` IS recognized as a requirement. Only
-    // the rewriter reads the raw line, which is why the two sides can
-    // disagree here and nowhere else. Widening recognition to the bare
-    // spelling without this branch produces a heading that renames to
-    // nothing while `rename` reports success.
+    // text, so `### Requirement 1 ###` IS recognized as a requirement, while
+    // every rewriter reads the raw line. `splitAtxHeading` (grammar/tokens.ts)
+    // is what keeps those raw-line readers on one normalization.
+    //
+    // It does NOT make the two sides agree everywhere. Widening recognition to
+    // the bare spelling newly reached 10 shapes whose raw line is not an
+    // unadorned `###` line — indented, blockquoted, list-nested, setext,
+    // emphasis-wrapped, entity- or comment-carrying headings — and those are
+    // still recognized without being renameable. That gap is pre-existing for
+    // the titled spelling and out of scope here: measured over the 551
+    // requirement headings in the 62-file real-world corpus behind
+    // KIRO_HEADING_RE's percentages, every one of them is a plain `###` line
+    // and none of the 10 shapes occurs even once.
     const closed = rewriteSpecHeading("### Requirement 1 ###", "Requirement-1", "Requirement-9");
     expect(closed.content).toBe("### Requirement 9 ###");
     expect(closed.changes).toHaveLength(1);
 
-    // Negative control in the same `it()`: the `#+` branch must not be a
-    // door into prose. Both of these end in text, not in the line ending, so
-    // neither side accepts them.
+    // Negative control in the same `it()`: the closing-sequence branch must
+    // not be a door into prose. Both of these end in text, not in the line
+    // ending, so neither side accepts them.
     const proseHash = rewriteSpecHeading(
       "### Requirement 1 ### and then some",
       "Requirement-1",
@@ -367,6 +399,113 @@ describe("issue #422 — rename rewrites both heading spellings", () => {
     );
     expect(proseHash.content).toBe("### Requirement 1 ### and then some");
     expect(proseHash.changes).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (3b) split / merge parity — the SECOND raw-line reader
+// ---------------------------------------------------------------------------
+//
+// `rewriteSpecHeading` is not the only rewriter that reads the raw line:
+// `specDefinitionId` does too, and split/merge locate the definition line to
+// DELETE through it. Shipping closing-sequence support in one and not the
+// other is what these tests pin down — and the merge case is worse than a
+// no-op, because merge deletes the definitions it does recognize while
+// rewriting every `@impl` tag regardless.
+
+describe("issue #422 — split/merge see the same heading definitions rename does", () => {
+  const CLOSED = "### Requirement 1 ###";
+
+  it("the definition probe and the rewriter accept exactly the same headings", () => {
+    // Same acceptance set, positive and negative, in one place: these two now
+    // derive their heading text from a single helper instead of each spelling
+    // its own ATX pattern.
+    const agree = (line: string): { defines: boolean; rewrites: boolean } => ({
+      defines: specDefinitionId(line) === "Requirement-1",
+      rewrites: rewriteSpecHeading(line, "Requirement-1", "Requirement-9").changes.length > 0,
+    });
+
+    // Positive: plain, titled, closing sequence, closing sequence + padding.
+    expect(agree("### Requirement 1")).toEqual({ defines: true, rewrites: true });
+    expect(agree("### Requirement 1: Federated authentication")).toEqual({
+      defines: true,
+      rewrites: true,
+    });
+    expect(agree(CLOSED)).toEqual({ defines: true, rewrites: true });
+    expect(agree("### Requirement 1 ###   ")).toEqual({ defines: true, rewrites: true });
+
+    // Negative, and each one is a shape the recognition side also rejects, so
+    // agreement here is agreement with mdast rather than a shared mistake:
+    //   - a `#` with no space in front of it is heading TEXT, not a closing
+    //     sequence, so the heading reads `Requirement 1#`;
+    //   - seven `#`s is a paragraph in CommonMark, not a heading at all;
+    //   - prose after the closing sequence puts the `#`s back into the text.
+    for (const line of [
+      "### Requirement 1#",
+      "####### Requirement 1",
+      "####### Requirement 1: T",
+      "### Requirement 1 ### and then some",
+      "### Requirement 1 is important",
+    ]) {
+      expect({ line, ...agree(line) }).toEqual({ line, defines: false, rewrites: false });
+      expect(reqIdsOf(line)).toEqual([]);
+    }
+  });
+
+  it("split removes a closing-sequence definition and scaffolds the new IDs", () => {
+    const before = ["# Requirements Document", "", CLOSED, "", "body", ""].join("\n");
+    const { content, changes } = splitMarkdown(
+      ".kiro/specs/auth/requirements.md",
+      before,
+      "Requirement-1",
+      ["Requirement-11", "Requirement-12"],
+      {},
+    );
+
+    // The definition line is gone and both scaffolds are present. Without the
+    // shared helper this returned the input byte-for-byte while the CLI
+    // printed "Split ..." and exited 0.
+    expect(content).not.toContain(CLOSED);
+    expect(content).toContain("- Requirement-11:");
+    expect(content).toContain("- Requirement-12:");
+    expect(changes.filter((c) => c.after === "(removed)")).toHaveLength(1);
+  });
+
+  it("merge removes BOTH definitions when one of them carries a closing sequence", () => {
+    // The half-application. `### Requirement 2` was always removed; the
+    // closing-sequence sibling was not, so the merge left the original heading
+    // behind as an orphan while every `@impl` tag had already moved to the
+    // target — a reported-success rename that turns `check --gate` red.
+    const before = [
+      "# Requirements Document",
+      "",
+      CLOSED,
+      "",
+      "body one",
+      "",
+      "### Requirement 2",
+      "",
+      "body two",
+      "",
+    ].join("\n");
+    const { content, changes } = mergeMarkdown(
+      ".kiro/specs/auth/requirements.md",
+      before,
+      ["Requirement-1", "Requirement-2"],
+      "Requirement-5",
+      false,
+      {},
+    );
+
+    expect(content).not.toContain(CLOSED);
+    expect(content).not.toContain("### Requirement 2");
+    expect(changes.filter((c) => c.after === "(removed)")).toHaveLength(2);
+    // Merge scaffolds the brand-new target exactly once, so the file still
+    // defines every ID the lock will hold after the rewrite.
+    expect(content.match(/- Requirement-5:/g)).toHaveLength(1);
+    expect(
+      parseMarkdownContent(content, "requirements.md").nodes.filter((n) => n.kind === "req"),
+    ).toHaveLength(1);
   });
 });
 
@@ -488,6 +627,70 @@ describe("issue #422 — doctor advisory for an uncovered SDD spec directory", (
     expect(findingsOf(proj.dir)).toEqual([]);
 
     mkdirp(proj.dir, KIRO_SPECS);
+    expect(findingsOf(proj.dir)).toHaveLength(1);
+  });
+
+  // The advisory names a directory for the user to paste into specDirs, so it
+  // must never name one that breaks the very next command. A regular file at
+  // `.kiro/specs` used to earn a NOTICE whose advice made `init` and `scan`
+  // exit 1 with ENOTDIR; the shared `isDirectory()` probe closes both ends at
+  // once, because `detectProject` is what `init` and `doctor` both consult.
+  it("stays silent when .kiro/specs is a regular file, and fires once it is a directory", () => {
+    initClaude(proj.dir);
+    write(
+      proj.dir,
+      ".artgraph.json",
+      JSON.stringify({
+        include: ["src/**/*.ts", "!**/node_modules/**"],
+        testPatterns: ["**/*.test.ts", "!**/node_modules/**"],
+        specDirs: ["specs", "docs"],
+        agents: ["claude"],
+      }),
+    );
+    write(proj.dir, KIRO_SPECS, "this is a file, not a directory\n");
+    expect(findingsOf(proj.dir)).toEqual([]);
+
+    unlinkSync(join(proj.dir, ".kiro", "specs"));
+    mkdirp(proj.dir, KIRO_SPECS);
+    expect(findingsOf(proj.dir)).toHaveLength(1);
+  });
+
+  // Pins the `detectedDescriptors.length > 0` gate itself. `--agents=<csv>`
+  // naming an agent that is NOT installed produces an absent descriptor, which
+  // is enough to get past the empty-report short-circuit — so this run reports
+  // findings, and the advisory still has to be missing from them. Without the
+  // gate the advisory appears here, which is the only observable difference it
+  // makes anywhere.
+  it("does not fire for an agent that is named but not installed, even though doctor still reports", () => {
+    write(proj.dir, ".kiro/specs/auth/requirements.md", REQUIREMENTS_MD);
+    write(
+      proj.dir,
+      ".artgraph.json",
+      JSON.stringify({
+        include: ["src/**/*.ts", "!**/node_modules/**"],
+        testPatterns: ["**/*.test.ts", "!**/node_modules/**"],
+        specDirs: ["specs", "docs"],
+      }),
+    );
+
+    const report = runDoctor({ rootDir: proj.dir, agents: ["claude"] });
+    // Positive control: the run is not empty, so "no advisory" is a real
+    // decision rather than a short-circuited report.
+    expect(report.summary.totalFindings).toBeGreaterThan(0);
+    expect(report.findings.filter((f) => f.kind === "config-specdir-missing-sdd-tool")).toEqual([]);
+
+    // Same tree, agent installed: the advisory appears.
+    initClaude(proj.dir);
+    write(
+      proj.dir,
+      ".artgraph.json",
+      JSON.stringify({
+        include: ["src/**/*.ts", "!**/node_modules/**"],
+        testPatterns: ["**/*.test.ts", "!**/node_modules/**"],
+        specDirs: ["specs", "docs"],
+        agents: ["claude"],
+      }),
+    );
     expect(findingsOf(proj.dir)).toHaveLength(1);
   });
 });
