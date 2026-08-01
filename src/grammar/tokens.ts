@@ -47,11 +47,18 @@ export const NAMESPACED_ID_TOKEN = `(?:[\\w-]+/)?(?:${REQ_ID_TOKEN})`;
 export const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
 
 // A Kiro-style requirement heading. Both spellings occur in real Kiro output
-// and neither is rare — measured over 549 requirement headings in 62 files
-// across 26 repositories with `.kiro/specs/` committed: 41.5% bare
-// (`### Requirement 1`), 58.5% titled (`### Requirement 1: Some Title`).
-// Four repositories use both, and one file uses both. Kiro's own spec-agent
-// prompt templates the bare form; the model adds titles anyway.
+// and neither is rare. Counted as HEADING LINES over 62 requirements.md files
+// from 26 repositories with `.kiro/specs/` committed — 549 in total, every one
+// of them an unindented `###`: 227 bare (41.3%, `### Requirement 1`), 321
+// titled (58.5%, `### Requirement 1: Some Title`), and one that is neither
+// (`### Requirement 0.1`, hierarchical — issue #431). Four repositories use
+// both spellings and one file uses both. Kiro's own spec-agent prompt
+// templates the bare form; the model adds titles anyway.
+//
+// The bare count includes the five `### 要件 N` headings in the corpus, which
+// this pattern does NOT match (issue #431) — they are counted because the
+// question the percentage answers is "how often does Kiro omit the colon",
+// not "how many headings does this regex accept".
 //
 // The alternative is `$`, NOT `:?` — `:?` would also accept prose headings
 // like `### Requirement 1 is important`, which are not requirement

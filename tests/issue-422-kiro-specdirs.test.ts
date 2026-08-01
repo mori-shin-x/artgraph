@@ -6,7 +6,9 @@
 // the truth.
 //
 // Three changes ship together here, because fixing only the first one leaves
-// the symptom in place for a measured 41.5% of real Kiro spec files:
+// the symptom in place for the 41.3% of measured real-world Kiro requirement
+// HEADINGS that omit the colon (227 of 549 heading lines; by file the share is
+// different, and the two must not be quoted interchangeably):
 //
 //   (1) `detectProject` probes each SDD tool's SPECS directory and
 //       `generateConfig` appends it to `specDirs` (never substitutes).
@@ -303,7 +305,7 @@ describe("issue #422 — Kiro heading grammar accepts a bare number", () => {
     // F11 — positive control, the spelling that always worked.
     expect(reqIdsOf("### Requirement 1: Federated authentication")).toEqual(["Requirement-1"]);
 
-    // F10 — the widening. 41.5% of measured real-world Kiro headings.
+    // F10 — the widening. 41.3% of measured real-world Kiro heading lines.
     expect(reqIdsOf("### Requirement 2")).toEqual(["Requirement-2"]);
 
     // F12 — prose is not a definition. `:?` would accept this one.
@@ -381,10 +383,10 @@ describe("issue #422 — rename rewrites both heading spellings", () => {
     // unadorned `###` line — indented, blockquoted, list-nested, setext,
     // emphasis-wrapped, entity- or comment-carrying headings — and those are
     // still recognized without being renameable. That gap is pre-existing for
-    // the titled spelling and out of scope here: measured over the 551
-    // requirement headings in the 62-file real-world corpus behind
-    // KIRO_HEADING_RE's percentages, every one of them is a plain `###` line
-    // and none of the 10 shapes occurs even once.
+    // the titled spelling and out of scope here: measured over the 549
+    // requirement heading lines in the 62-file real-world corpus behind
+    // KIRO_HEADING_RE's percentages, every one of them is a plain unindented
+    // `###` line and none of the 10 shapes occurs even once.
     const closed = rewriteSpecHeading("### Requirement 1 ###", "Requirement-1", "Requirement-9");
     expect(closed.content).toBe("### Requirement 9 ###");
     expect(closed.changes).toHaveLength(1);

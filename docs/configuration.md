@@ -337,7 +337,7 @@ and left the definition behind, which turns the requirement into an orphan. If
 the ID exists only in the spec, there is nothing left to rewrite and the run
 exits 1 (`… was not found in any of the N files matched by …`).
 
-None of these shapes occurred in the 62-file, 551-heading corpus behind the
+None of these shapes occurred in the 62-file, 549-heading corpus behind the
 percentages above; if you write one by hand, edit it and its `@impl` tags
 together.
 
