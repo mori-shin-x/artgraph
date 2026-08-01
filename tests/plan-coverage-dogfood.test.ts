@@ -15,7 +15,7 @@
 // tests rather than spawning the CLI. This keeps the test fast and
 // avoids depending on a built dist/ in CI.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { runPlanCoverage } from "../src/plan-coverage/index.js";
@@ -25,6 +25,40 @@ import { runPlanCoverage } from "../src/plan-coverage/index.js";
 // runs from the project root and the test path is stable.
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const SPEC_DIR = join(REPO_ROOT, "specs/014-reinvent-impact-cli");
+
+// issue #427 — `runPlanCoverage` builds the graph of the REPOSITORY ITSELF,
+// and `buildGraph` writes `node_modules/.cache/artgraph/parse-cache.json` on
+// the way out (`cacheEnabled` only asks whether `node_modules` exists). That
+// cache is keyed by file content, not by which build produced the fragment:
+// `computeCacheFingerprint` folds in `SCHEMA_VERSION` and `artgraphVersion()`,
+// and both are identical between `src` and `dist` because `artgraphVersion()`
+// reads the same `package.json` either way. So a cache warmed by this suite
+// (`src`, via vite-node) is then READ by the CLI (`dist`) — and `dist` is
+// older than `src` for most of a development cycle, since `pnpm test:unit`
+// does not rebuild. Measured before this guard: a `dist` predating #423
+// replayed 118 orphans from fragments the fixed parser had written, where a
+// cold rebuild gives 110.
+//
+// This is the same warm-vs-cold divergence `SCHEMA_VERSION` exists to prevent,
+// arriving through a channel the counter cannot see — bumping it does not help
+// when both sides read the same number.
+//
+// Disabled for the duration of THIS FILE only: vitest reuses a worker process
+// across files, and `tests/barrel-reexport.test.ts`'s two INV-L4 tests assert
+// that warm and cold builds agree, which requires the cache file to exist
+// (measured: they fail under a global `ARTGRAPH_CACHE=0`). Same shape as
+// `tests/dogfood-self-pollution.test.ts`, which closed the other writer.
+let previousCacheEnv: string | undefined;
+
+beforeAll(() => {
+  previousCacheEnv = process.env.ARTGRAPH_CACHE;
+  process.env.ARTGRAPH_CACHE = "0";
+});
+
+afterAll(() => {
+  if (previousCacheEnv === undefined) delete process.env.ARTGRAPH_CACHE;
+  else process.env.ARTGRAPH_CACHE = previousCacheEnv;
+});
 
 describe("plan-coverage self-dogfood — spec 014 has zero implicit impacts (T027)", () => {
   it("(precondition) the spec 014 directory exists and has tasks.md / spec.md", () => {
