@@ -73,11 +73,25 @@ import type { LockFile } from "../types.js";
 //     forward hop, and `depends_on`/`derives_from` carrying at least one
 //     EXPLICIT-declaration provenance) grants this state — "strong",
 //     transitive, exactly like every edge kind behaved pre-#361.
-//   - `"restricted"` — a `kind === "test"` node reached via a reverse
-//     `verifies`/`imports` hop (the #303 hub-arrival shape). Still
-//     EXPANDABLE (it IS dequeued), but its OWN forward `verifies`/`imports`
-//     edges are narrowed per R3a/R3b below. A later, unrestricted arrival at
-//     the SAME node upgrades and re-expands it (unchanged from #303).
+//   - `"restricted"` — a hub ARRIVAL, in exactly two shapes:
+//       (a) a `kind === "test"` node reached via a reverse `verifies`/
+//           `imports` hop (the #303 shape, unchanged), and
+//       (b) issue #435 — the source node of a reverse `verifies` hop over an
+//           edge whose `targetSpace === "requirement"`: a task's Kiro-style
+//           `_Requirements:` reference, resolved into the requirement ID
+//           space by a `verifiesTargetSpace: "requirement"` preset. Such a
+//           tasks.md names the same requirement from many tasks by
+//           construction, which is the same fan-out shape a test hub has.
+//           The condition is the EDGE's ID space, deliberately NOT the source
+//           node's `kind === "task"`: spec-kit's `[FR-001]` task tags have
+//           produced `task -> verifies -> req` edges since long before #435
+//           and are NOT narrowed (measured — narrowing them shrank a
+//           spec-kit fixture's `impactReqs` and flipped `plan-coverage
+//           --gate` from exit 1 to exit 0).
+//     Still EXPANDABLE (it IS dequeued), but its OWN forward `verifies`/
+//     `imports` edges are narrowed per R3a/R3b below. A later, unrestricted
+//     arrival at the SAME node upgrades and re-expands it (unchanged from
+//     #303).
 //   - `"terminal"` — a WEAK, "collect but do not re-open" reach: the node
 //     lands in `visited` (so it still contributes to `impactReqs` /
 //     `affectedFiles` / `affectedDocs` / `reqProvenance` / post-BFS
@@ -262,7 +276,17 @@ const REACH_RANK: Record<ReachState, number> = { terminal: 0, restricted: 1, exp
 // semantics for a non-restricted expansion, exactly like a startId or a
 // forward-reached node always could.
 function classifyEdgeTraversal(
-  edge: { source: string; target: string; kind: EdgeKind; provenances: readonly string[] },
+  edge: {
+    source: string;
+    target: string;
+    kind: EdgeKind;
+    provenances: readonly string[];
+    // issue #435 — the ID space the target was resolved into; see
+    // `GraphEdge.targetSpace` (src/types.ts). Structurally typed like the rest
+    // of this parameter so the classifier stays callable from a test with a
+    // literal edge object.
+    targetSpace?: "requirement";
+  },
   direction: "forward" | "reverse",
   fromRestricted: boolean,
   ctx: {
@@ -329,11 +353,38 @@ function classifyEdgeTraversal(
         }
         return { blocked: false, state: "terminal" };
       }
-      // reverse `verifies` (req -> its verifying test): unconditional;
+      // reverse `verifies` (req -> its verifying test/task): unconditional;
       // landing on a `kind === "test"` node is the #303 hub ARRIVAL.
+      //
+      // issue #435 — a REQUIREMENT-SPACE task reference (`edge.targetSpace ===
+      // "requirement"`, i.e. a Kiro `_Requirements: 1.1_` list resolved by a
+      // `verifiesTargetSpace: "requirement"` preset) is the SAME hub shape and
+      // gets the same `"restricted"` arrival: #435 made those edges land on
+      // real req nodes for the first time, and without the narrowing one
+      // `@impl` on a single file would walk
+      // req -> task -> sibling req -> its tasks -> ... and collapse a whole
+      // spec directory into one impact set (a Kiro tasks.md references the
+      // same requirement from many tasks by construction). `"restricted"`
+      // reuses #303's eligibility test verbatim: the hub's own forward
+      // `verifies` is blocked when the target REQ already has an `implements`
+      // edge, so a sibling req that is already claimed by code no longer
+      // bleeds in, and reach stops one hop out instead of daisy-chaining.
+      //
+      // The test is the EDGE's ID space, NOT `kind === "task"`. Spec Kit's
+      // `[FR-001]` task tags have produced `task -> verifies -> req` edges
+      // since the preset shipped, entirely independently of #435; keying on
+      // the source node's kind would have narrowed every spec-kit project's
+      // `impact()` too (measured: `impactReqs` `[FR-001, FR-002]` -> `[FR-001]`
+      // and `plan-coverage --gate` exit 1 -> 0 on a two-spec fixture, i.e.
+      // fail-open). `targetSpace` is what #435 actually introduced, so it is
+      // what #435 is allowed to narrow — see `GraphEdge.targetSpace`
+      // (src/types.ts) for why the flag rides on the edge instead of being
+      // re-derived from the target ID's spelling.
+      const sourceKind = ctx.graph.nodes.get(edge.source)?.kind;
+      const isRequirementSpaceTaskRef = edge.targetSpace === "requirement";
       return {
         blocked: false,
-        state: ctx.graph.nodes.get(edge.source)?.kind === "test" ? "restricted" : "expandable",
+        state: sourceKind === "test" || isRequirementSpaceTaskRef ? "restricted" : "expandable",
       };
     }
 
@@ -691,9 +742,16 @@ export function findOrphans(graph: ArtifactGraph): OrphanEdge[] {
   for (const edge of graph.edges) {
     if (edge.kind === "implements" || edge.kind === "verifies") {
       // task → implements/verifies は planning artefact。target が必ずしも
-      // graph 上の node とは限らない(Kiro の `_Requirements: 1.1, 2.3_` の
-      // numeric ID は `Requirement-N` という別 ID として登録されるため)。
+      // graph 上の node とは限らない(spec-kit の `@impl(auth-login)` のような
+      // 自由形式ターゲットや `[REQ-FR-001]` の prefix 付き ID など)。
       // task-source の orphan は警告対象外。code-claim な orphan のみ拾う。
+      //
+      // issue #435 以前はこの skip の正当化理由として「Kiro の
+      // `_Requirements: 1.1, 2.3_` は `Requirement-N` とは別 ID 空間だから」
+      // を挙げていたが、#435 で Kiro の task 参照は requirement 名前空間へ
+      // 解決されるようになったため、その理由はもう成立しない。結果として
+      // 「解決に失敗した Kiro の `_Requirements:` 参照が完全に無音になる」
+      // という穴が残っている(#415 が担当。本 PR では skip 条件を変えない)。
       if (graph.nodes.get(edge.source)?.kind === "task") continue;
       if (!graph.nodes.has(edge.target)) {
         orphans.push({ source: edge.source, target: edge.target, kind: edge.kind });

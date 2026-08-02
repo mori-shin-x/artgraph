@@ -12,6 +12,8 @@ import {
   LIST_ITEM_RE,
   KIRO_HEADING_RE,
   DEFAULT_CODE_ID_RE,
+  kiroRequirementId,
+  kiroRequirementIdFromTaskReference,
 } from "../grammar/tokens.js";
 
 export interface ParseMarkdownOptions {
@@ -74,7 +76,14 @@ export const BUILTIN_TASK_PRESETS: TaskConventionPreset[] = [
     // lookbehind keys on the literal `Requirements:` label and a comma/digit-only
     // run between it and the captured ID — that constrains matches to the
     // requirements list and ignores stray numerics like "Set up 3 workers".
+    //
+    // What the capture NAMES is a requirement, not a task: `1.1` is
+    // "requirement 1, acceptance criterion 1" in requirements.md's own
+    // numbering. `verifiesTargetSpace` below is what carries the capture into
+    // that ID space (issue #435) — without it the numbers collide with the
+    // task numbering in the same file and the edges come out as self-loops.
     verifiesTagRe: "(?<=Requirements:[\\s\\d.,]*)(\\d+(?:\\.\\d+)*)",
+    verifiesTargetSpace: "requirement",
   },
 ];
 // Inline req→req annotation: `(depends_on: A, B, ...)` or `(derives_from: ...)`.
@@ -308,6 +317,7 @@ export function parseMarkdownContent(
     idRe: RegExp;
     implRe?: RegExp;
     verifiesRe?: RegExp;
+    verifiesTargetSpace: "task" | "requirement";
   }
   const fileStem = basename(relPath)
     .replace(/\.(md|markdown)$/i, "")
@@ -325,6 +335,9 @@ export function parseMarkdownContent(
       idRe: new RegExp(preset.taskIdRe),
       implRe: preset.implementsTagRe ? new RegExp(preset.implementsTagRe, "g") : undefined,
       verifiesRe: preset.verifiesTagRe ? new RegExp(preset.verifiesTagRe, "g") : undefined,
+      // Absent means `"task"` — the pre-#435 behavior of every preset, so an
+      // existing user-supplied preset keeps emitting its captures verbatim.
+      verifiesTargetSpace: preset.verifiesTargetSpace ?? "task",
     });
   }
 
@@ -421,11 +434,29 @@ export function parseMarkdownContent(
               let m: RegExpExecArray | null;
               while ((m = preset.verifiesRe.exec(paragraphText)) !== null) {
                 for (const target of splitTagTargets(m[1])) {
+                  // issue #435 — a `"requirement"`-space preset's capture is
+                  // an acceptance-criterion number, not an ID; map it onto
+                  // the requirement ID space. `null` (major segment isn't a
+                  // bare number) keeps the raw capture, matching the
+                  // `"task"`-space behavior.
+                  const reqSpace = preset.verifiesTargetSpace === "requirement";
                   edges.push({
                     source: taskId,
-                    target,
+                    target: reqSpace
+                      ? (kiroRequirementIdFromTaskReference(target) ?? target)
+                      : target,
                     kind: "verifies",
                     provenances: ["task-tag"],
+                    // The ID SPACE the target now lives in, carried on the
+                    // edge so no consumer has to re-derive it from the ID's
+                    // spelling (`GraphEdge.targetSpace` in src/types.ts lists
+                    // them and why). Set even when the mapping returned
+                    // `null` and the raw capture survived: the preset still
+                    // DECLARED this reference to name a requirement, and the
+                    // consumers that read this flag (`rename`'s unrewritable-
+                    // reference warning, the traversal's hub arrival) are
+                    // about the reference, not about whether it resolved.
+                    ...(reqSpace ? { targetSpace: "requirement" as const } : {}),
                   });
                 }
               }
@@ -490,7 +521,7 @@ export function parseMarkdownContent(
     const match = text.match(headingRE);
     if (!match || match[1] == null) return;
 
-    const reqId = headingRE === KIRO_HEADING_RE ? `Requirement-${match[1]}` : match[1];
+    const reqId = headingRE === KIRO_HEADING_RE ? kiroRequirementId(match[1]) : match[1];
     const startLine = node.position.start.line;
     const headingContent = extractSectionContent(content, startLine);
     const paragraph = extractFirstParagraphAfterHeading(content, startLine);

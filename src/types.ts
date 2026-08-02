@@ -67,6 +67,39 @@ export interface GraphEdge {
   // NonEmpty: every edge must record at least one provenance.
   // See specs/011-edge-provenance/contracts/edge-provenance-type.md §INV-T1.
   provenances: NonEmptyArray<EdgeProvenance>;
+  /**
+   * issue #435 — this edge's `target` was RESOLVED into the requirement ID
+   * space by the task convention that produced it (`verifiesTargetSpace:
+   * "requirement"`, see `TaskConventionPreset` below), instead of being taken
+   * from the regex capture verbatim.
+   *
+   * Absent on every other edge in the graph — including spec-kit's
+   * `[FR-001]` task tags, whose captures ARE the ID — so "present" is the
+   * whole predicate; there is no `"task"` value to compare against.
+   *
+   * This is an ID-SPACE axis, deliberately NOT a new `EdgeProvenance` value:
+   * provenance answers "by what mechanism was this edge produced" (a task tag
+   * — `"task-tag"` — in both cases), which is a different question. Same
+   * reasoning as spec 022's G5 (`star-expansion.ts` reuses `ts-import` rather
+   * than minting a provenance for synthesized re-export edges).
+   *
+   * Consumers, and why they need the ID space rather than the ID's shape:
+   *   - `classifyEdgeTraversal` (src/graph/traverse.ts) — a reverse `verifies`
+   *     hop onto a requirement-space task reference is a hub ARRIVAL. Keying
+   *     on `kind === "task"` instead would have narrowed spec-kit's
+   *     long-standing `task -> verifies -> req` edges too.
+   *   - `collectTaskRequirementRefs` (src/rename-executor.ts) — these are the
+   *     references `rename` cannot rewrite. Keying on the ID's spelling
+   *     instead (`/^Requirement-\d+$/`) both warned about spec-kit's legal
+   *     `[Requirement-3]` tags, which rename DOES rewrite, and stayed silent
+   *     for a `verifiesTargetSpace: "requirement"` preset that mints some
+   *     other spelling.
+   *
+   * `dedupEdges` (src/graph/canonical.ts) unions this flag across duplicate
+   * (source, target, kind) edges — see its own comment for why the union
+   * direction is the safe one.
+   */
+  targetSpace?: "requirement";
 }
 
 export interface ArtifactGraph {
@@ -563,11 +596,31 @@ export interface TaskConventionPreset {
   implementsTagRe?: string;
   /**
    * Optional regex extracting `verifies`-edge target IDs from the task's listItem subtree.
-   * Each match's capture group 1 becomes one edge target. Applied with /g semantics.
+   * Each match's capture group 1 becomes one edge target — unless
+   * `verifiesTargetSpace` says otherwise (see below). Applied with /g semantics.
    * Examples: spec-kit's `[REQ-...]` brackets; kiro's `_Requirements: X, Y, Z_` lists
    * (the regex iterates each ID via lookbehind-free alternation).
    */
   verifiesTagRe?: string;
+  /**
+   * Which ID space `verifiesTagRe`'s captures name (issue #435).
+   *
+   * - `"task"` (default, and the behavior of every preset before #435): the
+   *   capture IS the target ID, verbatim. Spec Kit's `[FR-001]` names
+   *   `FR-001`.
+   * - `"requirement"`: the capture is a Kiro-style acceptance-criterion
+   *   number (`1.1` = requirement 1, criterion 1) and is mapped onto the
+   *   requirement ID space by `kiroRequirementIdFromTaskReference`
+   *   (src/grammar/tokens.ts) — `1.1` and `1.2` both become `Requirement-1`.
+   *   A capture whose major segment is not a bare number is left verbatim.
+   *
+   * Only the built-in `kiro` preset sets `"requirement"`. A user preset that
+   * re-implements Kiro's `_Requirements:` grammar (e.g. the
+   * `kiro-no-checkbox` recipe in docs/configuration.md) must set it too —
+   * otherwise its edges keep pointing at task IDs while the built-in preset's
+   * point at requirements, in the same file.
+   */
+  verifiesTargetSpace?: "task" | "requirement";
 }
 
 export interface TestResultRecord {

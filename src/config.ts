@@ -280,6 +280,42 @@ function validateTaskConventions(value: unknown, disabled: Set<string>): void {
       (preset as { verifiesTagRe?: unknown }).verifiesTagRe,
       /* required */ false,
     );
+    validateVerifiesTargetSpace(
+      idx,
+      (preset as { verifiesTargetSpace?: unknown }).verifiesTargetSpace,
+      (preset as { verifiesTagRe?: unknown }).verifiesTagRe,
+    );
+  }
+}
+
+// issue #435 — `loadConfig` hands `raw.taskConventions` through verbatim (see
+// the `taskConventions:` line in `loadConfig` below), so a field this function
+// does not look at reaches the parser unvalidated. `verifiesTargetSpace` is an
+// enum, not a regex, so it gets its own validator rather than a `MAX_PATTERN_
+// LENGTH`/ReDoS check: the only failure mode is a value the parser silently
+// treats as `"task"` (its `?? "task"` default), which would look exactly like
+// the pre-#435 bug this field exists to fix.
+const VERIFIES_TARGET_SPACES = ["task", "requirement"] as const;
+
+function validateVerifiesTargetSpace(idx: number, value: unknown, verifiesTagRe: unknown): void {
+  if (value === undefined) return;
+  if (typeof value !== "string" || !(VERIFIES_TARGET_SPACES as readonly string[]).includes(value)) {
+    throw new Error(
+      `Invalid taskConventions[${idx}].verifiesTargetSpace: must be one of ${VERIFIES_TARGET_SPACES.join(", ")}`,
+    );
+  }
+  // issue #435 (LOW-9) — the field does nothing on its own: it only ever
+  // reinterprets `verifiesTagRe`'s captures, and presets are merged
+  // whole-preset by name (src/parsers/markdown.ts), never field-by-field, so
+  // it can never be filled in from a built-in. Rejected rather than warned
+  // about: a preset carrying it with no `verifiesTagRe` produces the SAME
+  // graph as one without it, which is the silent no-op this whole field
+  // exists to stop being. It is new in #435, so there is no configuration in
+  // the wild for this to break.
+  if (verifiesTagRe === undefined) {
+    throw new Error(
+      `Invalid taskConventions[${idx}].verifiesTargetSpace: only meaningful together with verifiesTagRe (it reinterprets that regex's captures); remove it or add verifiesTagRe`,
+    );
   }
 }
 

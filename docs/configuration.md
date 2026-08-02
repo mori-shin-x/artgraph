@@ -246,6 +246,14 @@ then matches both, so it is **ambiguous and the edge is dropped**, with a
 `WARNING: ambiguous ID "Requirement-1" (candidates: auth, billing)` naming the
 candidates. The requirements themselves are reported `uncovered`.
 
+The same qualification applies to a task's `_Requirements:` list (issue #435):
+`_Requirements: 1.1_` in `.kiro/specs/auth/tasks.md` binds to
+`auth/Requirement-1`, because the resolver prefers a match in the *same* spec
+directory. You do not have to qualify anything by hand there — but a spec
+directory that holds a `tasks.md` and **no `requirements.md`** (a cross-cutting
+planning spec) has no same-directory match, so its `_Requirements:` entries are
+ambiguous and their edges are dropped with the same warning.
+
 The fix is on the annotation side: qualify each tag with the spec directory
 its requirement lives in.
 
@@ -605,15 +613,23 @@ regexes; there is no global `@impl` / `[REQ-]` convention baked into the parser.
 
 ### Built-in presets
 
-| Preset       | files (stem)        | task ID                          | `implements` tag        | `verifies` tag                                  |
-| ------------ | ------------------- | -------------------------------- | ----------------------- | ----------------------------------------------- |
-| **spec-kit** | `plan`, `tasks`     | `T\d+` (e.g. `T001`)             | `@impl(target-id)`      | `[REQ-FR-001]` / `[FR-001]` / `[Requirement-3]` |
-| **kiro**     | `tasks`             | `\d+(\.\d+)*` (e.g. `1`, `1.1`)  | *(not used by Kiro)*    | `- _Requirements: 1.1, 2.3, 3.1_` (italic list) |
+| Preset       | files (stem)        | task ID                          | `implements` tag        | `verifies` tag                                  | `verifies` target space |
+| ------------ | ------------------- | -------------------------------- | ----------------------- | ----------------------------------------------- | ----------------------- |
+| **spec-kit** | `plan`, `tasks`     | `T\d+` (e.g. `T001`)             | `@impl(target-id)`      | `[REQ-FR-001]` / `[FR-001]` / `[Requirement-3]` | `task` (capture verbatim) |
+| **kiro**     | `tasks`             | `\d+(\.\d+)*` (e.g. `1`, `1.1`)  | *(not used by Kiro)*    | `- _Requirements: 1.1, 2.3, 3.1_` (italic list) | `requirement` (`1.1` → `Requirement-1`) |
 
 Notes:
 
 - `doc → contains → task` edges are emitted under `docGraph.autoContains` (the
   same flag that drives `doc → req`).
+- **Kiro's `_Requirements:` entries are acceptance-criterion numbers, and
+  artgraph maps them to the requirement they belong to** — `1.1` and `1.2` both
+  name `Requirement-1`, so they produce ONE `task → verifies → Requirement-1`
+  edge, not two. Which criterion a task cited is not represented in the graph;
+  it stays in the `tasks.md` doc node's content hash. See
+  [Which `_Requirements:` entries resolve](#which-_requirements-entries-resolve-issue-435)
+  for the three shapes where the mapping produces an ID that matches no
+  requirement.
 - Kiro's `tasks.md` requires the `[ ]`/`[x]` checkbox on each task line — bare
   numbered lists like `- 1 release shipped` are not treated as tasks. See
   [Kiro `tasks.md` without checkboxes](#kiro-tasksmd-without-checkboxes-issue-419)
@@ -648,6 +664,27 @@ All three regex fields are validated the same way `reqPatterns` is
 Omit `implementsTagRe` or `verifiesTagRe` if your tool doesn't have that edge
 kind (Kiro omits `implementsTagRe`).
 
+There is a fourth, optional field: `verifiesTargetSpace`.
+
+| value | meaning |
+| ----- | ------- |
+| `"task"` (default) | `verifiesTagRe`'s capture **is** the target ID, verbatim. |
+| `"requirement"` | The capture is a Kiro-style `<requirement>.<criterion>` number; the part before the first `.` is mapped to `Requirement-<n>`. A capture whose leading segment is not a bare number is left verbatim. |
+
+Leave it out unless your tool numbers its cross-links the way Kiro does. It is
+rejected at config-load time with
+`Invalid taskConventions[N].verifiesTargetSpace: must be one of task, requirement`
+for any other value, and — because the field only ever reinterprets
+`verifiesTagRe`'s captures and presets are merged whole, never field-by-field —
+setting it on a preset that has **no `verifiesTagRe`** is rejected too, rather
+than silently doing nothing.
+
+Beyond choosing the ID space, the field also marks the edges it produces:
+`impact()` treats a requirement-space task reference as a hub (reach stops one
+hop past it, like a test file that verifies several requirements), and `rename`
+knows those references are ones it cannot rewrite. A `"task"`-space preset —
+every preset that omits the field, Spec Kit's included — is untouched by both.
+
 ### Kiro `tasks.md` without checkboxes (issue #419) <a id="kiro-tasksmd-without-checkboxes-issue-419"></a>
 
 Kiro sometimes emits a `tasks.md` whose task lines carry no `[ ]`/`[x]`
@@ -664,24 +701,25 @@ picks up the bare ones:
       "name": "kiro-no-checkbox",
       "fileStems": ["tasks"],
       "taskIdRe": "^(\\d+|\\d+\\.\\d+|\\d+\\.\\d+\\.\\d+)\\.?[\\s\\u00A0]",
-      "verifiesTagRe": "(?<=Requirements:[\\s\\d.,]*)(\\d+\\.\\d+|\\d+)"
+      "verifiesTagRe": "(?<=Requirements:[\\s\\d.,]*)(\\d+\\.\\d+|\\d+)",
+      "verifiesTargetSpace": "requirement"
     }
   ]
 }
 ```
 
-Four things about that snippet are easy to get wrong:
+Five things about that snippet are easy to get wrong:
 
-- **The `verifies` edges a Kiro `tasks.md` produces point at task IDs, not at
-  requirement IDs.** `_Requirements: 1.1, 1.2_` names entries in
-  `requirements.md`'s own numbering, and those numbers collide with the task
-  numbers in the same directory — so on a standard Kiro spec the edges come out
-  as self-loops (`1 -> 1`, `2 -> 2`) or point at nodes that do not exist. That
-  is the built-in preset's behavior too, not something this recipe introduces:
-  `examples/kiro-integration/` ships the same edges and its README calls them
-  planning metadata that is intentionally not reconciled. Seeding `.kiro/specs`
-  into `specDirs` is what makes them show up by default, so expect them in
-  `scan --format json` and do not read them as spec-to-code coverage.
+- **`verifiesTargetSpace: "requirement"` is not optional here (issue #435).**
+  Without it your preset's `_Requirements: 1.1_` captures stay in the *task* ID
+  space while the built-in `kiro` preset's resolve to `Requirement-1` — and
+  because both presets apply to the same `tasks.md`, you get **two ID spaces
+  inside one file**: the checkbox-less lines point at `1.1` (a task number, or
+  nothing at all) and the checkbox lines point at `Requirement-1`. Measured on a
+  mixed fixture, that is `1 -> 1.1` next to `2.1 -> Requirement-2`.
+  Pinned by `issue #435 ⑤ the docs kiro-no-checkbox recipe` in
+  `tests/issue-435-kiro-requirements-space.test.ts` (both halves: with and
+  without the field).
 - **You need `verifiesTagRe` too, not just `taskIdRe`.** Tag regexes are
   per-preset: a task discovered by your preset is scanned with *your* preset's
   tags, so leaving `verifiesTagRe` out gives the checkbox-less lines task nodes
@@ -713,13 +751,136 @@ one fixture: `- 3. Ordered-list dot form`, `- 4) Paren form` and a top-level
 checkbox spelling (`- [x] 3. Something`) survives the marker rule, because the
 `[x]` comes first.
 
+### Which `_Requirements:` entries resolve (issue #435) <a id="which-_requirements-entries-resolve-issue-435"></a>
+
+Do not read "Kiro's `_Requirements:` points at a requirement" as unconditional.
+The mapping is `<major>` → `Requirement-<major>`, applied verbatim, and three
+real shapes come out of it pointing at nothing. All three are **silent**: a
+`verifies` edge whose *source* is a task is excluded from orphan reporting
+(`findOrphans`), so a broken reference shows up in neither `check` nor `scan`
+warnings. That gap is tracked in issue #415.
+
+| `requirements.md` heading | `tasks.md` entry | resolves to | outcome |
+| ------------------------- | ---------------- | ----------- | ------- |
+| `### Requirement 2`       | `_Requirements: 2_`     | `Requirement-2`  | resolves |
+| `### Requirement 2`       | `_Requirements: 2.1_`   | `Requirement-2`  | resolves |
+| `### Requirement 2`       | `_Requirements: 2.1.1_` | `Requirement-2`  | resolves (major grain) |
+| `### Requirement 10`      | `_Requirements: 10.2_`  | `Requirement-10` | resolves |
+| `### Requirement 01`      | `_Requirements: 1.1_`   | `Requirement-1`  | **dangles** — zero padding is not normalized on either side |
+| `### Requirement 0.1`     | `_Requirements: 0.1_`   | `Requirement-0`  | **dangles** — the heading is not a requirement node at all (issue #431) |
+| `### 要件 1`               | `_Requirements: 1.1_`   | `Requirement-1`  | **dangles** — a non-English heading mints no requirement node (issue #431) |
+
+On an `### 要件 N` project the whole feature is a complete no-op *and*
+completely silent: `check --format json` is byte-identical to what it produced
+before this change. Pinned by `issue #435 ② ### 要件 N headings` and
+`issue #435 ⑥ numeric variants` in
+`tests/issue-435-kiro-requirements-space.test.ts`.
+
+`rename` cannot repair any of these for you. It rewrites the `### Requirement N`
+heading and the `@impl` tags but **not** the `_Requirements:` lines, so renaming
+a requirement a task references prints
+`WARNING: "<id>" is still referenced by a task's requirement list in <file>`
+and exits **1** — the rewrite is applied (the files on disk are already changed),
+the exit code is telling you the job is not finished. Note that the
+`_Requirements:` lines do not contain the ID at all (`1.1` resolves to
+`Requirement-1`), so search-and-replace will not find them: renumber them by
+hand, then re-run `artgraph reconcile`. Pinned by `issue #435 D2` in the same
+file.
+
+Which references get that warning is decided by the *task convention that
+produced them* — a preset with `verifiesTargetSpace: "requirement"` — never by
+what the ID looks like. A spec-kit `tasks.md` tag spelled `[Requirement-3]` is
+a plain spec-kit `verifies` tag (see the built-in preset table above) and gets
+no warning, exactly as before this change. Spec Kit's `tasks.md` tags are, in
+fact, *also* left unrewritten by `rename` and have always been silent about it;
+that pre-existing gap is unchanged here and belongs with issue #415.
+
 ### Upgrade note
 
 Built-in presets activate automatically on upgrade. Existing projects whose
 `tasks.md` already contains `T###` (Spec Kit) or checkbox-prefixed numerics
 (Kiro) will see new `task` nodes — and `doc → task` `contains` edges, plus
-`task → verifies → ...` edges for Kiro `_Requirements:` lists — on the next
-`artgraph scan`. Run `artgraph reconcile` to refresh the lock baseline.
+`task → verifies → Requirement-N` edges for Kiro `_Requirements:` lists — on
+the next `artgraph scan`. Run `artgraph reconcile` to refresh the lock baseline.
+
+### Upgrade note — Kiro `_Requirements:` now names requirements (issue #435)
+
+Before this change a Kiro `_Requirements: 1.1_` produced an edge whose target
+was the literal `1.1`, which collides with the *task* numbering in the same
+file: the edges came out as self-loops or pointed at nothing. They now resolve
+to `Requirement-1`, qualified by spec directory (`auth/Requirement-1`) exactly
+like any other ID defined in more than one spec.
+
+`artgraph reconcile` refreshes the lock baseline afterwards, but note what it
+does **not** absorb — the blast radius reaches beyond the lock:
+
+- **`plan-coverage --gate` can flip green → red.** A requirement co-referenced
+  by a task that also references a requirement your change touches now lands in
+  that task's impact set, and `plan-coverage`'s mention detector matches IDs
+  *literally* — neither `### Requirement 2` (no hyphen) nor `_Requirements: 2.1_`
+  matches `Requirement-2` — so the new arrival is reported as an *implicit*
+  impact and the gate exits 1. Measured: a one-task fixture went from
+  `{totalAffected: 1, mentioned: 1, implicit: 0}` / exit 0 to
+  `{totalAffected: 2, mentioned: 1, implicit: 1}` / exit 1. Write the
+  requirement ID (`Requirement-2`) into `tasks.md` / `plan.md` prose, or pass
+  `--ignore`.
+- **`check --diff` reports more on a Kiro project.** A `tasks.md` edit now
+  reaches the requirements its tasks reference, so those requirements — and
+  the code claiming them — enter `--diff` scope. Measured on a single-spec
+  Kiro fixture whose diff is one checkbox flip in `tasks.md`: `coverage: []` →
+  two entries, `uncovered: []` → `["Requirement-2"]`, `suppressedCount: 0 → 1`
+  (and `impact --diff` went from `{files: 0, reqs: 0}` to
+  `{files: 1, reqs: 2}`). `newIssues` stayed empty and the **exit code did not
+  change** in the three `check` scenarios measured — `check --gate`,
+  `check --diff --gate`, `check --diff --base <ref> --gate` — before and
+  after. The direction of the change is *more surfaced, never less*: every
+  measured difference on a Kiro project is an addition, because before this
+  change those edges pointed at task numbers and reached nothing at all. That
+  is not a general fail-closed guarantee, only what monotone growth on this
+  input class means; the `plan-coverage --gate` bullet above is the case where
+  the growth is itself the breaking change.
+- **A spec directory whose `tasks.md` has no sibling `requirements.md`** (a
+  cross-cutting planning spec) now emits
+  `WARNING: ambiguous ID "Requirement-1"` and drops the edge, because
+  `Requirement-1` exists in two other spec directories and nothing disambiguates
+  it. See [Kiro numbers requirements per spec](#kiro-numbers-requirements-per-spec-so-a-second-spec-qualifies-every-id).
+- **`rename` now exits 1** when the requirement it renamed is referenced from a
+  `_Requirements:` list (see the section above). **`--dry-run` exits 1 for the
+  same reason**, even though it writes nothing: the preview is what you read
+  before committing to the rewrite, so it reports the same incompleteness the
+  real run would. `--dry-run` could already exit 1 on a validation error (an
+  unknown `--from` id, say), but that path prints an error envelope instead of
+  a preview; this is the first condition under which it prints its **normal
+  output** and still exits non-zero. A script that treats `--dry-run`'s exit
+  code as "the rename is safe to run" should read the `warnings` array instead,
+  which carries `unrewritten-task-requirement-ref` with the exact `tasks.md`
+  paths.
+
+What this change leaves alone, and what enforces that:
+
+- **Spec Kit projects.** The requirement-space resolution is opt-in per task
+  convention (`verifiesTargetSpace`), and only the built-in `kiro` preset sets
+  it — so a spec-kit `[FR-001]` tag still produces exactly the edge it always
+  did, with no ID-space mark for the traversal or for `rename` to react to.
+  Measured on a two-spec-directory spec-kit fixture whose `tasks.md` bridges
+  `FR-001` and `FR-002`, before vs. after: `scan`, `check`, `check --gate`,
+  `check --diff`, `check --diff --gate`, `impact`, `impact --diff`,
+  `plan-coverage`, `plan-coverage --gate` and the reconciled `.trace.lock` are
+  byte-identical, exit codes included. That is one fixture across ten
+  surfaces, not a proof about every project — the load-bearing part is the
+  opt-in, which is what the tests pin: `issue #435 ⑦` covers the parser's
+  edges and `issue #435 ⑦b` covers `impact()` and the `plan-coverage` gate, in
+  `tests/issue-435-kiro-requirements-space.test.ts`.
+- **Coverage, on any project.** A task's `verifies` edge has never counted
+  toward coverage (`src/coverage.ts` drops `verifies` whose source is a task)
+  and still does not. Measured by building the same Kiro project twice, with
+  and without its `_Requirements:` lines: `check`'s `coverage`, `uncovered`,
+  `orphans`, `drifted` and `pass` are equal, and so is every non-`doc:`
+  `.trace.lock` entry. Pinned by the two `REGRESSION PIN` tests in
+  `issue #435 ①`.
+- **`### 要件 N` projects.** No requirement node is minted, so nothing
+  resolves and nothing is reported — `check --format json` is byte-identical
+  to the pre-change output. Pinned by `issue #435 ②`.
 
 ## `trace` — coverage-derived traceability (spec 020) <a id="trace--coverage-derived-traceability"></a>
 

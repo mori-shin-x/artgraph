@@ -59,7 +59,14 @@ export function printRenameText(result: RenameResult) {
       console.log(
         `WARNING: ${w.filePath} — unrecognized trace schema generation; left unrewritten (re-run the test suite to regenerate this trace)`,
       );
-    } else if (w.type === "unreadable-file" || w.type === "system-resource-exhausted") {
+    } else if (
+      w.type === "unreadable-file" ||
+      w.type === "system-resource-exhausted" ||
+      // issue #435 (D2) — carries its own fully-formed message (which files,
+      // which ID, what to do); see its `RenameWarning` doc comment for why it
+      // also drives a non-zero exit code.
+      w.type === "unrewritten-task-requirement-ref"
+    ) {
       console.log(`WARNING: ${w.message}`);
     } else {
       console.log(

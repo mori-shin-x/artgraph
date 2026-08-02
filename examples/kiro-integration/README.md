@@ -11,14 +11,23 @@ graph, and what `check` reports as you implement.
 | `### Requirement N: …` heading in `requirements.md` | `req` node with ID `Requirement-N`                            |
 | `design.md`, `tasks.md` siblings             | `doc` nodes; `design → requirements`, `tasks → design` via the **kiro convention** |
 | `- [ ] N. Task …` line in `tasks.md`         | `task` node with ID `N`                                       |
-| `_Requirements: 1, 2_` on a task             | planning-only `task → verifies` edges (not used for coverage) |
+| `_Requirements: 1, 2_` on a task             | planning-only `task → verifies → Requirement-1` / `Requirement-2` edges (not used for coverage) |
 | `// @impl Requirement-1` in source           | `file → implements → Requirement-1` (the edge that **counts** for coverage) |
 | `it("[Requirement-1] …")` in a test          | `test → verifies → Requirement-1`                             |
 
-> **Important**: Kiro's `_Requirements: N_` IDs are bare numbers, while the
-> heading parser produces `Requirement-N` IDs. They are **intentionally not
-> reconciled** — task → req links from `_Requirements:` are treated as planning
-> metadata. Coverage is driven by `@impl Requirement-N` tags in your source.
+> **Important**: Kiro's `_Requirements: N_` entries are acceptance-criterion
+> numbers (`1.1` = requirement 1, criterion 1). artgraph maps each one onto the
+> requirement it belongs to, so `_Requirements: 1.1, 1.2_` produces a single
+> `task → verifies → Requirement-1` edge (issue #435). Those edges are still
+> **planning metadata and are never counted as coverage** — coverage is driven
+> by `@impl Requirement-N` tags in your source. Three heading shapes are not
+> reachable by the mapping (zero-padded `### Requirement 01`, hierarchical
+> `### Requirement 0.1`, and non-English `### 要件 N`); see
+> [docs/configuration.md](../../docs/configuration.md#which-_requirements-entries-resolve-issue-435).
+>
+> `artgraph rename` does **not** rewrite `_Requirements:` lines. Renaming a
+> requirement a task references warns and exits 1; edit those lines by hand,
+> then re-run `artgraph reconcile`.
 
 ## Layout
 

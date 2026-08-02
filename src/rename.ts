@@ -5,7 +5,12 @@ import {
   findFrontmatterBounds,
   maskInlineProtectedSpans,
 } from "./parsers/markdown.js";
-import { LIST_ITEM_RE, KIRO_HEADING_RE, splitAtxHeading } from "./grammar/tokens.js";
+import {
+  LIST_ITEM_RE,
+  KIRO_HEADING_RE,
+  kiroRequirementId,
+  splitAtxHeading,
+} from "./grammar/tokens.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -159,7 +164,7 @@ export function specDefinitionId(line: string, opts?: RewriteOptions): string | 
     const headRe = headingRegex(opts);
     const m = heading.text.match(headRe);
     if (m && m[1] != null) {
-      return headRe.source === KIRO_HEADING_RE.source ? `Requirement-${m[1]}` : m[1];
+      return headRe.source === KIRO_HEADING_RE.source ? kiroRequirementId(m[1]) : m[1];
     }
   }
   return null;

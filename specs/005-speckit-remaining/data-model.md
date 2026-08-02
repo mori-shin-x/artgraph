@@ -66,6 +66,14 @@ export interface TaskConventionPreset {
   /** 要件参照タグ。capture group 1 = target ID。/g セマンティクスで適用。
    *  preset 別に書式が異なる: spec-kit は `[REQ-...]`、kiro は `_Requirements: X, Y_` 等。 */
   verifiesTagRe?: string;
+  /** capture が指す ID 空間 (issue #435)。既定 `"task"` = capture をそのまま target
+   *  にする (#435 以前の全 preset の挙動)。`"requirement"` = capture を Kiro の
+   *  acceptance criterion 番号とみなし `Requirement-<major>` に写像する。
+   *  `verifiesTagRe` とセットでのみ意味を持つ (単独指定は config-load 時に拒否)。
+   *  `"requirement"` の preset が生む `verifies` エッジには `GraphEdge.targetSpace`
+   *  が立ち、`impact()` の hub 判定と `rename` の未書換参照検出はこの印だけを見る
+   *  (target ID の字面は見ない)。 */
+  verifiesTargetSpace?: "task" | "requirement";
 }
 ```
 
@@ -185,7 +193,7 @@ export interface ParseMarkdownOptions {
 | Preset | implements tag | verifies tag |
 |---|---|---|
 | **spec-kit** | `@impl(target-id)` → capture group 1 を trim、空なら edge skip (warning なし) | `[REQ-XXX]` / `[FR-001]` / `[Requirement-3]` / `[ns/FR-1]` の bracket 内文字列を verbatim で target に |
-| **kiro** | *(未定義 — Kiro は @impl を使わない)* | `_Requirements: 1.1, 2.3, 3.1_` のカンマ区切り list から各 ID を 1 件ずつ抽出 (mdast `toString` が emphasis underscore を strip するため lookbehind は `Requirements:` ラベル後の `[\s\d.,]*` でスコープ |
+| **kiro** | *(未定義 — Kiro は @impl を使わない)* | `_Requirements: 1.1, 2.3, 3.1_` のカンマ区切り list から各エントリを 1 件ずつ抽出 (mdast `toString` が emphasis underscore を strip するため lookbehind は `Requirements:` ラベル後の `[\s\d.,]*` でスコープ)。`verifiesTargetSpace: "requirement"` により各エントリは `Requirement-<major>` に写像される (issue #435): `1.1` と `1.2` は同一 target になり dedup で 1 本に畳まれる |
 
 ### 共通の挙動
 

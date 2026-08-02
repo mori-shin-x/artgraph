@@ -102,6 +102,15 @@ export function dedupEdges(edges: GraphEdge[]): GraphEdge[] {
     } else {
       const merged = sortUniqueProvenances([...existing.provenances, ...edge.provenances]);
       existing.provenances = assertNonEmpty(merged, edge);
+      // issue #435 — `targetSpace` is unioned, not first-wins like the rest of
+      // the spread above: two presets can both match the same `tasks.md` line
+      // (the `kiro-no-checkbox` recipe in docs/configuration.md is exactly
+      // that shape) and produce the identical (source, target, kind) edge, one
+      // declaring the requirement ID space and one not. Union keeps the
+      // declaration regardless of which preset ran first — dedup order is an
+      // artefact of preset ordering, and a flag that depended on it would make
+      // `impact()` and `rename`'s warning silently order-sensitive.
+      if (edge.targetSpace) existing.targetSpace = edge.targetSpace;
     }
   }
   const dedupedEdges = Array.from(dedupMap.values());
