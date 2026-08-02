@@ -26,7 +26,8 @@ import { discoverCodeFiles, systemResourceExhaustedMessage } from "./parsers/typ
 import type { BuildWarning } from "./graph/builder.js";
 import { assertValidTargetId } from "./rename-validate-id.js";
 import { rewriteTraceShards } from "./rename-trace.js";
-import type { ArtgraphConfig, LockFile } from "./types.js";
+import { isKiroRequirementId } from "./grammar/tokens.js";
+import type { ArtgraphConfig, ArtifactGraph, LockFile } from "./types.js";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -77,6 +78,27 @@ export type RenameWarning =
   // shape minus the (here, not meaningful) `id`/`files`.
   | {
       type: "system-resource-exhausted";
+      message: string;
+    }
+  // issue #435 (D2) — a Kiro task's `_Requirements:` list now REFERENCES the
+  // requirement being renamed, but the rewriter does not touch it: the
+  // recognition side reads the listItem subtree paragraph-by-paragraph
+  // (`paragraphsInScope` in src/parsers/markdown.ts) while every rewriter in
+  // src/rename.ts is line-based, and closing that gap is a change of its own.
+  // Until then the rename is a genuine PARTIAL success — spec heading and
+  // `@impl` tags are rewritten and written to disk, the `_Requirements:`
+  // references are left pointing at an ID that no longer exists — so this
+  // warning is paired with a non-zero `process.exitCode` in
+  // src/commands/rename.ts rather than being merely informational. Sibling
+  // contract: `system-resource-exhausted` on `postWriteWarnings`, which sets
+  // the exit code the same way and for the same "files are already written"
+  // reason.
+  | {
+      type: "unrewritten-task-requirement-ref";
+      /** The renamed/merged-away ID the references still point at. */
+      oldId: string;
+      /** tasks.md paths holding at least one such reference, sorted, deduped. */
+      files: string[];
       message: string;
     };
 
@@ -486,6 +508,64 @@ interface ScanContext {
   // issue #265 — the pre-rewrite scan's build warnings, threaded into
   // `RenameResult.buildWarnings` by each `execute*` below.
   graphWarnings: BuildWarning[];
+  // issue #435 (D2) — requirement ID -> the tasks.md files whose
+  // `_Requirements:` lists reference it. Populated only for IDs in the Kiro
+  // requirement ID space (the only space a `verifiesTargetSpace:
+  // "requirement"` preset mints targets in), so a project with no such preset
+  // — every spec-kit-only project — gets an empty map and no new behavior.
+  taskRequirementRefs: Map<string, string[]>;
+}
+
+/**
+ * issue #435 (D2) — index the task-side `_Requirements:` references the
+ * rewriter cannot reach, keyed by the requirement ID they resolve to.
+ *
+ * Read off the graph rather than by re-parsing tasks.md: the builder has
+ * already applied spec-directory qualification to these edge targets
+ * (`resolveAnnotationTarget`), so `auth/Requirement-1` here is the same string
+ * a user passes to `--from`, with no second resolution path to keep in sync.
+ */
+function collectTaskRequirementRefs(graph: ArtifactGraph): Map<string, string[]> {
+  const byId = new Map<string, Set<string>>();
+  for (const edge of graph.edges) {
+    if (edge.kind !== "verifies") continue;
+    if (!edge.provenances.includes("task-tag")) continue;
+    if (!isKiroRequirementId(edge.target)) continue;
+    const source = graph.nodes.get(edge.source);
+    if (source?.kind !== "task") continue;
+    const bucket = byId.get(edge.target);
+    if (bucket) bucket.add(source.filePath);
+    else byId.set(edge.target, new Set([source.filePath]));
+  }
+  return new Map([...byId].map(([id, files]) => [id, [...files].sort()]));
+}
+
+/**
+ * issue #435 (D2) — one warning per ID this operation REMOVES from the graph
+ * that still has task-side `_Requirements:` references. IDs that survive the
+ * operation (`--split X --into X,Y`, `--merge X,Y --into X`) are excluded:
+ * their references keep resolving, so nothing is broken.
+ */
+function unrewrittenTaskRefWarnings(
+  taskRequirementRefs: Map<string, string[]>,
+  removedIds: string[],
+): RenameWarning[] {
+  const warnings: RenameWarning[] = [];
+  for (const oldId of removedIds) {
+    const files = taskRequirementRefs.get(oldId);
+    if (!files || files.length === 0) continue;
+    warnings.push({
+      type: "unrewritten-task-requirement-ref",
+      oldId,
+      files,
+      message:
+        `"${oldId}" is still referenced by a task's \`_Requirements:\` list in ` +
+        `${files.join(", ")} — rename does NOT rewrite those lines (issue #435), ` +
+        `so they are left pointing at an ID that no longer exists. Edit them by ` +
+        `hand, then re-run \`artgraph reconcile\`.`,
+    });
+  }
+  return warnings;
 }
 
 function loadScanContext(rootDir: string): ScanContext {
@@ -500,6 +580,7 @@ function loadScanContext(rootDir: string): ScanContext {
       disableBuiltinTaskConventions: config.disableBuiltinTaskConventions,
     },
     graphWarnings: warnings,
+    taskRequirementRefs: collectTaskRequirementRefs(graph),
   };
 }
 
@@ -527,7 +608,8 @@ function applyWrites(
 
 export function executeRename(options: RenameOptions & { from: string; to: string }): RenameResult {
   const { rootDir, dryRun, from, to, force = false } = options;
-  const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
+  const { config, existingIds, rewriteOpts, graphWarnings, taskRequirementRefs } =
+    loadScanContext(rootDir);
   // issue #351 (Step 0-pre HIGH-3) — pre-write gate, dry-run included; see
   // `assertScanNotResourceExhausted`'s own doc comment.
   runValidation(graphWarnings, () => assertScanNotResourceExhausted(graphWarnings));
@@ -620,6 +702,9 @@ export function executeRename(options: RenameOptions & { from: string; to: strin
           },
         ]
       : []),
+    // issue #435 (D2) — appended AFTER the zero-hit safety valve above so it
+    // can never turn a "nothing was rewritten" failure into a success.
+    ...unrewrittenTaskRefWarnings(taskRequirementRefs, [from]),
   ];
 
   const postWriteScanWarnings = applyWrites(rootDir, config, filesToWrite, dryRun, force);
@@ -646,7 +731,8 @@ export function executeSplit(
   options: RenameOptions & { splitId: string; intoIds: string[] },
 ): RenameResult {
   const { rootDir, dryRun, splitId, intoIds, force = false } = options;
-  const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
+  const { config, existingIds, rewriteOpts, graphWarnings, taskRequirementRefs } =
+    loadScanContext(rootDir);
   // issue #351 (Step 0-pre HIGH-3) — pre-write gate, dry-run included; see
   // `assertScanNotResourceExhausted`'s own doc comment.
   runValidation(graphWarnings, () => assertScanNotResourceExhausted(graphWarnings));
@@ -745,6 +831,14 @@ export function executeSplit(
     });
   }
 
+  // issue #435 (D2) — appended AFTER the zero-hit safety valve above so it can
+  // never turn a "nothing was rewritten" failure into a success. A split whose
+  // `--into` keeps the source ID leaves every `_Requirements:` reference
+  // resolving, so it is not a removal and gets no warning.
+  warnings.push(
+    ...unrewrittenTaskRefWarnings(taskRequirementRefs, intoIds.includes(splitId) ? [] : [splitId]),
+  );
+
   const lockChanges = projectLockChanges(rootDir, config, dryRun, (lock) =>
     splitLockKey(lock, splitId, intoIds),
   );
@@ -774,7 +868,8 @@ export function executeMerge(
   options: RenameOptions & { mergeIds: string[]; intoId: string },
 ): RenameResult {
   const { rootDir, dryRun, mergeIds, intoId, force = false } = options;
-  const { config, existingIds, rewriteOpts, graphWarnings } = loadScanContext(rootDir);
+  const { config, existingIds, rewriteOpts, graphWarnings, taskRequirementRefs } =
+    loadScanContext(rootDir);
   // issue #351 (Step 0-pre HIGH-3) — pre-write gate, dry-run included; see
   // `assertScanNotResourceExhausted`'s own doc comment.
   runValidation(graphWarnings, () => assertScanNotResourceExhausted(graphWarnings));
@@ -910,6 +1005,11 @@ export function executeMerge(
           },
         ]
       : []),
+    // issue #435 (D2) — appended AFTER the zero-hit safety valve above so it
+    // can never turn a "nothing was rewritten" failure into a success.
+    // `idsToRewrite` already excludes an `--into` that is one of the merge
+    // sources: that ID survives, so its references keep resolving.
+    ...unrewrittenTaskRefWarnings(taskRequirementRefs, idsToRewrite),
   ];
 
   const postWriteScanWarnings = applyWrites(rootDir, config, filesToWrite, dryRun, force);

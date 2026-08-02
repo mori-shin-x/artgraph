@@ -329,11 +329,25 @@ function classifyEdgeTraversal(
         }
         return { blocked: false, state: "terminal" };
       }
-      // reverse `verifies` (req -> its verifying test): unconditional;
+      // reverse `verifies` (req -> its verifying test/task): unconditional;
       // landing on a `kind === "test"` node is the #303 hub ARRIVAL.
+      //
+      // issue #435 — `kind === "task"` is the SAME hub shape and gets the same
+      // `"restricted"` arrival. Before #435 a Kiro task's `_Requirements:`
+      // edges pointed at task-numbering IDs, so a req was never reached from a
+      // task and the question never arose; now that they resolve to real req
+      // nodes, one `@impl` on a single file would otherwise walk
+      // req -> task -> sibling req -> its tasks -> ... and collapse a whole
+      // spec directory into one impact set (a Kiro tasks.md references the
+      // same requirement from many tasks by construction). `"restricted"`
+      // reuses #303's eligibility test verbatim: the hub's own forward
+      // `verifies` is blocked when the target REQ already has an `implements`
+      // edge, so a sibling req that is already claimed by code no longer
+      // bleeds in, and reach stops one hop out instead of daisy-chaining.
+      const sourceKind = ctx.graph.nodes.get(edge.source)?.kind;
       return {
         blocked: false,
-        state: ctx.graph.nodes.get(edge.source)?.kind === "test" ? "restricted" : "expandable",
+        state: sourceKind === "test" || sourceKind === "task" ? "restricted" : "expandable",
       };
     }
 
@@ -691,9 +705,16 @@ export function findOrphans(graph: ArtifactGraph): OrphanEdge[] {
   for (const edge of graph.edges) {
     if (edge.kind === "implements" || edge.kind === "verifies") {
       // task → implements/verifies は planning artefact。target が必ずしも
-      // graph 上の node とは限らない(Kiro の `_Requirements: 1.1, 2.3_` の
-      // numeric ID は `Requirement-N` という別 ID として登録されるため)。
+      // graph 上の node とは限らない(spec-kit の `@impl(auth-login)` のような
+      // 自由形式ターゲットや `[REQ-FR-001]` の prefix 付き ID など)。
       // task-source の orphan は警告対象外。code-claim な orphan のみ拾う。
+      //
+      // issue #435 以前はこの skip の正当化理由として「Kiro の
+      // `_Requirements: 1.1, 2.3_` は `Requirement-N` とは別 ID 空間だから」
+      // を挙げていたが、#435 で Kiro の task 参照は requirement 名前空間へ
+      // 解決されるようになったため、その理由はもう成立しない。結果として
+      // 「解決に失敗した Kiro の `_Requirements:` 参照が完全に無音になる」
+      // という穴が残っている(#415 が担当。本 PR では skip 条件を変えない)。
       if (graph.nodes.get(edge.source)?.kind === "task") continue;
       if (!graph.nodes.has(edge.target)) {
         orphans.push({ source: edge.source, target: edge.target, kind: edge.kind });

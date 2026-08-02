@@ -563,11 +563,31 @@ export interface TaskConventionPreset {
   implementsTagRe?: string;
   /**
    * Optional regex extracting `verifies`-edge target IDs from the task's listItem subtree.
-   * Each match's capture group 1 becomes one edge target. Applied with /g semantics.
+   * Each match's capture group 1 becomes one edge target — unless
+   * `verifiesTargetSpace` says otherwise (see below). Applied with /g semantics.
    * Examples: spec-kit's `[REQ-...]` brackets; kiro's `_Requirements: X, Y, Z_` lists
    * (the regex iterates each ID via lookbehind-free alternation).
    */
   verifiesTagRe?: string;
+  /**
+   * Which ID space `verifiesTagRe`'s captures name (issue #435).
+   *
+   * - `"task"` (default, and the behavior of every preset before #435): the
+   *   capture IS the target ID, verbatim. Spec Kit's `[FR-001]` names
+   *   `FR-001`.
+   * - `"requirement"`: the capture is a Kiro-style acceptance-criterion
+   *   number (`1.1` = requirement 1, criterion 1) and is mapped onto the
+   *   requirement ID space by `kiroRequirementIdFromTaskReference`
+   *   (src/grammar/tokens.ts) — `1.1` and `1.2` both become `Requirement-1`.
+   *   A capture whose major segment is not a bare number is left verbatim.
+   *
+   * Only the built-in `kiro` preset sets `"requirement"`. A user preset that
+   * re-implements Kiro's `_Requirements:` grammar (e.g. the
+   * `kiro-no-checkbox` recipe in docs/configuration.md) must set it too —
+   * otherwise its edges keep pointing at task IDs while the built-in preset's
+   * point at requirements, in the same file.
+   */
+  verifiesTargetSpace?: "task" | "requirement";
 }
 
 export interface TestResultRecord {

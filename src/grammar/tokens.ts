@@ -66,6 +66,74 @@ export const LIST_ITEM_RE = /^(?:\*\*)?([A-Z][A-Za-z]*-\d+)(?:\*\*)?[:\s]/;
 // `Requirement-<n>`.
 export const KIRO_HEADING_RE = /^Requirement\s+(\d+)\s*(?::|$)/;
 
+/**
+ * Mint the canonical requirement ID for a Kiro requirement NUMBER.
+ *
+ * `KIRO_HEADING_RE` captures the bare number (`### Requirement 3` → `"3"`),
+ * but every consumer downstream — the code parser's `@impl Requirement-3`,
+ * the test-tag token in `REQ_ID_TOKEN`, `rename`'s heading rewriter — works in
+ * the `Requirement-<n>` ID space. This is the ONE place that spelling is
+ * built, per this module's SSOT rule: before it existed the same template
+ * literal was spelled independently in src/parsers/markdown.ts (recognition)
+ * and src/rename.ts (rewriting), and issue #435 was about to add a third
+ * spelling on the task-reference side (`kiroRequirementIdFromTaskReference`
+ * below, which routes through this function).
+ */
+export function kiroRequirementId(number: string): string {
+  return `Requirement-${number}`;
+}
+
+// A requirement ID minted by `kiroRequirementId`, optionally qualified by the
+// spec directory the builder resolved it into (`auth/Requirement-1`). Used to
+// recognise the ID space rather than to produce it — see
+// `isKiroRequirementId`.
+const KIRO_REQ_ID_RE = /^(?:[\w-]+\/)?Requirement-\d+$/;
+
+/**
+ * Is `id` a Kiro requirement ID (`Requirement-7`, `auth/Requirement-7`)?
+ *
+ * `rename` uses this to decide whether a task-side `_Requirements:` reference
+ * could be pointing at the ID being renamed: only a preset whose
+ * `verifiesTargetSpace` is `"requirement"` mints targets in this space, so an
+ * ID outside it can never have an unrewritable `_Requirements:` reference and
+ * the check is skipped entirely (issue #435 D2).
+ */
+export function isKiroRequirementId(id: string): boolean {
+  return KIRO_REQ_ID_RE.test(id);
+}
+
+/**
+ * Map one entry of a Kiro task's `_Requirements: 1.1, 2.3_` list onto the
+ * requirement ID space, or `null` when the entry cannot be mapped.
+ *
+ * Kiro's `_Requirements:` entries are *acceptance-criterion* numbers
+ * (`<requirement>.<criterion>`) drawn from `requirements.md`'s own numbering,
+ * so only the part before the first `.` names a requirement. Two deliberate
+ * limits, both pinned by tests (issue #435):
+ *
+ *   - **Major grain.** `1.1` and `1.2` both map to `Requirement-1`, so the two
+ *     references collapse into ONE `task -> verifies -> Requirement-1` edge
+ *     (the graph's edge key is `source|target|kind`). Which acceptance
+ *     criterion a task cited is not represented in the graph; it stays visible
+ *     in the tasks.md doc node's content hash.
+ *   - **No numeric normalization.** The major segment is used verbatim, so
+ *     `_Requirements: 1.1_` under a `### Requirement 01` heading yields
+ *     `Requirement-1` and does NOT match the `Requirement-01` node. Zero
+ *     padding is preserved on both sides rather than canonicalized, because
+ *     canonicalizing here would make the parser's ID differ from the literal
+ *     text `rename` rewrites in the heading.
+ *
+ * Returns `null` (leaving the caller to keep the raw capture as the edge
+ * target) when the major segment is not a bare number — a user-supplied
+ * `verifiesTagRe` can capture anything, and minting `Requirement-<garbage>`
+ * would be worse than the pre-#435 behavior of passing the capture through.
+ */
+export function kiroRequirementIdFromTaskReference(reference: string): string | null {
+  const major = reference.split(".")[0];
+  if (!/^\d+$/.test(major)) return null;
+  return kiroRequirementId(major);
+}
+
 // Bare code-side ID shape (no namespace, whole-string match) used to validate
 // annotation targets when no custom `reqPatterns.codeId` is set.
 export const DEFAULT_CODE_ID_RE = /^[A-Z][A-Za-z]*-\d+$/;

@@ -647,6 +647,13 @@ artgraph:
     });
 
     it("extracts verifies edges from `_Requirements: X, Y_` italic lists", () => {
+      // issue #435 — the captured `7.1` is "requirement 7, acceptance
+      // criterion 1" in requirements.md's numbering, so the kiro preset's
+      // `verifiesTargetSpace: "requirement"` maps it to `Requirement-7`.
+      // Note the DUPLICATE `1 -> Requirement-7` pair: `7.1` and `7.2` are two
+      // captures collapsing onto one requirement. The parser emits both;
+      // `dedupEdges` in the builder is what folds them into a single edge
+      // (pinned separately in tests/builder.test.ts).
       const file = resolve(FIXTURE_DIR, "tasks/kiro-tasks/specs/billing/tasks.md");
       const result = parseMarkdown(file);
       const verifies = result.edges
@@ -657,12 +664,12 @@ artgraph:
             : a.source.localeCompare(b.source),
         );
       expect(verifies).toEqual([
-        { source: "1", target: "7.1", kind: "verifies", provenances: ["task-tag"] },
-        { source: "1", target: "7.2", kind: "verifies", provenances: ["task-tag"] },
-        { source: "1.1", target: "7.3", kind: "verifies", provenances: ["task-tag"] },
-        { source: "1.2", target: "8.1", kind: "verifies", provenances: ["task-tag"] },
-        { source: "2", target: "8.2", kind: "verifies", provenances: ["task-tag"] },
-        { source: "2", target: "9.1", kind: "verifies", provenances: ["task-tag"] },
+        { source: "1", target: "Requirement-7", kind: "verifies", provenances: ["task-tag"] },
+        { source: "1", target: "Requirement-7", kind: "verifies", provenances: ["task-tag"] },
+        { source: "1.1", target: "Requirement-7", kind: "verifies", provenances: ["task-tag"] },
+        { source: "1.2", target: "Requirement-8", kind: "verifies", provenances: ["task-tag"] },
+        { source: "2", target: "Requirement-8", kind: "verifies", provenances: ["task-tag"] },
+        { source: "2", target: "Requirement-9", kind: "verifies", provenances: ["task-tag"] },
       ]);
     });
 
@@ -671,14 +678,22 @@ artgraph:
       // `1.1` (indented under `1`) has its own `_Requirements: 7.3_`. The
       // parent must NOT pick up `7.3` — otherwise a 3-deep Kiro plan would
       // bubble every leaf requirement to the root task and pollute traversals.
+      //
+      // issue #435 made all three of those entries map onto the SAME
+      // `Requirement-7`, which would make a target-set assertion vacuously
+      // pass. Count the parent's edges instead: two (`7.1`, `7.2`), never
+      // three.
       const file = resolve(FIXTURE_DIR, "tasks/kiro-tasks/specs/billing/tasks.md");
       const result = parseMarkdown(file);
       const task1Targets = result.edges
         .filter((e) => e.kind === "verifies" && e.source === "1")
         .map((e) => e.target)
         .sort();
-      expect(task1Targets).toEqual(["7.1", "7.2"]);
-      expect(task1Targets).not.toContain("7.3");
+      expect(task1Targets).toEqual(["Requirement-7", "Requirement-7"]);
+      const task11Targets = result.edges
+        .filter((e) => e.kind === "verifies" && e.source === "1.1")
+        .map((e) => e.target);
+      expect(task11Targets).toEqual(["Requirement-7"]);
     });
   });
 
@@ -791,9 +806,11 @@ artgraph:
         const taskIds = result.nodes.filter((n) => n.kind === "task").map((n) => n.id);
         // Only the checkbox-prefixed entry should be a task.
         expect(taskIds).toEqual(["4"]);
-        // And its _Requirements: must reach via kiro's verifiesTagRe.
+        // And its _Requirements: must reach via kiro's verifiesTagRe, mapped
+        // into the requirement ID space (issue #435 — `1.2` is requirement 1,
+        // criterion 2).
         const verifies = result.edges.find((e) => e.kind === "verifies" && e.source === "4");
-        expect(verifies?.target).toBe("1.2");
+        expect(verifies?.target).toBe("Requirement-1");
       } finally {
         unlinkSync(file);
         rmdirSync(tmpDir);
@@ -868,7 +885,13 @@ artgraph:
         expect(taskIds).toEqual(["1", "2", "4"]);
         const verifies = result.edges.filter((e) => e.kind === "verifies");
         const targets = new Set(verifies.map((e) => e.target));
-        expect(targets.has("3.1")).toBe(false); // task 3 is gone, so its line never reaches verifiesTagRe
+        // Task 3 is gone, so its `_Requirements: 3.1_` line never reaches
+        // verifiesTagRe. issue #435 — assert the REQUIREMENT-space ID
+        // (`Requirement-3`), not the raw `3.1`: after #435 no edge target is
+        // ever spelled `3.1`, so the old `targets.has("3.1")` assertion would
+        // have stayed green while testing nothing.
+        expect(targets.has("Requirement-3")).toBe(false);
+        expect([...targets].sort()).toEqual(["Requirement-1", "Requirement-2"]);
         // Task 4 has no _Requirements line: zero verifies edges from it.
         expect(verifies.some((e) => e.source === "4")).toBe(false);
       } finally {

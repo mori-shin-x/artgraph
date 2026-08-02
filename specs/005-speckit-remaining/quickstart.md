@@ -143,19 +143,21 @@ pnpm exec artgraph graph --format json > graph.json
 ### Expected
 
 - `nodes`: `1`, `1.1`, `2` の 3 task ノード
-- `edges` (kiro preset は `implementsTagRe` を持たないため implements は 0 件):
-  - `1 → 7.1 → verifies`
-  - `1 → 7.2 → verifies`
-  - `1.1 → 7.3 → verifies`
-  - `2 → 8.1 → verifies`
-  - `2 → 8.2 → verifies`
+- `edges` (kiro preset は `implementsTagRe` を持たないため implements は 0 件)。
+  issue #435 以降、`_Requirements:` の各エントリは acceptance criterion 番号として
+  `Requirement-<major>` に写像される:
+  - `1 → Requirement-7 → verifies` (`7.1` / `7.2` が同一 target に畳まれ dedup)
+  - `1.1 → Requirement-7 → verifies`
+  - `2 → Requirement-8 → verifies` (`8.1` / `8.2` が同一 target に畳まれ dedup)
 - 名前空間衝突なし (single specDir)
 
 ### Pass criteria
 
 - 階層数字 ID がそれぞれ独立した task ノードとして抽出されている
 - 親 task `1` は子 task `1.1` の `_Requirements: 7.3_` を **継承しない** (scope-exclusion)
-- 1 つの `_Requirements:` 行から複数 ID が個別の verifies edge として展開される
+- 1 つの `_Requirements:` 行の各エントリが個別に処理される。ただし major が同じ
+  エントリ (`7.1` と `7.2`) は同一の `Requirement-7` に写り、`source|target|kind`
+  の dedup で 1 本のエッジに畳まれる (issue #435)
 
 ---
 

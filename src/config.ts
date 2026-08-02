@@ -280,6 +280,28 @@ function validateTaskConventions(value: unknown, disabled: Set<string>): void {
       (preset as { verifiesTagRe?: unknown }).verifiesTagRe,
       /* required */ false,
     );
+    validateVerifiesTargetSpace(
+      idx,
+      (preset as { verifiesTargetSpace?: unknown }).verifiesTargetSpace,
+    );
+  }
+}
+
+// issue #435 — `loadConfig` hands `raw.taskConventions` through verbatim (see
+// the `taskConventions:` line in `loadConfig` below), so a field this function
+// does not look at reaches the parser unvalidated. `verifiesTargetSpace` is an
+// enum, not a regex, so it gets its own validator rather than a `MAX_PATTERN_
+// LENGTH`/ReDoS check: the only failure mode is a value the parser silently
+// treats as `"task"` (its `?? "task"` default), which would look exactly like
+// the pre-#435 bug this field exists to fix.
+const VERIFIES_TARGET_SPACES = ["task", "requirement"] as const;
+
+function validateVerifiesTargetSpace(idx: number, value: unknown): void {
+  if (value === undefined) return;
+  if (typeof value !== "string" || !(VERIFIES_TARGET_SPACES as readonly string[]).includes(value)) {
+    throw new Error(
+      `Invalid taskConventions[${idx}].verifiesTargetSpace: must be one of ${VERIFIES_TARGET_SPACES.join(", ")}`,
+    );
   }
 }
 

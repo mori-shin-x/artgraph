@@ -107,6 +107,22 @@ export function registerRenameCommand(program: Command): void {
         if (result.postWriteWarnings?.some((w) => w.type === "system-resource-exhausted")) {
           process.exitCode = 1;
         }
+
+        // issue #435 (D2) — a Kiro task's `_Requirements:` list references the
+        // renamed requirement and `rename` does not rewrite it (see
+        // `unrewritten-task-requirement-ref` in `../rename-executor.js`). The
+        // spec heading and the `@impl` tags ARE rewritten and already on disk,
+        // so this is the same genuine partial success as the stale-lock case
+        // above and gets the identical signal, verbatim: `process.exitCode`
+        // (never an immediate `process.exit`), so `--format json` and
+        // `--format text` both finish printing their full, unchanged output —
+        // the JSON shape is untouched, this only affects the exit code —
+        // before the process exits non-zero. `--dry-run` reports it too: the
+        // references are already stale-in-waiting and the preview is what a
+        // user reads before committing to the rewrite.
+        if (result.warnings.some((w) => w.type === "unrewritten-task-requirement-ref")) {
+          process.exitCode = 1;
+        }
       } catch (e) {
         // issue #279 — `OxcLoadError` (oxc-parser's native binding missing/
         // broken, issue #263) is an environment failure, not a

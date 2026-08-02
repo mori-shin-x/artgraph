@@ -980,14 +980,24 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
       .sort((a, b) =>
         a.source === b.source ? a.target.localeCompare(b.target) : a.source.localeCompare(b.source),
       );
+    // issue #435 — targets are requirement IDs, and the parser's duplicate
+    // `1 -> Requirement-7` pair (from `_Requirements: 7.1, 7.2_`) has been
+    // folded into ONE edge here: `dedupEdges` keys on `source|target|kind`,
+    // so major-grain mapping is where the acceptance-criterion distinction is
+    // lost. Six parser edges, five graph edges.
     expect(verifies).toEqual([
-      { source: "1", target: "7.1", kind: "verifies", provenances: ["task-tag"] },
-      { source: "1", target: "7.2", kind: "verifies", provenances: ["task-tag"] },
-      { source: "1.1", target: "7.3", kind: "verifies", provenances: ["task-tag"] },
-      { source: "1.2", target: "8.1", kind: "verifies", provenances: ["task-tag"] },
-      { source: "2", target: "8.2", kind: "verifies", provenances: ["task-tag"] },
-      { source: "2", target: "9.1", kind: "verifies", provenances: ["task-tag"] },
+      { source: "1", target: "Requirement-7", kind: "verifies", provenances: ["task-tag"] },
+      { source: "1.1", target: "Requirement-7", kind: "verifies", provenances: ["task-tag"] },
+      { source: "1.2", target: "Requirement-8", kind: "verifies", provenances: ["task-tag"] },
+      { source: "2", target: "Requirement-8", kind: "verifies", provenances: ["task-tag"] },
+      { source: "2", target: "Requirement-9", kind: "verifies", provenances: ["task-tag"] },
     ]);
+    // Every one of them resolves to a real req node — the fixture now ships
+    // the `requirements.md` those numbers name (added with #435; before it the
+    // targets lived in the task ID space and this fixture had none).
+    for (const e of verifies) {
+      expect(graph.nodes.get(e.target)?.kind).toBe("req");
+    }
   });
 });
 
