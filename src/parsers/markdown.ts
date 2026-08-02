@@ -434,19 +434,29 @@ export function parseMarkdownContent(
               let m: RegExpExecArray | null;
               while ((m = preset.verifiesRe.exec(paragraphText)) !== null) {
                 for (const target of splitTagTargets(m[1])) {
+                  // issue #435 — a `"requirement"`-space preset's capture is
+                  // an acceptance-criterion number, not an ID; map it onto
+                  // the requirement ID space. `null` (major segment isn't a
+                  // bare number) keeps the raw capture, matching the
+                  // `"task"`-space behavior.
+                  const reqSpace = preset.verifiesTargetSpace === "requirement";
                   edges.push({
                     source: taskId,
-                    // issue #435 — a `"requirement"`-space preset's capture is
-                    // an acceptance-criterion number, not an ID; map it onto
-                    // the requirement ID space. `null` (major segment isn't a
-                    // bare number) keeps the raw capture, matching the
-                    // `"task"`-space behavior.
-                    target:
-                      preset.verifiesTargetSpace === "requirement"
-                        ? (kiroRequirementIdFromTaskReference(target) ?? target)
-                        : target,
+                    target: reqSpace
+                      ? (kiroRequirementIdFromTaskReference(target) ?? target)
+                      : target,
                     kind: "verifies",
                     provenances: ["task-tag"],
+                    // The ID SPACE the target now lives in, carried on the
+                    // edge so no consumer has to re-derive it from the ID's
+                    // spelling (`GraphEdge.targetSpace` in src/types.ts lists
+                    // them and why). Set even when the mapping returned
+                    // `null` and the raw capture survived: the preset still
+                    // DECLARED this reference to name a requirement, and the
+                    // consumers that read this flag (`rename`'s unrewritable-
+                    // reference warning, the traversal's hub arrival) are
+                    // about the reference, not about whether it resolved.
+                    ...(reqSpace ? { targetSpace: "requirement" as const } : {}),
                   });
                 }
               }

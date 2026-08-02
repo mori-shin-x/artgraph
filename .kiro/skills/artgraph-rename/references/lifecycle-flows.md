@@ -28,6 +28,9 @@ Splitting `REQ-001` (auth login) into `REQ-101` (password login) and `REQ-102` (
 
 1. `artgraph rename --split REQ-001 --into REQ-101 REQ-102 --dry-run` reports edits to `specs/auth.md`, `src/auth.ts`, `tests/auth.spec.ts`, plus lock rewrites.
 2. Apply without `--dry-run`. The lock now has `REQ-101` and `REQ-102`; `REQ-001` is gone.
+   (If either command exits 1 while still printing its normal output, read the `WARNING:`
+   lines — see the exit-code table in step 3 of the parent SKILL. A `--split` whose
+   `--into` list keeps the source ID leaves task references resolving and stays exit 0.)
 3. CLI candidate list includes `src/auth.ts:42` (password path) and `src/auth.ts:88` (OAuth path). Add `@impl REQ-101` above the password function and `@impl REQ-102` above the OAuth function.
 4. `artgraph check` reports both new IDs `verified` (tests inherited) and `impl-only` resolves once tags land.
 
@@ -47,6 +50,9 @@ Merging `REQ-010` and `REQ-011` (two near-duplicate session-handling requirement
 
 1. `artgraph rename --merge REQ-010 REQ-011 --into REQ-100 --dry-run` reports lock removals for `REQ-010` / `REQ-011`, a new lock entry for `REQ-100`, and tag rewrites across `src/session.ts` and `tests/session.spec.ts`.
 2. Apply without `--dry-run`. All existing `@impl REQ-010` / `@impl REQ-011` become `@impl REQ-100`; tests retag the same way.
+   (A merge REMOVES every source ID that is not the `--into` target, so any task requirement
+   list referencing one of them makes both the dry-run and the apply exit 1 with a `WARNING:`
+   naming the file — a partial success, not a failure. See step 3 of the parent SKILL.)
 3. Open `specs/session.md`: the heading is now `REQ-100`, but the original sub-bullets from both source headings are still present. Consolidate any duplicates by hand.
 4. `artgraph check` passes immediately — no manual `@impl` reassignment was required.
 

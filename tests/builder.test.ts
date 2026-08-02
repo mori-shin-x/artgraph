@@ -985,12 +985,22 @@ describe("buildGraph: US3 task nodes (FR-009 / FR-010 / FR-012)", () => {
     // folded into ONE edge here: `dedupEdges` keys on `source|target|kind`,
     // so major-grain mapping is where the acceptance-criterion distinction is
     // lost. Six parser edges, five graph edges.
+    // …and every one carries `targetSpace: "requirement"` — the ID-space mark
+    // the kiro preset stamps on, which `impact()` and `rename` read instead of
+    // guessing from the target's spelling (issue #435).
+    const kiroVerifies = (source: string, target: string) => ({
+      source,
+      target,
+      kind: "verifies",
+      provenances: ["task-tag"],
+      targetSpace: "requirement",
+    });
     expect(verifies).toEqual([
-      { source: "1", target: "Requirement-7", kind: "verifies", provenances: ["task-tag"] },
-      { source: "1.1", target: "Requirement-7", kind: "verifies", provenances: ["task-tag"] },
-      { source: "1.2", target: "Requirement-8", kind: "verifies", provenances: ["task-tag"] },
-      { source: "2", target: "Requirement-8", kind: "verifies", provenances: ["task-tag"] },
-      { source: "2", target: "Requirement-9", kind: "verifies", provenances: ["task-tag"] },
+      kiroVerifies("1", "Requirement-7"),
+      kiroVerifies("1.1", "Requirement-7"),
+      kiroVerifies("1.2", "Requirement-8"),
+      kiroVerifies("2", "Requirement-8"),
+      kiroVerifies("2", "Requirement-9"),
     ]);
     // Every one of them resolves to a real req node — the fixture now ships
     // the `requirements.md` those numbers name (added with #435; before it the

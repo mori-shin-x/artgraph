@@ -83,24 +83,17 @@ export function kiroRequirementId(number: string): string {
   return `Requirement-${number}`;
 }
 
-// A requirement ID minted by `kiroRequirementId`, optionally qualified by the
-// spec directory the builder resolved it into (`auth/Requirement-1`). Used to
-// recognise the ID space rather than to produce it — see
-// `isKiroRequirementId`.
-const KIRO_REQ_ID_RE = /^(?:[\w-]+\/)?Requirement-\d+$/;
-
-/**
- * Is `id` a Kiro requirement ID (`Requirement-7`, `auth/Requirement-7`)?
- *
- * `rename` uses this to decide whether a task-side `_Requirements:` reference
- * could be pointing at the ID being renamed: only a preset whose
- * `verifiesTargetSpace` is `"requirement"` mints targets in this space, so an
- * ID outside it can never have an unrewritable `_Requirements:` reference and
- * the check is skipped entirely (issue #435 D2).
- */
-export function isKiroRequirementId(id: string): boolean {
-  return KIRO_REQ_ID_RE.test(id);
-}
+// NOTE (issue #435) — there is deliberately no `isKiroRequirementId(id)` here.
+// An earlier revision of #435 recognised the requirement ID space by matching
+// `/^(?:[\w-]+\/)?Requirement-\d+$/` against an ID's spelling, and every
+// consumer of that predicate was wrong in both directions: spec-kit's
+// documented `[Requirement-3]` verifies tag matches the shape without being a
+// requirement-space reference, and a `verifiesTargetSpace: "requirement"`
+// preset whose capture is not a bare number keeps that capture verbatim
+// (`FR-002`) and so fails the shape while being exactly such a reference.
+// The ID SPACE is carried on the edge instead (`GraphEdge.targetSpace`,
+// src/types.ts), decided once at the only place that knows it — the preset
+// that minted the edge.
 
 /**
  * Map one entry of a Kiro task's `_Requirements: 1.1, 2.3_` list onto the

@@ -153,7 +153,19 @@ export interface ParseCacheData {
 // (118 orphans) where a cold rebuild of the identical tree yields 110 — the
 // warm ≡ cold divergence (INV-L4) this counter exists to prevent, same
 // rationale as v7/v8/v9.
-const SCHEMA_VERSION = 10;
+// v11 (issue #435): a Kiro `_Requirements: 1.1_` entry now resolves into the
+// requirement ID space (`1.1` -> `Requirement-1`) and the resulting `verifies`
+// edge carries a new `targetSpace: "requirement"` field. BOTH halves are
+// invisible to the cache key — the md cache key is the file's RAW bytes, so an
+// untouched `tasks.md` HITS and replays the pre-#435 fragment forever:
+// task-numbered edge targets AND no `targetSpace`, which then reads as
+// "spec-kit-shaped" to `classifyEdgeTraversal`/`rename`. Measured on a Kiro
+// fixture: a cache warmed by the pre-fix build and read by the fixed build
+// produced `1 -> 1`, `2 -> 2.1` where a cold rebuild of the identical tree
+// yields `1 -> Requirement-1`, `2 -> Requirement-2` — the warm ≡ cold
+// divergence (INV-L4) this counter exists to prevent, same rationale as
+// v7/v8/v9/v10.
+const SCHEMA_VERSION = 11;
 const CACHE_RELDIR = join("node_modules", ".cache", "artgraph");
 const CACHE_FILENAME = "parse-cache.json";
 

@@ -26,7 +26,6 @@ import { discoverCodeFiles, systemResourceExhaustedMessage } from "./parsers/typ
 import type { BuildWarning } from "./graph/builder.js";
 import { assertValidTargetId } from "./rename-validate-id.js";
 import { rewriteTraceShards } from "./rename-trace.js";
-import { isKiroRequirementId } from "./grammar/tokens.js";
 import type { ArtgraphConfig, ArtifactGraph, LockFile } from "./types.js";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -93,6 +92,16 @@ export type RenameWarning =
   // contract: `system-resource-exhausted` on `postWriteWarnings`, which sets
   // the exit code the same way and for the same "files are already written"
   // reason.
+  //
+  // SCOPE — this covers REQUIREMENT-SPACE task references only (see
+  // `collectTaskRequirementRefs`), i.e. exactly the class #435 created. A
+  // spec-kit `tasks.md` tag (`[FR-002]`) is equally unrewritten by rename and
+  // equally silent, but it has been that way since the preset shipped and is
+  // unchanged by #435 (measured against `main`: identical output, exit 0 on
+  // both sides) — widening the warning to it would flip the exit code of
+  // every spec-kit project that mentions a renamed ID in `tasks.md`. That
+  // residual belongs with issue #415 (task-side references that go stale
+  // silently), which owns the whole class.
   | {
       type: "unrewritten-task-requirement-ref";
       /** The renamed/merged-away ID the references still point at. */
@@ -509,10 +518,10 @@ interface ScanContext {
   // `RenameResult.buildWarnings` by each `execute*` below.
   graphWarnings: BuildWarning[];
   // issue #435 (D2) — requirement ID -> the tasks.md files whose
-  // `_Requirements:` lists reference it. Populated only for IDs in the Kiro
-  // requirement ID space (the only space a `verifiesTargetSpace:
-  // "requirement"` preset mints targets in), so a project with no such preset
-  // — every spec-kit-only project — gets an empty map and no new behavior.
+  // `_Requirements:` lists reference it. Populated ONLY from edges a
+  // `verifiesTargetSpace: "requirement"` task convention produced (see
+  // `collectTaskRequirementRefs`), so a project with no such preset — every
+  // spec-kit-only project — gets an empty map and no new behavior.
   taskRequirementRefs: Map<string, string[]>;
 }
 
@@ -524,13 +533,25 @@ interface ScanContext {
  * already applied spec-directory qualification to these edge targets
  * (`resolveAnnotationTarget`), so `auth/Requirement-1` here is the same string
  * a user passes to `--from`, with no second resolution path to keep in sync.
+ *
+ * The selector is `edge.targetSpace === "requirement"` — the ID SPACE the
+ * producing convention declared, not the ID's spelling. Testing the spelling
+ * instead (`/^(?:[\w-]+\/)?Requirement-\d+$/`) was wrong in BOTH directions,
+ * measured on real fixtures:
+ *   - false positive: spec-kit's `[Requirement-3]` is a documented, legal
+ *     `verifiesTagRe` capture (docs/configuration.md's built-in preset table),
+ *     and `rename` DOES rewrite it — yet the spelling test claimed a
+ *     `_Requirements:` list had been left behind and turned exit 0 into 1.
+ *   - false negative: a `verifiesTargetSpace: "requirement"` preset whose
+ *     numbering maps to any other spelling — and `_Requirements: 1.1_` under a
+ *     spec-kit-shaped `FR-002` heading — broke in exactly the same way with no
+ *     warning and exit 0.
  */
 function collectTaskRequirementRefs(graph: ArtifactGraph): Map<string, string[]> {
   const byId = new Map<string, Set<string>>();
   for (const edge of graph.edges) {
     if (edge.kind !== "verifies") continue;
-    if (!edge.provenances.includes("task-tag")) continue;
-    if (!isKiroRequirementId(edge.target)) continue;
+    if (edge.targetSpace !== "requirement") continue;
     const source = graph.nodes.get(edge.source);
     if (source?.kind !== "task") continue;
     const bucket = byId.get(edge.target);
@@ -558,11 +579,20 @@ function unrewrittenTaskRefWarnings(
       type: "unrewritten-task-requirement-ref",
       oldId,
       files,
+      // The message states what rename did and did not touch, and stays true
+      // for BOTH shapes a requirement-space reference can take: one that
+      // spells the ID out, and Kiro's, which does not (`_Requirements: 1.1_`
+      // resolves to `Requirement-1`). Naming `_Requirements:` as though it
+      // were the only spelling is what made the pre-fix message factually
+      // wrong on a spec-kit `tasks.md`.
       message:
-        `"${oldId}" is still referenced by a task's \`_Requirements:\` list in ` +
-        `${files.join(", ")} — rename does NOT rewrite those lines (issue #435), ` +
-        `so they are left pointing at an ID that no longer exists. Edit them by ` +
-        `hand, then re-run \`artgraph reconcile\`.`,
+        `"${oldId}" is still referenced by a task's requirement list in ` +
+        `${files.join(", ")} — rename rewrites the requirement's own definition and its ` +
+        `\`@impl\` tags, but not those references (issue #435), so they are left ` +
+        `resolving to an ID that no longer exists. They need not spell the ID out: Kiro ` +
+        `writes acceptance-criterion numbers (\`_Requirements: 1.1_\` resolves to ` +
+        `\`Requirement-1\`), so search-and-replace can miss them. Fix them by hand, then ` +
+        `re-run \`artgraph reconcile\`.`,
     });
   }
   return warnings;

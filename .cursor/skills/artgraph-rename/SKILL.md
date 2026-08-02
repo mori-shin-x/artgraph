@@ -18,6 +18,11 @@ disable-model-invocation: false
 
 The agent runs `artgraph rename` (or its `--split` / `--merge` variants) to safely rewrite a requirement ID across spec lists/headings, `@impl` tags, test `[ID]` tags, frontmatter `depends_on` / `derives_from`, and `.trace.lock`. The operation is destructive and writes directly to tracked files — always run `--dry-run` first.
 
+> **Exit code 1 does not always mean "it failed."** `rename` also exits 1 on a
+> *partial success*: the rewrite is complete and correct, but some reference it
+> cannot reach was left behind (a task's requirement list — see step 3). Read
+> the output, not just the status, in both `--dry-run` and apply mode.
+
 ## Preconditions
 
 - Working tree must be committed — `artgraph rename` writes directly to tracked files, and an uncommitted state makes the change irreversible.
@@ -54,9 +59,31 @@ Pick the command shape that matches the user's intent and add `--dry-run`:
 
 The dry-run prints the files, lines, and lock keys that will change. Show the diff summary to the user and get explicit confirmation before applying.
 
+**Check the exit code, and do not read it as pass/fail.** `--dry-run` writes
+nothing, yet it can still exit **1**:
+
+| exit | output | meaning | what to do |
+| ---- | ------ | ------- | ---------- |
+| 0 | the preview | the rewrite reaches everything | proceed to step 4 |
+| 1 | `{ "error": ... }` (or an `ERROR:` line) | validation failed, nothing was previewed | fix the input; do NOT apply |
+| 1 | the **normal preview** plus one or more `WARNING:` lines | *partial success ahead* — the rewrite is correct as far as it goes, but some references will be left pointing at the old ID | show the warnings to the user, then decide together whether to apply |
+
+The last row is the one that trips scripts. The usual cause is a task's
+requirement list (e.g. Kiro's `_Requirements: 1.1, 2.3_` in `tasks.md`), which
+`rename` does not rewrite; with `--format json` it appears as
+`warnings[].type === "unrewritten-task-requirement-ref"` with the exact file
+paths. Never treat `--dry-run`'s exit code alone as "the rename is unsafe" —
+distinguish the rows above by whether an error envelope or a preview was
+printed.
+
 ### 4. Apply
 
 Re-run the same command without `--dry-run`. The lock is auto-reconciled — `contentHash`, references, and `specFile` for the rewritten nodes are refreshed in `.trace.lock`.
+
+The apply run exits **1** under the same partial-success condition as step 3,
+*after* the files are already written. That is not a rollback signal: fix the
+references the warning names by hand (renumber the task's requirement list to
+match the new ID), then run `<PM-exec> reconcile` and continue.
 
 ### 5. Follow-up
 

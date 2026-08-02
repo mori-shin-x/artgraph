@@ -68,7 +68,11 @@ export interface TaskConventionPreset {
   verifiesTagRe?: string;
   /** capture が指す ID 空間 (issue #435)。既定 `"task"` = capture をそのまま target
    *  にする (#435 以前の全 preset の挙動)。`"requirement"` = capture を Kiro の
-   *  acceptance criterion 番号とみなし `Requirement-<major>` に写像する。 */
+   *  acceptance criterion 番号とみなし `Requirement-<major>` に写像する。
+   *  `verifiesTagRe` とセットでのみ意味を持つ (単独指定は config-load 時に拒否)。
+   *  `"requirement"` の preset が生む `verifies` エッジには `GraphEdge.targetSpace`
+   *  が立ち、`impact()` の hub 判定と `rename` の未書換参照検出はこの印だけを見る
+   *  (target ID の字面は見ない)。 */
   verifiesTargetSpace?: "task" | "requirement";
 }
 ```

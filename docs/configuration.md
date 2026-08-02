@@ -674,7 +674,16 @@ There is a fourth, optional field: `verifiesTargetSpace`.
 Leave it out unless your tool numbers its cross-links the way Kiro does. It is
 rejected at config-load time with
 `Invalid taskConventions[N].verifiesTargetSpace: must be one of task, requirement`
-for any other value.
+for any other value, and — because the field only ever reinterprets
+`verifiesTagRe`'s captures and presets are merged whole, never field-by-field —
+setting it on a preset that has **no `verifiesTagRe`** is rejected too, rather
+than silently doing nothing.
+
+Beyond choosing the ID space, the field also marks the edges it produces:
+`impact()` treats a requirement-space task reference as a hub (reach stops one
+hop past it, like a test file that verifies several requirements), and `rename`
+knows those references are ones it cannot rewrite. A `"task"`-space preset —
+every preset that omits the field, Spec Kit's included — is untouched by both.
 
 ### Kiro `tasks.md` without checkboxes (issue #419) <a id="kiro-tasksmd-without-checkboxes-issue-419"></a>
 
@@ -770,11 +779,21 @@ before this change. Pinned by `issue #435 ② ### 要件 N headings` and
 `rename` cannot repair any of these for you. It rewrites the `### Requirement N`
 heading and the `@impl` tags but **not** the `_Requirements:` lines, so renaming
 a requirement a task references prints
-`WARNING: "<id>" is still referenced by a task's _Requirements: list in <file>`
+`WARNING: "<id>" is still referenced by a task's requirement list in <file>`
 and exits **1** — the rewrite is applied (the files on disk are already changed),
-the exit code is telling you the job is not finished. Edit the `_Requirements:`
-lines by hand and re-run `artgraph reconcile`. Pinned by `issue #435 D2` in the
-same file.
+the exit code is telling you the job is not finished. Note that the
+`_Requirements:` lines do not contain the ID at all (`1.1` resolves to
+`Requirement-1`), so search-and-replace will not find them: renumber them by
+hand, then re-run `artgraph reconcile`. Pinned by `issue #435 D2` in the same
+file.
+
+Which references get that warning is decided by the *task convention that
+produced them* — a preset with `verifiesTargetSpace: "requirement"` — never by
+what the ID looks like. A spec-kit `tasks.md` tag spelled `[Requirement-3]` is
+a plain spec-kit `verifies` tag (see the built-in preset table above) and gets
+no warning, exactly as before this change. Spec Kit's `tasks.md` tags are, in
+fact, *also* left unrewritten by `rename` and have always been silent about it;
+that pre-existing gap is unchanged here and belongs with issue #415.
 
 ### Upgrade note
 
@@ -805,14 +824,21 @@ does **not** absorb — the blast radius reaches beyond the lock:
   `{totalAffected: 2, mentioned: 1, implicit: 1}` / exit 1. Write the
   requirement ID (`Requirement-2`) into `tasks.md` / `plan.md` prose, or pass
   `--ignore`.
-- **`check --diff` reports more.** The widened impact scope pulls the
-  `tasks.md` doc node — and requirements reached through it — into scope, so
-  `drifted`, `uncovered` and `suppressedCount` grow. Measured on a
-  single-spec fixture: `drifted: []` → `drifted: [doc:auth/tasks.md]` and
-  `suppressedCount: 0 → 1`. The **exit code did not change** in any measured
-  scenario (`check --gate`, `check --diff --gate`, and
-  `check --diff --base <ref> --gate` were all identical before and after) —
-  what grows is the payload, in the fail-closed direction.
+- **`check --diff` reports more on a Kiro project.** A `tasks.md` edit now
+  reaches the requirements its tasks reference, so those requirements — and
+  the code claiming them — enter `--diff` scope. Measured on a single-spec
+  Kiro fixture whose diff is one checkbox flip in `tasks.md`: `coverage: []` →
+  two entries, `uncovered: []` → `["Requirement-2"]`, `suppressedCount: 0 → 1`
+  (and `impact --diff` went from `{files: 0, reqs: 0}` to
+  `{files: 1, reqs: 2}`). `newIssues` stayed empty and the **exit code did not
+  change** in the three `check` scenarios measured — `check --gate`,
+  `check --diff --gate`, `check --diff --base <ref> --gate` — before and
+  after. The direction of the change is *more surfaced, never less*: every
+  measured difference on a Kiro project is an addition, because before this
+  change those edges pointed at task numbers and reached nothing at all. That
+  is not a general fail-closed guarantee, only what monotone growth on this
+  input class means; the `plan-coverage --gate` bullet above is the case where
+  the growth is itself the breaking change.
 - **A spec directory whose `tasks.md` has no sibling `requirements.md`** (a
   cross-cutting planning spec) now emits
   `WARNING: ambiguous ID "Requirement-1"` and drops the edge, because
@@ -830,10 +856,31 @@ does **not** absorb — the blast radius reaches beyond the lock:
   which carries `unrewritten-task-requirement-ref` with the exact `tasks.md`
   paths.
 
-Unchanged, and verified byte-for-byte on nine fixtures: `check`'s `coverage`,
-`uncovered`, `orphans` and `pass`; the `.trace.lock` contents; and every
-spec-kit project's output, down to the byte. A Kiro task's `verifies` edge has
-never counted toward coverage and still does not.
+What this change leaves alone, and what enforces that:
+
+- **Spec Kit projects.** The requirement-space resolution is opt-in per task
+  convention (`verifiesTargetSpace`), and only the built-in `kiro` preset sets
+  it — so a spec-kit `[FR-001]` tag still produces exactly the edge it always
+  did, with no ID-space mark for the traversal or for `rename` to react to.
+  Measured on a two-spec-directory spec-kit fixture whose `tasks.md` bridges
+  `FR-001` and `FR-002`, before vs. after: `scan`, `check`, `check --gate`,
+  `check --diff`, `check --diff --gate`, `impact`, `impact --diff`,
+  `plan-coverage`, `plan-coverage --gate` and the reconciled `.trace.lock` are
+  byte-identical, exit codes included. That is one fixture across ten
+  surfaces, not a proof about every project — the load-bearing part is the
+  opt-in, which is what the tests pin: `issue #435 ⑦` covers the parser's
+  edges and `issue #435 ⑦b` covers `impact()` and the `plan-coverage` gate, in
+  `tests/issue-435-kiro-requirements-space.test.ts`.
+- **Coverage, on any project.** A task's `verifies` edge has never counted
+  toward coverage (`src/coverage.ts` drops `verifies` whose source is a task)
+  and still does not. Measured by building the same Kiro project twice, with
+  and without its `_Requirements:` lines: `check`'s `coverage`, `uncovered`,
+  `orphans`, `drifted` and `pass` are equal, and so is every non-`doc:`
+  `.trace.lock` entry. Pinned by the two `REGRESSION PIN` tests in
+  `issue #435 ①`.
+- **`### 要件 N` projects.** No requirement node is minted, so nothing
+  resolves and nothing is reported — `check --format json` is byte-identical
+  to the pre-change output. Pinned by `issue #435 ②`.
 
 ## `trace` — coverage-derived traceability (spec 020) <a id="trace--coverage-derived-traceability"></a>
 

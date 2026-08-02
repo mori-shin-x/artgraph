@@ -663,13 +663,23 @@ artgraph:
             ? a.target.localeCompare(b.target)
             : a.source.localeCompare(b.source),
         );
+      // Each edge also carries `targetSpace: "requirement"` — the ID-space
+      // mark the preset stamps on so no downstream consumer has to re-derive
+      // it from the target's spelling (issue #435).
+      const kiroVerifies = (source: string, target: string) => ({
+        source,
+        target,
+        kind: "verifies",
+        provenances: ["task-tag"],
+        targetSpace: "requirement",
+      });
       expect(verifies).toEqual([
-        { source: "1", target: "Requirement-7", kind: "verifies", provenances: ["task-tag"] },
-        { source: "1", target: "Requirement-7", kind: "verifies", provenances: ["task-tag"] },
-        { source: "1.1", target: "Requirement-7", kind: "verifies", provenances: ["task-tag"] },
-        { source: "1.2", target: "Requirement-8", kind: "verifies", provenances: ["task-tag"] },
-        { source: "2", target: "Requirement-8", kind: "verifies", provenances: ["task-tag"] },
-        { source: "2", target: "Requirement-9", kind: "verifies", provenances: ["task-tag"] },
+        kiroVerifies("1", "Requirement-7"),
+        kiroVerifies("1", "Requirement-7"),
+        kiroVerifies("1.1", "Requirement-7"),
+        kiroVerifies("1.2", "Requirement-8"),
+        kiroVerifies("2", "Requirement-8"),
+        kiroVerifies("2", "Requirement-9"),
       ]);
     });
 

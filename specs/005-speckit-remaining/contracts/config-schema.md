@@ -64,6 +64,7 @@
 | `taskIdRe` capture group ゼロ | `Invalid taskConventions[{idx}].taskIdRe: regex must contain at least one capture group (group 1 is used as the target ID)` |
 | `implementsTagRe` / `verifiesTagRe` (optional) | 上記 `taskIdRe` と同じ 6 ルールを field 名差し替えで適用 (空文字列も拒否 — タグ種別を持たない preset は field 自体を省略する) |
 | `verifiesTargetSpace` (optional, issue #435) | `Invalid taskConventions[{idx}].verifiesTargetSpace: must be one of task, requirement` — regex ではなく enum なので長さ / ReDoS / capture group の検証は適用しない。未指定は `"task"` (後方互換) |
+| `verifiesTargetSpace` を `verifiesTagRe` なしで指定 (issue #435 LOW-9) | `Invalid taskConventions[{idx}].verifiesTargetSpace: only meaningful together with verifiesTagRe (it reinterprets that regex's captures); remove it or add verifiesTagRe` — preset は name 単位で丸ごと採用され field 単位の merge は無いため、built-in から `verifiesTagRe` が補完されることはない。値に関わらず (`"task"` / `"requirement"` とも) 拒否する |
 
 ---
 

@@ -67,6 +67,39 @@ export interface GraphEdge {
   // NonEmpty: every edge must record at least one provenance.
   // See specs/011-edge-provenance/contracts/edge-provenance-type.md §INV-T1.
   provenances: NonEmptyArray<EdgeProvenance>;
+  /**
+   * issue #435 — this edge's `target` was RESOLVED into the requirement ID
+   * space by the task convention that produced it (`verifiesTargetSpace:
+   * "requirement"`, see `TaskConventionPreset` below), instead of being taken
+   * from the regex capture verbatim.
+   *
+   * Absent on every other edge in the graph — including spec-kit's
+   * `[FR-001]` task tags, whose captures ARE the ID — so "present" is the
+   * whole predicate; there is no `"task"` value to compare against.
+   *
+   * This is an ID-SPACE axis, deliberately NOT a new `EdgeProvenance` value:
+   * provenance answers "by what mechanism was this edge produced" (a task tag
+   * — `"task-tag"` — in both cases), which is a different question. Same
+   * reasoning as spec 022's G5 (`star-expansion.ts` reuses `ts-import` rather
+   * than minting a provenance for synthesized re-export edges).
+   *
+   * Consumers, and why they need the ID space rather than the ID's shape:
+   *   - `classifyEdgeTraversal` (src/graph/traverse.ts) — a reverse `verifies`
+   *     hop onto a requirement-space task reference is a hub ARRIVAL. Keying
+   *     on `kind === "task"` instead would have narrowed spec-kit's
+   *     long-standing `task -> verifies -> req` edges too.
+   *   - `collectTaskRequirementRefs` (src/rename-executor.ts) — these are the
+   *     references `rename` cannot rewrite. Keying on the ID's spelling
+   *     instead (`/^Requirement-\d+$/`) both warned about spec-kit's legal
+   *     `[Requirement-3]` tags, which rename DOES rewrite, and stayed silent
+   *     for a `verifiesTargetSpace: "requirement"` preset that mints some
+   *     other spelling.
+   *
+   * `dedupEdges` (src/graph/canonical.ts) unions this flag across duplicate
+   * (source, target, kind) edges — see its own comment for why the union
+   * direction is the safe one.
+   */
+  targetSpace?: "requirement";
 }
 
 export interface ArtifactGraph {

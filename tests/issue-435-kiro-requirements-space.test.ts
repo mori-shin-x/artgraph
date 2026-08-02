@@ -24,11 +24,8 @@ import { impact, findOrphans } from "../src/graph/traverse.js";
 import { check } from "../src/check.js";
 import { parseMarkdownContent } from "../src/parsers/markdown.js";
 import { loadConfig } from "../src/config.js";
-import {
-  kiroRequirementId,
-  kiroRequirementIdFromTaskReference,
-  isKiroRequirementId,
-} from "../src/grammar/tokens.js";
+import { kiroRequirementId, kiroRequirementIdFromTaskReference } from "../src/grammar/tokens.js";
+import { dedupEdges } from "../src/graph/canonical.js";
 import { runAt } from "./helpers.js";
 import type { ArtgraphConfig, GraphNode, GraphEdge, LockFile } from "../src/types.js";
 
@@ -130,10 +127,83 @@ describe("issue #435 — kiroRequirementIdFromTaskReference (value-domain table)
   it("is the single source of truth for the `Requirement-N` spelling", () => {
     expect(kiroRequirementId("3")).toBe("Requirement-3");
     expect(kiroRequirementIdFromTaskReference("3.9")).toBe(kiroRequirementId("3"));
-    expect(isKiroRequirementId("Requirement-3")).toBe(true);
-    expect(isKiroRequirementId("auth/Requirement-3")).toBe(true);
-    expect(isKiroRequirementId("FR-001")).toBe(false);
-    expect(isKiroRequirementId("Requirement-3x")).toBe(false);
+  });
+
+  it("the ID space is carried on the EDGE, never re-derived from the ID's spelling", () => {
+    // The mark is what `impact()` and `rename` read. It is set by the preset
+    // that minted the edge, so it is set even when the mapping declined and
+    // the raw capture survived — the reference still DECLARES a requirement.
+    const kiro = parseMarkdownContent(
+      ["# Tasks", "", "- [x] 1. do it", "  - _Requirements: 1.1_", ""].join("\n"),
+      ".kiro/specs/auth/tasks.md",
+    );
+    expect(
+      kiro.edges
+        .filter((e) => e.kind === "verifies")
+        .map((e) => `${e.source} -> ${e.target} [${e.targetSpace ?? "-"}]`),
+    ).toEqual(["1 -> Requirement-1 [requirement]"]);
+
+    // Spec Kit captures ARE the ID: no mark, whatever the ID looks like. A
+    // bracketed `Requirement-3` is a documented spec-kit spelling, and it is
+    // NOT a requirement-space reference — the exact case an ID-shape test got
+    // wrong (MEDIUM-4). (Bracket + ID is spelled via `br()` even in comments:
+    // see that helper's doc comment.)
+    const speckit = parseMarkdownContent(
+      ["# Tasks", "", `- [x] T001 do it ${br("Requirement-3")}`, ""].join("\n"),
+      "specs/001/tasks.md",
+    );
+    expect(
+      speckit.edges
+        .filter((e) => e.kind === "verifies")
+        .map((e) => `${e.source} -> ${e.target} [${e.targetSpace ?? "-"}]`),
+    ).toEqual(["T001 -> Requirement-3 [-]"]);
+
+    // A requirement-space preset whose capture is not a bare number keeps the
+    // capture verbatim — and is STILL marked. This is the case an ID-shape
+    // test missed entirely (MEDIUM-5).
+    const verbatim = parseMarkdownContent(
+      ["# Tasks", "", `- [x] T002 do it ${br("FR-002")}`, ""].join("\n"),
+      "specs/001/tasks.md",
+      {
+        disableBuiltinTaskConventions: ["spec-kit", "kiro"],
+        taskConventions: [
+          {
+            name: "reqspace-brackets",
+            fileStems: ["tasks"],
+            taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(T\\d+)\\b",
+            verifiesTagRe: "\\[([A-Za-z]+-\\d+)\\]",
+            verifiesTargetSpace: "requirement",
+          },
+        ],
+      },
+    );
+    expect(
+      verbatim.edges
+        .filter((e) => e.kind === "verifies")
+        .map((e) => `${e.source} -> ${e.target} [${e.targetSpace ?? "-"}]`),
+    ).toEqual(["T002 -> FR-002 [requirement]"]);
+  });
+
+  it("dedup UNIONS the mark — two presets on one line cannot make it order-dependent", () => {
+    // `dedupEdges` keeps the first edge's fields and only merges provenances,
+    // so `targetSpace` needs its own union step. The `kiro-no-checkbox` recipe
+    // in docs/configuration.md is exactly this shape: two presets matching the
+    // same `tasks.md` line. Order must not decide the ID space.
+    const marked: GraphEdge = {
+      source: "1",
+      target: "Requirement-1",
+      kind: "verifies",
+      provenances: ["task-tag"],
+      targetSpace: "requirement",
+    };
+    const unmarked: GraphEdge = {
+      source: "1",
+      target: "Requirement-1",
+      kind: "verifies",
+      provenances: ["task-tag"],
+    };
+    expect(dedupEdges([marked, unmarked])[0].targetSpace).toBe("requirement");
+    expect(dedupEdges([unmarked, marked])[0].targetSpace).toBe("requirement");
   });
 });
 
@@ -436,6 +506,29 @@ describe("issue #435 ⑤ the docs `kiro-no-checkbox` recipe", () => {
     });
     expect(loadConfig(legacy).taskConventions?.[0].verifiesTargetSpace).toBeUndefined();
   });
+
+  it("rejects `verifiesTargetSpace` on a preset with no `verifiesTagRe` (it would be inert)", () => {
+    // LOW-9 — the field only reinterprets `verifiesTagRe`'s captures, and
+    // presets merge whole-preset by name, so it can never be completed from a
+    // built-in. Left un-validated it produces the exact same graph as omitting
+    // it, which is the silent no-op the field exists to eliminate. Both values
+    // are rejected: `"task"` is equally inert.
+    const { verifiesTagRe: _drop, ...noTagRe } = NO_CHECKBOX_PRESET;
+    for (const space of ["requirement", "task"]) {
+      const root = makeProject({
+        ".artgraph.json": JSON.stringify({
+          ...KIRO_CONFIG,
+          taskConventions: [{ ...noTagRe, verifiesTargetSpace: space }],
+        }),
+      });
+      expect(() => loadConfig(root)).toThrow(/only meaningful together with verifiesTagRe/);
+    }
+    // …and the same preset without the field loads fine.
+    const fine = makeProject({
+      ".artgraph.json": JSON.stringify({ ...KIRO_CONFIG, taskConventions: [noTagRe] }),
+    });
+    expect(loadConfig(fine).taskConventions?.[0].name).toBe("kiro-no-checkbox");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -512,10 +605,15 @@ describe("issue #435 ⑥ numeric variants (zero padding, 3 levels, hierarchical)
 });
 
 // ---------------------------------------------------------------------------
-// ⑦ spec-kit identity
+// ⑦ spec-kit identity — PARSER edges only. The name says exactly that on
+//    purpose: an earlier revision called this block "the spec-kit preset is
+//    byte-for-byte unchanged" while only ever inspecting
+//    `parseMarkdownContent`'s edge array, and a regression that left those
+//    edges untouched but narrowed every spec-kit project's `impact()` walked
+//    straight through it. ⑦b below is the traversal-level half.
 // ---------------------------------------------------------------------------
 
-describe("issue #435 ⑦ the spec-kit preset is byte-for-byte unchanged", () => {
+describe("issue #435 ⑦ the spec-kit preset's parseMarkdownContent edges are unchanged", () => {
   it("emits every capture verbatim — including a Kiro-shaped bracket", () => {
     const content = [
       "# Tasks",
@@ -564,7 +662,90 @@ describe("issue #435 ⑦ the spec-kit preset is byte-for-byte unchanged", () => 
 });
 
 // ---------------------------------------------------------------------------
-// ⑧ the task hub (D1-a: reverse `verifies` onto a task node is `restricted`)
+// ⑦b spec-kit identity THROUGH `impact()` and the plan-coverage gate
+// ---------------------------------------------------------------------------
+
+/**
+ * A spec-kit project whose `task -> verifies -> req` edges bridge two spec
+ * directories. `src/a.ts` claims `FR-001`; `specs/hub/tasks.md`'s `T900`
+ * references `FR-001` and `FR-002`; `src/b.ts` claims `FR-002`. So
+ * `impact(src/a.ts)` reaches `FR-002` — and `src/b.ts` — only by traversing
+ * the task hub.
+ *
+ * `specs/auth`'s own trio never mentions `FR-002`, so `plan-coverage --spec
+ * specs/auth --gate` reports it as an IMPLICIT impact and exits 1. That is a
+ * CI gate firing on a real cross-spec side effect; #435 must not disarm it.
+ */
+function specKitTaskHubProject(): string {
+  return makeProject({
+    ".artgraph.json": JSON.stringify({
+      specDirs: ["specs"],
+      include: ["src/**/*.ts"],
+      testPatterns: ["tests/**/*.test.ts"],
+      lockFile: ".trace.lock",
+    }),
+    "specs/auth/spec.md": "# Auth\n\n- FR-001: first requirement\n",
+    "specs/auth/tasks.md": `# Tasks\n\n- [x] T001 build the token module ${br("FR-001")}\n  - Files: src/a.ts\n`,
+    "specs/hub/spec.md": "# Hub\n\n- FR-002: second requirement\n",
+    "specs/hub/tasks.md": `# Tasks\n\n- [x] T900 cross-cutting task ${br("FR-001")} ${br("FR-002")}\n`,
+    "src/a.ts": "// @impl FR-001\nexport const a = 1;\n",
+    "src/b.ts": "// @impl FR-002\nexport const b = 2;\n",
+  });
+}
+
+describe("issue #435 ⑦b spec-kit reach through impact() / plan-coverage is unchanged", () => {
+  it("a spec-kit task hub still passes reach on — `impact()`, not just the parser", () => {
+    // The gap this test exists to close: before it, NO test in the repository
+    // pinned a RESOLVED `task -> verifies -> req` edge through `impact()`, so
+    // narrowing every spec-kit project's traversal was invisible to the suite
+    // even though ⑦ above claimed spec-kit was "unchanged". Measured against
+    // `main` (7339b11) on this exact fixture, and these are its numbers.
+    const specKitConfig: ArtgraphConfig = {
+      specDirs: ["specs"],
+      include: ["src/**/*.ts"],
+      testPatterns: ["tests/**/*.test.ts"],
+      lockFile: ".trace.lock",
+    };
+    const { graph } = buildGraph(specKitTaskHubProject(), specKitConfig);
+
+    // The mechanism: no spec-kit `verifies` edge carries the ID-space mark…
+    expect(graph.edges.filter((e) => e.kind === "verifies" && e.targetSpace !== undefined)).toEqual(
+      [],
+    );
+    // …so the hub stays `"expandable"` and reach crosses it, exactly as it has
+    // since the spec-kit preset shipped.
+    const result = impact(graph, ["file:src/a.ts"], EMPTY_LOCK);
+    expect(result.impactReqs.sort()).toEqual(["FR-001", "FR-002"]);
+    expect(result.affectedFiles.sort()).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(result.affectedTasks.sort()).toEqual(["T001", "T900"]);
+  });
+
+  it("`plan-coverage --gate` still fires on the implicit cross-spec impact (exit 1)", async () => {
+    const r = await runAt(specKitTaskHubProject(), [
+      "plan-coverage",
+      "--spec",
+      "specs/auth",
+      "--gate",
+      "--format",
+      "json",
+    ]);
+    expect(r.exitCode).toBe(1);
+    const payload = JSON.parse(r.stdout);
+    expect(payload.implicitImpactsByReq).toEqual([
+      { reqId: "FR-002", sourceLocations: [{ file: "src/a.ts" }] },
+    ]);
+    expect(payload.summary).toEqual({
+      totalAffected: 2,
+      mentioned: 1,
+      implicit: 1,
+      ignored: 0,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ⑧ the task hub (D1-a: a reverse `verifies` hop over a REQUIREMENT-SPACE task
+//    reference is `restricted`)
 // ---------------------------------------------------------------------------
 
 function n(id: string, kind: GraphNode["kind"], filePath: string): GraphNode {
@@ -575,6 +756,10 @@ function n(id: string, kind: GraphNode["kind"], filePath: string): GraphNode {
  * A daisy chain: req1..req4, task1..task3, each task verifying two adjacent
  * requirements, and `file:src/one.ts` implementing `Requirement-1` only.
  * `claimed` lists extra requirements given their own `implements` edge.
+ *
+ * `targetSpace` mirrors what the kiro preset stamps on a real
+ * `_Requirements:` edge — it is the whole trigger for the hub arrival, so
+ * omitting it here would silently test the wrong thing.
  */
 function daisyChain(claimed: string[] = []) {
   const nodes = new Map<string, GraphNode>();
@@ -602,12 +787,14 @@ function daisyChain(claimed: string[] = []) {
       target: `Requirement-${i}`,
       kind: "verifies",
       provenances: ["task-tag"],
+      targetSpace: "requirement",
     });
     edges.push({
       source: `${i}`,
       target: `Requirement-${i + 1}`,
       kind: "verifies",
       provenances: ["task-tag"],
+      targetSpace: "requirement",
     });
   }
   for (const c of claimed) {
@@ -629,6 +816,25 @@ describe("issue #435 ⑧ task hub daisy-chain", () => {
     const result = impact(daisyChain(), ["file:src/one.ts"], EMPTY_LOCK);
     expect(result.impactReqs.sort()).toEqual(["Requirement-1", "Requirement-2"]);
     expect(result.affectedTasks).toEqual(["1"]);
+  });
+
+  it("the SAME chain WITHOUT the ID-space mark keeps its pre-#435 reach (spec-kit shape)", () => {
+    // THE regression pin for the whole issue. A `task -> verifies -> req`
+    // edge is not by itself a hub arrival: spec-kit's bracketed `FR-001` tags
+    // have produced exactly this shape since the preset shipped, and #435 must not
+    // narrow them. Strip only `targetSpace` from the fixture above — same
+    // nodes, same node kinds, same edges — and the walk must daisy-chain the
+    // whole way, as it always has.
+    const { nodes, edges } = daisyChain();
+    const unmarked = edges.map(({ targetSpace: _drop, ...e }) => e);
+    const result = impact({ nodes, edges: unmarked }, ["file:src/one.ts"], EMPTY_LOCK);
+    expect(result.impactReqs.sort()).toEqual([
+      "Requirement-1",
+      "Requirement-2",
+      "Requirement-3",
+      "Requirement-4",
+    ]);
+    expect(result.affectedTasks.sort()).toEqual(["1", "2", "3"]);
   });
 
   it("a sibling requirement that already has its own `@impl` is excluded entirely (#303 R3a)", () => {
@@ -737,21 +943,86 @@ describe("issue #435 D2 — rename fail-loud on unrewritten `_Requirements:` ref
     expect(r.stdout).not.toContain("WARNING:");
   });
 
-  it("stays silent for a spec-kit project (IDs outside the Kiro requirement space)", async () => {
-    const root = makeProject({
+  // The selector is the EDGE's ID space, never the ID's spelling. These two
+  // tests are the false-positive and false-negative halves of that; an
+  // ID-shape test (`/^(?:[\w-]+\/)?Requirement-\d+$/`) fails BOTH, in opposite
+  // directions, and passing one while failing the other is what made the
+  // spelling look adequate.
+  const specKitProject = () =>
+    makeProject({
       ".artgraph.json": JSON.stringify({
         specDirs: ["kit-specs"],
         include: ["src/**/*.ts"],
         testPatterns: ["tests/**/*.test.ts"],
         lockFile: ".trace.lock",
       }),
-      "kit-specs/001/spec.md": "# Feature\n\n- FR-001: first\n",
-      "kit-specs/001/tasks.md": `# Tasks\n\n- [x] T001 build it ${br("FR-001")}\n`,
-      "src/a.ts": "// @impl FR-001\nexport const a = 1;\n",
+      // `Requirement-3` is a documented spec-kit `verifiesTagRe` capture (see
+      // the built-in preset table in docs/configuration.md), NOT a Kiro
+      // requirement-space reference — same spelling, different ID space.
+      "kit-specs/001/spec.md": "# Feature\n\n- FR-001: first\n- Requirement-3: third\n",
+      "kit-specs/001/tasks.md":
+        `# Tasks\n\n- [x] T001 build it ${br("FR-001")}\n` +
+        `- [x] T003 kiro-shaped bracket ${br("Requirement-3")}\n`,
+      "src/a.ts": "// @impl FR-001\n// @impl Requirement-3\nexport const a = 1;\n",
     });
-    const r = await runAt(root, ["rename", "--from", "FR-001", "--to", "FR-009"]);
-    expect(r.exitCode).toBe(0);
-    expect(r.stdout).not.toContain("WARNING:");
+
+  it("stays silent for a spec-kit project — including a `Requirement-N`-SPELLED id", async () => {
+    for (const [from, to] of [
+      ["FR-001", "FR-009"],
+      ["Requirement-3", "Requirement-9"],
+    ]) {
+      const r = await runAt(specKitProject(), ["rename", "--from", from, "--to", to]);
+      expect(r.exitCode).toBe(0);
+      expect(r.stdout).not.toContain("WARNING:");
+    }
+  });
+
+  it("warns for a requirement-space reference whose id is NOT spelled `Requirement-N`", async () => {
+    // A `verifiesTargetSpace: "requirement"` preset whose capture is not a
+    // bare number keeps the capture verbatim (`kiroRequirementIdFromTask
+    // Reference` returns null), so the reference names `FR-002` while still
+    // being a requirement-space reference rename cannot rewrite. It breaks
+    // exactly like `Requirement-1` does.
+    const root = makeProject({
+      ".artgraph.json": JSON.stringify({
+        specDirs: ["kit-specs"],
+        include: ["src/**/*.ts"],
+        testPatterns: ["tests/**/*.test.ts"],
+        lockFile: ".trace.lock",
+        disableBuiltinTaskConventions: ["spec-kit", "kiro"],
+        taskConventions: [
+          {
+            name: "reqspace-brackets",
+            fileStems: ["tasks"],
+            taskIdRe: "^(?:\\[[xX ]\\][\\s\\u00A0]+)?(T\\d+)\\b",
+            verifiesTagRe: "\\[([A-Za-z]+-\\d+)\\]",
+            verifiesTargetSpace: "requirement",
+          },
+        ],
+      }),
+      "kit-specs/001/spec.md": "# Feature\n\n- FR-002: second\n",
+      "kit-specs/001/tasks.md": `# Tasks\n\n- [x] T002 verify it ${br("FR-002")}\n`,
+      "src/a.ts": "// @impl FR-002\nexport const b = 2;\n",
+    });
+    const r = await runAt(root, [
+      "rename",
+      "--from",
+      "FR-002",
+      "--to",
+      "FR-009",
+      "--dry-run",
+      "--format",
+      "json",
+    ]);
+    expect(r.exitCode).toBe(1);
+    expect(JSON.parse(r.stdout).warnings).toEqual([
+      {
+        type: "unrewritten-task-requirement-ref",
+        oldId: "FR-002",
+        files: ["kit-specs/001/tasks.md"],
+        message: expect.stringContaining("FR-002"),
+      },
+    ]);
   });
 
   it("only warns for IDs the operation REMOVES — a surviving `--into` target is not one", async () => {
