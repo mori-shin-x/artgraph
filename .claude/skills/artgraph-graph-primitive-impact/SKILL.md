@@ -33,7 +33,7 @@ disable-model-invocation: false
 サブエージェント brief テンプレ:
 
 > あなたは artgraph リポジトリの調査担当です。これから `<変更対象の primitive / 関数 / エッジ kind>` を `<変更の一行要約>` する変更を検討しています。実装はまだ存在しません。
-> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の 24 チェックを順に実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept) を含めること。
+> `.claude/skills/artgraph-graph-primitive-impact/SKILL.md` の「どのチェックが今回必須か」表を先に引いて必須列を確定させ、それを報告の必須セクションとして確保したうえでチェックを実行し、「この primitive を変えると SILENT に破壊される経路」のランク付きリストを報告してください。各項目には (a) 経路の説明 (b) 影響を受ける CLI コマンド (c) 該当テストの有無 (d) 推奨 (本 PR で fix / 別 issue / accept / 起票しない — 起票ゲート A/B/C/D の答えを併記) (e) 根拠 (実測 / 未実測) を含めること。**測定はすべて「どの案について取ったか」でラベルする** — 採用案が変わったら、その案で取り直していない測定は結論として使えない。
 
 ## 横断 grep を始める前に
 
