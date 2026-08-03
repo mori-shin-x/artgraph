@@ -84,14 +84,14 @@
     "@types/cytoscape": "^3.31.0",
     "@types/node": "^22.15.0",
     "@types/picomatch": "^2.3.0",
-    "@vitest/coverage-v8": "^4.1.9",
+    "@vitest/coverage-v8": "^4.1.10",
     "cytoscape": "^3.34.0",
     "knip": "^6.17.1",
-    "lefthook": "^2.1.9",
+    "lefthook": "^2.1.10",
     "oxfmt": "^0.55.0",
     "oxlint": "^1.70.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   },
   "peerDependencies": {
     "vitest": ">=3 <5"
