@@ -82,7 +82,7 @@
   },
   "devDependencies": {
     "@types/cytoscape": "^3.31.0",
-    "@types/node": "^22.15.0",
+    "@types/node": "^26.2.0",
     "@types/picomatch": "^2.3.0",
     "@vitest/coverage-v8": "^4.1.9",
     "cytoscape": "^3.34.0",
